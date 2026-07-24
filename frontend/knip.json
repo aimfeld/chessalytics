@@ -7,7 +7,8 @@
     "tailwindcss",
     "tailwindcss-safe-area",
     "tw-animate-css",
-    "onnxruntime-web"
+    "onnxruntime-web",
+    "audit-ci"
   ],
   "ignoreExportsUsedInFile": true,
   "ignore": [

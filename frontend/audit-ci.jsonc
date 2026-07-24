@@ -1,0 +1,25 @@
+{
+  // Frontend production-dependency vulnerability gate (replaces the raw
+  // `npm audit --audit-level=high --omit=dev` CI step). Fails CI on any
+  // high/critical advisory in a production dependency EXCEPT the explicitly
+  // allowlisted ones below. Keep this list minimal and justified — every
+  // entry is a deliberate risk-acceptance, not a mute button.
+  "$schema": "https://github.com/IBM/audit-ci/raw/main/docs/schema.json",
+  "high": true,
+  "skip-dev": true,
+  "allowlist": [
+    // react-router / react-router-dom high advisories. FlawChess is a
+    // client-only SPA that mounts a plain <BrowserRouter> (see App.tsx) —
+    // we do NOT use React Router's RSC framework mode, SSR, or data-router
+    // server handlers, which is the attack surface these advisories cover.
+    // No forward fix exists in the 7.x line (all 7.12+ are flagged; the fix
+    // lands in 8.3.0, unreleased). Re-evaluate and drop these when react
+    // router ships a patched release we can upgrade to.
+    //
+    // RSC Mode CSRF Bypass — requires React Router RSC server actions; N/A to a client SPA.
+    "GHSA-qwww-vcr4-c8h2",
+    // DoS via inefficient route matching — client-side only; a crafted URL can
+    // slow the user's OWN browser tab, no server-side amplification for a static SPA.
+    "GHSA-chx6-hx7r-mcp5"
+  ]
+}
