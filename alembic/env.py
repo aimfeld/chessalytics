@@ -31,8 +31,13 @@ config.set_main_option("sqlalchemy.url", settings.DATABASE_URL)
 
 # Interpret the config file for Python logging.
 # This line sets up loggers basically.
+# disable_existing_loggers=False: the default (True) marks every already-created
+# logger as `disabled`, which silently kills app loggers when a migration runs
+# in-process (e.g. Alembic-driven tests) — a disabled logger drops all records,
+# breaking pytest's caplog capture for any test that runs after a migration
+# (surfaced as a serial-only failure in tests/test_guest_cleanup_service.py).
 if config.config_file_name is not None:
-    fileConfig(config.config_file_name)
+    fileConfig(config.config_file_name, disable_existing_loggers=False)
 
 # add your model's MetaData object here
 # for 'autogenerate' support

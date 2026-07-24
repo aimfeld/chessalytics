@@ -14,7 +14,7 @@ POST /eval/remote/entry-submit — (Phase 123 SEED-051 D-07) apply depth-15 entr
                                  via the no-shift SEED-044 write path (_apply_eval_results).
 POST /eval/remote/atomic-lease — (Phase 147 SEED-074 Part B, D-02) versioned lease for the
                                  eval+blob worker pipeline. Claims via claim_eval_job
-                                 (tier-1 > tier-2 > tier-3), returns the FEN-per-ply shape
+                                 (tier-1 > tier-3), returns the FEN-per-ply shape
                                  (_build_lease_positions, shared with the deleted Gen-1 /lease).
 POST /eval/remote/atomic-submit — (Phase 147 SEED-074 Part B, D-01/D-02) paired with
                                  /atomic-lease. Applies full-ply evals + the worker's own
@@ -425,10 +425,12 @@ async def atomic_lease_eval_game(
 ) -> Response | AtomicLeaseResponse:
     """Claim the next eval game for the atomic (versioned) eval+blob worker pipeline.
 
-    NEW endpoint pair (Phase 147 SEED-074 Part B, D-02) — does NOT modify /lease
-    or /submit; both stay live and deprecated for a mixed-fleet deploy. Selects
-    games with the IDENTICAL claim_eval_job priority (tier-1 > tier-2 > tier-3,
-    SKIP LOCKED, stale-lease sweep) and returns the same FEN-per-ply lease shape
+    Endpoint pair added in Phase 147 (SEED-074 Part B, D-02); the Gen-1 /lease +
+    /submit pair it was designed to coexist with during a mixed-fleet deploy was
+    fully deleted in Phase 149-03 (see the module docstring above) — this is now
+    the only lease endpoint for the eval+blob worker pipeline. Selects games with
+    the IDENTICAL claim_eval_job priority (tier-1 > tier-3, SKIP LOCKED,
+    stale-lease sweep) and returns the same FEN-per-ply lease shape
     _build_lease_positions already produces (Q4 narrower-hint design — no PGN,
     no Game metadata added to the payload).
 
@@ -1310,14 +1312,16 @@ async def atomic_submit_eval(
 ) -> AtomicSubmitResponse:
     """Apply one game's full-ply evals + MultiPV-2 blobs atomically (Phase 147 D-01/D-02).
 
-    NEW endpoint pair (paired with /atomic-lease, 147-04) — does NOT modify /submit
-    or /flaw-blob-submit; both stay live for a mixed-fleet deploy. Unlike the old
-    /submit (which always defers blobs to a separate tier-4 round-trip) and
-    /flaw-blob-submit (which only ever retags existing NULL-blob flaw rows), this
-    endpoint applies evals, classifies flaws, and writes gated tactic tags + PV-line
-    blobs + both completion markers in ONE transaction — no ungated window is ever
-    observable for a game processed here (see _apply_atomic_submit for the full
-    write-ordering rationale).
+    Endpoint pair added in Phase 147 (paired with /atomic-lease, 147-04); the Gen-1
+    /submit it was designed to coexist with during a mixed-fleet deploy was fully
+    deleted in Phase 149-03 (see the module docstring above) — /flaw-blob-submit is
+    unaffected and stays live (it serves the separate tier-4/4b blob-backfill lane,
+    D-09-fenced). Unlike the old /submit (which always defers blobs to a separate
+    tier-4 round-trip) and /flaw-blob-submit (which only ever retags existing
+    NULL-blob flaw rows), this endpoint applies evals, classifies flaws, and writes
+    gated tactic tags + PV-line blobs + both completion markers in ONE transaction —
+    no ungated window is ever observable for a game processed here (see
+    _apply_atomic_submit for the full write-ordering rationale).
 
     worker_schema_version is accepted but not gated on (Q5, RESEARCH.md): the server
     re-classifies authoritatively regardless of which schema version produced the

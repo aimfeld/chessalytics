@@ -1,20 +1,20 @@
 ---
 gsd_state_version: 1.0
 milestone: v2.8
-milestone_name: Import Filters
-status: completed
-stopped_at: Completed quick 260724-gnd (fix-backfill-cursor-reset-race-and-budget)
-last_updated: "2026-07-24T10:36:20.750Z"
+milestone_name: Import Filters and Guest Data Cleanup
+status: Awaiting next milestone
+stopped_at: Completed 188-01-PLAN.md (import/eval pipeline cleanup, SEED-115)
+last_updated: "2026-07-24T20:24:29.416Z"
 last_activity: 2026-07-24
-last_activity_desc: Phase 186 complete
+last_activity_desc: Milestone v2.8 completed and archived
 progress:
-  total_phases: 1
-  completed_phases: 1
-  total_plans: 3
-  completed_plans: 3
+  total_phases: 3
+  completed_phases: 3
+  total_plans: 6
+  completed_plans: 6
   percent: 100
-current_phase: 186
-current_phase_name: import-filters-tc-and-game-cap
+current_phase: 188
+current_phase_name: import-eval-pipeline-cleanup-seed-115
 milestone_status: in_progress
 ---
 
@@ -22,11 +22,10 @@ milestone_status: in_progress
 
 ## Current Position
 
-Milestone: v2.8 Import Filters — opened 2026-07-24 (lightweight regroup, no `/gsd-new-milestone` requirements cycle; same pattern as v2.6)
-Phases: 186 (Import Filters — Time Controls + Game Cap, SEED-117) — Plan 03/3 complete (phase complete)
-Status: All phases complete
-Last activity: 2026-07-24 — Phase 186 complete
-Deployed: production is current through PR #275 (v2.7 shipped incrementally)
+Phase: Milestone v2.8 complete
+Plan: —
+Status: Awaiting next milestone
+Last activity: 2026-07-24 — Milestone v2.8 completed and archived
 
 ## Project Reference
 
@@ -94,6 +93,8 @@ v1.29 Live-Engine Analysis Page shipped 2026-06-29 — 5 phases (136–140), 14 
 
 ### Roadmap Evolution
 
+- Phase 188 added 2026-07-24 (explicit user request after reviewing SEED-115): **Import/eval pipeline cleanup — retire completed backfill machinery** (SEED-115 base scope) with two locked amendments over the seed: (a) KEEP `resweep_holed_games` + its script — verified that `apply_completion_decision` Path C still stamps games complete WITH residual mid-game holes at MAX_EVAL_ATTEMPTS (weak/slow remote workers recreate the holed-stamped population go-forward), so the resweep is the permanent re-arm tool, not pre-Phase-119 legacy; its docstring gets updated to say so. (b) The seed's open decision resolved as **option 1**: tiers 4/4b stay as thin permanent safety nets — no strict-complete submit semantics, no worker-protocol change, no column-drop migration (the only migration is the small `ix_games_bestmove_backfill_pending` predicate realignment). No remote-worker upgrade required. `phase.add` numbered 188 correctly (187 is the active-dir max); its truncated auto-slug dir was renamed to `.planning/phases/188-import-eval-pipeline-cleanup-seed-115/`; scope details in the ROADMAP Goal block.
+- Phase 187 added 2026-07-24 (explicit user request via `/gsd-phase 187 @SEED-116`): **Guest Game Cleanup — 30-Day Inactivity Pruning** (SEED-116). Implements the already-advertised but never-built 30-day-inactivity guest cleanup: a scheduled job deletes games (+ cascading positions/flaws/bookmarks/eval_jobs) of guest users (`is_guest=true`) whose `users.last_activity` is ≥30 days old, KEEPS the guest User row + auth, and resets the incremental import cursor so a returning guest re-imports full history. Three seed gotchas: verify `last_activity` is bumped on guest browsing (not just import), reset the `import_jobs` cursor, and confirm every game-scoped child cascades with no orphans. In the same request the v2.8 milestone was **renamed "Import Filters" → "Import Filters and Guest Data Cleanup"** (top Milestones bullet, `## v2.8` section heading + intro, STATE fields). `phase.add` numbered it 187 sequentially (186 is the active-dir max) — no manual renumber needed this time.
 - Milestone v2.8 Import Filters created 2026-07-24 (explicit user request via `/gsd-phase 186 @SEED-117`) with **Phase 186: Import Filters — Time Controls + Game Cap** as its first phase. Lightweight manual open (no `/gsd-new-milestone` requirements cycle — same pattern as v2.6's creation): top Milestones bullet (⏳), `## v2.8` section + Phase 186 block appended, Progress row added, STATE flipped v2.7-closed → v2.8-in-progress, phase dir `.planning/phases/186-import-filters-tc-and-game-cap/` created, SEED-117 marked promoted. Numbered 186 manually — `phase.add` would have miscounted (active phases dir is empty post-archive; known mature-ROADMAP behavior, see Phase 164/172/177/180 entries). Seed carries the locked design decisions (backlog-only cap anchored at account creation, TC filter on both directions, cap = total imported backlog per platform, upgrades backfill / downgrades never delete, existing users grandfathered to all TCs + 5000).
 - Milestone v2.6 Bot Strength Calibration created 2026-07-19 (explicit user request) — regroups the two standalone post-v2.3 calibration phases under one milestone: **Phase 173** (SEED-101, ✅ complete — internal anchor rating scale) and **Phase 180** (SEED-102, not planned — three-preset bot strength curves + cross-family `G_preset`). Both had been floating as bare `### Phase` headings after v2.5's close with no milestone parent. Changes: top Milestones bullet (⏳ in progress), a `## v2.6 …` grouping heading above Phase 173, a missing Progress-table row for 173 (172→174 gap filled), 180 row tagged v2.6, STATE milestone fields flipped v2.5→v2.6 / Awaiting→In progress. No `/gsd-new-milestone` requirements cycle run — this was a lightweight ROADMAP regroup, not a fresh requirements-gathering milestone. Unblocks SEED-104.
 - Phase 180 added 2026-07-19: Three-preset bot strength curves on the internal anchor scale (SEED-102) — measure the bot's strength vs `bot_elo` at three blend presets (Human=0 no-search, Light=0.05, Deep=0.5) on the SEED-101/Phase-173 internal anchor scale. Harness fixes first: integrate `calibration-internal-scale.mjs` into `calibration-harness.mjs` so anchors window by `INTERNAL_RATING` not nominal `bot_elo` (the bug that clamped the 2026-07-12 run), enable BOTH anchor families (Maia-argmax rungs + Stockfish skill levels), locate-then-measure two-pass over a ~5×3 grid at 24–30 games/cell, per-cell CIs. Load-bearing new output is the cross-family split `G_preset = rating_vs_Maia − rating_vs_SF` (the no-human style-inflation gap) — with a literature constant `C≈+40` it replaces the closed SEED-103 (play real humans). Unblocks SEED-104. **Numbering fix:** `phase.add` computed 174 (it scans only active `.planning/phases/`, where 173 is the max; 174–179 are archived into shipped v2.4/v2.5 milestones) — that would collide with shipped Phase 174, so renumbered to 180 by hand (dir renamed, ROADMAP heading + Progress row + goal patched). Standalone phase like 173/177; NOT yet assigned to a milestone (v2.5 closed, awaiting `/gsd-new-milestone`).
@@ -426,6 +427,11 @@ v1.29 Live-Engine Analysis Page shipped 2026-06-29 — 5 phases (136–140), 14 
 - [Phase 186-03]: Settings-fetch isError handling lives once, inside ImportFilterCard — removed a duplicate page-level error branch added mid-Task-2 (both components share the same `['import-settings']` queryKey and would otherwise render the identical error message twice)
 - [Phase 186-03]: tcSettingsKey's return type narrowed to a `tc_${TimeControl}` template-literal union (not the broader `keyof ImportSettingsUpdate`, which includes the numeric `game_cap` field) so indexed access resolves to `boolean` with no cast
 - [Phase ?]: Quick 260724-gnd: moved _import_scope_expanded into user_import_settings_repository.py (single shared implementation); added run_import end-of-run cursor reset for the UAT-186-RACE cursor-clobber race; added anchor param to _admit_backward_game for UAT-186-BUDGET uncapped post-anchor admission
+- [Phase ?]: [Phase 187-01]: guest_cleanup_service.py built with get_eligible_guest_ids/_purge_guest/cleanup_inactive_guests, mirroring DELETE /api/games (incl. UserBenchmarkPercentile/UserRatingAnchor deletes) and reusing delete_all_games_for_user/reset_backfill_cursors verbatim
+- [Phase ?]: [Phase 187-01]: tests/test_guest_cleanup_service.py cannot seed via the standard rollback-scoped db_session fixture for _purge_guest/cleanup_inactive_guests tests (savepoint-scoped commit is invisible to a separately-opened connection); added a real_session_maker fixture + autouse monkeypatch of guest_cleanup_service.async_session_maker instead
+- [Phase 187-02]: run_periodic_guest_cleanup is a byte-for-byte structural mirror of run_periodic_reaper (D-01/D-02); fixed pre-existing test_main_lifespan.py EXPECTED_TASKS drift (missing full-eval-drain) while wiring guest-cleanup as the 4th lifespan background task
+- [Phase ?]: [Phase 188-01]: Fixed 3 out-of-D-03/D-05-named-scope tier-1>tier-2>tier-3 docstring mentions in eval_drain.py/eval_queue_service.py/eval_remote.py — leaving them inconsistent would have failed the plan's own acceptance check that edited docstrings read tier-1 > tier-3 > tier-4 throughout
+- [Phase ?]: [Phase 188-01, Rule 3 auto-fix]: Repointed 3 test files (test_backfill_eval.py, test_backfill_multipv.py, test_backfill_accuracy_acpl.py) from scripts.X to scripts.archive.X — a real gap in RESEARCH.md's test-suite impact map, which never grepped tests/ for imports of the scripts themselves, only eval_drain.py re-export importers
 
 ### Pending Todos
 
@@ -522,9 +528,9 @@ Items acknowledged and deferred at **v1.29 milestone close on 2026-06-29** (user
 
 ## Session Continuity
 
-**Stopped at:** Completed quick 260724-gnd (fix-backfill-cursor-reset-race-and-budget)
+**Stopped at:** Completed 188-01-PLAN.md (import/eval pipeline cleanup, SEED-115)
 
-**Last session:** 2026-07-24T10:36:20.727Z
+**Last session:** 2026-07-24T19:35:15.548Z
 
 **Resume file:**
 
@@ -583,6 +589,9 @@ None
 | Phase 186 P01 | 25min | 2 tasks | 12 files |
 | Phase 186 P02 | 40min | 3 tasks | 10 files |
 | Phase 186 P03 | 20min | 3 tasks | 5 files |
+| Phase 187 P01 | 45min | 2 tasks | 2 files |
+| Phase 187 P02 | 20min | 2 tasks | 4 files |
+| Phase 188 P01 | 10min | 4 tasks | 17 files |
 
 ## Performance Metrics
 
@@ -671,6 +680,17 @@ None
 | Phase 172 P04 | 50min | 3 tasks | 4 files |
 | Phase 172 P05 | ~2h | 3 tasks | 2 files |
 | Phase 173 P01 | ~20min | 2 tasks | 5 files |
+
+## Deferred Items
+
+Items acknowledged and deferred at v2.8 milestone close on 2026-07-24 (override closeout):
+
+| Category | Item | Status | Note |
+|----------|------|--------|------|
+| verification | Phase 187 D-06 backstop | human_needed | By-design prod-observation abstention: a single ~5M-row `game_positions` cascade delete under live traffic; 11/11 truths verified, no code gap. Terminal state — observe in prod, chunked deletion is the documented fallback. |
+| debug | entry-submit-n-plus-1 | fixed_awaiting_deploy | Fix landed; awaiting deploy verification. |
+| debug | insights-diskfull-shm | awaiting_human_verify | shm_size fix in place (see CLAUDE.md); confirmed benign 16 MB /dev/shm exhaustion, not disk. |
+| backlog | 19 quick tasks, 5 dormant seeds, 3 todos | deferred | Pre-existing cross-milestone backlog, not v2.8 scope; carried forward. |
 
 ## Operator Next Steps
 

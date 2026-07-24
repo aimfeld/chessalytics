@@ -59,9 +59,9 @@ from app.core.config import db_url_for_target, settings  # noqa: E402
 from app.models.game import Game  # noqa: E402
 from app.models.game_flaw import GameFlaw  # noqa: E402
 from app.schemas.eval_remote import FlawBlobSubmitEval  # noqa: E402
+from app.services.eval_apply import _batch_update_flaw_pv_lines  # noqa: E402
 from app.services.eval_drain import (  # noqa: E402
     _assemble_flaw_blobs_from_submit,
-    _batch_update_flaw_pv_lines,
     _build_flaw_blob_lease_positions,
 )
 from app.services.eval_queue_service import _claim_tier4_blob  # noqa: E402

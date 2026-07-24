@@ -122,8 +122,11 @@ jobs:
         run: npm ci
         working-directory: frontend
 
-      - name: Frontend vulnerability scan (npm audit)
-        run: npm audit --audit-level=high --omit=dev
+      - name: Frontend vulnerability scan (audit-ci)
+        # audit-ci wraps `npm audit` with a justified per-advisory allowlist
+        # (frontend/audit-ci.jsonc): fails on any high/critical prod-dep vuln
+        # except explicitly accepted, non-applicable ones. Keeps the gate strict.
+        run: npx audit-ci --config audit-ci.jsonc
         working-directory: frontend
 
       - name: Lint (eslint)

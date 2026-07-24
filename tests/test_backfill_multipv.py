@@ -35,7 +35,7 @@ from app.models.oauth_account import OAuthAccount  # noqa: E402, F401 (registers
 from app.models.user import User  # noqa: E402
 from app.services.tactic_detector import TacticMotifInt  # noqa: E402
 
-from scripts.backfill_multipv import _query_eligible, _query_status, run_dry_run  # noqa: E402
+from scripts.archive.backfill_multipv import _query_eligible, _query_status, run_dry_run  # noqa: E402
 
 # Unique test-module user ID to avoid PK collisions with other test files.
 _TEST_USER_ID = 145050

@@ -94,12 +94,15 @@ class Game(Base):
         # ix_games_lichess_pv_backfill_pending's shape (single user_id column,
         # partial WHERE). postgresql_where text MUST stay byte-identical to the
         # migration's create_index call (174-07 alembic-check drift lesson).
+        # Phase 188/SEED-115 D-07: dropped the trailing
+        # `AND lichess_evals_at IS NULL` clause to realign with
+        # _claim_tier4_bestmove's live predicate (quick 260719-fsz had already
+        # dropped it from the query, leaving the index stale for ~5 days).
         Index(
             "ix_games_bestmove_backfill_pending",
             "user_id",
             postgresql_where=sa.text(
                 "full_pv_completed_at IS NOT NULL AND best_moves_completed_at IS NULL"
-                " AND lichess_evals_at IS NULL"
             ),
         ),
     )

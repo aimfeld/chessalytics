@@ -1,5 +1,10 @@
 """Re-arm already-stamped engine games with non-terminal eval holes (Phase 119 SEED-045).
 
+Still load-bearing, not legacy: a weak/slow remote worker can recreate this
+holed-stamped population go-forward (see resweep_holed_games's docstring in
+app/services/eval_drain.py for the Path-C mechanism), so there is no
+population-exhaustion date for this tool.
+
 Finds engine games (lichess_evals_at IS NULL) whose full_evals_completed_at is set
 but that still carry at least one non-terminal hole (eval_cp IS NULL AND eval_mate IS NULL
 on a ply that is not the terminal game-over ply). Clears their completion markers
