@@ -2,11 +2,11 @@
 gsd_state_version: 1.0
 milestone: v2.8
 milestone_name: Import Filters and Guest Data Cleanup
-status: completed
+status: Awaiting next milestone
 stopped_at: Completed 188-01-PLAN.md (import/eval pipeline cleanup, SEED-115)
-last_updated: "2026-07-24T19:48:47.594Z"
+last_updated: "2026-07-24T20:24:29.416Z"
 last_activity: 2026-07-24
-last_activity_desc: Phase 188 complete
+last_activity_desc: Milestone v2.8 completed and archived
 progress:
   total_phases: 3
   completed_phases: 3
@@ -22,11 +22,10 @@ milestone_status: in_progress
 
 ## Current Position
 
-Milestone: v2.8 Import Filters and Guest Data Cleanup — opened 2026-07-24 (lightweight regroup, no `/gsd-new-milestone` requirements cycle; same pattern as v2.6); renamed from "Import Filters" 2026-07-24 when Phase 187 was added
-Phases: 186 (Import Filters — Time Controls + Game Cap, SEED-117) — complete; 187 (Guest Game Cleanup — 30-Day Inactivity Pruning, SEED-116) — complete; 188 (Import/Eval Pipeline Cleanup, SEED-115) — complete
-Status: All phases complete
-Last activity: 2026-07-24 — Phase 188 complete
-Deployed: production is current through PR #275 (v2.7 shipped incrementally)
+Phase: Milestone v2.8 complete
+Plan: —
+Status: Awaiting next milestone
+Last activity: 2026-07-24 — Milestone v2.8 completed and archived
 
 ## Project Reference
 
@@ -682,6 +681,17 @@ None
 | Phase 172 P05 | ~2h | 3 tasks | 2 files |
 | Phase 173 P01 | ~20min | 2 tasks | 5 files |
 
+## Deferred Items
+
+Items acknowledged and deferred at v2.8 milestone close on 2026-07-24 (override closeout):
+
+| Category | Item | Status | Note |
+|----------|------|--------|------|
+| verification | Phase 187 D-06 backstop | human_needed | By-design prod-observation abstention: a single ~5M-row `game_positions` cascade delete under live traffic; 11/11 truths verified, no code gap. Terminal state — observe in prod, chunked deletion is the documented fallback. |
+| debug | entry-submit-n-plus-1 | fixed_awaiting_deploy | Fix landed; awaiting deploy verification. |
+| debug | insights-diskfull-shm | awaiting_human_verify | shm_size fix in place (see CLAUDE.md); confirmed benign 16 MB /dev/shm exhaustion, not disk. |
+| backlog | 19 quick tasks, 5 dormant seeds, 3 todos | deferred | Pre-existing cross-milestone backlog, not v2.8 scope; carried forward. |
+
 ## Operator Next Steps
 
-- All v2.8 phases (186, 187, 188) are complete — close the milestone with /gsd-complete-milestone, then start the next milestone with /gsd-new-milestone
+- Start the next milestone with /gsd-new-milestone

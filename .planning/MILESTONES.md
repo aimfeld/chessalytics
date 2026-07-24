@@ -1,5 +1,22 @@
 # Milestones: FlawChess
 
+## v2.8 Import Filters and Guest Data Cleanup (Shipped: 2026-07-24)
+
+**Phases completed:** 3 phases, 6 plans, 12 tasks
+
+**Key accomplishments:**
+
+- Per-user `user_import_settings` table + grandfathering migration + GET/PATCH API + derived backlog-count query + forward-sync TC filter, proven end-to-end as the phase's tracer slice.
+- Two-pass Sync (forward + budget-capped backward backfill) across both platform clients, with an in-memory live-budget stop condition and an incrementally-persisted resumable cursor.
+- Import-tab "Import filters" card (TC multiselect + backlog-cap select, auto-save, last-one-standing guard) plus per-(platform,TC) budget-chip rows reading `backlog_counts` from Plan 01's settings endpoint.
+- `guest_cleanup_service.py` with a 30-day eligibility query, a per-guest cascade purge reusing `delete_all_games_for_user`/`reset_backfill_cursors`, and a per-tick orchestration loop with isolated per-guest failure handling — all proven by a real-DB integration test.
+- `run_periodic_guest_cleanup` daily asyncio loop wrapping Plan 01's purge orchestration, wired as the 4th FastAPI lifespan background task alongside the reaper/eval-drain/full-eval-drain, with the lifespan smoke test's pre-existing task-list drift corrected.
+- Import/eval pipeline cleanup (Phase 188, SEED-115): archived 7 completed backfill scripts to `scripts/archive/`, pruned dead tier-2 logic + 3 unused `eval_drain` re-exports, realigned `ix_games_bestmove_backfill_pending` with the tier-4b claim query (migration `c9deb514`), and kept `resweep_holed_games` + tiers 4/4b as permanent safety nets.
+
+**Closeout:** `override_closeout` — Phase 187's D-06 backstop (a ~5M-row `game_positions` cascade delete observed under live prod traffic) abstains by design and is deferred to prod observation (11/11 truths verified, no code gap). Cross-milestone backlog acknowledged as deferred (see STATE.md Deferred Items).
+
+---
+
 ## v2.7 Bot Personas & Playstyle Layer (Shipped: 2026-07-23)
 
 **Phases completed:** 4 phases (182, 183, 184, 185), 19 plans

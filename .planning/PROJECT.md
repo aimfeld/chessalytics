@@ -20,15 +20,15 @@ Mobile-first PWA, installable on iOS/Android, with drawer-based filter and bookm
 
 Users get position-precise WDL analysis (openings + endgames + time pressure) on top of their actual chess.com and lichess games, with personalized LLM commentary on endgame performance and an auto-generated opening-strengths/weaknesses report. No per-platform fragmentation, no manual opening tagging.
 
-## Current Milestone: v2.8 Import Filters and Guest Data Cleanup — all phases complete
+## Current Milestone: none — v2.8 closed 2026-07-24
 
-**v2.8 execution complete 2026-07-24** (Phases 186–188): user-facing import filters on the Import tab (SEED-117), daily guest-data pruning job (SEED-116), and import/eval pipeline cleanup (SEED-115, Phase 188 — 7 completed backfill scripts archived, dead tier-2 prose removed, `ix_games_bestmove_backfill_pending` realigned with the tier-4b claim query; `resweep_holed_games` and tiers 4/4b kept as permanent safety nets). Milestone close pending: `/gsd-complete-milestone`.
+**v2.8 Import Filters and Guest Data Cleanup closed 2026-07-24** (Phases 186–188, 6 plans; tag v2.8; `override_closeout`): user-facing import filters on the Import tab (SEED-117), daily guest-data pruning job (SEED-116), and import/eval pipeline cleanup (SEED-115, Phase 188 — 7 completed backfill scripts archived, dead tier-2 prose removed, `ix_games_bestmove_backfill_pending` realigned with the tier-4b claim query; `resweep_holed_games` and tiers 4/4b kept as permanent safety nets). Forty milestones complete (v1.0–v2.8). Closed `override_closeout`: Phase 187's D-06 backstop (a ~5M-row `game_positions` cascade delete observed under live prod traffic) abstains by design and is deferred to prod observation (11/11 truths verified, no code gap). Deploy on this close's `bin/deploy.sh`. See [MILESTONES.md](MILESTONES.md) and [milestones/v2.8-ROADMAP.md](milestones/v2.8-ROADMAP.md).
 
 **v2.7 Bot Personas & Playstyle Layer closed 2026-07-24** (Phases 182–185, 19 plans; deployed to production, PRs through #275). Shipped a roster of 24 named bot personas (4 styles × 6 ELO rungs, 800–1800) on the Bots page — each a complete pinned opponent (preset, measured ELO, style params, opening book, resign/draw-offer policy, avatar, bio), with no persona × strength picker; Custom mode keeps the raw (ELO, preset) knobs. Persona ELO labels are measured on the Phase-173 internal anchor scale (`PERSONA_CALIBRATION_MEASURED=true`), with honest ~900 floor / ~1800 ceiling constraints. See [MILESTONES.md](MILESTONES.md) and [milestones/v2.7-ROADMAP.md](milestones/v2.7-ROADMAP.md).
 
 Deferred at v2.7 close: AVAT-01 (real AI portraits — placeholders + prompts shipped per D-16); Phase 183 fast-follows WR-01 / IN-02; SEED-114 (bots above ~1900) stays dormant.
 
-**Next:** `/gsd-complete-milestone` (v2.8).
+**Next:** `bin/deploy.sh` to ship v2.8 to production, then `/gsd-new-milestone`.
 
 
 ## Requirements
@@ -537,6 +537,8 @@ This document evolves at phase transitions and milestone boundaries.
 4. Update Context with current state
 
 ---
+*Last updated: 2026-07-24 after v2.8 Import Filters and Guest Data Cleanup milestone closed (Phases 186–188, 6 plans; tag v2.8). User-facing import filters on the Import tab with backward backfill + grandfathering (Phase 186, SEED-117), a daily 30-day-inactivity guest-data pruning job that keeps the guest account (Phase 187, SEED-116), and an import/eval pipeline cleanup retiring completed backfill machinery while keeping `resweep_holed_games` + tiers 4/4b as permanent safety nets (Phase 188, SEED-115). Forty milestones complete (v1.0–v2.8). Closed `override_closeout` — Phase 187's D-06 backstop (a ~5M-row `game_positions` cascade delete observed under live prod traffic) is deferred to prod observation (11/11 truths verified, no code gap); cross-milestone backlog carried forward. Full pre-merge gate green (backend 3624 passed, frontend 2546 passed). Not yet deployed — ships on this close's `bin/deploy.sh`. Next is `/gsd-new-milestone`. (Prior footer below.)*
+
 *Last updated: 2026-07-24 — Phase 188 (Import/eval pipeline cleanup, SEED-115) complete, closing out v2.8 execution (Phases 186–188 all verified). Backfill machinery retired to `scripts/archive/`, tier-2 dead prose removed, bestmove backfill index realigned; full backend gate green (3637 passed). Next: `/gsd-complete-milestone`. (Prior footer below.)*
 
 *Last updated: 2026-07-22 — Phase 182 (Style Levers) complete: the engine-side style layer (opening books, contempt/resign policy, prior reweighting, score shaping) is live behind `BotSettings.style` / `BotGameSettings.style`, verified 8/8 with both review blockers fixed. Next: Phase 183 (Persona Registry & Bots Page). (Prior footer below.)*

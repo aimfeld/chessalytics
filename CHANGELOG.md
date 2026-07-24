@@ -8,6 +8,8 @@ in `YYYY-MM-DD` (Europe/Zurich).
 
 ## [Unreleased]
 
+## [v2.8] Import Filters and Guest Data Cleanup — 2026-07-24
+
 ### Added
 
 - Import filters — choose exactly which games get imported per platform: filter by color, opponent type, time controls, and a recency window, plus a per-time-control game cap so you can bound how many bullet/blitz/rapid/classical games each import pulls. The Import tab shows a filter card per platform with budget and backlog chips (untimed games appear as an uncapped bucket), settings auto-save as you toggle them, and a save failure surfaces inline near the control (Phase 186).
@@ -1155,7 +1157,8 @@ bookmarks, game cards, and rating / stats pages.
 - Rating history, global stats, openings W/D/L charts.
 - Multi-user auth with data isolation.
 
-[Unreleased]: https://github.com/flawchess/flawchess/compare/v2.7...HEAD
+[Unreleased]: https://github.com/flawchess/flawchess/compare/v2.8...HEAD
+[v2.8]: https://github.com/flawchess/flawchess/compare/v2.7...v2.8
 [v2.7]: https://github.com/flawchess/flawchess/compare/v2.6...v2.7
 [v2.6]: https://github.com/flawchess/flawchess/compare/v2.5...v2.6
 [v2.5]: https://github.com/flawchess/flawchess/compare/v2.4...v2.5
