@@ -43,7 +43,7 @@
 - ✅ **v2.5 Move Statistics** — Phases 178–179 (shipped 2026-07-18) — one uniform, lichess-compatible per-game accuracy & ACPL methodology written into repurposed canonical `games` columns so games are comparable across chess.com/lichess/self-analyzed (Phase 178, SEED-110), then a single shared **two-sided Move Stats** component (accuracy strip + a 7-category per-player move-classification table) replacing the badge rows on both the Library game card and the analysis board tags panel (Phase 179, SEED-112) — see [milestones/v2.5-ROADMAP.md](milestones/v2.5-ROADMAP.md)
 - ✅ **v2.6 Bot Strength Calibration** — Phases 173, 180, 181 (shipped 2026-07-21; dev-only, no deploy) — put the bot's play-style presets on a measured strength scale without ever playing a human. Phase 173 (SEED-101) round-robins the calibration anchors into one internal rating scale (verdict: the Maia-3 argmax ladder is ~2.8x compressed); Phase 180 (SEED-102) measures the three-preset (Human/Light/Deep) strength curves on that scale plus the cross-family style-inflation gap `G_preset`; Phase 181 (SEED-104) inverts those curves into per-preset `target_blitz_elo → bot_elo` lookups with honest measured ranges (Human 900–1400, Light 1500–1600, Deep 1600–1800) and an approximate-ELO disclaimer. Nothing in the product reads the lookup yet — see [milestones/v2.6-ROADMAP.md](milestones/v2.6-ROADMAP.md)
 - ✅ **v2.7 Bot Personas & Playstyle Layer** — Phases 182–185 (shipped 2026-07-23; deployed to production, PRs through #275) — a roster of 24 named bot personas (4 styles × 6 ELO rungs, 800–1800) on the Bots page, each a complete pinned opponent (preset, calibrated ELO, style params, opening book, resign/draw-offer policy, avatar, bio). Style levers land first (Phase 182), then the persona registry + Bots page UI (Phase 183), then per-persona harness calibration replaces the provisional labels with measured values (Phase 184, `PERSONA_CALIBRATION_MEASURED=true`), then the roster is re-laid-out as a rung-ladder grid with per-persona win stars (Phase 185) (SEED-098) — see [milestones/v2.7-ROADMAP.md](milestones/v2.7-ROADMAP.md)
-- ⏳ **v2.8 Import Filters and Guest Data Cleanup** — Phase 186 (complete), Phase 187 (complete) — user-facing import filters (time-control multiselect + per-platform game cap) on the Import tab to keep storage and Stockfish compute in check, with backward backfill on filter upgrades and grandfathering for existing users (SEED-117), plus a daily background job that prunes game data for guests inactive ≥30 days while keeping the guest account (SEED-116)
+- ⏳ **v2.8 Import Filters and Guest Data Cleanup** — Phase 186 (complete), Phase 187 (complete), Phase 188 (added) — user-facing import filters (time-control multiselect + per-platform game cap) on the Import tab to keep storage and Stockfish compute in check, with backward backfill on filter upgrades and grandfathering for existing users (SEED-117), plus a daily background job that prunes game data for guests inactive ≥30 days while keeping the guest account (SEED-116), plus import/eval pipeline cleanup retiring completed backfill machinery while keeping `resweep_holed_games` and tiers 4/4b as permanent safety nets (SEED-115)
 
 ## Progress
 
@@ -143,6 +143,7 @@
 | 185. Bots Roster Transpose + Win Stars (SEED-098, v2.7) | 3/3 | Complete | 2026-07-22 |
 | 186. Import Filters — Time Controls + Game Cap (SEED-117, v2.8) | 3/3 | Complete | 2026-07-24 |
 | 187. Guest Game Cleanup — 30-Day Inactivity Pruning (SEED-116, v2.8) | 2/2 | Complete | 2026-07-24 |
+| 188. Import/Eval Pipeline Cleanup — Retire Completed Backfill Machinery (SEED-115, v2.8) | 0/? | Not planned | — |
 
 ## Backlog
 
@@ -750,3 +751,14 @@ Plans:
 **Wave 2** *(blocked on Wave 1 completion)*
 
 - [x] 187-02-PLAN.md — Periodic loop + lifespan wiring: `run_periodic_guest_cleanup` + 4th `app/main.py` background task + lifespan smoke-test drift fix
+
+### Phase 188: Import/eval pipeline cleanup: retire completed backfill machinery (SEED-115)
+
+**Goal:** Retire the completed historical-backfill machinery from the import/eval pipeline (SEED-115 base scope) with two locked amendments: (a) KEEP `resweep_holed_games` + `scripts/resweep_holed_games.py` — it is the Path-C mid-game-hole re-arm tool (weak remote workers can still exhaust MAX_EVAL_ATTEMPTS and stamp games with mid-game holes), not pre-Phase-119 legacy; update its docstring accordingly. (b) SEED-115 open decision resolved as option 1: tiers 4/4b stay as thin permanent safety nets — no submit-semantics change, no migration. Scope: remove dead tier 2 from `eval_queue_service.py`; archive completed backfill scripts to `scripts/archive/` (`backfill_eval.py`, `backfill_full_evals.py`, `backfill_best_move_pv.py`, `backfill_multipv.py`, `backfill_opening_eval_cache.py`, `snapshot_tactic_counts.py`, `backfill_accuracy_acpl.py`; keep `OPENING_CACHE_BACKFILL_SQL` in `eval_drain.py`); fix stale `eval_remote.py` docstrings claiming legacy `/lease`//`submit` are live; prune `eval_drain.py` backward-compat re-exports no longer imported by tests or kept scripts; realign `ix_games_bestmove_backfill_pending` with the `_claim_tier4_bestmove` predicate (quick 260719-fsz dropped `lichess_evals_at IS NULL`).
+**Requirements**: TBD
+**Depends on:** Phase 187
+**Plans:** 0 plans
+
+Plans:
+
+- [ ] TBD (run /gsd-plan-phase 188 to break down)

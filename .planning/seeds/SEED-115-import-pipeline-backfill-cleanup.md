@@ -1,6 +1,6 @@
 ---
 id: SEED-115
-status: ready (verification complete, scope inventoried)
+status: promoted (Phase 188, v2.8, 2026-07-24 — resweep_holed_games kept as Path-C re-arm tool; open decision resolved as option 1)
 planted: 2026-07-23
 planted_during: /gsd-explore session on 2026-07-23 on simplifying the import/eval pipeline now that all historical backfill populations are drained. Prod verification (read-only tunnel) confirmed completeness the same day; a research pass produced a precise keep/delete inventory.
 trigger_when: Next maintenance window / milestone with pipeline scope. No external blocker — the deletable list is safe to execute any time. The tier-4/4b decision (see Open decision) should be made at planning time.
