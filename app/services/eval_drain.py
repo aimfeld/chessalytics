@@ -66,9 +66,6 @@ from app.services.eval_apply import (
     _apply_full_eval_results,  # noqa: F401 — backward-compat re-export (tests/scripts)
     _assemble_flaw_blobs_from_submit,  # noqa: F401 — backward-compat re-export (tests)
     _assemble_one_line_blob,  # noqa: F401 — backward-compat re-export (tests)
-    _batch_update_best_move_rows,  # noqa: F401 — backward-compat re-export (scripts)
-    _batch_update_flaw_pv_lines,  # noqa: F401 — backward-compat re-export (scripts)
-    _batch_update_pv_rows,  # noqa: F401 — backward-compat re-export (scripts)
     _build_best_move_candidates,
     _build_bestmove_lease_positions,
     _build_flaw_blob_lease_positions,  # noqa: F401 — backward-compat re-export (tests/scripts)
@@ -858,7 +855,7 @@ async def _full_drain_tick() -> bool:
 
     Session discipline (CLAUDE.md hard rule: AsyncSession not safe for concurrent use):
       Step 0: yield gate — short read tx, close.
-      Step 1: claim_eval_job — tier-1 > tier-2 > tier-3 derived (queue service owns sessions).
+      Step 1: claim_eval_job — tier-1 > tier-3 derived (queue service owns sessions).
       Step 2: load PGN + game_positions rows — short read tx, close.
       Step 3: asyncio.gather(evaluate_nodes_multipv2) with NO session open.
       Step 4: write session (open LATE): UPDATEs + classify + oracle + markers + commit, close.
@@ -1155,10 +1152,19 @@ async def resweep_holed_games(
 ) -> int:
     """Re-arm already-stamped engine games that still carry non-terminal holes (SEED-045).
 
-    Before Phase 119, the drain stamped full_evals_completed_at unconditionally (D-116-07),
-    so games with transient mid-game engine holes were permanently marked "fully analyzed"
-    with gaps. This sweep finds those games and clears their completion markers so the
-    bounded-retry drain re-picks them with a fresh MAX_EVAL_ATTEMPTS budget.
+    Permanent manual re-arm tool for Path-C mid-game holes — NOT pre-Phase-119 legacy.
+    `apply_completion_decision` (`eval_apply.py`, Path C) deliberately stamps a game's
+    completion markers when `current_attempts + 1 >= MAX_EVAL_ATTEMPTS`, even though
+    `failed_ply_count > 0` — this is the EXPECTED terminal state of the bounded-retry
+    drain, not a bug (see that function's own docstring). A weak or slow remote worker
+    that repeatedly fails the same plies recreates this holed-stamped population
+    go-forward — there is no population-exhaustion date. This sweep clears the
+    completion markers for such games so the drain re-picks them with a fresh
+    MAX_EVAL_ATTEMPTS budget. (Historical note: before Phase 119 introduced the
+    bounded-retry Path A/B/C decision tree, the drain stamped unconditionally with no
+    retry budget at all — D-116-07 — so this tool's original 2026 motivation was
+    cleaning up that one-time backlog. The tool has remained load-bearing ever since
+    as the only way to re-arm Path-C-stamped holes.)
 
     A "hole" is a non-terminal, non-game-ending-move, non-mate ply:
         eval_cp IS NULL AND eval_mate IS NULL AND ply < MAX(ply) - 1 for that game.

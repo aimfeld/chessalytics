@@ -2,19 +2,19 @@
 gsd_state_version: 1.0
 milestone: v2.8
 milestone_name: Import Filters and Guest Data Cleanup
-status: executing
-stopped_at: "Completed 187-02-PLAN.md (periodic loop + lifespan wiring: run_periodic_guest_cleanup wired as 4th background task)"
-last_updated: "2026-07-24T13:47:48.406Z"
+status: completed
+stopped_at: Completed 188-01-PLAN.md (import/eval pipeline cleanup, SEED-115)
+last_updated: "2026-07-24T19:48:47.594Z"
 last_activity: 2026-07-24
-last_activity_desc: Phase 187 complete (run_periodic_guest_cleanup wired as 4th lifespan background task)
+last_activity_desc: Phase 188 complete
 progress:
-  total_phases: 2
-  completed_phases: 2
-  total_plans: 5
-  completed_plans: 5
+  total_phases: 3
+  completed_phases: 3
+  total_plans: 6
+  completed_plans: 6
   percent: 100
-current_phase: 187
-current_phase_name: guest-game-cleanup-30-day-inactivity-pruning-seed-116
+current_phase: 188
+current_phase_name: import-eval-pipeline-cleanup-seed-115
 milestone_status: in_progress
 ---
 
@@ -23,9 +23,9 @@ milestone_status: in_progress
 ## Current Position
 
 Milestone: v2.8 Import Filters and Guest Data Cleanup — opened 2026-07-24 (lightweight regroup, no `/gsd-new-milestone` requirements cycle; same pattern as v2.6); renamed from "Import Filters" 2026-07-24 when Phase 187 was added
-Phases: 186 (Import Filters — Time Controls + Game Cap, SEED-117) — complete; 187 (Guest Game Cleanup — 30-Day Inactivity Pruning, SEED-116) — complete
-Status: All v2.8 phases complete (186, 187) — ready for `/gsd-complete-milestone`
-Last activity: 2026-07-24 — Phase 187 complete (run_periodic_guest_cleanup wired as 4th lifespan background task)
+Phases: 186 (Import Filters — Time Controls + Game Cap, SEED-117) — complete; 187 (Guest Game Cleanup — 30-Day Inactivity Pruning, SEED-116) — complete; 188 (Import/Eval Pipeline Cleanup, SEED-115) — complete
+Status: All phases complete
+Last activity: 2026-07-24 — Phase 188 complete
 Deployed: production is current through PR #275 (v2.7 shipped incrementally)
 
 ## Project Reference
@@ -431,6 +431,8 @@ v1.29 Live-Engine Analysis Page shipped 2026-06-29 — 5 phases (136–140), 14 
 - [Phase ?]: [Phase 187-01]: guest_cleanup_service.py built with get_eligible_guest_ids/_purge_guest/cleanup_inactive_guests, mirroring DELETE /api/games (incl. UserBenchmarkPercentile/UserRatingAnchor deletes) and reusing delete_all_games_for_user/reset_backfill_cursors verbatim
 - [Phase ?]: [Phase 187-01]: tests/test_guest_cleanup_service.py cannot seed via the standard rollback-scoped db_session fixture for _purge_guest/cleanup_inactive_guests tests (savepoint-scoped commit is invisible to a separately-opened connection); added a real_session_maker fixture + autouse monkeypatch of guest_cleanup_service.async_session_maker instead
 - [Phase 187-02]: run_periodic_guest_cleanup is a byte-for-byte structural mirror of run_periodic_reaper (D-01/D-02); fixed pre-existing test_main_lifespan.py EXPECTED_TASKS drift (missing full-eval-drain) while wiring guest-cleanup as the 4th lifespan background task
+- [Phase ?]: [Phase 188-01]: Fixed 3 out-of-D-03/D-05-named-scope tier-1>tier-2>tier-3 docstring mentions in eval_drain.py/eval_queue_service.py/eval_remote.py — leaving them inconsistent would have failed the plan's own acceptance check that edited docstrings read tier-1 > tier-3 > tier-4 throughout
+- [Phase ?]: [Phase 188-01, Rule 3 auto-fix]: Repointed 3 test files (test_backfill_eval.py, test_backfill_multipv.py, test_backfill_accuracy_acpl.py) from scripts.X to scripts.archive.X — a real gap in RESEARCH.md's test-suite impact map, which never grepped tests/ for imports of the scripts themselves, only eval_drain.py re-export importers
 
 ### Pending Todos
 
@@ -527,9 +529,9 @@ Items acknowledged and deferred at **v1.29 milestone close on 2026-06-29** (user
 
 ## Session Continuity
 
-**Stopped at:** Completed 187-02-PLAN.md (periodic loop + lifespan wiring: run_periodic_guest_cleanup wired as 4th background task)
+**Stopped at:** Completed 188-01-PLAN.md (import/eval pipeline cleanup, SEED-115)
 
-**Last session:** 2026-07-24T13:46:25.904Z
+**Last session:** 2026-07-24T19:35:15.548Z
 
 **Resume file:**
 
@@ -590,6 +592,7 @@ None
 | Phase 186 P03 | 20min | 3 tasks | 5 files |
 | Phase 187 P01 | 45min | 2 tasks | 2 files |
 | Phase 187 P02 | 20min | 2 tasks | 4 files |
+| Phase 188 P01 | 10min | 4 tasks | 17 files |
 
 ## Performance Metrics
 
@@ -681,4 +684,4 @@ None
 
 ## Operator Next Steps
 
-- Start the next milestone with /gsd-new-milestone
+- All v2.8 phases (186, 187, 188) are complete — close the milestone with /gsd-complete-milestone, then start the next milestone with /gsd-new-milestone

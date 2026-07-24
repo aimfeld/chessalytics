@@ -143,7 +143,7 @@
 | 185. Bots Roster Transpose + Win Stars (SEED-098, v2.7) | 3/3 | Complete | 2026-07-22 |
 | 186. Import Filters — Time Controls + Game Cap (SEED-117, v2.8) | 3/3 | Complete | 2026-07-24 |
 | 187. Guest Game Cleanup — 30-Day Inactivity Pruning (SEED-116, v2.8) | 2/2 | Complete | 2026-07-24 |
-| 188. Import/Eval Pipeline Cleanup — Retire Completed Backfill Machinery (SEED-115, v2.8) | 0/? | Not planned | — |
+| 188. Import/Eval Pipeline Cleanup — Retire Completed Backfill Machinery (SEED-115, v2.8) | 1/1 | Complete | 2026-07-24 |
 
 ## Backlog
 
@@ -755,10 +755,10 @@ Plans:
 ### Phase 188: Import/eval pipeline cleanup: retire completed backfill machinery (SEED-115)
 
 **Goal:** Retire the completed historical-backfill machinery from the import/eval pipeline (SEED-115 base scope) with two locked amendments: (a) KEEP `resweep_holed_games` + `scripts/resweep_holed_games.py` — it is the Path-C mid-game-hole re-arm tool (weak remote workers can still exhaust MAX_EVAL_ATTEMPTS and stamp games with mid-game holes), not pre-Phase-119 legacy; update its docstring accordingly. (b) SEED-115 open decision resolved as option 1: tiers 4/4b stay as thin permanent safety nets — no submit-semantics change, no migration. Scope: remove dead tier 2 from `eval_queue_service.py`; archive completed backfill scripts to `scripts/archive/` (`backfill_eval.py`, `backfill_full_evals.py`, `backfill_best_move_pv.py`, `backfill_multipv.py`, `backfill_opening_eval_cache.py`, `snapshot_tactic_counts.py`, `backfill_accuracy_acpl.py`; keep `OPENING_CACHE_BACKFILL_SQL` in `eval_drain.py`); fix stale `eval_remote.py` docstrings claiming legacy `/lease`//`submit` are live; prune `eval_drain.py` backward-compat re-exports no longer imported by tests or kept scripts; realign `ix_games_bestmove_backfill_pending` with the `_claim_tier4_bestmove` predicate (quick 260719-fsz dropped `lichess_evals_at IS NULL`).
-**Requirements**: TBD
+**Requirements**: D-01..D-09 (CONTEXT.md decisions — maintenance phase, no REQUIREMENTS.md IDs)
 **Depends on:** Phase 187
-**Plans:** 0 plans
+**Plans:** 1/1 plans complete
 
 Plans:
 
-- [ ] TBD (run /gsd-plan-phase 188 to break down)
+- [x] 188-01-PLAN.md — Retire completed backfill machinery: docstring surgery (resweep reframe D-01, tier-2 trim D-03, stale /lease+/submit fix D-05), re-export prune + script archival (D-04/D-06), ix_games_bestmove_backfill_pending realignment migration (D-07), CHANGELOG + full backend gate

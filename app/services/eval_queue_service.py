@@ -1,17 +1,14 @@
 """Priority queue service for the full-ply eval drain (QUEUE-01/02/05/06/08).
 
-Three-tier pick:
+Tiered pick (tier 2 is fully retired — Phase 118 removed its only enqueue
+source, Phase 149-04 removed the then-callerless TIER_2 constant):
   Tier 1 (TIER_EXPLICIT)      — explicit user request
-  Tier 2                      — unused (its only enqueue source was removed in
-                                Phase 118; the eval_jobs.tier column and the
-                                tier-agnostic claim SQL below still support it,
-                                but there is no active tier-2 lane)
   Tier 3 (TIER_IDLE_BACKLOG)  — idle backlog (derived pick, no eval_jobs row)
 
 Tier-1 uses SELECT FOR UPDATE OF … SKIP LOCKED against the eval_jobs table for
 a lock-safe, serialized claim contract (QUEUE-06 / SEED-012 D-8); the claim SQL
 is tier-agnostic (`ORDER BY tier ASC`) so it would transparently pick up a
-future tier-2 row without changes.
+future tier-2 row without any code changes.
 
 Tier-3 is a *derived* pick via a SINGLE Efraimidis–Spirakis recency-weighted
 lottery over candidate users. Quick 260723-j6g unified the population: a
@@ -229,7 +226,7 @@ async def _claim_queued_job(
     worker_id: str,
     lease_ttl_seconds: int,
 ) -> tuple[int, int, int, int, bool] | None:
-    """Claim one pending tier-1 or tier-2 job via SELECT FOR UPDATE OF SKIP LOCKED.
+    """Claim one pending tier-1 job via SELECT FOR UPDATE OF SKIP LOCKED.
 
     Returns (job_id, game_id, user_id, tier, is_lichess_eval_game) or None when empty.
 
@@ -787,18 +784,18 @@ async def claim_eval_job(
     worker_id: str = WORKER_ID_SERVER_POOL,
     scope: Literal["explicit", "idle"] | None = None,
 ) -> ClaimedJob | None:
-    """Claim the next eval job — tier-1 > tier-2 > tier-3 > tier-4 (derived).
+    """Claim the next eval job — tier-1 > tier-3 > tier-4 (derived).
 
     Session discipline: opens its own short session, commits, closes.
     The SKIP LOCKED lock is released immediately on commit — never held
     across the engine gather (Pitfall 1 in RESEARCH §Common Pitfalls).
 
     D-05 scope param (Phase 123 SEED-051):
-      None     → bundled tier-1>2>3>4 behavior (backward-compat for un-updated workers).
-      "explicit" → tier-1/2 only (_claim_queued_job); return None if empty (skip tier-3/4).
+      None     → bundled tier-1>3>4 behavior (backward-compat for un-updated workers).
+      "explicit" → tier-1 only (_claim_queued_job); return None if empty (skip tier-3/4).
       "idle"   → tier-3 only (still gated by EVAL_AUTO_DRAIN_ENABLED).
 
-    Tier-4 (TIER_BLOB_BACKFILL) fires only after tier-1/2/3 fall through AND only
+    Tier-4 (TIER_BLOB_BACKFILL) fires only after tier-1/3 fall through AND only
     under EVAL_AUTO_DRAIN_ENABLED — spare-capacity flaw-blob backfill (Phase 145).
 
     SEED-072: tier-4 is NOT served through the idle `/lease` path. Phase 146 removed the
@@ -839,7 +836,7 @@ async def claim_eval_job(
         await _sweep_expired_leases(session)
         await session.commit()
 
-    # Attempt tier-1 / tier-2 pick in a fresh short transaction.
+    # Attempt tier-1 pick in a fresh short transaction.
     async with async_session_maker() as session:
         queued = await _claim_queued_job(session, worker_id, LEASE_TTL_SECONDS)
         await session.commit()
@@ -953,8 +950,8 @@ async def report_job_complete(job_id: int) -> None:
 async def release_job(job_id: int) -> None:
     """Release a single leased eval_job back to 'pending' so it can be re-claimed.
 
-    Used by the remote lease handler (`/atomic-lease`) when it claims a tier-1/
-    tier-2 job it cannot hand a real lease payload to — currently only the
+    Used by the remote lease handler (`/atomic-lease`) when it claims a tier-1
+    job it cannot hand a real lease payload to — currently only the
     over-cap sentinel path (a lease that would exceed MAX_SUBMIT_EVALS positions,
     147-03/SEED-073). Without this the row would sit 'leased' for the full
     LEASE_TTL_SECONDS before the stale-lease sweep frees it, stalling the very

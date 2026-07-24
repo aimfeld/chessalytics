@@ -20,13 +20,15 @@ Mobile-first PWA, installable on iOS/Android, with drawer-based filter and bookm
 
 Users get position-precise WDL analysis (openings + endgames + time pressure) on top of their actual chess.com and lichess games, with personalized LLM commentary on endgame performance and an auto-generated opening-strengths/weaknesses report. No per-platform fragmentation, no manual opening tagging.
 
-## Current Milestone: none active — v2.7 shipped 2026-07-23
+## Current Milestone: v2.8 Import Filters and Guest Data Cleanup — all phases complete
+
+**v2.8 execution complete 2026-07-24** (Phases 186–188): user-facing import filters on the Import tab (SEED-117), daily guest-data pruning job (SEED-116), and import/eval pipeline cleanup (SEED-115, Phase 188 — 7 completed backfill scripts archived, dead tier-2 prose removed, `ix_games_bestmove_backfill_pending` realigned with the tier-4b claim query; `resweep_holed_games` and tiers 4/4b kept as permanent safety nets). Milestone close pending: `/gsd-complete-milestone`.
 
 **v2.7 Bot Personas & Playstyle Layer closed 2026-07-24** (Phases 182–185, 19 plans; deployed to production, PRs through #275). Shipped a roster of 24 named bot personas (4 styles × 6 ELO rungs, 800–1800) on the Bots page — each a complete pinned opponent (preset, measured ELO, style params, opening book, resign/draw-offer policy, avatar, bio), with no persona × strength picker; Custom mode keeps the raw (ELO, preset) knobs. Persona ELO labels are measured on the Phase-173 internal anchor scale (`PERSONA_CALIBRATION_MEASURED=true`), with honest ~900 floor / ~1800 ceiling constraints. See [MILESTONES.md](MILESTONES.md) and [milestones/v2.7-ROADMAP.md](milestones/v2.7-ROADMAP.md).
 
 Deferred at v2.7 close: AVAT-01 (real AI portraits — placeholders + prompts shipped per D-16); Phase 183 fast-follows WR-01 / IN-02; SEED-114 (bots above ~1900) stays dormant.
 
-**Next:** `/gsd-new-milestone`.
+**Next:** `/gsd-complete-milestone` (v2.8).
 
 
 ## Requirements
@@ -535,6 +537,8 @@ This document evolves at phase transitions and milestone boundaries.
 4. Update Context with current state
 
 ---
+*Last updated: 2026-07-24 — Phase 188 (Import/eval pipeline cleanup, SEED-115) complete, closing out v2.8 execution (Phases 186–188 all verified). Backfill machinery retired to `scripts/archive/`, tier-2 dead prose removed, bestmove backfill index realigned; full backend gate green (3637 passed). Next: `/gsd-complete-milestone`. (Prior footer below.)*
+
 *Last updated: 2026-07-22 — Phase 182 (Style Levers) complete: the engine-side style layer (opening books, contempt/resign policy, prior reweighting, score shaping) is live behind `BotSettings.style` / `BotGameSettings.style`, verified 8/8 with both review blockers fixed. Next: Phase 183 (Persona Registry & Bots Page). (Prior footer below.)*
 
 *Previous: 2026-07-21 — v2.7 Bot Personas & Playstyle Layer milestone opened (sourced from SEED-098, redesigned in the 2026-07-21 explore session on the shipped v2.6 substrate). A roster of 24 named bot personas (4 styles × 6 rungs 800–1800, persona-pins-everything) on the Bots page: per-persona opening books, draw contempt + resign policy, prior reweighting on Human rungs, score shaping on Light/Deep rungs, per-persona calibrated ELO via the Phase-180 harness on the Phase-173 anchor scale, AI-generated avatar set. Goal is perceived personality, not measurably distinct play. SEED-114 (ladder extension above ~1900) deliberately left dormant. (Prior footer below.)*

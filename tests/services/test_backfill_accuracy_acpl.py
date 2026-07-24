@@ -35,7 +35,7 @@ from app.models.game_position import GamePosition  # noqa: E402
 from app.models.oauth_account import OAuthAccount  # noqa: E402, F401 (registers FK table)
 from app.models.user import User  # noqa: E402
 
-from scripts.backfill_accuracy_acpl import run_backfill  # noqa: E402
+from scripts.archive.backfill_accuracy_acpl import run_backfill  # noqa: E402
 
 # Unique test-module user ID to avoid PK collisions with other test files.
 _TEST_USER_ID: int = 99206

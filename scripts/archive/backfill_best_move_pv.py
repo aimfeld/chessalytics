@@ -119,7 +119,7 @@ from app.services.engine import EnginePool  # noqa: E402
 
 # Reuse the live drain's batched write helpers so the (game_id, ply) keying for
 # best_move / pv is identical to the in-process drain by construction (SEED-054).
-from app.services.eval_drain import (  # noqa: E402
+from app.services.eval_apply import (  # noqa: E402
     _batch_update_best_move_rows,
     _batch_update_pv_rows,
 )

@@ -27,8 +27,8 @@ from app.repositories.endgame_repository import ENDGAME_PLY_THRESHOLD
 
 # Public API of the script — run_backfill is the callable exposed for testability.
 # CLI is parsed in main(); run_backfill takes explicit kwargs.
-# This import will fail (RED phase) until Task 2 creates scripts/backfill_eval.py.
-from scripts.backfill_eval import run_backfill
+# Phase 188/SEED-115 D-04: script archived to scripts/archive/ (completed backfill).
+from scripts.archive.backfill_eval import run_backfill
 
 
 pytestmark = pytest.mark.asyncio
@@ -170,7 +170,7 @@ class TestDryRun:
             await setup.commit()
 
         try:
-            with patch("scripts.backfill_eval.EnginePool") as MockPoolCls:
+            with patch("scripts.archive.backfill_eval.EnginePool") as MockPoolCls:
                 mock_pool = AsyncMock()
                 mock_pool.evaluate = AsyncMock(return_value=(150, None))
                 MockPoolCls.return_value = mock_pool
@@ -215,7 +215,7 @@ class TestIdempotency:
             await setup.commit()
 
         try:
-            with patch("scripts.backfill_eval.EnginePool") as MockPoolCls:
+            with patch("scripts.archive.backfill_eval.EnginePool") as MockPoolCls:
                 mock_pool = AsyncMock()
                 mock_pool.evaluate = AsyncMock(return_value=(150, None))
                 MockPoolCls.return_value = mock_pool
@@ -269,7 +269,7 @@ class TestLichessPreservation:
             await setup.commit()
 
         try:
-            with patch("scripts.backfill_eval.EnginePool") as MockPoolCls:
+            with patch("scripts.archive.backfill_eval.EnginePool") as MockPoolCls:
                 mock_pool = AsyncMock()
                 mock_pool.evaluate = AsyncMock(return_value=(999, None))
                 MockPoolCls.return_value = mock_pool
@@ -322,7 +322,7 @@ class TestLimit:
             await setup.commit()
 
         try:
-            with patch("scripts.backfill_eval.EnginePool") as MockPoolCls:
+            with patch("scripts.archive.backfill_eval.EnginePool") as MockPoolCls:
                 mock_pool = AsyncMock()
                 mock_pool.evaluate = AsyncMock(return_value=(100, None))
                 MockPoolCls.return_value = mock_pool
@@ -366,7 +366,7 @@ class TestUserFilter:
             await setup.commit()
 
         try:
-            with patch("scripts.backfill_eval.EnginePool") as MockPoolCls:
+            with patch("scripts.archive.backfill_eval.EnginePool") as MockPoolCls:
                 mock_pool = AsyncMock()
                 mock_pool.evaluate = AsyncMock(return_value=(50, None))
                 MockPoolCls.return_value = mock_pool
@@ -447,7 +447,7 @@ class TestIslandDetection:
             await setup.commit()
 
         try:
-            with patch("scripts.backfill_eval.EnginePool") as MockPoolCls:
+            with patch("scripts.archive.backfill_eval.EnginePool") as MockPoolCls:
                 mock_pool = AsyncMock()
                 mock_pool.evaluate = AsyncMock(return_value=(77, None))
                 MockPoolCls.return_value = mock_pool

@@ -14,6 +14,14 @@ in `YYYY-MM-DD` (Europe/Zurich).
 
 - Guest data cleanup — guest sessions inactive for 30 days now have their imported games and all associated analysis automatically purged (the long-advertised behavior is finally live). The guest account itself is kept, so a returning guest can log back in and simply re-import a fresh history. A daily background job handles it; registered accounts are never touched (Phase 187).
 
+### Changed
+
+- Realigned the `ix_games_bestmove_backfill_pending` partial index with the current best-move claim query; reframed `resweep_holed_games` as the permanent Path-C hole re-arm tool and trimmed stale tier-2 / legacy-endpoint docstrings (Phase 188).
+
+### Removed
+
+- Archived completed one-shot backfill scripts to `scripts/archive/` and pruned the 3 now-unused `eval_drain` re-exports (Phase 188, SEED-115).
+
 ## [v2.7] Bot Personas & Playstyle Layer — 2026-07-23
 
 ### Added
