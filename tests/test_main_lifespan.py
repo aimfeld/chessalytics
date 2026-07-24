@@ -16,8 +16,16 @@ import pytest
 
 # ─── Constants ────────────────────────────────────────────────────────────────
 
-# Named tasks expected in the lifespan.
-EXPECTED_TASKS: tuple[str, str] = ("periodic-orphan-reaper", "eval-drain")
+# Named tasks expected in the lifespan. Phase 187 / SEED-116: corrected the
+# pre-existing drift (was missing "full-eval-drain") while adding the new
+# "guest-cleanup" task, so this constant actually reflects all 4 background
+# tasks spawned in app/main.py's lifespan.
+EXPECTED_TASKS: tuple[str, ...] = (
+    "periodic-orphan-reaper",
+    "eval-drain",
+    "full-eval-drain",
+    "guest-cleanup",
+)
 
 # Stub coroutines sleep long enough to stay alive for the duration of the test.
 # They are never awaited to completion — the lifespan's task.cancel() path is
@@ -55,15 +63,18 @@ class TestLifespanBackgroundTasks:
     """Verify that both background tasks are spawned at startup and cancelled at shutdown."""
 
     async def test_both_background_tasks_spawned(self, monkeypatch: pytest.MonkeyPatch) -> None:
-        """Both reaper_task and drain_task are created and cancelled during lifespan.
+        """All four background tasks are created and cancelled during lifespan.
 
-        Monkeypatches all startup hooks + both background coroutines so the test
-        runs in-process with no DB or engine connections.
+        Monkeypatches all startup hooks + all four background coroutines so
+        the test runs in-process with no DB or engine connections. Named
+        "both" for historical reasons (Phase 91); now covers all EXPECTED_TASKS.
         """
         from app.main import app
 
         reaper_called = False
         drain_called = False
+        full_drain_called = False
+        guest_cleanup_called = False
 
         async def _stub_reaper() -> None:
             nonlocal reaper_called
@@ -75,6 +86,16 @@ class TestLifespanBackgroundTasks:
             drain_called = True
             await asyncio.sleep(STUB_SLEEP_SECONDS)
 
+        async def _stub_full_drain() -> None:
+            nonlocal full_drain_called
+            full_drain_called = True
+            await asyncio.sleep(STUB_SLEEP_SECONDS)
+
+        async def _stub_guest_cleanup() -> None:
+            nonlocal guest_cleanup_called
+            guest_cleanup_called = True
+            await asyncio.sleep(STUB_SLEEP_SECONDS)
+
         # Patch startup hooks so the lifespan can reach the task-spawn lines.
         monkeypatch.setattr("app.main.get_insights_agent", _noop_sync)
         monkeypatch.setattr("app.main.cleanup_orphaned_jobs", _noop)
@@ -84,15 +105,21 @@ class TestLifespanBackgroundTasks:
         # Replace the actual background coroutines with stubs that record being called.
         monkeypatch.setattr("app.main.run_periodic_reaper", _stub_reaper)
         monkeypatch.setattr("app.main.run_eval_drain", _stub_drain)
+        monkeypatch.setattr("app.main.run_full_eval_drain", _stub_full_drain)
+        monkeypatch.setattr("app.main.run_periodic_guest_cleanup", _stub_guest_cleanup)
 
         # Drive the lifespan: enter context (startup), then exit (shutdown).
         async with app.router.lifespan_context(app):
             # asyncio.create_task() schedules the coroutine but does not run it
-            # immediately. Yield to the event loop so both task stubs begin
-            # executing (setting reaper_called / drain_called).
+            # immediately. Yield to the event loop so all task stubs begin
+            # executing (setting the *_called flags).
             await asyncio.sleep(0)
             assert reaper_called, "run_periodic_reaper was not called during lifespan startup"
             assert drain_called, "run_eval_drain was not called during lifespan startup"
+            assert full_drain_called, "run_full_eval_drain was not called during lifespan startup"
+            assert guest_cleanup_called, (
+                "run_periodic_guest_cleanup was not called during lifespan startup"
+            )
 
         # After context exit the tasks were cancelled; stubs exited cleanly.
         # No exception propagated from the lifespan — this is the primary assert.
@@ -172,5 +199,73 @@ class TestLifespanBackgroundTasks:
         drain_logged = any("Eval drain task raised on shutdown" in msg for msg in logged_messages)
         assert drain_logged, (
             "Expected 'Eval drain task raised on shutdown' in logger.exception calls. "
+            f"Captured: {logged_messages}"
+        )
+
+    async def test_guest_cleanup_task_exception_on_shutdown_is_logged(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """A RuntimeError raised by run_periodic_guest_cleanup on shutdown is logged, not propagated.
+
+        Mirrors test_drain_task_exception_on_shutdown_is_logged for the 4th
+        background task (SEED-116 / Phase 187): the lifespan's finally block
+        catches a non-CancelledError from the cancelled guest-cleanup task,
+        logs it via logger.exception ("Guest cleanup task raised on shutdown"),
+        and must NOT propagate it to the lifespan caller.
+        """
+        import app.main as main_module
+        from app.main import app
+
+        async def _failing_guest_cleanup() -> None:
+            """Guest-cleanup stub that raises a non-CancelledError when cancelled."""
+            try:
+                await asyncio.sleep(STUB_SLEEP_SECONDS)
+            except asyncio.CancelledError:
+                raise RuntimeError("simulated guest cleanup failure")
+
+        monkeypatch.setattr("app.main.get_insights_agent", _noop_sync)
+        monkeypatch.setattr("app.main.cleanup_orphaned_jobs", _noop)
+        monkeypatch.setattr("app.main.start_engine", _noop_async_returns_none)
+        monkeypatch.setattr("app.main.stop_engine", _noop_async_returns_none)
+        monkeypatch.setattr("app.main.run_periodic_reaper", _stub_sleep_forever)
+        monkeypatch.setattr("app.main.run_eval_drain", _stub_sleep_forever)
+        monkeypatch.setattr("app.main.run_full_eval_drain", _stub_sleep_forever)
+        monkeypatch.setattr("app.main.run_periodic_guest_cleanup", _failing_guest_cleanup)
+
+        # Capture logger.exception directly (see the drain-shutdown test for why
+        # caplog is unreliable for tasks awaited inside the context manager).
+        logged_messages: list[str] = []
+        original_exception = main_module.logger.exception
+
+        def _capture_exception(
+            msg: str,
+            *args: object,
+            exc_info: Any = True,
+            stack_info: bool = False,
+            stacklevel: int = 1,
+            extra: Mapping[str, object] | None = None,
+        ) -> None:
+            logged_messages.append(msg)
+            original_exception(
+                msg,
+                *args,
+                exc_info=exc_info,
+                stack_info=stack_info,
+                stacklevel=stacklevel,
+                extra=extra,
+            )
+
+        monkeypatch.setattr(main_module.logger, "exception", _capture_exception)
+
+        # The lifespan context manager must NOT propagate the RuntimeError.
+        async with app.router.lifespan_context(app):
+            await asyncio.sleep(0)
+
+        guest_logged = any(
+            "Guest cleanup task raised on shutdown" in msg for msg in logged_messages
+        )
+        assert guest_logged, (
+            "Expected 'Guest cleanup task raised on shutdown' in logger.exception calls. "
             f"Captured: {logged_messages}"
         )

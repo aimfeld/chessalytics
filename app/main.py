@@ -29,6 +29,7 @@ from app.routers.users import router as users_router
 from app.services.engine import start_engine, stop_engine
 from app.services.maia_engine import start_maia, stop_maia
 from app.services.eval_drain import run_eval_drain, run_full_eval_drain
+from app.services.guest_cleanup_service import run_periodic_guest_cleanup
 from app.services.import_service import cleanup_orphaned_jobs, run_periodic_reaper
 from app.services.insights_llm import get_insights_agent
 
@@ -112,6 +113,10 @@ async def lifespan(_app: FastAPI) -> AsyncIterator[None]:
     # Phase 116 / EVAL-01: full-ply drain — analyzes every non-terminal ply at 1M nodes.
     # Runs alongside the entry-ply drain (D-116-08: entry-ply drain untouched).
     full_drain_task = asyncio.create_task(run_full_eval_drain(), name="full-eval-drain")
+    # Phase 187 / SEED-116: daily guest inactivity cleanup (D-01/D-02). No
+    # ordering dependency with stop_engine/stop_maia — guest cleanup never
+    # touches the engine.
+    guest_cleanup_task = asyncio.create_task(run_periodic_guest_cleanup(), name="guest-cleanup")
     try:
         yield
     finally:
@@ -123,6 +128,7 @@ async def lifespan(_app: FastAPI) -> AsyncIterator[None]:
         reaper_task.cancel()
         drain_task.cancel()
         full_drain_task.cancel()
+        guest_cleanup_task.cancel()
         try:
             try:
                 await reaper_task
@@ -142,6 +148,12 @@ async def lifespan(_app: FastAPI) -> AsyncIterator[None]:
                 pass  # expected on shutdown
             except Exception:
                 logger.exception("Full eval drain task raised on shutdown")
+            try:
+                await guest_cleanup_task
+            except asyncio.CancelledError:
+                pass  # expected on shutdown
+            except Exception:
+                logger.exception("Guest cleanup task raised on shutdown")
         finally:
             await stop_engine()
             # Phase 174 / D-03: tear down the Maia session alongside Stockfish. No

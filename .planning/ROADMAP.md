@@ -43,7 +43,7 @@
 - ✅ **v2.5 Move Statistics** — Phases 178–179 (shipped 2026-07-18) — one uniform, lichess-compatible per-game accuracy & ACPL methodology written into repurposed canonical `games` columns so games are comparable across chess.com/lichess/self-analyzed (Phase 178, SEED-110), then a single shared **two-sided Move Stats** component (accuracy strip + a 7-category per-player move-classification table) replacing the badge rows on both the Library game card and the analysis board tags panel (Phase 179, SEED-112) — see [milestones/v2.5-ROADMAP.md](milestones/v2.5-ROADMAP.md)
 - ✅ **v2.6 Bot Strength Calibration** — Phases 173, 180, 181 (shipped 2026-07-21; dev-only, no deploy) — put the bot's play-style presets on a measured strength scale without ever playing a human. Phase 173 (SEED-101) round-robins the calibration anchors into one internal rating scale (verdict: the Maia-3 argmax ladder is ~2.8x compressed); Phase 180 (SEED-102) measures the three-preset (Human/Light/Deep) strength curves on that scale plus the cross-family style-inflation gap `G_preset`; Phase 181 (SEED-104) inverts those curves into per-preset `target_blitz_elo → bot_elo` lookups with honest measured ranges (Human 900–1400, Light 1500–1600, Deep 1600–1800) and an approximate-ELO disclaimer. Nothing in the product reads the lookup yet — see [milestones/v2.6-ROADMAP.md](milestones/v2.6-ROADMAP.md)
 - ✅ **v2.7 Bot Personas & Playstyle Layer** — Phases 182–185 (shipped 2026-07-23; deployed to production, PRs through #275) — a roster of 24 named bot personas (4 styles × 6 ELO rungs, 800–1800) on the Bots page, each a complete pinned opponent (preset, calibrated ELO, style params, opening book, resign/draw-offer policy, avatar, bio). Style levers land first (Phase 182), then the persona registry + Bots page UI (Phase 183), then per-persona harness calibration replaces the provisional labels with measured values (Phase 184, `PERSONA_CALIBRATION_MEASURED=true`), then the roster is re-laid-out as a rung-ladder grid with per-persona win stars (Phase 185) (SEED-098) — see [milestones/v2.7-ROADMAP.md](milestones/v2.7-ROADMAP.md)
-- ⏳ **v2.8 Import Filters** — Phase 186 (in progress) — user-facing import filters (time-control multiselect + per-platform game cap) on the Import tab to keep storage and Stockfish compute in check, with backward backfill on filter upgrades and grandfathering for existing users (SEED-117)
+- ⏳ **v2.8 Import Filters and Guest Data Cleanup** — Phase 186 (complete), Phase 187 (complete) — user-facing import filters (time-control multiselect + per-platform game cap) on the Import tab to keep storage and Stockfish compute in check, with backward backfill on filter upgrades and grandfathering for existing users (SEED-117), plus a daily background job that prunes game data for guests inactive ≥30 days while keeping the guest account (SEED-116)
 
 ## Progress
 
@@ -141,7 +141,8 @@
 | 183. Persona Registry & Bots Page (SEED-098, v2.7) | 5/5 | Complete | 2026-07-22 |
 | 184. Persona Calibration & Strength Honesty (SEED-098, v2.7) | 4/4 | Complete | 2026-07-23 |
 | 185. Bots Roster Transpose + Win Stars (SEED-098, v2.7) | 3/3 | Complete | 2026-07-22 |
-| 186. Import Filters — Time Controls + Game Cap (SEED-117, v2.8) | 0/? | Not planned | — |
+| 186. Import Filters — Time Controls + Game Cap (SEED-117, v2.8) | 3/3 | Complete | 2026-07-24 |
+| 187. Guest Game Cleanup — 30-Day Inactivity Pruning (SEED-116, v2.8) | 2/2 | Complete | 2026-07-24 |
 
 ## Backlog
 
@@ -696,17 +697,18 @@ See [milestones/v2.7-ROADMAP.md](milestones/v2.7-ROADMAP.md) for full phase deta
 
 </details>
 
-## v2.8 Import Filters (in progress)
+## v2.8 Import Filters and Guest Data Cleanup (in progress)
 
 Let users choose on the Import tab which time controls to import and how many games, so casual users don't pull (and FlawChess doesn't store/analyze) tens of thousands of bullet games nobody will look at. Storage and Stockfish compute are the real constraints; the filter UI is the lever. Sourced from SEED-117 (explore session 2026-07-24); the three load-bearing design decisions (filter mutability, cap accounting, existing-user grandfathering) are locked in the seed. Lightweight milestone opened 2026-07-24 without a `/gsd-new-milestone` requirements cycle (same pattern as v2.6); flesh out or extend at will.
 
 - [x] **Phase 186: Import Filters — Time Controls + Game Cap** - TC multiselect + per-platform game cap on the Import tab, backward backfill on filter upgrades, grandfathering for existing users (SEED-117) (completed 2026-07-24)
+- [x] **Phase 187: Guest Game Cleanup — 30-Day Inactivity Pruning** - daily background job purges game data for guests inactive ≥30 days (cascade delete + dual import-cursor reset), keeps the guest account + auth (SEED-116) (completed 2026-07-24)
 
 ### Phase 186: Import Filters — Time Controls + Game Cap
 
 **Goal**: Users control what gets imported via a time-control multiselect (default: all except bullet) and a per-platform backlog game cap (1000/3000/5000, default 1000) on the Import tab; raising the cap or enabling a TC backfills older history, lowering never deletes, and existing users are grandfathered (all TCs + 5000 cap) with unchanged sync behavior.
 **Depends on**: Nothing hard (touches `app/services/import_service.py`, `chesscom_client.py`, `lichess_client.py`; generalizes the lichess client's existing benchmark-only `max_games`/`perf_type` pass-through)
-**Requirements**: TBD (locked design decisions in [SEED-117](seeds/SEED-117-import-filters-tc-and-game-cap.md))
+**Requirements**: TBD (locked design decisions in [SEED-117](seeds/closed/SEED-117-import-filters-tc-and-game-cap.md))
 **Success Criteria** (what must be TRUE):
 
   1. User can set a TC multiselect (bullet/blitz/rapid/classical, default all except bullet) and a game cap (1000/3000/5000, default 1000) on the Import tab; one shared setting per user, cap counted per platform.
@@ -724,3 +726,27 @@ Let users choose on the Import tab which time controls to import and how many ga
 
 - [x] 186-02-PLAN.md — Backward-fetch backfill: lichess `until`+`max` / chess.com newest→oldest walk, two-pass Sync orchestration with per-platform cursor + budget stop, delete-all cursor reset (IMPORT-03; D-03/04/05/06/07/14)
 - [x] 186-03-PLAN.md — Import tab UI: ImportFilterCard (TC multiselect + cap + copy + info popover), useImportSettings auto-save hook, per-TC budget chips (IMPORT-01/04; D-08/09/10/11/12/16)
+
+### Phase 187: Guest Game Cleanup — 30-Day Inactivity Pruning
+
+**Goal**: A daily in-process background job purges game data for guest users (`is_guest=true`) inactive for ≥30 days — deletes their games and all cascading game-scoped children (positions, flaws, best_moves, eval_jobs, bot_game_settings), deletes their `import_jobs` cursor row(s) AND resets the Phase-186 `user_import_settings` backfill cursors, while KEEPING the guest User row + auth + bookmarks + import preferences so a returning guest can log back in and re-import full history. Implements the already-advertised-but-never-built retention policy (SEED-116).
+**Depends on**: Nothing hard (new `app/services/guest_cleanup_service.py` + 1 lifespan line in `app/main.py`; reuses `game_repository.delete_all_games_for_user` + `user_import_settings_repository.reset_backfill_cursors` — the exact functions `DELETE /api/games` already uses in prod)
+**Requirements**: None (no REQ-IDs mapped; contract is CONTEXT.md D-01..D-07 + [SEED-116](seeds/closed/SEED-116-guest-game-30day-inactivity-cleanup.md))
+**Success Criteria** (what must be TRUE):
+
+  1. Only `is_guest=true` guests with `last_activity < now()-30d` are purged; NULL-last_activity (brand-new) guests and registered users are never touched.
+  2. A purged guest's games + all 5 cascading children are gone with zero orphan rows.
+  3. BOTH import cursors reset per guest (`import_jobs` row deleted AND `user_import_settings` backfill cursors nulled), so a returning guest re-imports full history.
+  4. The guest User row + auth + bookmarks + `user_import_settings` preferences survive.
+  5. The job runs as the 4th in-process asyncio lifespan task (daily cadence), spawned on startup, cancelled+awaited cleanly on shutdown, per-tick errors logged + Sentry-captured.
+
+**Plans**: 2/2 plans executed
+
+Plans:
+**Wave 1**
+
+- [x] 187-01-PLAN.md — Guest purge mechanics (tracer): eligibility query + per-guest purge (cascade delete + dual cursor reset) + orchestration loop, full test matrix
+
+**Wave 2** *(blocked on Wave 1 completion)*
+
+- [x] 187-02-PLAN.md — Periodic loop + lifespan wiring: `run_periodic_guest_cleanup` + 4th `app/main.py` background task + lifespan smoke-test drift fix

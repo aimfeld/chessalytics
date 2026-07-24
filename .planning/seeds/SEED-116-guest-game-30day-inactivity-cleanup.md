@@ -1,6 +1,6 @@
 ---
 id: SEED-116
-status: ready (decision made, mechanics verified)
+status: promoted (Phase 187, v2.8 — 2026-07-24)
 planted: 2026-07-23
 planted_during: /gsd-explore session on 2026-07-23, triggered by a user importing ~65k games from GM Hikaru's chess.com account (~5M game_positions rows). Explored import/storage/compute resource limits; converged on guest-game retention as the proportionate lever.
 trigger_when: Next maintenance/pipeline window. No external blocker — the decision is made and the mechanics exist. Prioritize if guest storage growth becomes a measured concern.
@@ -38,18 +38,10 @@ Implement a scheduled job that, for **guest** users (`users.is_guest = true`) in
 User row**. Guests can still log back in later — the session lives in browser localStorage,
 not the 30-day JWT — so keeping the account lets a returning guest simply re-import.
 
-Deliberately **not** doing (this seed): any hard import cap (game-count or date-range) for
-registered users. Rationale: ownership can't be verified, compute is already rationed, and
-importing a foreign archive into your *own* registered account is self-punishing (it turns
-your own dashboard into that player's stats). See "Deferred lever" below.
-
 ## Three implementation gotchas
 
 1. **"Inactivity" = `users.last_activity`.** The column exists (`user.py:27`) and is already
-   the eval lottery's recency signal, so it's maintained — BUT verify it's actually bumped
-   on guest *browsing/activity*, not only on import. If it's only touched on import, a guest
-   who keeps using the app without re-importing would be wrongly reaped. Confirm the update
-   site covers general guest requests before trusting it as the inactivity clock.
+   the eval lottery's recency signal, so it's maintained
 2. **Reset the import cursor on cleanup.** Import is incremental off `last_synced_at`
    (`import_service.py:459`). If games are deleted but the `import_jobs` cursor is left in
    place, a returning guest's re-import syncs from that cursor and pulls almost nothing.
@@ -60,18 +52,4 @@ your own dashboard into that player's stats). See "Deferred lever" below.
    (`game_flaws`, bookmarks, eval_jobs, etc.). Confirm each child cascades or is handled so
    no orphan rows remain. Keep the User row and its auth intact.
 
-Also: verify the exact advertised wording ("30 days of inactivity" vs "since creation") so
-the job matches what users are promised.
 
-## Deferred lever (do NOT build now — reserve)
-
-Content-based import cap (game-count or date-range) for the one case the guest prune does
-NOT catch: a **registered** user importing a huge **foreign** archive into their permanent
-account. Trigger to revisit: guest prune shipped **and** registered oversized-import abuse
-actually shows up in storage or pipeline metrics. Until then it's self-limiting and not
-worth the UX cost of a cap.
-
-## Why this is a seed, not a phase
-
-Per project rule (no unplanned phases without explicit consent), captured as a seed. The
-decision is locked and the mechanics are verified, so a future phase can start at planning.
