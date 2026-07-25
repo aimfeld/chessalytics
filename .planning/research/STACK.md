@@ -1,197 +1,185 @@
-# Stack Research — v2.3 Bot Play (NEW capabilities only)
+# Stack Research
 
-**Domain:** Clocked bot-play added to an existing client-side chess engine (React 19 PWA + FastAPI)
-**Researched:** 2026-07-11
-**Confidence:** HIGH (versions verified via `npm view`; chess.js `[%clk]` behavior and engine-module browser-independence verified by direct Node execution against the repo's own `node_modules`)
+**Domain:** Spaced-repetition drill feature (Train, v2.9) added to an existing FastAPI + React app
+**Researched:** 2026-07-25
+**Confidence:** HIGH
 
-## Scope note
+## Headline Finding
 
-This file covers ONLY what is NEW for bot-play. The FlawChess Engine (`useFlawChessEngine` / `mctsSearch`), the Maia-3 ONNX policy worker, the Stockfish.wasm worker pool, the ELO + play-style sliders, `chess.js`, `react-chessboard`, and the game-storage normalization path already ship in prod. See **What NOT to Use / Add** for the explicit "do not replace" list. There are exactly four net-new stack concerns: a chess clock, move sounds, a headless calibration harness, and `[%clk]` PGN emission.
+**Zero new dependencies are needed for the Train milestone.** Every capability the settled
+SEED-037 design calls for — confetti celebration, a hand-rolled interval-ladder scheduler,
+weekday-snapped due dates, and a weekday-picker control — is already installed and, in three
+of four cases, already has working, tested code in this exact codebase to copy from. This
+is stronger than "near-zero new deps": it's confirmed-zero, with file-level precedent.
 
-Headline: **only ONE new production-adjacent dependency is warranted** (`onnxruntime-node`, dev-only, for the harness). The clock and sounds are best hand-rolled; `[%clk]` is already covered by the installed `chess.js`.
+The prior-milestone (v2.3 Bot Play) stack research this file replaces is preserved in git
+history; that milestone's four new-concern-but-zero-new-deps stack (hand-rolled clock,
+hand-rolled sounds, dev-only `onnxruntime-node` harness) is unrelated to Train and not
+referenced further here.
 
-The prior-milestone (v2.0 engine) stack research is preserved alongside as `STACK.prev-v2.0-engine.md`.
+## Recommended Stack (= the existing stack, reused)
 
----
+### Core Technologies
 
-## Recommended Stack
+| Technology | Version (installed) | Purpose | Why Recommended |
+|------------|---------|---------|-----------------|
+| `canvas-confetti` | 1.9.4 (already in `frontend/package.json`, matches npm latest) | Session-end and "Flaw fixed!" celebration bursts | Already vendored for Bot Play wins (`frontend/src/lib/confetti.ts`, Quick 260723-tqn) with `prefersReducedMotion()` guard, theme-colored particles, and a test suite. Zero-dependency, ~6 kB gzipped ([Bundlephobia](https://bundlephobia.com/package/canvas-confetti)), canvas-based (no DOM thrash). Adding a second call site costs **0 bytes** of new bundle weight — it's already shipped and tree-shaken in. |
+| `date-fns` | 4.4.0 (already installed, matches npm latest) | Any frontend date formatting/arithmetic the Schedule + progress surface needs (e.g. displaying next due date, "N days ago" solve log) | Already the project's sole date library (`frontend/src/lib/relativeDate.ts`, `frontend/src/lib/recency.ts`). No reason to introduce a second (dayjs/luxon/moment) for one milestone. |
+| Python stdlib `datetime`/`timedelta` | 3.13 stdlib | Backend interval-ladder due-date computation + weekday-snap logic | This exact pattern — snap a date forward to a specific weekday — already exists in `app/services/endgame_service.py` (`monday = played_at.date() - timedelta(days=played_at.date().weekday())`, plus an `iso_weekday`-based variant). The ladder is 3 rungs (streak 0/1/2) with day-offsets (~3, ~10) and a "roll forward to next scheduled weekday" step — this is `timedelta` + `.weekday()` arithmetic, not a scheduling problem. A dedicated date library (`python-dateutil`, `pendulum`) would add a dependency to solve something stdlib already solves cleanly and testably as pure functions. |
 
-### Core decisions (NEW work)
+### Supporting Libraries (reused, not added)
 
-| Concern | Decision | Version | Why |
-|---------|----------|---------|-----|
-| Chess clock / timer | **Hand-roll** a deadline-based hook (`useGameClock`) | n/a | No maintained React chess-clock lib is worth a dependency; the correct pattern is ~80 lines and interval libraries get the accuracy model *wrong* (see clock section). |
-| Move sounds | **Hand-roll** a tiny Web Audio wrapper (`useMoveSounds`), preloaded buffers | n/a (Web Audio API is a platform built-in) | 5 short one-shot cues; a lib (howler) adds ~30 KB + a stale dep for something the platform does natively. Precache the audio assets via the existing Workbox/`vite-plugin-pwa` config for offline. |
-| Harness — Maia inference | **`onnxruntime-node`** (swap from `onnxruntime-web`) | **1.27.0** | Exact same ORT version as the pinned `onnxruntime-web@1.27.0` → identical opset/kernel support, zero model-compat risk. Native CPU EP is far faster than WASM for a batch harness, and needs no browser globals (`importScripts`, `self`, `navigator.gpu`, `Worker`). |
-| Harness — Stockfish | **Reuse the vendored `stockfish-18-lite-single.js`** as a `.cjs` child process | already vendored | Already verified working headlessly in Node (memory `project_headless_stockfish_wasm_verification`). No new dependency. |
-| Harness — run TS directly | **`tsx`** (esbuild loader) | **4.23.0** | Runs the exact `mctsSearch.ts` + pure engine modules unbundled, ESM + path-alias aware, no jsdom, no separate build step. Dev-only. |
-| `[%clk h:mm:ss]` PGN emission | **`chess.js` `setComment()`** (already installed) | 1.4.0 (present) | Verified: `setComment('[%clk 0:03:00]')` after each move makes `.pgn()` emit `... e4 {[%clk 0:03:00]} e5 ...` — the exact lichess/PGN standard. No PGN-writer library needed; python-chess already parses it on ingest. |
+| Library | Version | Purpose | When to Use |
+|---------|---------|---------|-------------|
+| `radix-ui` (`ToggleGroup`) | 1.4.3, wrapped in `frontend/src/components/ui/toggle-group.tsx` | The "weekday picker" settings control (Mon/Tue/.../Sun multi-select) | Already used for exactly this shape of control — multi-select chip rows — in `ImportFilterCard.tsx` and `Openings.tsx`. A 7-day picker is 7 `ToggleGroupItem`s, no new component. Do not reach for a calendar/date-picker library for this — it's a day-of-week selector, not a date selector. |
+| `react-day-picker` | 10.0.1 | NOT needed for the weekday picker (see above) — already present for unrelated custom-date-range filters (`CustomRangePopover.tsx`) | Only relevant to Train if a future v2 feature needs an actual calendar (e.g. "pick a specific catch-up day"); v1's weekday-picker + N-per-session settings don't need it. |
+| `@types/canvas-confetti` | 1.9.0 (already installed as devDependency) | TypeScript types for the untyped `canvas-confetti` package | Already present; nothing to add. |
 
-### New dependencies to actually add
+### Development Tools
 
-| Package | Version | Where | Dev/Prod |
-|---------|---------|-------|----------|
-| `onnxruntime-node` | 1.27.0 | harness only (`scripts/` or a `harness/` workspace) | **devDependency** — must NOT ship in the browser bundle |
-| `tsx` | 4.23.0 | harness runner | **devDependency** |
-
-That's it. The clock, sounds, and `[%clk]` add **zero** new runtime dependencies.
-
----
-
-## 1. React chess clock / timer — hand-roll, deadline-based
-
-**Recommendation: hand-roll. Do not add a library.** The npm "react-timer"/"react-countdown" family (and the few "chess clock" packages) almost all implement the *wrong* model: they decrement a counter on each `setInterval` tick and accumulate drift, and they stop cold when the tab is backgrounded (browsers throttle `setInterval` to ≥1 s for visible tabs, and much harder for hidden ones — a 3+0 blitz clock would silently freeze). None are worth the dependency for ~80 lines of correct code.
-
-**The correct accurate-timer pattern (this is the standard, and what lichess/chess.com do):**
-
-1. **Store deadlines, not counters.** The source of truth is `deadlineMs = Date.now() + remainingMs` for the side on move (plus the frozen `remainingMs` for the side off move). Never subtract a fixed amount per tick.
-2. **Derive display from `Date.now()` deltas.** On each render tick compute `remaining = deadline - Date.now()`. Drift-free by construction: every frame recomputes against the wall clock, so no error accumulates.
-3. **Drive the UI tick with `setTimeout`/`requestAnimationFrame`, not `setInterval`.** A self-rescheduling `setTimeout` (or `rAF` while visible) at ~100 ms *only repaints* the number; the *value* comes from the delta, so a throttled or skipped tick cannot corrupt time — it just repaints late.
-4. **Page Visibility API for background correctness.** On `visibilitychange`: when hidden, stop the repaint loop; on becoming visible, immediately recompute `remaining = deadline - Date.now()`. Because the deadline is absolute, elapsed background time is accounted for correctly — if the clock ran out while hidden, the recompute detects `remaining <= 0`. This satisfies "survives tab backgrounding / `setInterval` throttling."
-5. **Flag detection on the authoritative delta**, not on a tick reaching zero: check `Date.now() >= deadline` (a) every repaint, (b) on `visibilitychange` → visible, and (c) right before the bot is asked to move. A tick-based zero-check would miss a flag that expired while throttled/hidden.
-6. **Fischer increment:** on move *commit* for a side, `remaining += incrementMs`, then set the opponent's `deadline`. Matches lichess semantics (the mover keeps the increment).
-7. **Pause/resume (localStorage abandonment resume, SEED-091 decision 4):** persist `remainingMs` per side + whose turn it is (a paused clock stores plain remaining values, no live deadline). On resume, rebuild the on-move side's `deadline = Date.now() + remainingMs`. Clock is paused while away.
-
-**Shape:** a `useGameClock({ initialMs, incrementMs })` hook returning `{ whiteMs, blackMs, activeSide, onMove(side), pause(), resume(), flagged }`, plus a pure `computeRemaining(state, now)` helper that is trivially unit-testable (feed it fake `now` values) and reusable in the harness for time-odds simulation. Keep the React `setTimeout` loop thin; put the time math in the pure helper.
-
-**Interaction with bot think-time (SEED-091 pacing note):** the same `remainingMs` feeds both the search-budget ceiling and the human-like move delay. The bot's "thinking" delay must itself be a `setTimeout` scheduled against a deadline (so a backgrounded tab doesn't make the bot move instantly on return) — reuse the same deadline discipline.
-
----
-
-## 2. Move sounds — hand-roll Web Audio; source CC0 assets
-
-**Recommendation: hand-roll a tiny `useMoveSounds` hook over the Web Audio API.** Five short cues (move, capture, check, game-end, optionally low-time/illegal). ~40 lines: `fetch` each asset once → `AudioContext.decodeAudioData` → cache the `AudioBuffer` → on event, `createBufferSource()` and `start()`. Web Audio is the right layer: **no per-play latency** (buffers pre-decoded), supports **overlapping** plays (rapid moves), needs no DOM nodes.
-
-**Why not the alternatives:**
-- **`<audio>` elements:** simplest, but re-triggering a still-playing element needs `currentTime = 0` gymnastics, overlapping plays need cloned nodes, and first-play decode latency is noticeable. Fine as a fallback, not the primary path.
-- **`howler.js` (2.2.4):** the standard tiny audio lib and it *works*, but ~30 KB gzipped, an aging release cadence, and it solves problems (audio sprites, cross-fade, streaming music) this feature doesn't have. Add it only if sound scope later grows. Documented alternative, not the default.
-
-**Critical browser gotcha (must handle):** `AudioContext` starts `suspended` until a user gesture. Create/resume the context on the first user interaction (the "Play" button on the setup screen is the natural unlock point) and call `ctx.resume()` there. Without this, the first move plays silently on Chrome/Safari. Respect a mute toggle (persist in localStorage) and consider a sound preference / `prefers-reduced-motion`.
-
-**Assets & licensing (be careful):**
-- **Do NOT assume lichess's sound files are freely reusable.** lichess `lila` assets are under lichess's own terms and some carry attribution/CC-BY or bespoke licenses — not clean CC0. Don't copy them without checking each file.
-- **Preferred: CC0.** Source from **freesound.org** filtered to CC0 (public domain), or generate synthetic clicks/thuds (a short sine/triangle burst rendered offline). CC0 avoids attribution obligations awkward in a PWA. Keep a short provenance/license note in the repo even for CC0.
-- Encode as small **`.ogg` + `.mp3`** (or just `.mp3`/`.m4a` — universally supported incl. iOS Safari) at low bitrate; each cue is a few KB.
-
-**PWA / offline:** put audio under `frontend/public/sounds/` and ensure the existing **`vite-plugin-pwa@1.3.0`** Workbox config precaches them (add the audio glob to the precache manifest if `public/` assets aren't already globbed) so sounds work when installed/offline. This mirrors how the vendored engine/maia assets are served verbatim from `public/`.
-
----
-
-## 3. Headless calibration harness — `onnxruntime-node` is the right swap (feasibility: YES)
-
-**The open feasibility question — "can Maia ONNX run headlessly in Node at harness-viable speed?" — resolves to YES, via `onnxruntime-node`, not `onnxruntime-web` in jsdom.**
-
-### Why not run the browser worker in Node/jsdom
-The Maia path in prod is `mctsSearch.ts` → `maiaQueue.ts` → `new Worker('/maia/maia-worker.js')` → `importScripts(ort.wasm.min.js)`. `maia-worker.js` depends on browser-only globals: `importScripts`, `self.onmessage`/`postMessage`, `navigator.gpu` (WebGPU probe), and the UMD `ort` global. jsdom provides **none** of `Worker`, `importScripts`, or WebGPU; shimming them to run WASM-ORT would be slow and brittle. Reject this approach.
-
-### The clean approach (verified feasible)
-The **encoding + post-processing math is already browser-independent.** Verified by inspection: `src/lib/maiaEncoding.ts` and `src/lib/sanToSquares.ts` import only `chess.js` — no `window`/`self`/`navigator`/`document`. `mctsSearch.ts` imports only pure TS modules (`select`, `leafScore`, `policyTemperature`, `types`, `guardrail`, `liveFlaw`). The browser coupling lives **entirely in the two worker-glue files** (`maia-worker.js`, and the `Worker`-spawning parts of `maiaQueue.ts`).
-
-So the harness reimplements just the thin provider seam in Node:
-
-1. **Maia provider (Node):** load `frontend/public/maia/maia3_simplified.onnx` with `onnxruntime-node`'s `InferenceSession.create(modelPath, { executionProviders: ['cpu'] })`. Feed the **same three inputs** the worker builds — `tokens [B,64,12]`, `elo_self [B]`, `elo_oppo [B]` — using the **ported** `encodeBoardTokens()` from `maiaEncoding.ts` (import it directly via `tsx`, since it's browser-free). Read `logits_move` / `logits_value`, then run the same `maskAndSoftmax` + `sanToUci` to produce the `Record<uci, prob>` that `EngineProviders.policy()` returns. **The existing browser encoding glue ports directly** — same numeric pipeline, minus the Worker envelope.
-2. **Stockfish provider (Node):** spawn the vendored `stockfish-18-lite-single.js` copied to a no-`package.json` dir as `.cjs` and drive it over stdin/stdout UCI — the already-verified recipe. Wrap it to the same `EngineProviders` grading interface `mctsSearch` expects.
-3. **Reuse `mctsSearch.ts` unchanged.** It's pure logic over the `EngineProviders` interface; wire it to the two Node providers. This is the point of the harness — it tests the *identical* search code the browser runs, so the strength map is valid.
-4. **Anchors:** raw-Maia-argmax opponents (1100–1900) reuse the same Node Maia session with a straight argmax over the policy; Stockfish skill-level anchors use `setoption name Skill Level` on the vendored binary.
-
-### Version / packages / runtime
-- **`onnxruntime-node@1.27.0`** — pinned to match `onnxruntime-web@1.27.0` exactly. Eliminates the classic opset/kernel-mismatch trap: same ORT build → the model that runs in the browser runs identically in Node. (The `onnxruntime==1.20.1` in the memory files was the **Python** `onnxruntime` for a *different* Maia repro — irrelevant here; do not down-pin the Node package to it.)
-- **`tsx@4.23.0`** — run `tsx harness/run.ts`; it resolves the `@/` path alias (point tsx at the frontend `tsconfig` or a small `paths` config) and executes ESM TS with no bundler. No jsdom.
-- **Node ≥ 20** (repo has **v24.14.0**; `onnxruntime-node` ships prebuilt binaries for Node 18/20/22/24 on linux-x64/arm64 + macos — no native toolchain needed).
-- **No jsdom, no worker shims, no `Worker` polyfill.** Keeping providers Node-native avoids the entire browser-emulation surface.
-
-### Throughput expectation
-Native CPU ORT runs the small Chessformer model in low single-digit milliseconds per position on a modern CPU — orders of magnitude faster than needed for a coarse `(ELO × slider)` grid. The full-human path is **one Maia inference per move** (no MCTS), so even thousands of games are minutes. The Stockfish-blend path costs more (search), but that's WASM-in-Node compute, already proven. Harness-viable: **comfortably YES.**
-
-### Fallback (if `onnxruntime-node` ever mismatches the model)
-Run `onnxruntime-web`'s **WASM backend inside Node** (`require('onnxruntime-web')`, force `ort.env.wasm.numThreads = 1`, point `wasmPaths` at the vendored `.wasm`). Slower and you re-inherit WASM asset-path fiddliness, but it's the *exact* runtime the browser uses — the tie-breaker oracle if a Node-vs-browser policy discrepancy is ever suspected. Keep it documented, don't build on it by default.
-
----
-
-## 4. `[%clk]` PGN clock annotations — already covered by chess.js
-
-**No new library. `chess.js@1.4.0` (already installed) emits `[%clk]` correctly** — verified by direct Node execution against the repo's `node_modules`:
-
-```
-c.move('e4'); c.setComment('[%clk 0:03:00]');
-c.move('e5'); c.setComment('[%clk 0:02:58]');
-c.pgn()  →  1. e4 {[%clk 0:03:00]} e5 {[%clk 0:02:58]} 2. Nf3 *
-```
-
-`setComment()` attaches a comment to the position *after* the move just played, and `.pgn()` renders it as `{...}` immediately following the move — exactly the lichess/PGN `[%clk h:mm:ss]` convention. So:
-- **Frontend:** after each committed move, `chess.setComment('[%clk ' + formatClock(remainingMs) + ']')`. Format is `h:mm:ss` (single-digit hours; lichess uses `0:03:00` for 3+0). Hand-write the string — chess.js has no dedicated clock API, but doesn't need one; the annotation is just a structured comment.
-- **Backend:** the existing normalization path uses **python-chess**, which parses `[%clk]` natively (it's how imported chess.com/lichess clock data already lands). The stored `platform='flawchess'` PGN flows through the same reader — **no new backend parsing code**, satisfying SEED-091 decision 1 (time-management stats won't silently exclude bot games).
-
-One caveat to lock at plan time: emit the clock for **both** colors' moves (so time-management analytics have per-side clocks), and decide value semantics — store *remaining time after the move* (lichess convention), computed from the clock hook's `remainingMs` at move-commit (after increment). Keep the formatter a pure function shared with the clock hook.
-
----
+No new dev tooling. Existing `ruff`/`ty`/`pytest` (backend) and `eslint`/`vitest` (frontend) cover the new code with zero configuration changes.
 
 ## Installation
 
 ```bash
-# Harness only — dev dependencies, MUST NOT reach the browser bundle
-cd frontend        # or a dedicated harness workspace
-npm install -D onnxruntime-node@1.27.0 tsx@4.23.0
-
-# Clock, sounds, [%clk]: NO installs.
-#   - chess.js@1.4.0 already present (handles [%clk] via setComment)
-#   - Web Audio API + Page Visibility API are platform built-ins
-#   - audio assets: drop CC0 .mp3/.ogg files into frontend/public/sounds/
+# Nothing to install. All of the below are already present in package.json / pyproject.toml:
+#   canvas-confetti ^1.9.4 (+ @types/canvas-confetti ^1.9.0 dev)
+#   date-fns ^4.4.0
+#   radix-ui ^1.4.3 (ToggleGroup)
+#   Python 3.13 stdlib datetime/timedelta
 ```
 
----
+## Answering the Four Specific Questions
+
+### 1. Confetti/celebration effect
+
+**Use the existing `canvas-confetti` wrapper, extended with a second helper.**
+`frontend/src/lib/confetti.ts` already exports `fireWinConfetti()` (two-burst, theme-colored,
+`CONFETTI_ORIGIN_Y`/`CONFETTI_PARTICLE_COUNT` constants) and a tested `prefersReducedMotion()`
+guard read at the call site (never inside the fire function — matches the project's existing
+call-site-gating convention, e.g. `useBotGame.ts:801`). For Train:
+
+- **Green session-end celebration**: reuse `fireWinConfetti()` as-is, or add a small sibling
+  (e.g. `fireSessionConfetti()`) if the burst geometry/particle count needs to differ for a
+  full-screen results panel vs. the bot-game board. Either way it's a new named export in the
+  same file, not a new dependency.
+- **"Flaw fixed!" retirement moment**: a second, distinct celebration per the settled design.
+  Same library, same `prefersReducedMotion()` guard — vary particle count/origin/colors as a
+  design decision, not a stack decision.
+- Do **not** reach for a heavier alternative (`tsparticles`, `party.js`, a Lottie/After-Effects
+  export). Those solve problems (physics engines, complex particle systems, designer-authored
+  animations) this feature doesn't have, and `canvas-confetti` is already the zero-cost choice
+  since it's shipped.
+- **Pure-CSS confetti** was the other option posed in the question — rejected as a *downgrade*
+  here specifically because switching away from the already-installed, already-tested,
+  already-reduced-motion-aware library would mean re-solving a solved problem (CSS confetti
+  needs many pre-generated keyframe pieces or JS-driven positioning anyway, at which point
+  you're most of the way to reinventing `canvas-confetti`).
+
+### 2. No scheduler dependency
+
+**Confirmed — the interval ladder is pure functions, no library.** The settled design (SEED-037)
+is explicit: streak-keyed rungs (0 → next scheduled session, 1 → ~3 days, 2 → ~10 days), each
+snapped forward to the next scheduled weekday, with wrong-answer resetting streak to 0. This is:
+
+- **Not FSRS** (explicitly rejected in the seed's Rejected Alternatives — no memory-model
+  fitting, no `py-fsrs`/`fsrs` package).
+- **Not cron-driven** — due dates are computed and stored per-item at result-recording time;
+  sessions are pulled on-demand when the user opens `/train` (most-overdue-first query), not
+  pushed by a background scheduler. There is no APScheduler/Celery-beat/cron job here, because
+  v1 has no push/email (deferred to v2 per the seed) — the only "trigger" is the user visiting
+  the page, which the existing FastAPI request/response cycle already handles.
+- Confirmed against the codebase's own precedent: `guest_cleanup_service.py`,
+  `import_job_repository.py`'s orphan-reaping, and `endgame_service.py`'s week-bucketing all do
+  this class of "compute a date offset, maybe snap to a weekday" work as plain functions/queries
+  under existing services — no scheduler library appears anywhere in `app/services/` for this
+  kind of per-record due-date logic, and Train's ladder is materially simpler (2 non-zero rungs)
+  than any of those.
+
+### 3. Date/scheduling utility for weekday-snapped due dates
+
+**Stdlib `datetime`/`date`/`timedelta` on the backend; `date-fns` (already installed) for any
+frontend display formatting.** No new library on either side:
+
+- Backend: the snap-to-weekday primitive is a one-liner pattern already used twice in
+  `endgame_service.py` (`date.weekday()` for Monday-anchoring, and an ISO-weekday variant). Train
+  needs the general case (snap to *any* one of the user's chosen weekdays, not just Monday) —
+  still trivially `min((7 - date.weekday() + target_weekday) % 7 for target_weekday in
+  scheduled_days)` or equivalent, no dependency. Recommend implementing as a small pure function
+  in a new `app/services/train_scheduler.py` (or similar) precisely because the seed calls out
+  "fully testable, no dependency" as a design goal — stdlib delivers on that directly.
+  `zoneinfo` (stdlib, Python 3.9+) is available if timezone-aware "next scheduled day" logic is
+  needed, but check whether the rest of the app already has a timezone convention (likely UTC
+  dates, matching `game_flaws`/`games` timestamp handling) before introducing per-user timezone
+  awareness — that's a scope question for the phase plan, not a stack question.
+- Frontend: `date-fns` already covers relative-date display (`relativeDate.ts` pattern) for
+  showing "due in 3 days" / solve-log timestamps on the progress surface. No new frontend date
+  library.
+
+### 4. Anything else the settled design implies
+
+Reviewed the full settled design (solve loop, grading, taxonomy, session composition, tactic
+line stepper, gamification, nav) against the current stack. Everything else is explicitly
+**reuse of already-built machinery**, not new stack surface:
+
+- **Grading engine**: vendored client Stockfish WASM (`stockfish` 18.0.8 +
+  `onnxruntime-web` 1.27.0 for Maia, already in `dependencies`) — the seed explicitly reuses the
+  Bot Play WASM integration for client-side move evaluation. No new engine, no grading endpoint.
+- **Tactic line stepper**: reuses `frontend/src/components/analysis/VariationTree.tsx` as-is
+  (`tacticDepthBadge`, `missedDepth`/`allowedDepth` props already handle both orientations).
+- **Weekly streak / nav badge / dashboard card**: standard React state + existing `useUserFlag`
+  pattern (referenced in the seed for the notification-dot chain) — no new UI library.
+- **Session-end score color rating**: `theme.ts`-driven, matching the project's existing
+  green/yellow/red conventions elsewhere (no new charting/gauge library — this is a badge/pill,
+  not a Recharts visualization).
+- **New DB tables/columns** (drill-item state: `streak`, `due_date`, `fail_count`, parked flag,
+  solve log) are a schema/migration concern (SQLAlchemy 2 async + Alembic, already the stack),
+  not a new-dependency concern.
+- One thing to flag for the phase planner, not a stack gap: the seed's session-composition
+  query (75% SR most-overdue-first + 25% red herrings from non-gem `game_best_moves`, backfilled
+  from recent games) is pure SQL/repository-layer work against existing tables — no vector
+  search, no queue library, no new indexing technology implied. Confirm at plan time whether the
+  most-overdue-first + recency-weighted-backfill query needs a new composite index (a DB
+  question, not a stack-library question).
 
 ## Alternatives Considered
 
 | Recommended | Alternative | When to Use Alternative |
-|-------------|-------------|-------------------------|
-| Hand-rolled deadline clock | `react-countdown` / a "react chess clock" npm pkg | Never for this — they use interval-decrement + accumulate drift and freeze when backgrounded. Not fit for a real chess clock. |
-| Hand-rolled Web Audio `useMoveSounds` | `howler.js@2.2.4` (+ `@types/howler@2.2.13`) | If sound scope grows: audio sprites, background music, cross-fade, or a single-line cross-format fallback. Not needed for 5 one-shot cues. |
-| `onnxruntime-node@1.27.0` for the harness | `onnxruntime-web` WASM backend run *inside* Node | As a correctness oracle when you suspect a Node-vs-browser policy discrepancy (identical runtime), or if a future model uses an op the Node CPU EP lacks. Slower; don't default to it. |
-| `tsx` to run the harness TS | Pre-`tsc` build then run JS; or `ts-node` | If you want a committed compiled artifact. `tsx` (esbuild) is faster to iterate and alias-aware; `ts-node` is slower and stricter about ESM. |
-| Port encoding into Node providers | Run the browser Maia worker under jsdom + Worker/WebGPU shims | Never — jsdom has no `Worker`/`importScripts`/WebGPU; shimming WASM-ORT is slow and brittle. The encoding math is already browser-free, so this is pure downside. |
-| `chess.js setComment` for `[%clk]` | A dedicated PGN writer lib (e.g. `@mliebelt/pgn-*`) | Never here — chess.js already emits the standard annotation; a PGN library is redundant weight. |
+|-------------|-------------|--------------------------|
+| `canvas-confetti` (existing) | Pure CSS confetti (keyframe-based) | Never for this project — see §1 above; only makes sense if a project has zero JS confetti already and wants to avoid any JS dependency at all. |
+| `canvas-confetti` (existing) | `tsparticles` / `party.js` | Only if the design called for continuous ambient particle effects or complex physics — the seed's two one-shot bursts don't need that weight. |
+| Stdlib `datetime` (backend) | `python-dateutil` / `pendulum` / `arrow` | Only if the ladder grew genuinely complex recurrence rules (RRULE-style "every 2nd Tuesday") — it doesn't; it's ≤3 rungs with day-count offsets. |
+| Radix `ToggleGroup` (existing) | A dedicated weekday-picker npm package | Never — this is exactly what `ToggleGroup` already renders elsewhere in the app (`ImportFilterCard.tsx`); a new package would duplicate an in-house pattern. |
+| Hand-rolled interval ladder (per seed) | `fsrs` / `ts-fsrs` (FSRS algorithm) | Explicitly rejected by the seed's own decision log — item lifetime (~3-6 reps) and binary grading give FSRS's memory-model fitting nothing to bite on. Do not revisit; this is a settled decision, not an open stack question. |
 
----
+## What NOT to Use
 
-## What NOT to Use / Add
-
-These already exist and ship in prod. **Do NOT propose replacing, re-selecting, or re-benchmarking them** — bot-play consumes them as-is.
-
-| Do NOT add/replace | Why | Use the existing thing |
-|--------------------|-----|------------------------|
-| Any new chess engine, or a rewrite of `mctsSearch` | The FlawChess Engine (v2.0) is the whole point of measuring; changing it invalidates calibration | `useFlawChessEngine` / `mctsSearch` (`src/lib/engine/`) |
-| A different browser Maia inference stack (tfjs, hosted API) | `onnxruntime-web@1.27.0` + `maia3_simplified.onnx` in a Worker already ships | `public/maia/maia-worker.js`, `maiaQueue.ts` |
-| A different/bundled Stockfish, or WASM threading | Vendored single-thread `stockfish-18-lite-single.{js,wasm}` is deliberately non-Vite-bundled; threading off (no cross-origin isolation) | `public/engine/`, `useStockfishEngine` / the search's grading provider |
-| A move-selection/sampling library | The sample↔argmax blend is the engine's own play-style-slider semantics | reuse the analysis-board play-style slider + root-policy temperature (`policyTemperature.ts`) |
-| A websocket/server game-session layer, an on-chain clock authority | Locked decision: the game is fully client-side; only the finished PGN is POSTed | one small store endpoint reusing the existing normalization path (`platform='flawchess'`) |
-| A backend PGN/`[%clk]` parser | python-chess already parses `[%clk]` on ingest | existing normalization reader |
-| `onnxruntime-node` as a **prod/runtime** dependency | It's a native binary for the Node harness only; the browser keeps using `onnxruntime-web` | mark it `devDependencies`, keep it out of the Vite bundle |
-
----
+| Avoid | Why | Use Instead |
+|-------|-----|--------------|
+| `fsrs` / `ts-fsrs` / any spaced-repetition algorithm package | Settled-rejected in SEED-037; adds a dependency and a memory-model the design deliberately doesn't want | The hand-rolled streak-keyed interval ladder (pure functions, `app/services/`) |
+| APScheduler / Celery-beat / `node-cron` / any background scheduler | No push/email in v1 (deferred); due-date computation is request-time, not a background job | Compute-and-store due dates on result-recording; pull most-overdue-first on page load |
+| A second date library (dayjs/luxon/moment/pendulum) on the frontend | `date-fns` is already the established single date library across the codebase | `date-fns` (already installed) |
+| A dedicated weekday-picker or calendar npm package | Radix `ToggleGroup` already renders this exact multi-select-chip shape elsewhere in the app | `frontend/src/components/ui/toggle-group.tsx` |
+| A second confetti/particle library | `canvas-confetti` is already installed, tested, themed, and reduced-motion-aware | `frontend/src/lib/confetti.ts` (extend with a second exported helper if burst geometry needs to differ) |
 
 ## Version Compatibility
 
-| Package A | Compatible With | Notes |
-|-----------|-----------------|-------|
-| `onnxruntime-node@1.27.0` | `onnxruntime-web@1.27.0` (pinned) | **Match these exactly.** Same ORT version → identical opset/kernel coverage → the browser model runs identically in the harness. Bump them together, never independently. |
-| `onnxruntime-node@1.27.0` | Node 24.14.0 (repo), Node ≥ 20 | Prebuilt binaries for Node 18/20/22/24 on linux/macos x64+arm64; no native build toolchain needed. |
-| `tsx@4.23.0` | TypeScript 6, Vite 8 project | esbuild-based, ESM-native; give it the frontend `tsconfig` (or a small `paths` config) so `@/` aliases resolve in `mctsSearch.ts` and friends. |
-| `chess.js@1.4.0` | existing frontend + python-chess backend | `setComment('[%clk h:mm:ss]')` → `.pgn()` emits `{[%clk ...]}`; python-chess parses it. Verified end-to-end. |
-| Web Audio + Page Visibility APIs | all target browsers incl. iOS Safari | Web Audio needs a user-gesture `resume()`; both APIs are baseline-supported. |
-| audio assets (mp3/ogg) | `vite-plugin-pwa@1.3.0` Workbox | Ensure `public/sounds/*` is in the precache glob for offline PWA playback. |
-
----
+| Package | Compatible With | Notes |
+|---------|------------------|-------|
+| `canvas-confetti@1.9.4` | React 19, Vite 8 | Framework-agnostic canvas API, no React-specific wrapper needed (the project calls it directly from hooks/services, not via a `react-canvas-confetti` wrapper — keep that pattern). |
+| `date-fns@4.4.0` | TypeScript 6.0.3 (project's `typescript` version) | v4 is ESM-first with full tree-shaking; already integrated, no action needed. |
+| Python stdlib `datetime` | Python 3.13 | No version concerns — stdlib. |
 
 ## Sources
 
-- Repo `node_modules` version check via `npm view` (2026-07-11): `onnxruntime-node 1.27.0`, `onnxruntime-web 1.27.0` (pinned in `frontend/package.json`), `tsx 4.23.0`, `howler 2.2.4`, `@types/howler 2.2.13`, Node `v24.14.0` — HIGH confidence (authoritative for versions).
-- Direct Node execution of `chess.js@1.4.0` `setComment`/`pgn()` against the repo's own install — confirmed `{[%clk 0:03:00]}` emission — HIGH confidence (behavioral verification, not docs).
-- Source inspection: `frontend/public/maia/maia-worker.js`, `src/lib/engine/maiaQueue.ts`, `src/lib/maiaEncoding.ts`, `src/lib/sanToSquares.ts`, `src/lib/engine/mctsSearch.ts` — confirmed engine math is browser-global-free and worker glue isolates the browser coupling — HIGH confidence.
-- Memory `project_headless_stockfish_wasm_verification` — vendored Stockfish WASM verified headless in Node as `.cjs` — HIGH confidence (prior verification).
-- Web Audio unlock-on-gesture, `setInterval` background throttling, and Page Visibility semantics — MDN-documented platform behavior — MEDIUM-HIGH confidence (standard, not project-specific).
-- Sound-asset licensing (lichess assets not cleanly CC0; prefer freesound.org CC0) — MEDIUM confidence; verify each specific asset's license at plan time before committing files.
+- `frontend/package.json` — confirmed `canvas-confetti@^1.9.4`, `@types/canvas-confetti@^1.9.0`, `date-fns@^4.4.0`, `radix-ui@^1.4.3` already present (direct file read, HIGH confidence).
+- `npm view canvas-confetti version` / `npm view date-fns version` — confirmed installed versions match current npm latest (1.9.4 / 4.4.0) as of 2026-07-25 (HIGH confidence).
+- [canvas-confetti on Bundlephobia](https://bundlephobia.com/package/canvas-confetti) — ~6 kB gzipped, zero dependencies (web search, MEDIUM-HIGH confidence, cross-checked against npm package metadata showing no `dependencies` field).
+- `frontend/src/lib/confetti.ts`, `frontend/src/hooks/useBotGame.ts:801` — existing confetti + `prefersReducedMotion()` integration pattern to reuse (direct file read, HIGH confidence).
+- `app/services/endgame_service.py` (lines ~1349, ~2053, ~2815) — existing weekday-snap arithmetic precedent (direct file read, HIGH confidence).
+- `frontend/src/components/ui/toggle-group.tsx`, `frontend/src/components/filters/ImportFilterCard.tsx` — existing multi-select weekday-picker-shaped control precedent (direct file read, HIGH confidence).
+- `.planning/seeds/SEED-037-train-spaced-repetition-blunder-drills.md` — settled design and Rejected Alternatives (FSRS, grading endpoint) (direct file read, HIGH confidence).
 
 ---
-*Stack research for: clocked bot-play added to a client-side chess engine (FlawChess v2.3)*
-*Researched: 2026-07-11*
+*Stack research for: FlawChess v2.9 Train (spaced-repetition blunder drills)*
+*Researched: 2026-07-25*
