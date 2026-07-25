@@ -13,7 +13,14 @@ import chess
 import chess.engine
 import pytest
 
-from app.services.engine import _STOCKFISH_PATH, evaluate_nodes
+from app.services.engine import (
+    _HASH_MB,
+    _NODES_BUDGET,
+    _STOCKFISH_PATH,
+    _THREADS,
+    _engine_popen_kwargs,
+    evaluate_nodes,
+)
 from app.services.zobrist import EVAL_CP_MAX_ABS, EVAL_MATE_MAX_ABS
 
 # Reuse the same stockfish-presence detection as test_engine.py.
@@ -22,11 +29,19 @@ skip_if_no_stockfish = pytest.mark.skipif(stockfish_missing, reason="Stockfish b
 
 # Known position for real-engine smoke test
 KQ_VS_K_WHITE_WINS = "8/8/8/8/8/8/4Q3/4K2k w - - 0 1"
+# A dense middlegame (not a trivially-resolved endgame) so a 1M-node search
+# cannot finish inside the sub-second cancellation window below.
+DENSE_MIDDLEGAME_FEN = "r1bqkb1r/pppp1ppp/2n2n2/4p3/2B1P3/5N2/PPPP1PPP/RNBQK2R w KQkq - 0 1"
 
 # ─── Constants (CLAUDE.md: no magic numbers) ──────────────────────────────────
 EXPECTED_NONE_RESULT: tuple[None, None] = (None, None)
 MOCK_EVAL_CP: int = 150
 MOCK_EVAL_MATE: int = 3
+# Cancellation-safety probe budgets (quick task 260725-da3, ITEM 2 gate).
+_CANCEL_PROBE_TIMEOUT_S: float = 0.05  # forces asyncio.wait_for to cancel mid-search
+_REUSE_PROBE_DEPTH: int = 6  # cheap second search on the SAME protocol
+_REUSE_PROBE_TIMEOUT_S: float = 10.0  # generous: a desync would hang, not be slow
+_WARMUP_PROBE_DEPTH: int = 4  # gets `ucinewgame`/`isready` out of the way first
 
 
 class TestEvaluateNodesPoolUnset:
@@ -113,11 +128,18 @@ class TestEvaluateNodesWithMock:
             f"Expected depth=None (not a depth-limited call), got depth={limit.depth}"
         )
 
-    async def test_evaluate_nodes_timeout_returns_none(self) -> None:
-        """evaluate_nodes() returns (None, None) and restarts worker on TimeoutError.
+    async def test_evaluate_nodes_timeout_returns_none_without_restart(self) -> None:
+        """evaluate_nodes() returns (None, None) on TimeoutError WITHOUT restarting.
 
-        When asyncio.wait_for times out, the worker must be restarted and
-        (None, None) must be returned. Same contract as EnginePool.evaluate().
+        Contract changed by quick task 260725-da3 (FLAWCHESS-8B): a timeout means
+        the box is slow, not that the engine is broken, so the worker is kept and
+        only its slot is released. Restarting spawned a fresh Stockfish process on
+        an already-overloaded machine and amplified one slow position into a block
+        of holes.
+
+        The contrast test is test_evaluate_nodes_engine_error_returns_none, which
+        asserts a genuine EngineError DOES still restart — together the two are the
+        regression test for the split except handlers.
         """
         from app.services.engine import EnginePool
 
@@ -156,7 +178,10 @@ class TestEvaluateNodesWithMock:
             result = await pool.evaluate_nodes(chess.Board())
 
         assert result == EXPECTED_NONE_RESULT, f"Expected (None, None) on timeout, got {result}"
-        assert restart_called, "Expected _restart_worker to be called on timeout"
+        assert not restart_called, (
+            "260725-da3: a timeout must NOT restart the worker — a slow box is not a "
+            "broken engine, and restarting amplifies holes (FLAWCHESS-8B)"
+        )
 
     async def test_evaluate_nodes_engine_error_returns_none(self) -> None:
         """evaluate_nodes() returns (None, None) on chess.engine.EngineError."""
@@ -245,3 +270,68 @@ class TestEvaluateNodesRealEngine:
             assert -EVAL_CP_MAX_ABS <= cp <= EVAL_CP_MAX_ABS
         if mate is not None:
             assert -EVAL_MATE_MAX_ABS <= mate <= EVAL_MATE_MAX_ABS
+
+    async def test_protocol_reusable_after_cancelled_analyse(self) -> None:
+        """A cancelled `analyse()` leaves the UCI protocol usable for the NEXT one.
+
+        This is the correctness gate for quick task 260725-da3 ITEM 2 (skipping
+        `_restart_worker` on `asyncio.TimeoutError`). Keeping a slot after a
+        timeout is only safe if the cancellation does NOT desync the protocol,
+        so this asserts it against the real binary rather than assuming it.
+
+        Why it holds (python-chess 1.11.2 source):
+          - `Protocol.analyse` (L1127-1132) awaits the result inside `with analysis:`.
+          - `AnalysisResult.__exit__` (L2836) -> `.stop()` (L2761) -> the
+            `stop=lambda: self.cancel()` hook installed by
+            `UciAnalysisCommand.start` (L1712) -> `.cancel()` (L1766) sends `stop`.
+          - Stockfish answers `stop` with `bestmove`, which reaches
+            `UciAnalysisCommand._bestmove` (L1758-1763) -> `set_finished()`
+            (L1268) -> resolves the command's `finished` future.
+          - `Protocol.communicate` (L986-1021) queues the NEXT command as
+            `next_command` and only `_start()`s it from
+            `previous_command_finished` (L1001-1012), i.e. AFTER that `finished`
+            future resolves. The next `analyse()` is therefore serialized behind
+            the stale `bestmove` instead of racing it.
+        """
+        transport, protocol = await chess.engine.popen_uci(
+            _STOCKFISH_PATH, **_engine_popen_kwargs()
+        )
+        try:
+            await protocol.configure({"Hash": _HASH_MB, "Threads": _THREADS})
+
+            # Warm up so `first_game` is False: the very first analysis on a fresh
+            # protocol sends `ucinewgame`/`isready` and only resolves its result
+            # future from the async `readyok` handler, which is a different (and
+            # much narrower) cancellation window than the steady-state one the
+            # pool actually hits.
+            await asyncio.wait_for(
+                protocol.analyse(chess.Board(), chess.engine.Limit(depth=_WARMUP_PROBE_DEPTH)),
+                timeout=_REUSE_PROBE_TIMEOUT_S,
+            )
+
+            board = chess.Board(DENSE_MIDDLEGAME_FEN)
+            with pytest.raises((asyncio.TimeoutError, TimeoutError)):
+                await asyncio.wait_for(
+                    protocol.analyse(board, chess.engine.Limit(nodes=_NODES_BUDGET)),
+                    timeout=_CANCEL_PROBE_TIMEOUT_S,
+                )
+
+            # No restart, no re-popen: reuse the SAME protocol object. A desynced
+            # protocol would hang here (caught by the wait_for) or raise.
+            info = await asyncio.wait_for(
+                protocol.analyse(board, chess.engine.Limit(depth=_REUSE_PROBE_DEPTH)),
+                timeout=_REUSE_PROBE_TIMEOUT_S,
+            )
+            assert not isinstance(info, list), "expected a scalar InfoDict without multipv"
+            score = info.get("score")
+            assert score is not None, f"post-cancellation analyse returned no score: {info!r}"
+            white = score.white()
+            assert white.score() is not None or white.mate() is not None, (
+                f"post-cancellation analyse returned an unusable score: {score!r}"
+            )
+        finally:
+            try:
+                await protocol.quit()
+            except (chess.engine.EngineError, chess.engine.EngineTerminatedError, RuntimeError):
+                pass
+            transport.close()

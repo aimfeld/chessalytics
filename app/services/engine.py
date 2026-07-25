@@ -38,9 +38,10 @@ Two APIs:
         Use directly when you need a different size than the module-level
         pool (e.g. scripts/backfill_eval.py running on a beefy host).
 
-On engine timeout / crash, evaluate() restarts the affected worker and
-returns (None, None). The caller decides whether to log to Sentry
-(import path: D-11; backfill script: log).
+On engine crash, evaluate() restarts the affected worker and returns
+(None, None). On a plain timeout it returns (None, None) WITHOUT restarting
+(260725-da3 — see `_acquire_and_analyse`). The caller decides whether to log
+to Sentry (import path: D-11; backfill script: log).
 """
 
 from __future__ import annotations
@@ -244,9 +245,9 @@ async def stop_engine() -> None:
 async def evaluate(board: chess.Board) -> tuple[int | None, int | None]:
     """Evaluate position at depth 15. Returns (eval_cp, eval_mate) in white perspective.
 
-    Returns (None, None) if the engine is not started, or on timeout / crash
-    (the affected worker is restarted before returning so the next caller
-    sees a clean state).
+    Returns (None, None) if the engine is not started, or on timeout / crash.
+    A crash restarts the affected worker before returning so the next caller
+    sees a clean state; a timeout keeps the worker as-is (260725-da3).
 
     Sign convention matches app/services/zobrist.py:183-197 byte-for-byte:
         eval_cp  -- centipawn score from white's perspective; None for mate positions
@@ -376,8 +377,9 @@ class EnginePool:
     evaluate() concurrently (e.g. via asyncio.gather), up to N positions
     analyse in parallel.
 
-    On per-worker timeout / crash, that worker restarts in place; siblings
-    keep going. If restart fails, the worker's slot is NOT dropped — it
+    On a per-worker crash, that worker restarts in place; siblings keep going.
+    A per-worker timeout does NOT restart it (260725-da3) — the slot is simply
+    released back to the queue. If restart fails, the worker's slot is NOT dropped — it
     stays in the available queue and every future pickup returns None
     almost instantly (see the `protocol is None` early-return in
     `_acquire_and_analyse`). A pool where every worker has permanently failed
@@ -437,7 +439,11 @@ class EnginePool:
         self._started = False
 
     async def _restart_worker(self, idx: int) -> bool:
-        """Restart worker at index `idx` after timeout / crash. Returns True on success."""
+        """Restart worker at index `idx` after an engine crash. Returns True on success.
+
+        NOT called for a plain analyse timeout (260725-da3) — see the
+        `except asyncio.TimeoutError` handler in `_acquire_and_analyse`.
+        """
         old_protocol = self._protocols[idx]
         if old_protocol is not None:
             try:
@@ -474,7 +480,7 @@ class EnginePool:
 
         Single implementation behind evaluate(), evaluate_nodes(),
         evaluate_nodes_with_pv(), and evaluate_nodes_multipv2() — the acquisition,
-        exception tuple, restart-on-failure, and slot-release logic must never
+        exception handling, restart-on-crash, and slot-release logic must never
         diverge between the four public methods. Only genuine difference across
         callers is whether `multipv` is passed to `protocol.analyse()`; everything
         else (post-processing into (cp, mate), raw InfoDict, or list[InfoDict])
@@ -482,7 +488,8 @@ class EnginePool:
 
         Returns the raw analyse() result — a scalar InfoDict when multipv is None,
         or list[InfoDict] when multipv is set — or None on failure (not started,
-        missing protocol, timeout, or engine crash/restart).
+        missing protocol, timeout, or engine crash/restart). Only the crash cases
+        restart the worker; a timeout does not (260725-da3).
         """
         if not self._started:
             return None
@@ -502,14 +509,26 @@ class EnginePool:
                         protocol.analyse(board, limit),
                         timeout=timeout,
                     )
-            except (
-                asyncio.TimeoutError,
-                chess.engine.EngineError,
-                chess.engine.EngineTerminatedError,
-            ):
-                # Restart the failed worker; its slot returns to the queue regardless
-                # of restart success — a permanently-failed worker returns None on
-                # its next pickup but does not block sibling workers.
+            except asyncio.TimeoutError:
+                # Bug fix (2026-07-25, quick task 260725-da3 / FLAWCHESS-8B): a
+                # timeout used to share the restart path below. It shouldn't — a
+                # timeout means the BOX is slow, not that the engine is broken, so
+                # restarting spawned a fresh Stockfish process (NNUE net load, cold
+                # TT) on an already-overloaded machine and plausibly amplified one
+                # slow position into a block of holes. Prod measured a median of 25
+                # holes per holed game, not the 1-2 terminal-only holes the old
+                # comments assumed. Keeping the slot is safe: python-chess's
+                # cancellation path sends UCI `stop` via AnalysisResult.__exit__ and
+                # `Protocol.communicate` serializes the next command behind the stale
+                # `bestmove`, so the protocol is NOT desynced (verified against the
+                # real binary by test_protocol_reusable_after_cancelled_analyse — do
+                # not "restore" the restart without re-running it).
+                return None
+            except (chess.engine.EngineError, chess.engine.EngineTerminatedError):
+                # A genuine engine failure. Restart the failed worker; its slot
+                # returns to the queue regardless of restart success — a
+                # permanently-failed worker returns None on its next pickup but does
+                # not block sibling workers.
                 await self._restart_worker(idx)
                 return None
             return result
