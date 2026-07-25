@@ -107,13 +107,13 @@ The last lever has nothing to do with move choice. It governs the bot's attitude
 
 ### 🪨 Grinder — trades now, endgame later
 
-*The ladder: Pip the Ant (800) → Dig the Mole (1000) → Otto the Otter (1200) → Tank the Ox (1400) → Bo the Buffalo (1600) → Yara the Yak (1800).*
+*The ladder: Pip the Ant (800) → Dig the Mole (1000) → Otto the Otter (1200) → Nell the Penguin (1400) → Tank the Ox (1600) → Gus the Gorilla (1800).*
 
 **Openings.** Exchange variations, on principle: the Ruy Lopez Exchange, the Slav Exchange, the Queen's Gambit Declined Exchange, the French Exchange. As Black it heads for the Petrov, the Berlin, and the Slav — openings famous for trading down early.
 
 **In the middlegame.** One dominant habit: **even trades**. Where a piece can be swapped fairly, the Grinder swaps it, almost twice as often as a neutral player. It doesn't rush attacks and rarely storms with pawns; the plan is always the same — simplify, reach an endgame, and outplay you there.
 
-**When it calculates**, it prefers calm positions over sharp ones and is quietly confident in the simplified structures its trades produce. From 1600 up it calculates deeply — the Buffalo and the Yak are grinding you down *with precision*.
+**When it calculates**, it prefers calm positions over sharp ones and is quietly confident in the simplified structures its trades produce. From 1600 up it calculates deeply — the Ox and the Gorilla are grinding you down *with precision*.
 
 **Temperament.** This is the style where temperament matters most. The Grinder has the strongest draw contempt of the four: it wants meaningfully more than equality before it will ever split the point, so don't bother offering draws in level positions. And it essentially **never resigns** — the position must be utterly lost, and stay utterly lost for many consecutive moves, before it will tip its king. If you're winning against a Grinder, you will have to prove the full technique.
 
@@ -121,7 +121,7 @@ The last lever has nothing to do with move choice. It governs the bot's attitude
 
 ### 🛡️ Wall — the fortress builder
 
-*The ladder: Sheldon the Snail (800) → Spike the Hedgehog (1000) → Shelly the Turtle (1200) → Bruno the Badger (1400) → Dana the Beaver (1600) → Rocco the Armadillo (1800).*
+*The ladder: Sheldon the Snail (800) → Spike the Hedgehog (1000) → Shelly the Turtle (1200) → Bruno the Badger (1400) → Rocco the Armadillo (1600) → Hilda the Hippo (1800).*
 
 **Openings.** Systems, not theory battles: the London and the Colle as White — the same setup nearly regardless of what you play. As Black: the Caro-Kann and the Stonewall Dutch. You will recognize the structure by move four.
 

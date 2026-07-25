@@ -293,7 +293,7 @@ const TRICKSTER_PERSONAS: Record<`trickster-${Rung}`, Persona> = {
   },
 };
 
-// ─── Grinder — Ant -> Mole -> Otter -> Ox -> Buffalo -> Yak ────────────────
+// ─── Grinder — Ant -> Mole -> Otter -> Penguin -> Ox -> Gorilla ───────────
 // Trade-happy, steers toward simplified endgames, never resigns early
 // (SEED-098: "playing it trains exactly what FlawChess measures").
 
@@ -341,10 +341,10 @@ const GRINDER_PERSONAS: Record<`grinder-${Rung}`, Persona> = {
     botElo: PERSONA_CALIBRATION['grinder-1400'].botElo,
     calibratedLabel: PERSONA_CALIBRATION['grinder-1400'].label,
     blend: RUNG_BLEND[1400],
-    name: 'Tank the Ox',
-    species: 'Ox',
-    bio: 'Tank plows through complications by simplifying them away, trading pieces until only the essentials remain. He is stubborn in a lost position, playing on long past the point most bots would resign.',
-    avatarEmoji: '🐂',
+    name: 'Nell the Penguin',
+    species: 'Penguin',
+    bio: 'Nell simply outlasts people. She trades down without fuss and settles into the endgame like it is the part she was waiting for, unbothered by how long it takes.',
+    avatarEmoji: '🐧',
   },
   // 1600 -> Deep (Claude's discretion): Grinder's identity is fundamentally
   // calculation-driven (steering toward favorable trades and endgames), so
@@ -356,10 +356,10 @@ const GRINDER_PERSONAS: Record<`grinder-${Rung}`, Persona> = {
     botElo: PERSONA_CALIBRATION['grinder-1600'].botElo,
     calibratedLabel: PERSONA_CALIBRATION['grinder-1600'].label,
     blend: DEEP_BLEND,
-    name: 'Bo the Buffalo',
-    species: 'Buffalo',
-    bio: 'Bo calculates its way into favorable trades, steering the game toward the flat, grounded endgames it measures best in. It genuinely enjoys a long fight and will not give up a difficult position without one.',
-    avatarEmoji: '🐃',
+    name: 'Tank the Ox',
+    species: 'Ox',
+    bio: 'Tank plows through complications by simplifying them away, trading pieces until only the essentials remain. He is stubborn in a lost position, playing on long past the point most bots would resign.',
+    avatarEmoji: '🐂',
   },
   'grinder-1800': {
     id: personaId('Grinder', 1800),
@@ -368,14 +368,14 @@ const GRINDER_PERSONAS: Record<`grinder-${Rung}`, Persona> = {
     botElo: PERSONA_CALIBRATION['grinder-1800'].botElo,
     calibratedLabel: PERSONA_CALIBRATION['grinder-1800'].label,
     blend: RUNG_BLEND[1800],
-    name: 'Yara the Yak',
-    species: 'Yak',
-    bio: 'Yara calculates deep into the endgame before she ever agrees to trade, and by the time the dust settles she usually has the better structure. She almost never resigns, grinding on long after the position looks lost.',
-    avatarEmoji: '🐄',
+    name: 'Gus the Gorilla',
+    species: 'Gorilla',
+    bio: 'Gus calculates his way into favorable trades, steering the game toward the flat, grounded endgames he measures best in. He genuinely enjoys a long fight and will not give up a difficult position without one.',
+    avatarEmoji: '🦍',
   },
 };
 
-// ─── Wall — Snail -> Hedgehog -> Turtle -> Badger -> Beaver -> Armadillo ───
+// ─── Wall — Snail -> Hedgehog -> Turtle -> Badger -> Armadillo -> Hippo ───
 // Fixed system openings, simplifying trades, welcomes an early draw a bit
 // more readily than dead-equal (D-09).
 
@@ -439,10 +439,10 @@ const WALL_PERSONAS: Record<`wall-${Rung}`, Persona> = {
     botElo: PERSONA_CALIBRATION['wall-1600'].botElo,
     calibratedLabel: PERSONA_CALIBRATION['wall-1600'].label,
     blend: LIGHT_BLEND,
-    name: 'Dana the Beaver',
-    species: 'Beaver',
-    bio: 'Dana calculates carefully to keep the position as flat and quiet as possible, damming up any complications before they start. She is genuinely comfortable steering toward a solid, simplified draw.',
-    avatarEmoji: '🦫',
+    name: 'Rocco the Armadillo',
+    species: 'Armadillo',
+    bio: 'Rocco calculates deep to keep everything under control, curling into the least chaotic line available whenever the position allows it. By this level his system openings and simplifying trades add up to a genuinely difficult wall to crack.',
+    avatarEmoji: '🐢',
   },
   'wall-1800': {
     id: personaId('Wall', 1800),
@@ -451,10 +451,10 @@ const WALL_PERSONAS: Record<`wall-${Rung}`, Persona> = {
     botElo: PERSONA_CALIBRATION['wall-1800'].botElo,
     calibratedLabel: PERSONA_CALIBRATION['wall-1800'].label,
     blend: RUNG_BLEND[1800],
-    name: 'Rocco the Armadillo',
-    species: 'Armadillo',
-    bio: 'Rocco calculates deep to keep everything under control, curling into the least chaotic line available whenever the position allows it. By this level his system openings and simplifying trades add up to a genuinely difficult wall to crack.',
-    avatarEmoji: '🐢',
+    name: 'Hilda the Hippo',
+    species: 'Hippo',
+    bio: 'Hilda calculates carefully to keep the position as flat and quiet as possible, smothering complications before they start. She is genuinely comfortable steering toward a solid, simplified draw, and by this level she is very hard to talk out of one.',
+    avatarEmoji: '🦛',
   },
 };
 
