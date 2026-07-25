@@ -1,31 +1,26 @@
 ---
 gsd_state_version: 1.0
-milestone: v2.8
-milestone_name: Import Filters and Guest Data Cleanup
-status: Awaiting next milestone
-stopped_at: Completed 188-01-PLAN.md (import/eval pipeline cleanup, SEED-115)
-last_updated: "2026-07-24T20:24:29.416Z"
-last_activity: 2026-07-24
-last_activity_desc: Milestone v2.8 completed and archived
+milestone: v2.9
+milestone_name: Train — Spaced-Repetition Blunder Drills
+status: planning
+last_updated: "2026-07-25T09:53:43.509Z"
+last_activity: 2026-07-25
 progress:
-  total_phases: 3
-  completed_phases: 3
-  total_plans: 6
-  completed_plans: 6
-  percent: 100
-current_phase: 188
-current_phase_name: import-eval-pipeline-cleanup-seed-115
-milestone_status: in_progress
+  total_phases: 0
+  completed_phases: 0
+  total_plans: 0
+  completed_plans: 0
+  percent: 0
 ---
 
 # Project State: FlawChess
 
 ## Current Position
 
-Phase: Milestone v2.8 complete
+Phase: Not started (defining requirements)
 Plan: —
-Status: Awaiting next milestone
-Last activity: 2026-07-25 — Completed quick task 260725-da3: FLAWCHESS-8B worker hole telemetry + no engine restart on timeout
+Status: Defining requirements
+Last activity: 2026-07-25 — Milestone v2.9 started
 
 ## Project Reference
 
