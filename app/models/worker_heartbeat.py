@@ -18,6 +18,11 @@ class WorkerHeartbeat(Base):
     trusted-proxy `request.client.host`) is the more trustworthy cross-check for
     fleet identity, since worker_id can be spoofed or shared across machines.
 
+    `holes_submitted` / `plies_leased` are fed ONLY by the atomic-submit lane, so
+    a per-worker hole RATE (holes_submitted / plies_leased) is meaningful — unlike
+    `evals_submitted`, which mixes all three submit lanes (quick task 260725-da3,
+    FLAWCHESS-8B attribution).
+
     No ForeignKey: worker_id is a free-form external identity string, not a
     reference to an internal table (CLAUDE.md's FK rule doesn't apply here).
     """
@@ -40,3 +45,7 @@ class WorkerHeartbeat(Base):
     last_seen: Mapped[datetime.datetime] = mapped_column(nullable=False, server_default=func.now())
     submit_count: Mapped[int] = mapped_column(BigInteger, nullable=False, default=0)
     evals_submitted: Mapped[int] = mapped_column(BigInteger, nullable=False, default=0)
+    # Atomic-submit lane only (260725-da3) — see the class docstring. Accumulating
+    # counters, same shape as submit_count/evals_submitted.
+    holes_submitted: Mapped[int] = mapped_column(BigInteger, nullable=False, default=0)
+    plies_leased: Mapped[int] = mapped_column(BigInteger, nullable=False, default=0)
