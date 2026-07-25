@@ -21,6 +21,10 @@ from app.models.feedback import Feedback  # noqa: F401
 from app.models.user_activity import UserActivity  # noqa: F401
 from app.models.bot_game_settings import BotGameSettings  # noqa: F401
 from app.models.user_import_settings import UserImportSettings  # noqa: F401
+from app.models.drill_item import DrillItem  # noqa: F401
+from app.models.drill_session import DrillSession  # noqa: F401
+from app.models.drill_solve import DrillSolve  # noqa: F401
+from app.models.train_settings import TrainSettings  # noqa: F401
 
 # this is the Alembic Config object, which provides
 # access to the values within the .ini file in use.

@@ -1,0 +1,1304 @@
+"""Integration tests for the Train router (Phase 189, Plans 01 + 04 + 05).
+
+Coverage:
+- test_compose_session_serves_own_blunder : a qualifying own blunder is served as
+                                             one puzzle, 200, full 6-field FEN
+- test_opponent_flaw_excluded             : an opponent-side flaw never enters the pool
+- test_null_blob_excluded                 : a blunder with no missed_pv_lines blob is excluded
+- test_empty_blob_excluded                : 189-06 gap closure — a non-NULL EMPTY
+                                             missed_pv_lines (`[]`, the D-06 un-fillable
+                                             sentinel) is excluded, same as a NULL blob
+- test_below_winnability_floor_excluded   : a hopeless pre-flaw position is excluded
+- test_403_guest                          : a guest account is rejected before any pool query
+- test_401_unauthenticated                : no auth token returns 401
+- test_pre_attempt_payload_shape          : the puzzle dict's key set is exactly the POOL-10 five
+- test_drill_items_fk_targets             : drill_items' FK referenced-table set is {users, games}
+- test_compose_twice_returns_same_session_id      : D-12 resume over real HTTP
+- test_concurrent_compose_yields_one_open_session : uq_drill_sessions_user_open holds
+                                             under two simultaneous requests (T-189-14)
+
+Plan 05 (POOL-08/POOL-10, solve/reveal/settings):
+- test_solve_records_and_advances_streak / test_solve_masters_item_at_three /
+  test_solve_wrong_resets_streak_and_counts_fail / test_solve_parks_item_at_three_never_correct :
+      the interval ladder advances exactly per app.services.train_scheduler.apply_result
+- test_solve_herring_touches_no_drill_item : a red herring carries no SR bookkeeping
+- test_correct_guess_computed_server_side  : the guess verdict is server-computed, never
+                                              client-asserted (parametrized 2 guesses x 2 types)
+- test_solve_is_idempotent_per_position / test_concurrent_solve_advances_streak_once :
+      the claiming UPDATE's solved_at IS NULL guard is the whole concurrency story (T-189-19)
+- test_solve_foreign_session_404 / test_solve_unknown_position_404 : IDOR guard (T-189-16)
+- test_last_solve_completes_session : session_complete flips once every puzzle is recorded
+- test_reveal_409_before_attempt / test_reveal_200_after_attempt /
+  test_reveal_herring_reports_herring_type / test_reveal_foreign_session_404 /
+  test_reveal_unknown_position_404 / test_reveal_has_tactic_lines_flag :
+      the reveal gate (T-189-17) and its POOL-02/tactic-lines-pointer fields
+- test_get_settings_creates_defaults_on_first_touch / test_get_settings_is_idempotent /
+  test_put_settings_persists_and_round_trips / test_put_settings_rejects_bad_timezone_422 /
+  test_put_settings_rejects_out_of_range_mask_422 / test_settings_403_guest /
+  test_session_size_follows_settings : the D-06/D-07/D-08 settings surface
+"""
+
+from __future__ import annotations
+
+import asyncio
+import datetime
+import uuid
+
+import httpx
+import pytest
+from sqlalchemy import delete, func, select, text, update
+from sqlalchemy.ext.asyncio import async_sessionmaker
+
+from app.main import app
+from app.models.drill_item import DrillItem, DrillStatus
+from app.models.drill_session import DrillSession
+from app.models.drill_solve import DrillSolve, DrillSource
+from app.models.game import Game
+from app.models.game_flaw import GameFlaw
+from app.models.game_position import GamePosition
+from app.schemas.train import SolveRequest
+
+ENDPOINT = "/api/train/sessions"
+
+# POOL-02 puzzle-type fixtures: a "sharp" blob has a wide best-vs-second gap
+# (>= SHARP_GAP_ES == MISTAKE_DROP == 0.10); the module's default
+# _MISSED_PV_LINES blob (b=40, s=-30 -> gap ~0.064) is deliberately "soft".
+_SHARP_PV_LINES = [{"b": 200, "bm": None, "s": -200, "sm": None, "su": "g8f6"}]
+
+# A real, legal Ruy Lopez opening PGN — long enough (10 half-moves) to replay
+# any flaw ply this file exercises via chess.pgn.
+_PGN = "1. e4 e5 2. Nf3 Nc6 3. Bb5 a6 4. Ba4 Nf6 5. O-O Be7 *"
+
+# ply=6 (even -> white mover): position before white's 4th move (Ba4).
+_FLAW_PLY_WHITE = 6
+# ply=7 (odd -> black mover): position before black's 4th move (Nf6).
+_FLAW_PLY_BLACK = 7
+
+_MISSED_PV_LINES = [{"b": 40, "bm": None, "s": -30, "sm": None, "su": "g8f6"}]
+
+# A comfortably winnable eval for White (well above WINNABILITY_FLOOR_ES=0.20).
+_WINNABLE_CP = 300
+# A hopeless eval for White (well below the floor).
+_HOPELESS_CP = -2000
+
+
+# ---------------------------------------------------------------------------
+# Helpers
+# ---------------------------------------------------------------------------
+
+
+async def _register_and_login(email: str, password: str = "testpass123!") -> tuple[int, str]:
+    """Register a user via HTTP and return (user_id, auth_token)."""
+    async with httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=app), base_url="http://test"
+    ) as client:
+        reg = await client.post("/api/auth/register", json={"email": email, "password": password})
+        assert reg.status_code in (200, 201), f"register failed: {reg.text}"
+        user_id = int(reg.json()["id"])
+
+        login = await client.post(
+            "/api/auth/jwt/login",
+            data={"username": email, "password": password},
+        )
+        assert login.status_code == 200, f"login failed: {login.text}"
+        token = str(login.json()["access_token"])
+    return user_id, token
+
+
+async def _seed_game_with_blunder(
+    test_engine,
+    user_id: int,
+    *,
+    ply: int = _FLAW_PLY_WHITE,
+    user_color: str = "white",
+    missed_pv_lines: list | None = _MISSED_PV_LINES,
+    prior_eval_cp: int | None = _WINNABLE_CP,
+    seed_prior_position: bool = True,
+    missed_tactic_motif: int | None = None,
+    allowed_tactic_motif: int | None = None,
+) -> int:
+    """Seed one game + one blunder flaw row (+ optional prior-ply eval). Returns game_id.
+
+    `missed_pv_lines` defaults to a non-empty blob (the qualifying case);
+    pass `missed_pv_lines=None` explicitly to test the no-answer-key
+    exclusion path — `None` is a real, distinct value here, not a "use the
+    default" sentinel (the module-level `_MISSED_PV_LINES` constant is never
+    mutated, so reusing it as a default parameter value is safe).
+    """
+    session_maker = async_sessionmaker(test_engine, expire_on_commit=False)
+    async with session_maker() as session:
+        async with session.begin():
+            game = Game(
+                user_id=user_id,
+                platform="lichess",
+                platform_game_id=str(uuid.uuid4()),
+                platform_url="https://lichess.org/test",
+                pgn=_PGN,
+                result="1-0",
+                user_color=user_color,
+                time_control_str="600+0",
+                time_control_bucket="blitz",
+                time_control_seconds=600,
+                base_time_seconds=600,
+                increment_seconds=0.0,
+                rated=True,
+                is_computer_game=False,
+                ply_count=10,
+                full_evals_completed_at=datetime.datetime(2026, 1, 1, tzinfo=datetime.timezone.utc),
+            )
+            session.add(game)
+            await session.flush()
+            game_id: int = game.id
+
+            flaw_kwargs: dict[str, object] = dict(
+                user_id=user_id,
+                game_id=game_id,
+                ply=ply,
+                severity=2,  # blunder
+                phase=0,
+                is_miss=False,
+                is_lucky=False,
+                is_reversed=False,
+                is_squandered=False,
+                fen="rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR",
+            )
+            if missed_pv_lines is not None:
+                # JSONB gotcha (project_asyncpg_jsonb_null_vs_sql_null): passing
+                # missed_pv_lines=None explicitly would write null::jsonb, which
+                # `IS NOT NULL` treats as present — OMIT the column entirely to
+                # get a true SQL NULL (the "no blob" state pool_entry_stmt tests
+                # for via GameFlaw.missed_pv_lines.isnot(None)).
+                flaw_kwargs["missed_pv_lines"] = missed_pv_lines
+            if missed_tactic_motif is not None:
+                flaw_kwargs["missed_tactic_motif"] = missed_tactic_motif
+            if allowed_tactic_motif is not None:
+                flaw_kwargs["allowed_tactic_motif"] = allowed_tactic_motif
+            flaw = GameFlaw(**flaw_kwargs)
+            session.add(flaw)
+
+            if seed_prior_position and prior_eval_cp is not None:
+                prior = GamePosition(
+                    user_id=user_id,
+                    game_id=game_id,
+                    ply=ply - 1,
+                    full_hash=1000 + game_id,
+                    white_hash=2000 + game_id,
+                    black_hash=3000 + game_id,
+                    eval_cp=prior_eval_cp,
+                    eval_mate=None,
+                )
+                session.add(prior)
+
+    return game_id
+
+
+async def _delete_games(test_engine, game_ids: list[int]) -> None:
+    if not game_ids:
+        return
+    session_maker = async_sessionmaker(test_engine, expire_on_commit=False)
+    async with session_maker() as session:
+        async with session.begin():
+            await session.execute(delete(Game).where(Game.id.in_(game_ids)))
+
+
+async def _set_guest(test_engine, user_id: int) -> None:
+    from app.models.user import User
+
+    session_maker = async_sessionmaker(test_engine, expire_on_commit=False)
+    async with session_maker() as session:
+        async with session.begin():
+            await session.execute(update(User).where(User.id == user_id).values(is_guest=True))
+
+
+# ---------------------------------------------------------------------------
+# Plan 05 helpers — direct seeding of drill_items/drill_sessions/drill_solves
+# gives each test full control over the pre-solve SR state (streak/fail_count/
+# ever_correct) without needing to control the endpoint's real wall-clock
+# `now_utc` across multiple composed sessions.
+# ---------------------------------------------------------------------------
+
+
+async def _seed_bare_game(test_engine, user_id: int, label: str) -> int:
+    """Seed a Game row with no flaw/best-move rows attached. Returns game_id."""
+    session_maker = async_sessionmaker(test_engine, expire_on_commit=False)
+    async with session_maker() as session:
+        async with session.begin():
+            game = Game(
+                user_id=user_id,
+                platform="lichess",
+                platform_game_id=f"{label}-{uuid.uuid4().hex[:8]}",
+                platform_url="https://lichess.org/test",
+                pgn=_PGN,
+                result="1-0",
+                user_color="white",
+                time_control_str="600+0",
+                time_control_bucket="blitz",
+                time_control_seconds=600,
+                base_time_seconds=600,
+                increment_seconds=0.0,
+                rated=True,
+                is_computer_game=False,
+                ply_count=10,
+                full_evals_completed_at=datetime.datetime(2026, 1, 1, tzinfo=datetime.timezone.utc),
+            )
+            session.add(game)
+            await session.flush()
+            return game.id
+
+
+async def _seed_drill_item(
+    test_engine,
+    user_id: int,
+    game_id: int,
+    ply: int,
+    *,
+    status: int = DrillStatus.ACTIVE,
+    streak: int = 0,
+    fail_count: int = 0,
+    ever_correct: bool = False,
+) -> None:
+    """Seed one drill_items row with an explicit pre-solve SR state."""
+    session_maker = async_sessionmaker(test_engine, expire_on_commit=False)
+    async with session_maker() as session:
+        async with session.begin():
+            session.add(
+                DrillItem(
+                    user_id=user_id,
+                    game_id=game_id,
+                    ply=ply,
+                    status=int(status),
+                    streak=streak,
+                    due_date=datetime.datetime.now(datetime.timezone.utc).date(),
+                    fail_count=fail_count,
+                    ever_correct=ever_correct,
+                )
+            )
+
+
+async def _seed_session(test_engine, user_id: int, entries: list[tuple[int, int, int]]) -> int:
+    """Seed one open drill_sessions row plus one unsolved drill_solves row per entry.
+
+    `entries` is a list of `(game_id, ply, source)` tuples, one per frozen
+    position (0-based, in list order) — mirrors exactly what
+    `compose_and_materialize_session` would have pre-inserted.
+    """
+    session_maker = async_sessionmaker(test_engine, expire_on_commit=False)
+    today = datetime.datetime.now(datetime.timezone.utc).date()
+    async with session_maker() as session:
+        async with session.begin():
+            drill_session = DrillSession(
+                user_id=user_id,
+                session_date=today,
+                status="open",
+                puzzle_count=len(entries),
+                expires_on=today + datetime.timedelta(days=7),
+            )
+            session.add(drill_session)
+            await session.flush()
+            for position, (game_id, ply, source) in enumerate(entries):
+                session.add(
+                    DrillSolve(
+                        session_id=drill_session.id,
+                        position=position,
+                        user_id=user_id,
+                        game_id=game_id,
+                        ply=ply,
+                        source=source,
+                        solved_at=None,
+                    )
+                )
+            session_id = drill_session.id
+    return session_id
+
+
+async def _seed_position_meta(
+    test_engine,
+    user_id: int,
+    game_id: int,
+    ply: int,
+    *,
+    best_move: str,
+    move_san: str,
+) -> None:
+    """Seed a game_positions row carrying the answer-key fields reveal reads."""
+    session_maker = async_sessionmaker(test_engine, expire_on_commit=False)
+    async with session_maker() as session:
+        async with session.begin():
+            session.add(
+                GamePosition(
+                    user_id=user_id,
+                    game_id=game_id,
+                    ply=ply,
+                    full_hash=7_000_000 + game_id * 100 + ply,
+                    white_hash=8_000_000 + game_id * 100 + ply,
+                    black_hash=9_000_000 + game_id * 100 + ply,
+                    best_move=best_move,
+                    move_san=move_san,
+                )
+            )
+
+
+async def _get_drill_item(test_engine, user_id: int, game_id: int, ply: int) -> DrillItem | None:
+    session_maker = async_sessionmaker(test_engine, expire_on_commit=False)
+    async with session_maker() as session:
+        result = await session.execute(
+            select(DrillItem).where(
+                DrillItem.user_id == user_id, DrillItem.game_id == game_id, DrillItem.ply == ply
+            )
+        )
+        return result.scalar_one_or_none()
+
+
+async def _count_drill_items(test_engine, user_id: int) -> int:
+    session_maker = async_sessionmaker(test_engine, expire_on_commit=False)
+    async with session_maker() as session:
+        result = await session.execute(
+            select(func.count()).select_from(DrillItem).where(DrillItem.user_id == user_id)
+        )
+        return result.scalar_one()
+
+
+async def _get_session_status(test_engine, session_id: int) -> str:
+    session_maker = async_sessionmaker(test_engine, expire_on_commit=False)
+    async with session_maker() as session:
+        result = await session.execute(
+            select(DrillSession.status).where(DrillSession.id == session_id)
+        )
+        return result.scalar_one()
+
+
+async def _solve(
+    token: str,
+    session_id: int,
+    position: int,
+    *,
+    guess: str = "several",
+    played_move: str = "e2e4",
+    correct_move: bool = True,
+) -> httpx.Response:
+    async with httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=app), base_url="http://test"
+    ) as client:
+        return await client.post(
+            f"/api/train/sessions/{session_id}/solve",
+            headers={"Authorization": f"Bearer {token}"},
+            json={
+                "position": position,
+                "guess": guess,
+                "played_move": played_move,
+                "correct_move": correct_move,
+            },
+        )
+
+
+async def _reveal(token: str, session_id: int, position: int) -> httpx.Response:
+    async with httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=app), base_url="http://test"
+    ) as client:
+        return await client.get(
+            f"/api/train/sessions/{session_id}/puzzles/{position}/reveal",
+            headers={"Authorization": f"Bearer {token}"},
+        )
+
+
+async def _get_settings(token: str) -> httpx.Response:
+    async with httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=app), base_url="http://test"
+    ) as client:
+        return await client.get("/api/train/settings", headers={"Authorization": f"Bearer {token}"})
+
+
+async def _put_settings(
+    token: str, *, timezone: str, weekday_mask: int, puzzles_per_session: int
+) -> httpx.Response:
+    async with httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=app), base_url="http://test"
+    ) as client:
+        return await client.put(
+            "/api/train/settings",
+            headers={"Authorization": f"Bearer {token}"},
+            json={
+                "timezone": timezone,
+                "weekday_mask": weekday_mask,
+                "puzzles_per_session": puzzles_per_session,
+            },
+        )
+
+
+# ---------------------------------------------------------------------------
+# Tests
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_compose_session_serves_own_blunder(test_engine) -> None:
+    """A qualifying own blunder is served as one puzzle over real HTTP."""
+    email = f"train-own-{uuid.uuid4().hex[:8]}@example.com"
+    user_id, token = await _register_and_login(email)
+    game_id = await _seed_game_with_blunder(test_engine, user_id)
+
+    try:
+        async with httpx.AsyncClient(
+            transport=httpx.ASGITransport(app=app), base_url="http://test"
+        ) as client:
+            resp = await client.post(ENDPOINT, headers={"Authorization": f"Bearer {token}"})
+
+        assert resp.status_code == 200, f"Expected 200, got {resp.status_code}: {resp.text}"
+        body = resp.json()
+        assert body["puzzle_count"] == 1
+        assert len(body["puzzles"]) == 1
+        puzzle = body["puzzles"][0]
+        assert puzzle["game_id"] == game_id
+        assert puzzle["ply"] == _FLAW_PLY_WHITE
+        assert puzzle["side_to_move"] == "white"
+        fen_fields = puzzle["fen"].split(" ")
+        assert len(fen_fields) == 6, f"Expected a full 6-field FEN, got: {puzzle['fen']!r}"
+        assert body["session_id"] is not None
+    finally:
+        await _delete_games(test_engine, [game_id])
+
+
+@pytest.mark.asyncio
+async def test_opponent_flaw_excluded(test_engine) -> None:
+    """A flaw whose mover is the opponent (ply parity) never enters the pool."""
+    email = f"train-opp-{uuid.uuid4().hex[:8]}@example.com"
+    user_id, token = await _register_and_login(email)
+    # user_color=white, ply=7 (odd) -> black mover -> opponent flaw, excluded.
+    game_id = await _seed_game_with_blunder(
+        test_engine, user_id, ply=_FLAW_PLY_BLACK, user_color="white"
+    )
+
+    try:
+        async with httpx.AsyncClient(
+            transport=httpx.ASGITransport(app=app), base_url="http://test"
+        ) as client:
+            resp = await client.post(ENDPOINT, headers={"Authorization": f"Bearer {token}"})
+
+        assert resp.status_code == 200
+        body = resp.json()
+        assert body["puzzle_count"] == 0
+        assert body["puzzles"] == []
+    finally:
+        await _delete_games(test_engine, [game_id])
+
+
+@pytest.mark.asyncio
+async def test_null_blob_excluded(test_engine) -> None:
+    """A blunder with no missed_pv_lines blob (no answer key) is excluded."""
+    email = f"train-noblob-{uuid.uuid4().hex[:8]}@example.com"
+    user_id, token = await _register_and_login(email)
+    game_id = await _seed_game_with_blunder(test_engine, user_id, missed_pv_lines=None)
+
+    try:
+        async with httpx.AsyncClient(
+            transport=httpx.ASGITransport(app=app), base_url="http://test"
+        ) as client:
+            resp = await client.post(ENDPOINT, headers={"Authorization": f"Bearer {token}"})
+
+        assert resp.status_code == 200
+        body = resp.json()
+        assert body["puzzle_count"] == 0
+    finally:
+        await _delete_games(test_engine, [game_id])
+
+
+@pytest.mark.asyncio
+async def test_empty_blob_excluded(test_engine) -> None:
+    """189-06 gap closure: a blunder with a non-NULL EMPTY missed_pv_lines
+    (`[]`, the eval pipeline's D-06 un-fillable sentinel) is excluded from the
+    served pool exactly like test_null_blob_excluded's true-NULL case."""
+    email = f"train-emptyblob-{uuid.uuid4().hex[:8]}@example.com"
+    user_id, token = await _register_and_login(email)
+    game_id = await _seed_game_with_blunder(test_engine, user_id, missed_pv_lines=[])
+
+    try:
+        async with httpx.AsyncClient(
+            transport=httpx.ASGITransport(app=app), base_url="http://test"
+        ) as client:
+            resp = await client.post(ENDPOINT, headers={"Authorization": f"Bearer {token}"})
+
+        assert resp.status_code == 200
+        body = resp.json()
+        assert body["puzzle_count"] == 0
+        assert body["blob_pending_count"] == 0
+    finally:
+        await _delete_games(test_engine, [game_id])
+
+
+@pytest.mark.asyncio
+async def test_below_winnability_floor_excluded(test_engine) -> None:
+    """A blunder from an already-hopeless pre-move position is excluded."""
+    email = f"train-hopeless-{uuid.uuid4().hex[:8]}@example.com"
+    user_id, token = await _register_and_login(email)
+    game_id = await _seed_game_with_blunder(test_engine, user_id, prior_eval_cp=_HOPELESS_CP)
+
+    try:
+        async with httpx.AsyncClient(
+            transport=httpx.ASGITransport(app=app), base_url="http://test"
+        ) as client:
+            resp = await client.post(ENDPOINT, headers={"Authorization": f"Bearer {token}"})
+
+        assert resp.status_code == 200
+        body = resp.json()
+        assert body["puzzle_count"] == 0
+    finally:
+        await _delete_games(test_engine, [game_id])
+
+
+@pytest.mark.asyncio
+async def test_403_guest(test_engine) -> None:
+    """A guest account is rejected 403 before any pool query runs (D-05)."""
+    email = f"train-guest-{uuid.uuid4().hex[:8]}@example.com"
+    user_id, token = await _register_and_login(email)
+    await _set_guest(test_engine, user_id)
+
+    async with httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=app), base_url="http://test"
+    ) as client:
+        resp = await client.post(ENDPOINT, headers={"Authorization": f"Bearer {token}"})
+
+    assert resp.status_code == 403
+    assert resp.json()["detail"] == "Train requires a full account"
+
+
+@pytest.mark.asyncio
+async def test_401_unauthenticated() -> None:
+    """No auth token returns 401."""
+    async with httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=app), base_url="http://test"
+    ) as client:
+        resp = await client.post(ENDPOINT)
+
+    assert resp.status_code == 401
+
+
+@pytest.mark.asyncio
+async def test_pre_attempt_payload_shape(test_engine) -> None:
+    """The puzzle dict's key set is EXACTLY the POOL-10 five fields (P-01)."""
+    email = f"train-shape-{uuid.uuid4().hex[:8]}@example.com"
+    user_id, token = await _register_and_login(email)
+    game_id = await _seed_game_with_blunder(test_engine, user_id)
+
+    try:
+        async with httpx.AsyncClient(
+            transport=httpx.ASGITransport(app=app), base_url="http://test"
+        ) as client:
+            resp = await client.post(ENDPOINT, headers={"Authorization": f"Bearer {token}"})
+
+        assert resp.status_code == 200
+        body = resp.json()
+        assert body["puzzle_count"] == 1
+        puzzle = body["puzzles"][0]
+        assert set(puzzle.keys()) == {"position", "game_id", "ply", "fen", "side_to_move"}
+    finally:
+        await _delete_games(test_engine, [game_id])
+
+
+@pytest.mark.asyncio
+async def test_drill_items_fk_targets(test_engine) -> None:
+    """drill_items' FK referenced-table set is exactly {users, games} (D-02 proof)."""
+    async with test_engine.connect() as conn:
+        result = await conn.execute(
+            text(
+                """
+                SELECT DISTINCT ccu.table_name
+                FROM information_schema.table_constraints tc
+                JOIN information_schema.constraint_column_usage ccu
+                  ON tc.constraint_name = ccu.constraint_name
+                 AND tc.constraint_schema = ccu.constraint_schema
+                WHERE tc.table_name = 'drill_items'
+                  AND tc.constraint_type = 'FOREIGN KEY'
+                """
+            )
+        )
+        referenced_tables = {row[0] for row in result.all()}
+
+    assert referenced_tables == {"users", "games"}
+
+
+@pytest.mark.asyncio
+async def test_compose_twice_returns_same_session_id(test_engine) -> None:
+    """D-12: a second POST inside an open session's window resumes it (real HTTP)."""
+    email = f"train-resume-{uuid.uuid4().hex[:8]}@example.com"
+    user_id, token = await _register_and_login(email)
+    game_id = await _seed_game_with_blunder(test_engine, user_id)
+
+    try:
+        async with httpx.AsyncClient(
+            transport=httpx.ASGITransport(app=app), base_url="http://test"
+        ) as client:
+            first = await client.post(ENDPOINT, headers={"Authorization": f"Bearer {token}"})
+            second = await client.post(ENDPOINT, headers={"Authorization": f"Bearer {token}"})
+
+        assert first.status_code == 200
+        assert second.status_code == 200
+        assert first.json()["session_id"] is not None
+        assert first.json()["session_id"] == second.json()["session_id"]
+    finally:
+        await _delete_games(test_engine, [game_id])
+
+
+@pytest.mark.asyncio
+async def test_concurrent_compose_yields_one_open_session(test_engine) -> None:
+    """T-189-14: two simultaneous POSTs leave exactly one open drill_sessions row.
+
+    Two independent httpx.AsyncClient instances (each request gets its own DB
+    session via the FastAPI dependency) — NOT the forbidden shared-AsyncSession
+    pattern.
+    """
+    email = f"train-concurrent-{uuid.uuid4().hex[:8]}@example.com"
+    user_id, token = await _register_and_login(email)
+    game_id = await _seed_game_with_blunder(test_engine, user_id)
+
+    try:
+        async with (
+            httpx.AsyncClient(
+                transport=httpx.ASGITransport(app=app), base_url="http://test"
+            ) as client_a,
+            httpx.AsyncClient(
+                transport=httpx.ASGITransport(app=app), base_url="http://test"
+            ) as client_b,
+        ):
+            resp_a, resp_b = await asyncio.gather(
+                client_a.post(ENDPOINT, headers={"Authorization": f"Bearer {token}"}),
+                client_b.post(ENDPOINT, headers={"Authorization": f"Bearer {token}"}),
+            )
+
+        assert resp_a.status_code == 200
+        assert resp_b.status_code == 200
+        assert resp_a.json()["session_id"] is not None
+        assert resp_a.json()["session_id"] == resp_b.json()["session_id"]
+
+        session_maker = async_sessionmaker(test_engine, expire_on_commit=False)
+        async with session_maker() as session:
+            open_count = (
+                await session.execute(
+                    select(func.count())
+                    .select_from(DrillSession)
+                    .where(DrillSession.user_id == user_id, DrillSession.status == "open")
+                )
+            ).scalar_one()
+        assert open_count == 1
+    finally:
+        await _delete_games(test_engine, [game_id])
+
+
+# ---------------------------------------------------------------------------
+# Plan 05 Task 1 — POST /sessions/{session_id}/solve
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_solve_records_and_advances_streak(test_engine) -> None:
+    """A correct solve advances streak 0 -> 1, stays active, gets a real due_date."""
+    email = f"train-solve-adv-{uuid.uuid4().hex[:8]}@example.com"
+    user_id, token = await _register_and_login(email)
+    game_id = await _seed_game_with_blunder(test_engine, user_id, missed_pv_lines=_SHARP_PV_LINES)
+    await _seed_drill_item(test_engine, user_id, game_id, _FLAW_PLY_WHITE, streak=0)
+    session_id = await _seed_session(
+        test_engine, user_id, [(game_id, _FLAW_PLY_WHITE, int(DrillSource.SR_ITEM))]
+    )
+
+    try:
+        resp = await _solve(token, session_id, 0, guess="critical", correct_move=True)
+        assert resp.status_code == 200, resp.text
+        body = resp.json()
+        assert body["item_status"] == "active"
+        assert body["streak"] == 1
+        assert body["due_date"] is not None
+        assert body["correct_move"] is True
+
+        item = await _get_drill_item(test_engine, user_id, game_id, _FLAW_PLY_WHITE)
+        assert item is not None
+        assert item.streak == 1
+        assert item.status == DrillStatus.ACTIVE
+    finally:
+        await _delete_games(test_engine, [game_id])
+
+
+@pytest.mark.asyncio
+async def test_solve_masters_item_at_three(test_engine) -> None:
+    """The third consecutive correct solve masters the item (POOL-05)."""
+    email = f"train-master-{uuid.uuid4().hex[:8]}@example.com"
+    user_id, token = await _register_and_login(email)
+    game_id = await _seed_game_with_blunder(test_engine, user_id)
+    await _seed_drill_item(
+        test_engine, user_id, game_id, _FLAW_PLY_WHITE, streak=2, ever_correct=True
+    )
+    session_id = await _seed_session(
+        test_engine, user_id, [(game_id, _FLAW_PLY_WHITE, int(DrillSource.SR_ITEM))]
+    )
+
+    try:
+        resp = await _solve(token, session_id, 0, correct_move=True)
+        assert resp.status_code == 200
+        body = resp.json()
+        assert body["item_status"] == "mastered"
+        assert body["streak"] == 3
+
+        item = await _get_drill_item(test_engine, user_id, game_id, _FLAW_PLY_WHITE)
+        assert item is not None
+        assert item.status == DrillStatus.MASTERED
+    finally:
+        await _delete_games(test_engine, [game_id])
+
+
+@pytest.mark.asyncio
+async def test_solve_wrong_resets_streak_and_counts_fail(test_engine) -> None:
+    """A wrong solve resets streak to 0 and counts a fail while ever_correct is False."""
+    email = f"train-wrong-{uuid.uuid4().hex[:8]}@example.com"
+    user_id, token = await _register_and_login(email)
+    game_id = await _seed_game_with_blunder(test_engine, user_id)
+    await _seed_drill_item(
+        test_engine, user_id, game_id, _FLAW_PLY_WHITE, streak=0, fail_count=1, ever_correct=False
+    )
+    session_id = await _seed_session(
+        test_engine, user_id, [(game_id, _FLAW_PLY_WHITE, int(DrillSource.SR_ITEM))]
+    )
+
+    try:
+        resp = await _solve(token, session_id, 0, correct_move=False)
+        assert resp.status_code == 200
+        body = resp.json()
+        assert body["item_status"] == "active"
+        assert body["streak"] == 0
+        assert body["correct_move"] is False
+
+        item = await _get_drill_item(test_engine, user_id, game_id, _FLAW_PLY_WHITE)
+        assert item is not None
+        assert item.streak == 0
+        assert item.fail_count == 2
+        assert item.ever_correct is False
+    finally:
+        await _delete_games(test_engine, [game_id])
+
+
+@pytest.mark.asyncio
+async def test_solve_parks_item_at_three_never_correct(test_engine) -> None:
+    """The third never-correct failure parks the item (POOL-06)."""
+    email = f"train-park-{uuid.uuid4().hex[:8]}@example.com"
+    user_id, token = await _register_and_login(email)
+    game_id = await _seed_game_with_blunder(test_engine, user_id)
+    await _seed_drill_item(
+        test_engine, user_id, game_id, _FLAW_PLY_WHITE, streak=0, fail_count=2, ever_correct=False
+    )
+    session_id = await _seed_session(
+        test_engine, user_id, [(game_id, _FLAW_PLY_WHITE, int(DrillSource.SR_ITEM))]
+    )
+
+    try:
+        resp = await _solve(token, session_id, 0, correct_move=False)
+        assert resp.status_code == 200
+        body = resp.json()
+        assert body["item_status"] == "parked"
+
+        item = await _get_drill_item(test_engine, user_id, game_id, _FLAW_PLY_WHITE)
+        assert item is not None
+        assert item.status == DrillStatus.PARKED
+        assert item.fail_count == 3
+    finally:
+        await _delete_games(test_engine, [game_id])
+
+
+@pytest.mark.asyncio
+async def test_solve_herring_touches_no_drill_item(test_engine) -> None:
+    """A red-herring solve writes a drill_solves row and creates/modifies no drill_items row."""
+    email = f"train-herring-solve-{uuid.uuid4().hex[:8]}@example.com"
+    user_id, token = await _register_and_login(email)
+    game_id = await _seed_bare_game(test_engine, user_id, "herring-solve")
+    session_id = await _seed_session(
+        test_engine, user_id, [(game_id, 8, int(DrillSource.RED_HERRING))]
+    )
+
+    try:
+        before = await _count_drill_items(test_engine, user_id)
+        resp = await _solve(token, session_id, 0, guess="several", correct_move=True)
+        assert resp.status_code == 200
+        body = resp.json()
+        assert body["item_status"] is None
+        assert body["streak"] is None
+        assert body["due_date"] is None
+        after = await _count_drill_items(test_engine, user_id)
+        assert after == before
+    finally:
+        await _delete_games(test_engine, [game_id])
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "pv_lines,expected_puzzle_type,guess,expected_correct_guess",
+    [
+        (_SHARP_PV_LINES, "sharp", "critical", True),
+        (_SHARP_PV_LINES, "sharp", "several", False),
+        (_MISSED_PV_LINES, "soft", "several", True),
+        (_MISSED_PV_LINES, "soft", "critical", False),
+    ],
+)
+async def test_correct_guess_computed_server_side(
+    test_engine,
+    pv_lines: list,
+    expected_puzzle_type: str,
+    guess: str,
+    expected_correct_guess: bool,
+) -> None:
+    """P-02: the guess verdict is graded server-side from the live blob, never client-asserted."""
+    assert "correct_guess" not in SolveRequest.model_fields
+    assert "puzzle_type" not in SolveRequest.model_fields
+
+    email = f"train-guess-{uuid.uuid4().hex[:8]}@example.com"
+    user_id, token = await _register_and_login(email)
+    game_id = await _seed_game_with_blunder(test_engine, user_id, missed_pv_lines=pv_lines)
+    await _seed_drill_item(test_engine, user_id, game_id, _FLAW_PLY_WHITE)
+    session_id = await _seed_session(
+        test_engine, user_id, [(game_id, _FLAW_PLY_WHITE, int(DrillSource.SR_ITEM))]
+    )
+
+    try:
+        resp = await _solve(token, session_id, 0, guess=guess, correct_move=True)
+        assert resp.status_code == 200
+        body = resp.json()
+        assert body["puzzle_type"] == expected_puzzle_type
+        assert body["correct_guess"] is expected_correct_guess
+    finally:
+        await _delete_games(test_engine, [game_id])
+
+
+@pytest.mark.asyncio
+async def test_solve_is_idempotent_per_position(test_engine) -> None:
+    """Re-submitting the same (session_id, position) returns the first recorded result."""
+    email = f"train-idem-{uuid.uuid4().hex[:8]}@example.com"
+    user_id, token = await _register_and_login(email)
+    game_id = await _seed_game_with_blunder(test_engine, user_id)
+    await _seed_drill_item(test_engine, user_id, game_id, _FLAW_PLY_WHITE, streak=0)
+    session_id = await _seed_session(
+        test_engine, user_id, [(game_id, _FLAW_PLY_WHITE, int(DrillSource.SR_ITEM))]
+    )
+
+    try:
+        first = await _solve(
+            token, session_id, 0, guess="critical", played_move="e2e4", correct_move=True
+        )
+        assert first.status_code == 200
+        second = await _solve(
+            token, session_id, 0, guess="several", played_move="d2d4", correct_move=False
+        )
+        assert second.status_code == 200
+
+        assert second.json()["correct_move"] == first.json()["correct_move"]
+        assert second.json()["correct_guess"] == first.json()["correct_guess"]
+        assert second.json()["streak"] == first.json()["streak"]
+
+        item = await _get_drill_item(test_engine, user_id, game_id, _FLAW_PLY_WHITE)
+        assert item is not None
+        assert item.streak == 1  # advanced exactly once, never re-advanced or reset
+    finally:
+        await _delete_games(test_engine, [game_id])
+
+
+@pytest.mark.asyncio
+async def test_concurrent_solve_advances_streak_once(test_engine) -> None:
+    """T-189-19: two concurrent solves of the same puzzle advance the streak exactly once."""
+    email = f"train-concurrent-solve-{uuid.uuid4().hex[:8]}@example.com"
+    user_id, token = await _register_and_login(email)
+    game_id = await _seed_game_with_blunder(test_engine, user_id)
+    await _seed_drill_item(test_engine, user_id, game_id, _FLAW_PLY_WHITE, streak=0)
+    session_id = await _seed_session(
+        test_engine, user_id, [(game_id, _FLAW_PLY_WHITE, int(DrillSource.SR_ITEM))]
+    )
+
+    try:
+        payload = {
+            "position": 0,
+            "guess": "critical",
+            "played_move": "e2e4",
+            "correct_move": True,
+        }
+        async with (
+            httpx.AsyncClient(
+                transport=httpx.ASGITransport(app=app), base_url="http://test"
+            ) as client_a,
+            httpx.AsyncClient(
+                transport=httpx.ASGITransport(app=app), base_url="http://test"
+            ) as client_b,
+        ):
+            resp_a, resp_b = await asyncio.gather(
+                client_a.post(
+                    f"/api/train/sessions/{session_id}/solve",
+                    headers={"Authorization": f"Bearer {token}"},
+                    json=payload,
+                ),
+                client_b.post(
+                    f"/api/train/sessions/{session_id}/solve",
+                    headers={"Authorization": f"Bearer {token}"},
+                    json=payload,
+                ),
+            )
+        assert resp_a.status_code == 200
+        assert resp_b.status_code == 200
+
+        item = await _get_drill_item(test_engine, user_id, game_id, _FLAW_PLY_WHITE)
+        assert item is not None
+        assert item.streak == 1
+    finally:
+        await _delete_games(test_engine, [game_id])
+
+
+@pytest.mark.asyncio
+async def test_solve_foreign_session_404(test_engine) -> None:
+    """A session_id belonging to another user returns 404, not that user's data (T-189-16)."""
+    email_a = f"train-owner-{uuid.uuid4().hex[:8]}@example.com"
+    user_a, token_a = await _register_and_login(email_a)
+    email_b = f"train-attacker-{uuid.uuid4().hex[:8]}@example.com"
+    _user_b, token_b = await _register_and_login(email_b)
+
+    game_id = await _seed_game_with_blunder(test_engine, user_a)
+    await _seed_drill_item(test_engine, user_a, game_id, _FLAW_PLY_WHITE)
+    session_id = await _seed_session(
+        test_engine, user_a, [(game_id, _FLAW_PLY_WHITE, int(DrillSource.SR_ITEM))]
+    )
+
+    try:
+        resp = await _solve(token_b, session_id, 0, correct_move=True)
+        assert resp.status_code == 404
+        body = resp.json()
+        assert "correct_guess" not in body
+        assert "streak" not in body
+    finally:
+        await _delete_games(test_engine, [game_id])
+
+
+@pytest.mark.asyncio
+async def test_solve_unknown_position_404(test_engine) -> None:
+    """A position outside the session's frozen list returns 404."""
+    email = f"train-badpos-{uuid.uuid4().hex[:8]}@example.com"
+    user_id, token = await _register_and_login(email)
+    game_id = await _seed_game_with_blunder(test_engine, user_id)
+    await _seed_drill_item(test_engine, user_id, game_id, _FLAW_PLY_WHITE)
+    session_id = await _seed_session(
+        test_engine, user_id, [(game_id, _FLAW_PLY_WHITE, int(DrillSource.SR_ITEM))]
+    )
+
+    try:
+        resp = await _solve(token, session_id, 5, correct_move=True)
+        assert resp.status_code == 404
+    finally:
+        await _delete_games(test_engine, [game_id])
+
+
+@pytest.mark.asyncio
+async def test_last_solve_completes_session(test_engine) -> None:
+    """Recording the last outstanding puzzle sets the session to completed."""
+    email = f"train-complete-{uuid.uuid4().hex[:8]}@example.com"
+    user_id, token = await _register_and_login(email)
+    game_id_sr = await _seed_game_with_blunder(test_engine, user_id, ply=_FLAW_PLY_WHITE)
+    game_id_herring = await _seed_bare_game(test_engine, user_id, "complete-herring")
+    await _seed_drill_item(test_engine, user_id, game_id_sr, _FLAW_PLY_WHITE)
+    session_id = await _seed_session(
+        test_engine,
+        user_id,
+        [
+            (game_id_sr, _FLAW_PLY_WHITE, int(DrillSource.SR_ITEM)),
+            (game_id_herring, 8, int(DrillSource.RED_HERRING)),
+        ],
+    )
+
+    try:
+        first = await _solve(token, session_id, 0, correct_move=True)
+        assert first.status_code == 200
+        assert first.json()["session_complete"] is False
+        assert await _get_session_status(test_engine, session_id) == "open"
+
+        second = await _solve(token, session_id, 1, guess="several", correct_move=True)
+        assert second.status_code == 200
+        assert second.json()["session_complete"] is True
+        assert await _get_session_status(test_engine, session_id) == "completed"
+    finally:
+        await _delete_games(test_engine, [game_id_sr, game_id_herring])
+
+
+# ---------------------------------------------------------------------------
+# Plan 05 Task 2 — GET /sessions/{session_id}/puzzles/{position}/reveal
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_reveal_409_before_attempt(test_engine) -> None:
+    """The reveal gate returns 409 with no answer-key fields before the attempt (T-189-17)."""
+    email = f"train-reveal-409-{uuid.uuid4().hex[:8]}@example.com"
+    user_id, token = await _register_and_login(email)
+    game_id = await _seed_game_with_blunder(test_engine, user_id)
+    await _seed_drill_item(test_engine, user_id, game_id, _FLAW_PLY_WHITE)
+    session_id = await _seed_session(
+        test_engine, user_id, [(game_id, _FLAW_PLY_WHITE, int(DrillSource.SR_ITEM))]
+    )
+
+    try:
+        resp = await _reveal(token, session_id, 0)
+        assert resp.status_code == 409
+        body = resp.json()
+        assert "best_move" not in body
+        assert "puzzle_type" not in body
+    finally:
+        await _delete_games(test_engine, [game_id])
+
+
+@pytest.mark.asyncio
+async def test_reveal_200_after_attempt(test_engine) -> None:
+    """Once solved, reveal returns 200 with a non-null best_move/best_move_san/puzzle_type."""
+    email = f"train-reveal-200-{uuid.uuid4().hex[:8]}@example.com"
+    user_id, token = await _register_and_login(email)
+    game_id = await _seed_game_with_blunder(test_engine, user_id, missed_pv_lines=_SHARP_PV_LINES)
+    await _seed_drill_item(test_engine, user_id, game_id, _FLAW_PLY_WHITE)
+    await _seed_position_meta(
+        test_engine, user_id, game_id, _FLAW_PLY_WHITE, best_move="b5a4", move_san="Ba4"
+    )
+    session_id = await _seed_session(
+        test_engine, user_id, [(game_id, _FLAW_PLY_WHITE, int(DrillSource.SR_ITEM))]
+    )
+
+    try:
+        solved = await _solve(token, session_id, 0, guess="critical", correct_move=True)
+        assert solved.status_code == 200
+
+        resp = await _reveal(token, session_id, 0)
+        assert resp.status_code == 200
+        body = resp.json()
+        assert body["best_move"] == "b5a4"
+        assert body["best_move_san"] == "Ba4"
+        assert body["puzzle_type"] == "sharp"
+        assert body["source"] == "sr_item"
+    finally:
+        await _delete_games(test_engine, [game_id])
+
+
+@pytest.mark.asyncio
+async def test_reveal_herring_reports_herring_type(test_engine) -> None:
+    """A solved red herring reveals puzzle_type "herring" and source "red_herring"."""
+    email = f"train-reveal-herring-{uuid.uuid4().hex[:8]}@example.com"
+    user_id, token = await _register_and_login(email)
+    game_id = await _seed_bare_game(test_engine, user_id, "reveal-herring")
+    session_id = await _seed_session(
+        test_engine, user_id, [(game_id, 8, int(DrillSource.RED_HERRING))]
+    )
+
+    try:
+        solved = await _solve(token, session_id, 0, guess="several", correct_move=True)
+        assert solved.status_code == 200
+
+        resp = await _reveal(token, session_id, 0)
+        assert resp.status_code == 200
+        body = resp.json()
+        assert body["puzzle_type"] == "herring"
+        assert body["source"] == "red_herring"
+    finally:
+        await _delete_games(test_engine, [game_id])
+
+
+@pytest.mark.asyncio
+async def test_reveal_foreign_session_404(test_engine) -> None:
+    """A session id belonging to a second registered user returns 404 (T-189-16)."""
+    email_a = f"train-reveal-owner-{uuid.uuid4().hex[:8]}@example.com"
+    user_a, token_a = await _register_and_login(email_a)
+    email_b = f"train-reveal-attacker-{uuid.uuid4().hex[:8]}@example.com"
+    _user_b, token_b = await _register_and_login(email_b)
+
+    game_id = await _seed_game_with_blunder(test_engine, user_a)
+    await _seed_drill_item(test_engine, user_a, game_id, _FLAW_PLY_WHITE)
+    session_id = await _seed_session(
+        test_engine, user_a, [(game_id, _FLAW_PLY_WHITE, int(DrillSource.SR_ITEM))]
+    )
+
+    try:
+        solved = await _solve(token_a, session_id, 0, correct_move=True)
+        assert solved.status_code == 200
+
+        resp = await _reveal(token_b, session_id, 0)
+        assert resp.status_code == 404
+    finally:
+        await _delete_games(test_engine, [game_id])
+
+
+@pytest.mark.asyncio
+async def test_reveal_unknown_position_404(test_engine) -> None:
+    """A position outside the session's frozen list returns 404."""
+    email = f"train-reveal-badpos-{uuid.uuid4().hex[:8]}@example.com"
+    user_id, token = await _register_and_login(email)
+    game_id = await _seed_game_with_blunder(test_engine, user_id)
+    await _seed_drill_item(test_engine, user_id, game_id, _FLAW_PLY_WHITE)
+    session_id = await _seed_session(
+        test_engine, user_id, [(game_id, _FLAW_PLY_WHITE, int(DrillSource.SR_ITEM))]
+    )
+
+    try:
+        resp = await _reveal(token, session_id, 5)
+        assert resp.status_code == 404
+    finally:
+        await _delete_games(test_engine, [game_id])
+
+
+@pytest.mark.asyncio
+async def test_reveal_has_tactic_lines_flag(test_engine) -> None:
+    """has_tactic_lines flips True only when the flaw carries a tactic tag."""
+    email = f"train-reveal-tactic-{uuid.uuid4().hex[:8]}@example.com"
+    user_id, token = await _register_and_login(email)
+
+    tagged_game_id = await _seed_game_with_blunder(test_engine, user_id, missed_tactic_motif=1)
+    await _seed_drill_item(test_engine, user_id, tagged_game_id, _FLAW_PLY_WHITE)
+    session_tagged = await _seed_session(
+        test_engine, user_id, [(tagged_game_id, _FLAW_PLY_WHITE, int(DrillSource.SR_ITEM))]
+    )
+    solved_tagged = await _solve(token, session_tagged, 0, correct_move=True)
+    assert solved_tagged.status_code == 200
+    # Single-puzzle session -> immediately completed, freeing the D-12
+    # at-most-one-open-session slot before the second session is seeded.
+    assert solved_tagged.json()["session_complete"] is True
+
+    untagged_game_id = await _seed_game_with_blunder(test_engine, user_id)
+    await _seed_drill_item(test_engine, user_id, untagged_game_id, _FLAW_PLY_WHITE)
+    session_untagged = await _seed_session(
+        test_engine, user_id, [(untagged_game_id, _FLAW_PLY_WHITE, int(DrillSource.SR_ITEM))]
+    )
+    solved_untagged = await _solve(token, session_untagged, 0, correct_move=True)
+    assert solved_untagged.status_code == 200
+
+    try:
+        tagged_resp = await _reveal(token, session_tagged, 0)
+        untagged_resp = await _reveal(token, session_untagged, 0)
+
+        assert tagged_resp.status_code == 200
+        assert untagged_resp.status_code == 200
+        assert tagged_resp.json()["has_tactic_lines"] is True
+        assert untagged_resp.json()["has_tactic_lines"] is False
+    finally:
+        await _delete_games(test_engine, [tagged_game_id, untagged_game_id])
+
+
+# ---------------------------------------------------------------------------
+# Plan 05 Task 3 — GET/PUT /train/settings
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_get_settings_creates_defaults_on_first_touch(test_engine) -> None:
+    """First GET creates and returns the D-06/D-07/D-08 defaults in one call."""
+    email = f"train-settings-default-{uuid.uuid4().hex[:8]}@example.com"
+    _user_id, token = await _register_and_login(email)
+
+    resp = await _get_settings(token)
+    assert resp.status_code == 200
+    assert resp.json() == {"timezone": "UTC", "weekday_mask": 0, "puzzles_per_session": 12}
+
+
+@pytest.mark.asyncio
+async def test_get_settings_is_idempotent(test_engine) -> None:
+    """Two GETs create exactly one train_settings row."""
+    from app.models.train_settings import TrainSettings
+
+    email = f"train-settings-idem-{uuid.uuid4().hex[:8]}@example.com"
+    user_id, token = await _register_and_login(email)
+
+    first = await _get_settings(token)
+    second = await _get_settings(token)
+    assert first.status_code == 200
+    assert second.status_code == 200
+    assert first.json() == second.json()
+
+    session_maker = async_sessionmaker(test_engine, expire_on_commit=False)
+    async with session_maker() as session:
+        count = (
+            await session.execute(
+                select(func.count())
+                .select_from(TrainSettings)
+                .where(TrainSettings.user_id == user_id)
+            )
+        ).scalar_one()
+    assert count == 1
+
+
+@pytest.mark.asyncio
+async def test_put_settings_persists_and_round_trips(test_engine) -> None:
+    """A PUT persists and a subsequent GET returns exactly what was stored."""
+    email = f"train-settings-put-{uuid.uuid4().hex[:8]}@example.com"
+    _user_id, token = await _register_and_login(email)
+
+    put_resp = await _put_settings(
+        token, timezone="America/New_York", weekday_mask=0b0010101, puzzles_per_session=8
+    )
+    assert put_resp.status_code == 200
+    assert put_resp.json() == {
+        "timezone": "America/New_York",
+        "weekday_mask": 0b0010101,
+        "puzzles_per_session": 8,
+    }
+
+    get_resp = await _get_settings(token)
+    assert get_resp.status_code == 200
+    assert get_resp.json() == put_resp.json()
+
+
+@pytest.mark.asyncio
+async def test_put_settings_rejects_bad_timezone_422(test_engine) -> None:
+    """An unresolvable IANA timezone is rejected 422 and never persisted."""
+    email = f"train-settings-badtz-{uuid.uuid4().hex[:8]}@example.com"
+    _user_id, token = await _register_and_login(email)
+
+    good = await _put_settings(
+        token, timezone="Europe/Zurich", weekday_mask=0, puzzles_per_session=12
+    )
+    assert good.status_code == 200
+
+    bad = await _put_settings(token, timezone="Not/AZone", weekday_mask=0, puzzles_per_session=12)
+    assert bad.status_code == 422
+
+    get_resp = await _get_settings(token)
+    assert get_resp.json()["timezone"] == "Europe/Zurich"
+
+
+@pytest.mark.asyncio
+async def test_put_settings_rejects_out_of_range_mask_422(test_engine) -> None:
+    """A weekday_mask outside [0, 127] is rejected 422."""
+    email = f"train-settings-badmask-{uuid.uuid4().hex[:8]}@example.com"
+    _user_id, token = await _register_and_login(email)
+
+    resp = await _put_settings(token, timezone="UTC", weekday_mask=128, puzzles_per_session=12)
+    assert resp.status_code == 422
+
+
+@pytest.mark.asyncio
+async def test_settings_403_guest(test_engine) -> None:
+    """A guest account is rejected 403 on both GET and PUT /train/settings."""
+    email = f"train-settings-guest-{uuid.uuid4().hex[:8]}@example.com"
+    user_id, token = await _register_and_login(email)
+    await _set_guest(test_engine, user_id)
+
+    get_resp = await _get_settings(token)
+    assert get_resp.status_code == 403
+
+    put_resp = await _put_settings(token, timezone="UTC", weekday_mask=0, puzzles_per_session=12)
+    assert put_resp.status_code == 403
+
+
+@pytest.mark.asyncio
+async def test_session_size_follows_settings(test_engine) -> None:
+    """Setting puzzles_per_session=4 composes a session of at most 4 puzzles."""
+    email = f"train-settings-size-{uuid.uuid4().hex[:8]}@example.com"
+    user_id, token = await _register_and_login(email)
+
+    put_resp = await _put_settings(token, timezone="UTC", weekday_mask=0, puzzles_per_session=4)
+    assert put_resp.status_code == 200
+
+    game_ids = [
+        await _seed_game_with_blunder(test_engine, user_id, ply=_FLAW_PLY_WHITE) for _ in range(6)
+    ]
+
+    try:
+        async with httpx.AsyncClient(
+            transport=httpx.ASGITransport(app=app), base_url="http://test"
+        ) as client:
+            resp = await client.post(ENDPOINT, headers={"Authorization": f"Bearer {token}"})
+        assert resp.status_code == 200
+        body = resp.json()
+        assert body["requested_count"] == 4
+        assert len(body["puzzles"]) <= 4
+    finally:
+        await _delete_games(test_engine, game_ids)

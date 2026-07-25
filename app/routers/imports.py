@@ -463,6 +463,14 @@ async def delete_all_games(
     Returns the count of deleted games.
     """
     deleted_count = await game_repository.delete_all_games_for_user(session, user.id)
+    # Phase 189 Plan 02 (POOL-09, D-02/D-04): `drill_items` and `drill_solves`
+    # need NO explicit delete here -- both FK to `games.id ON DELETE CASCADE`
+    # (D-02), so the DELETE FROM games above already removed them. `drill_sessions`
+    # and `train_settings` are DELIBERATELY preserved: session history is user
+    # progress (the Phase 191 weekly-streak source), not game-derived data (D-04).
+    # Do NOT add a delete(DrillSession)/delete(TrainSettings) statement here --
+    # that would silently violate D-04. See tests/test_imports_router.py::
+    # TestDeleteAllGamesDrillCascade for the pinning tests.
     await session.execute(delete(ImportJob).where(ImportJob.user_id == user.id))
     await session.execute(
         delete(UserBenchmarkPercentile).where(UserBenchmarkPercentile.user_id == user.id)

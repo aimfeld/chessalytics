@@ -2,25 +2,29 @@
 gsd_state_version: 1.0
 milestone: v2.9
 milestone_name: Train — Spaced-Repetition Blunder Drills
+current_phase: 190
+current_phase_name: Train Page + Solve Loop
 status: planning
-last_updated: "2026-07-25T09:53:43.509Z"
+stopped_at: Phase 189 shipped — secured (threats_open 0) and squash-merged to main
+last_updated: "2026-07-25T18:10:00.000Z"
 last_activity: 2026-07-25
+last_activity_desc: Phase 189 shipped to main (local squash-merge, no PR per GitLab Flow)
 progress:
-  total_phases: 0
-  completed_phases: 0
-  total_plans: 0
-  completed_plans: 0
-  percent: 0
+  total_phases: 3
+  completed_phases: 1
+  total_plans: 6
+  completed_plans: 6
+  percent: 33
 ---
 
 # Project State: FlawChess
 
 ## Current Position
 
-Phase: Not started (roadmap created — next: plan Phase 189)
-Plan: —
-Status: Roadmap created
-Last activity: 2026-07-25 — Roadmap created (Phases 189-191: Pool + Scheduler Backend, Train Page + Solve Loop, Schedule + Progress Surface; 27/27 requirements mapped)
+Phase: 190 — Train Page + Solve Loop
+Plan: Not started
+Status: Ready to plan
+Last activity: 2026-07-25 — Phase 189 shipped to main (secured, full pre-merge gate green, squash-merged)
 
 ## Project Reference
 
@@ -427,6 +431,17 @@ v1.29 Live-Engine Analysis Page shipped 2026-06-29 — 5 phases (136–140), 14 
 - [Phase 187-02]: run_periodic_guest_cleanup is a byte-for-byte structural mirror of run_periodic_reaper (D-01/D-02); fixed pre-existing test_main_lifespan.py EXPECTED_TASKS drift (missing full-eval-drain) while wiring guest-cleanup as the 4th lifespan background task
 - [Phase ?]: [Phase 188-01]: Fixed 3 out-of-D-03/D-05-named-scope tier-1>tier-2>tier-3 docstring mentions in eval_drain.py/eval_queue_service.py/eval_remote.py — leaving them inconsistent would have failed the plan's own acceptance check that edited docstrings read tier-1 > tier-3 > tier-4 throughout
 - [Phase ?]: [Phase 188-01, Rule 3 auto-fix]: Repointed 3 test files (test_backfill_eval.py, test_backfill_multipv.py, test_backfill_accuracy_acpl.py) from scripts.X to scripts.archive.X — a real gap in RESEARCH.md's test-suite impact map, which never grepped tests/ for imports of the scripts themselves, only eval_drain.py re-export importers
+- [Phase ?]: 189-01: TrainSessionResponse.session_id made nullable (int | None) so the composition contract's explicit no-session-row-when-empty case is expressible
+- [Phase ?]: 189-01: WINNABILITY_FLOOR_ES=0.20, LADDER_DAYS={0:0,1:3,2:10}, MASTERY_STREAK_THRESHOLD=3, PARK_FAIL_THRESHOLD=3 locked as named constants per planner discretion
+- [Phase ?]: 189-01: Reverted requirements.mark-complete's POOL-01/04/05/06/10 checkbox flips — per this plan's own source_audit table these requirements are shared across Plans 01/04/05 (composition padding, herrings, solve-time ladder wiring, reveal endpoint); Plan 01 delivers eligibility + the pure ladder + the payload-shape guarantee only. Left [ ] Pending; the last contributing plan (04 or 05) will actually close them.
+- [Phase ?]: 189-02: comments cite phase-scoped Phase-189 D-04/D-05 IDs to disambiguate from guest_cleanup_service.py's pre-existing Phase-187 D-05 label
+- [Phase ?]: 189-02: no finally-block cleanup added for no-drill-rows tests -- existing autouse _cleanup_leaked_guest_rows fixture already cascades guest-owned rows away
+- [Phase ?]: [Phase 189-03]: POOL-03's flagged 'unclassified' ambiguity resolved: herring_stmt requires BOTH best_move_tier_sql(...).is_(None) AND gap < SHARP_GAP_ES, since tier-IS-NULL alone also fires on easy-to-find large-gap moves
+- [Phase ?]: [189-04] compose_slots + blob_pending_stmt added to train_pool.py; cross-backfill via if/elif; one SAVEPOINT wraps padding+session+solves inserts, IntegrityError resumes the race winner (T-189-14)
+- [Phase ?]: record_solve claims a puzzle via a conditional UPDATE (solved_at IS NULL in the WHERE clause) — the sole concurrency guarantee for T-189-19, proven by a deterministic two-httpx-client asyncio.gather test
+- [Phase ?]: correct_guess is computed server-side from the live game_flaws blob at solve/reveal time (never snapshotted); a reclassified-away flaw falls back to classify_puzzle_type's soft default rather than failing the solve
+- [Phase ?]: reveal_for_puzzle returns internal sentinel strings (not_found/not_attempted) alongside a RevealedPuzzle dataclass rather than raising from the repository — the router maps these to 404/409
+- [Phase ?]: D-GAP-01: the D-06 empty-array missed_pv_lines sentinel counts toward NEITHER pool_entry_stmt NOR blob_pending_count (terminal, not transient — never self-heals via the tier-4 lottery)
 
 ### Pending Todos
 
@@ -524,9 +539,9 @@ Items acknowledged and deferred at **v1.29 milestone close on 2026-06-29** (user
 
 ## Session Continuity
 
-**Stopped at:** Completed 188-01-PLAN.md (import/eval pipeline cleanup, SEED-115)
+**Stopped at:** Completed 189-06-PLAN.md (Phase 189 fully closed — POOL-01 complete)
 
-**Last session:** 2026-07-24T19:35:15.548Z
+**Last session:** 2026-07-25T15:34:30.020Z
 
 **Resume file:**
 
@@ -588,6 +603,12 @@ None
 | Phase 187 P01 | 45min | 2 tasks | 2 files |
 | Phase 187 P02 | 20min | 2 tasks | 4 files |
 | Phase 188 P01 | 10min | 4 tasks | 17 files |
+| Phase 189 P01 | 25min | 2 tasks | 14 files |
+| Phase 189 P02 | 20min | 2 tasks | 4 files |
+| Phase 189 P03 | 35min | 2 tasks | 2 files |
+| Phase 189 P04 | 45min | 2 tasks | 5 files |
+| Phase 189 P05 | 45min | 3 tasks | 4 files |
+| Phase 189 P06 | 12min | 2 tasks | 6 files |
 
 ## Performance Metrics
 

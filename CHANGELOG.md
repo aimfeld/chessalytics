@@ -8,6 +8,10 @@ in `YYYY-MM-DD` (Europe/Zurich).
 
 ## [Unreleased]
 
+### Added
+
+- Backend groundwork for Train, the upcoming spaced-repetition drill mode: your own blunders that carry a full stored answer key become drill puzzles on a per-user schedule, mixed with red herrings drawn from positions where your move was already fine. Sessions compose, resume, expire, and record results with the interval ladder advancing, retiring mastered puzzles and parking ones you keep missing. No user-facing page yet — that lands with the `/train` page (Phase 189).
+
 ### Changed
 
 - Reworked the bot roster's Grinder and Wall ladders. The Grinder line now runs Ant → Mole → Otter → Nell the Penguin → Tank the Ox → Gus the Gorilla, and the Wall line ends Rocco the Armadillo → Hilda the Hippo, retiring Bo the Buffalo, Yara the Yak, and Dana the Beaver. Grinder portraits also read grittier and more dogged than the previous placid look.

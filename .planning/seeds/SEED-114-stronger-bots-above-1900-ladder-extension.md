@@ -41,6 +41,17 @@ any anchor-ladder extension, or at the next bot-calibration milestone.
 1. Extend the anchor ladder upward (new Stockfish rungs above sf10).
 2. Raise the bot search budget (`max_nodes` above 50) for a stronger top preset.
 3. Argmax / blend 1.0 as a free tack-on to (2) — not a standalone lever.
+4. Stockfish root injection (`budget.extraRootMoves`, built but dormant) for the new
+   top presets only — the one lever that widens the Maia-truncated root candidate set,
+   attacking the sf10 tactical gap that (2)/(3) can't (the root expands once; more
+   nodes never add candidates). See SEED-118 for the mechanics (prior-seeding fix,
+   per-move injection pre-search) — do the analysis-board half (SEED-118) first as
+   validation, since it has no recalibration risk. Bot caveats: gate by preset so
+   existing rungs stay byte-identical (no re-sweep); share the injection wiring
+   between `useBotGame` and the calibration harness (T-168.5-04-01 anti-desync);
+   fixed-nodes/depth injection search, not movetime (harness determinism); with only
+   50 nodes an injected child may be expanded 0-2 times, leaving its value ≈ raw
+   Stockfish sigmoid (undiscounted by self-execution) — pair with lever (2).
 
 **Cheap probe first (~hours, not ~36h):** blend 1.0 at bot_elo 1900 and 2600 vs
 sf8/sf10 anchors only. If argmax moves the sf10 score substantially, a full sweep plus
@@ -61,6 +72,7 @@ runs, see `reports/data/preset-supervisor.sh` pattern).
 - `frontend/src/lib/engine/selectBotMove.ts` — blend regime dispatch, TAU_MAX = 0.1
 - `frontend/src/lib/maiaEncoding.ts` — `eloToInput` continuous ELO conditioning
 - `scripts/calibration-harness.mjs` — `--blends` / `--anchors` flags; FLAWCHESS_BOT_MAX_NODES
+- `SEED-118-analysis-board-stockfish-root-injection.md` — lever 4 mechanics + validation-first sequencing (analysis board before bot presets)
 
 ## Notes
 

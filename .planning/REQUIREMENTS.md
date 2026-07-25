@@ -8,16 +8,16 @@
 
 ### Drill Pool & Scheduler (backend)
 
-- [ ] **POOL-01**: User's own blunders (ply parity vs `user_color` via the existing `is_opponent_expr` helper) enter the drill pool when they clear the winnability floor (expected score ≥ ~20–25% via `eval_cp_to_expected_score`, respecting the post-move eval-shift convention) and carry a stored answer key (`best_move` + `pv` + non-empty `missed_pv_lines` blob)
-- [ ] **POOL-02**: Each drill item is classified sharp vs avoid-the-blunder from the `missed_pv_lines` node-0 best-vs-second expected-score gap (classifier, not entry gate)
-- [ ] **POOL-03**: Red herrings are sourced from non-gem `game_best_moves` candidate rows (user played the stored best move out-of-book, best ≈ second), winnability-floored, recency-weighted, no repeats until the source is exhausted, with no SR bookkeeping
-- [ ] **POOL-04**: Per-item SR state (streak, due date, fail count, parked flag, solve log) persists per (user, flaw); the streak-keyed interval ladder (0 → next session, 1 → ~3d, 2 → ~10d) snaps due dates forward to the next scheduled session day
-- [ ] **POOL-05**: An item retires as mastered after 3 correct solves in 3 separate sessions (a miss resets the counter); mastery is driven by move correctness alone, never the guess
-- [ ] **POOL-06**: An item failed 3 times with zero correct solves ever is parked ("too hard for now") and leaves the queue; a single correct solve permanently zeroes the fail counter; parked items do not return in v1
-- [ ] **POOL-07**: A session-composition endpoint returns exactly N puzzles while material lasts: ~75% SR items (due most-overdue first, padded by introducing new flaws recency-weighted) + ~25% red herrings
-- [ ] **POOL-08**: A result-recording endpoint persists per-puzzle outcomes (guess verdict, move verdict, played move) and updates streak/due/fail/parked state; grading itself happens client-side
-- [ ] **POOL-09**: Drill data stays consistent when source games are deleted (guest 30-day prune, delete-all + re-import): no orphaned drill rows, no crashes on dangling references
-- [ ] **POOL-10**: The pre-attempt puzzle payload does not contain the answer key or puzzle-type ground truth (no answer leak before the attempt); reveal data is fetched or unlocked only after the attempt
+- [x] **POOL-01**: User's own blunders (ply parity vs `user_color` via the existing `is_opponent_expr` helper) enter the drill pool when they clear the winnability floor (expected score ≥ ~20–25% via `eval_cp_to_expected_score`, respecting the post-move eval-shift convention) and carry a stored answer key (`best_move` + `pv` + non-empty `missed_pv_lines` blob)
+- [x] **POOL-02**: Each drill item is classified sharp vs avoid-the-blunder from the `missed_pv_lines` node-0 best-vs-second expected-score gap (classifier, not entry gate)
+- [x] **POOL-03**: Red herrings are sourced from non-gem `game_best_moves` candidate rows (user played the stored best move out-of-book, best ≈ second), winnability-floored, recency-weighted, no repeats until the source is exhausted, with no SR bookkeeping
+- [x] **POOL-04**: Per-item SR state (streak, due date, fail count, parked flag, solve log) persists per (user, flaw); the streak-keyed interval ladder (0 → next session, 1 → ~3d, 2 → ~10d) snaps due dates forward to the next scheduled session day
+- [x] **POOL-05**: An item retires as mastered after 3 correct solves in 3 separate sessions (a miss resets the counter); mastery is driven by move correctness alone, never the guess
+- [x] **POOL-06**: An item failed 3 times with zero correct solves ever is parked ("too hard for now") and leaves the queue; a single correct solve permanently zeroes the fail counter; parked items do not return in v1
+- [x] **POOL-07**: A session-composition endpoint returns exactly N puzzles while material lasts: ~75% SR items (due most-overdue first, padded by introducing new flaws recency-weighted) + ~25% red herrings
+- [x] **POOL-08**: A result-recording endpoint persists per-puzzle outcomes (guess verdict, move verdict, played move) and updates streak/due/fail/parked state; grading itself happens client-side
+- [x] **POOL-09**: Drill data stays consistent when source games are deleted (guest 30-day prune, delete-all + re-import): no orphaned drill rows, no crashes on dangling references
+- [x] **POOL-10**: The pre-attempt puzzle payload does not contain the answer key or puzzle-type ground truth (no answer leak before the attempt); reveal data is fetched or unlocked only after the attempt
 
 ### Solve Loop (frontend)
 
@@ -95,16 +95,16 @@ Which phases cover which requirements. Updated during roadmap creation.
 
 | Requirement | Phase | Status |
 |-------------|-------|--------|
-| POOL-01 | Phase 189 | Pending |
-| POOL-02 | Phase 189 | Pending |
-| POOL-03 | Phase 189 | Pending |
-| POOL-04 | Phase 189 | Pending |
-| POOL-05 | Phase 189 | Pending |
-| POOL-06 | Phase 189 | Pending |
-| POOL-07 | Phase 189 | Pending |
-| POOL-08 | Phase 189 | Pending |
-| POOL-09 | Phase 189 | Pending |
-| POOL-10 | Phase 189 | Pending |
+| POOL-01 | Phase 189 | Complete |
+| POOL-02 | Phase 189 | Complete |
+| POOL-03 | Phase 189 | Complete |
+| POOL-04 | Phase 189 | Complete |
+| POOL-05 | Phase 189 | Complete |
+| POOL-06 | Phase 189 | Complete |
+| POOL-07 | Phase 189 | Complete |
+| POOL-08 | Phase 189 | Complete |
+| POOL-09 | Phase 189 | Complete |
+| POOL-10 | Phase 189 | Complete |
 | SOLV-01 | Phase 190 | Pending |
 | SOLV-02 | Phase 190 | Pending |
 | SOLV-03 | Phase 190 | Pending |
@@ -124,6 +124,7 @@ Which phases cover which requirements. Updated during roadmap creation.
 | PROG-05 | Phase 191 | Pending |
 
 **Coverage:**
+
 - v1 requirements: 27 total
 - Mapped to phases: 27
 - Unmapped: 0

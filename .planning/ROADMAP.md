@@ -145,7 +145,7 @@
 | 186. Import Filters — Time Controls + Game Cap (SEED-117, v2.8) | 3/3 | Complete | 2026-07-24 |
 | 187. Guest Game Cleanup — 30-Day Inactivity Pruning (SEED-116, v2.8) | 2/2 | Complete | 2026-07-24 |
 | 188. Import/Eval Pipeline Cleanup — Retire Completed Backfill Machinery (SEED-115, v2.8) | 1/1 | Complete | 2026-07-24 |
-| 189. Pool + Scheduler Backend (SEED-037, v2.9) | 0/? | Not started | — |
+| 189. Pool + Scheduler Backend (SEED-037, v2.9) | 6/6 | Complete | 2026-07-25 |
 | 190. Train Page + Solve Loop (SEED-037, v2.9) | 0/? | Not started | — |
 | 191. Schedule + Progress Surface (SEED-037, v2.9) | 0/? | Not started | — |
 
@@ -164,12 +164,35 @@ Turn FlawChess from an analysis tool into a habit: a new import-gated `/train` p
 **Plan-time decisions to resolve explicitly (not default)**: the answer-key freshness policy (snapshot-at-pool-entry vs. live-join — real drift-vs-staleness tradeoff); `drill_sessions` cascade/deletion semantics on game wipe or guest purge (the one drill table that doesn't auto-cascade — product question, not just schema); timezone/day-boundary convention for due-date snapping (zero precedent elsewhere in this naive-UTC codebase, crosscutting with Phase 191's weekly-schedule logic — decide once, thread through both).
 
 **Success Criteria** (what must be TRUE):
+
   1. A user's own out-of-book blunders (ply-parity filtered via the existing `is_opponent_expr` helper) that clear the winnability floor and carry a full stored answer key (`best_move` + `pv` + non-empty `missed_pv_lines`) are added to that user's drill pool, classified sharp vs avoid-the-blunder from the blob's best-vs-second gap; opponent-side flaws, hopeless positions, and answer-key-incomplete flaws never appear.
   2. Calling the session-composition endpoint returns exactly N puzzles (~75% most-overdue-first SR items padded by recency-weighted new flaws, ~25% red herrings from non-gem `game_best_moves` rows) whenever the user has any drillable material, and the pre-attempt payload never contains the answer key or puzzle-type ground truth.
   3. Submitting a result via the result-recording endpoint advances an item's streak/due-date per the interval ladder (0 → next session, 1 → ~3d, 2 → ~10d, snapped to the next scheduled session day) and correctly retires it as mastered after 3 spaced-correct solves or parks it after 3 zero-correct fails, in both cases removing it from the active queue.
   4. Deleting a user's source games (guest 30-day prune, delete-all + re-import) leaves no orphaned drill rows, and the pool/session/result endpoints keep working without errors afterward.
 
-**Plans**: TBD
+**Plans**: 6 plans
+
+Plans:
+**Wave 1**
+
+- [x] 189-01-PLAN.md — Schema + tracer (end-to-end SR session composition) + pure interval ladder
+
+**Wave 2** *(blocked on Wave 1 completion)*
+
+- [x] 189-02-PLAN.md — Deletion-cascade guarantees at both delete-all call sites (POOL-09)
+- [x] 189-03-PLAN.md — Sharp/soft classifier + red-herring source query (POOL-02, POOL-03)
+
+**Wave 3** *(blocked on Wave 2 completion)*
+
+- [x] 189-04-PLAN.md — Full 75/25 session composition + session lifecycle (POOL-07)
+
+**Wave 4** *(blocked on Wave 3 completion)*
+
+- [x] 189-05-PLAN.md — Result recording + post-attempt reveal + train settings (POOL-08, POOL-10)
+
+**Wave 5** *(gap closure — blocked on Wave 4 completion)*
+
+- [x] 189-06-PLAN.md — Empty-blob answer-key entry gate: exclude the `[]` sentinel from pool entry, pin the `blob_pending_count` semantics, harden the re-serve scan (POOL-01)
 
 ### Phase 190: Train Page + Solve Loop
 
@@ -182,6 +205,7 @@ Turn FlawChess from an analysis tool into a habit: a new import-gated `/train` p
 **Plan-time decisions to resolve explicitly (not default)**: `VariationTree` full-component-reuse vs. a new lightweight stepper is a real build-cost unknown (the component is deeply coupled to Analysis.tsx's full editor state) and should be spiked early, not discovered mid-build; the WASM grading movetime budget needs its own headless measurement pass (the seed's assumed "~1s" figure is unvalidated for Train's single-move-eval shape) before the solve-loop UX is finalized.
 
 **Success Criteria** (what must be TRUE):
+
   1. `/train` appears between Library and Bots on the desktop header, the mobile bottom bar (6 tap targets, labels intact), and the mobile More drawer, greyed out (import-gated, NOT in `IMPORT_EXEMPT_ROUTES`) until the user has games and import tier 1 is complete.
   2. Before each move the user commits a binary "one critical move vs several fine moves" guess, then plays exactly one move on a lichess-minimal board (user-color orientation, opponent's last move animated + highlighted, no eval bar or game metadata), with a visible "N of M" session progress indicator throughout.
   3. Every move is graded fully client-side (exact best-move match, or the vendored Stockfish WASM's expected-score-drop check against the MISTAKE threshold) with no server round-trip, and the reveal shows guess + move verdicts, the original blunder vs. the best line, the game card, and a deep link into the analysis board.
@@ -202,6 +226,7 @@ Turn FlawChess from an analysis tool into a habit: a new import-gated `/train` p
 **Plan-time decisions to resolve explicitly (not default)**: timezone/day-boundary convention (zero precedent elsewhere in this naive-UTC codebase) must be decided consistently with Phase 189's due-date snapping — not solved twice inconsistently. SCHD-03 (ad-hoc "train now") is scoped to this phase alongside the schedule settings UI it sits next to, rather than Phase 190, since it's a manual-trigger affordance on the schedule surface, not a new solve-loop mechanic — it draws the same session-composition endpoint Phase 190 already consumes.
 
 **Success Criteria** (what must be TRUE):
+
   1. A user sets a weekday picker + N-puzzles-per-session schedule, and on scheduled session days a nav badge and/or dashboard card surfaces the waiting session ("12 puzzles waiting"); an ad-hoc "train now" session is available on any day and draws the same queue.
   2. A weekly streak counter reflects consecutive weeks with every scheduled session completed, with no freeze-token mechanics.
   3. A green-rated session ends with a `prefers-reduced-motion`-safe confetti burst, and an item hitting 3/3 mastery triggers a distinct "Flaw fixed!" celebration with the position thumbnail.

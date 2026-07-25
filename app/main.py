@@ -25,6 +25,7 @@ from app.routers.insights import router as insights_router
 from app.routers.eval_remote import router as eval_remote_router
 from app.routers.library import router as library_router
 from app.routers.stats import router as stats_router
+from app.routers.train import router as train_router
 from app.routers.users import router as users_router
 from app.services.engine import start_engine, stop_engine
 from app.services.maia_engine import start_maia, stop_maia
@@ -201,6 +202,7 @@ app.include_router(library_router, prefix="/api")
 app.include_router(eval_remote_router, prefix="/api")
 app.include_router(feedback.router, prefix="/api")
 app.include_router(bots_router, prefix="/api")
+app.include_router(train_router, prefix="/api")
 
 
 @app.get("/", include_in_schema=False)

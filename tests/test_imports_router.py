@@ -7,6 +7,7 @@ Uses httpx AsyncClient with ASGITransport to test the FastAPI app directly
 without spinning up a real server.
 """
 
+import datetime
 import time
 import uuid
 from unittest.mock import AsyncMock, MagicMock, patch
@@ -14,12 +15,18 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import httpx
 import pytest
 import pytest_asyncio
-from sqlalchemy import delete, text
+from sqlalchemy import delete, func, select, text
 from sqlalchemy.ext.asyncio import async_sessionmaker
 
 import app.services.import_service as import_service
 from app.main import app
+from app.models.drill_item import DrillItem
+from app.models.drill_session import DrillSession
+from app.models.drill_solve import DrillSolve
+from app.models.game import Game
 from app.models.import_job import ImportJob
+from app.models.train_settings import TrainSettings
+from app.repositories.game_repository import bulk_insert_games
 
 
 # ---------------------------------------------------------------------------
@@ -651,3 +658,263 @@ class TestDeleteAllGamesCursorReset:
 
         assert delete_resp.status_code == 200
         assert delete_resp.json()["deleted_count"] == 1
+
+
+# ---------------------------------------------------------------------------
+# DELETE /imports/games -- Train drill-table cascade + survival (Phase 189
+# Plan 02, POOL-09, D-02/D-03/D-04)
+# ---------------------------------------------------------------------------
+
+
+def _game_row(user_id: int, platform_game_id: str) -> dict:
+    """Minimal valid Game row dict for bulk_insert_games (drill-cascade tests)."""
+    return {
+        "user_id": user_id,
+        "platform": "chess.com",
+        "platform_game_id": platform_game_id,
+        "platform_url": None,
+        "pgn": '[Event "Test"]\n\n1. e4 *',
+        "result": "1-0",
+        "user_color": "white",
+        "time_control_str": "600+0",
+        "time_control_bucket": "blitz",
+        "time_control_seconds": 600,
+        "rated": True,
+        "white_username": "u",
+        "black_username": "o",
+        "white_rating": 1600,
+        "black_rating": 1550,
+        "opening_name": None,
+        "opening_eco": None,
+        "played_at": datetime.datetime(2020, 1, 1, tzinfo=datetime.timezone.utc),
+    }
+
+
+class TestDeleteAllGamesDrillCascade:
+    @pytest.mark.asyncio
+    async def test_delete_games_cascades_drill_rows(self, test_engine) -> None:
+        """DELETE /imports/games cascades drill_items/drill_solves away via the
+        games FK (D-02), while drill_sessions and train_settings survive (D-04)."""
+        user_id, headers = await _register_and_login()
+        session_maker = async_sessionmaker(test_engine, expire_on_commit=False)
+
+        async with session_maker() as seed_session:
+            game_ids = await bulk_insert_games(
+                seed_session,
+                [
+                    _game_row(user_id, f"drill-cascade-1-{uuid.uuid4().hex}"),
+                    _game_row(user_id, f"drill-cascade-2-{uuid.uuid4().hex}"),
+                ],
+            )
+            game1_id, game2_id = game_ids
+
+            drill_session = DrillSession(
+                user_id=user_id,
+                session_date=datetime.date(2026, 7, 25),
+                puzzle_count=2,
+                expires_on=datetime.date(2026, 8, 1),
+            )
+            seed_session.add(drill_session)
+            await seed_session.flush()
+
+            seed_session.add(
+                DrillItem(
+                    user_id=user_id,
+                    game_id=game1_id,
+                    ply=6,
+                    due_date=datetime.date(2026, 7, 26),
+                )
+            )
+            seed_session.add(
+                DrillSolve(
+                    session_id=drill_session.id,
+                    position=0,
+                    user_id=user_id,
+                    game_id=game1_id,
+                    ply=6,
+                    source=0,
+                )
+            )
+            seed_session.add(
+                DrillSolve(
+                    session_id=drill_session.id,
+                    position=1,
+                    user_id=user_id,
+                    game_id=game2_id,
+                    ply=8,
+                    source=0,
+                )
+            )
+            seed_session.add(TrainSettings(user_id=user_id))
+            await seed_session.commit()
+
+        async def _count(model, *predicates) -> int:
+            async with session_maker() as s:
+                result = await s.execute(select(func.count()).select_from(model).where(*predicates))
+                return result.scalar_one()
+
+        assert await _count(DrillItem, DrillItem.user_id == user_id) == 1, (
+            "seed setup must produce a non-zero drill_items count before delete"
+        )
+        assert await _count(DrillSolve, DrillSolve.user_id == user_id) == 2, (
+            "seed setup must produce a non-zero drill_solves count before delete"
+        )
+
+        async with httpx.AsyncClient(
+            transport=httpx.ASGITransport(app=app), base_url="http://test"
+        ) as client:
+            delete_resp = await client.delete("/api/imports/games", headers=headers)
+        assert delete_resp.status_code == 200
+
+        assert await _count(DrillItem, DrillItem.user_id == user_id) == 0
+        assert await _count(DrillSolve, DrillSolve.user_id == user_id) == 0
+        assert await _count(DrillSession, DrillSession.user_id == user_id) == 1, (
+            "drill_sessions must survive delete-all (D-04)"
+        )
+        assert await _count(TrainSettings, TrainSettings.user_id == user_id) == 1, (
+            "train_settings must survive delete-all (D-04)"
+        )
+
+    @pytest.mark.asyncio
+    async def test_delete_single_game_leaves_sibling_drill_rows(self, test_engine) -> None:
+        """Deleting one game cascades only that game's drill_items; a sibling
+        game's drill_items for the same user survive untouched (POOL-09 edge probe)."""
+        user_id, _headers = await _register_and_login()
+        session_maker = async_sessionmaker(test_engine, expire_on_commit=False)
+
+        async with session_maker() as seed_session:
+            game_ids = await bulk_insert_games(
+                seed_session,
+                [
+                    _game_row(user_id, f"single-delete-1-{uuid.uuid4().hex}"),
+                    _game_row(user_id, f"single-delete-2-{uuid.uuid4().hex}"),
+                ],
+            )
+            game1_id, game2_id = game_ids
+
+            seed_session.add(
+                DrillItem(
+                    user_id=user_id,
+                    game_id=game1_id,
+                    ply=6,
+                    due_date=datetime.date(2026, 7, 26),
+                )
+            )
+            seed_session.add(
+                DrillItem(
+                    user_id=user_id,
+                    game_id=game2_id,
+                    ply=8,
+                    due_date=datetime.date(2026, 7, 28),
+                    streak=2,
+                )
+            )
+            await seed_session.commit()
+
+        # A targeted delete through the session -- not the DELETE /games
+        # endpoint -- to isolate the single-game cascade from the delete-all path.
+        async with session_maker() as delete_session:
+            await delete_session.execute(delete(Game).where(Game.id == game1_id))
+            await delete_session.commit()
+
+        async with session_maker() as verify_session:
+            surviving = (
+                await verify_session.execute(select(DrillItem).where(DrillItem.game_id == game2_id))
+            ).scalar_one()
+            gone = (
+                await verify_session.execute(select(DrillItem).where(DrillItem.game_id == game1_id))
+            ).scalar_one_or_none()
+
+        assert gone is None, "the deleted game's drill_items row must be cascaded away"
+        assert surviving.streak == 2, "sibling drill_items row's streak must be unchanged"
+        assert surviving.due_date == datetime.date(2026, 7, 28), (
+            "sibling drill_items row's due_date must be unchanged"
+        )
+
+    @pytest.mark.asyncio
+    async def test_delete_games_no_drill_rows_is_noop(self) -> None:
+        """A user with games but zero train rows deletes cleanly -- no FK/cascade error."""
+        user_id, headers = await _register_and_login()
+
+        from app.core.database import async_session_maker
+
+        async with async_session_maker() as seed_session:
+            await bulk_insert_games(
+                seed_session, [_game_row(user_id, f"no-drill-{uuid.uuid4().hex}")]
+            )
+            await seed_session.commit()
+
+        async with httpx.AsyncClient(
+            transport=httpx.ASGITransport(app=app), base_url="http://test"
+        ) as client:
+            delete_resp = await client.delete("/api/imports/games", headers=headers)
+
+        assert delete_resp.status_code == 200
+        assert delete_resp.json()["deleted_count"] == 1
+
+    @pytest.mark.asyncio
+    async def test_delete_games_twice_is_idempotent(self, test_engine) -> None:
+        """A second DELETE /imports/games call returns 200 with deleted_count 0 and
+        leaves the drill tables in the same (empty) state as after the first call."""
+        user_id, headers = await _register_and_login()
+        session_maker = async_sessionmaker(test_engine, expire_on_commit=False)
+
+        async with session_maker() as seed_session:
+            game_ids = await bulk_insert_games(
+                seed_session, [_game_row(user_id, f"idempotent-{uuid.uuid4().hex}")]
+            )
+            (game_id,) = game_ids
+            seed_session.add(
+                DrillItem(
+                    user_id=user_id,
+                    game_id=game_id,
+                    ply=6,
+                    due_date=datetime.date(2026, 7, 26),
+                )
+            )
+            await seed_session.commit()
+
+        async with httpx.AsyncClient(
+            transport=httpx.ASGITransport(app=app), base_url="http://test"
+        ) as client:
+            first_resp = await client.delete("/api/imports/games", headers=headers)
+            second_resp = await client.delete("/api/imports/games", headers=headers)
+
+        assert first_resp.status_code == 200
+        assert second_resp.status_code == 200
+        assert second_resp.json()["deleted_count"] == 0
+
+        async with session_maker() as verify_session:
+            result = await verify_session.execute(
+                select(func.count()).select_from(DrillItem).where(DrillItem.user_id == user_id)
+            )
+            assert result.scalar_one() == 0, (
+                "drill_items count after the second call must equal the count after the first (0)"
+            )
+
+    @pytest.mark.asyncio
+    async def test_compose_session_after_delete_all_returns_empty(self) -> None:
+        """POST /train/sessions after a full delete-all returns 200 with zero
+        puzzles -- not a 500 from a dangling drill_items reference."""
+        user_id, headers = await _register_and_login()
+
+        from app.core.database import async_session_maker
+
+        async with async_session_maker() as seed_session:
+            await bulk_insert_games(
+                seed_session,
+                [_game_row(user_id, f"compose-after-delete-{uuid.uuid4().hex}")],
+            )
+            await seed_session.commit()
+
+        async with httpx.AsyncClient(
+            transport=httpx.ASGITransport(app=app), base_url="http://test"
+        ) as client:
+            delete_resp = await client.delete("/api/imports/games", headers=headers)
+            assert delete_resp.status_code == 200
+
+            compose_resp = await client.post("/api/train/sessions", headers=headers)
+
+        assert compose_resp.status_code == 200
+        data = compose_resp.json()
+        assert data["puzzles"] == []
