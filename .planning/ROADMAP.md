@@ -44,6 +44,7 @@
 - ✅ **v2.6 Bot Strength Calibration** — Phases 173, 180, 181 (shipped 2026-07-21; dev-only, no deploy) — put the bot's play-style presets on a measured strength scale without ever playing a human. Phase 173 (SEED-101) round-robins the calibration anchors into one internal rating scale (verdict: the Maia-3 argmax ladder is ~2.8x compressed); Phase 180 (SEED-102) measures the three-preset (Human/Light/Deep) strength curves on that scale plus the cross-family style-inflation gap `G_preset`; Phase 181 (SEED-104) inverts those curves into per-preset `target_blitz_elo → bot_elo` lookups with honest measured ranges (Human 900–1400, Light 1500–1600, Deep 1600–1800) and an approximate-ELO disclaimer. Nothing in the product reads the lookup yet — see [milestones/v2.6-ROADMAP.md](milestones/v2.6-ROADMAP.md)
 - ✅ **v2.7 Bot Personas & Playstyle Layer** — Phases 182–185 (shipped 2026-07-23; deployed to production, PRs through #275) — a roster of 24 named bot personas (4 styles × 6 ELO rungs, 800–1800) on the Bots page, each a complete pinned opponent (preset, calibrated ELO, style params, opening book, resign/draw-offer policy, avatar, bio). Style levers land first (Phase 182), then the persona registry + Bots page UI (Phase 183), then per-persona harness calibration replaces the provisional labels with measured values (Phase 184, `PERSONA_CALIBRATION_MEASURED=true`), then the roster is re-laid-out as a rung-ladder grid with per-persona win stars (Phase 185) (SEED-098) — see [milestones/v2.7-ROADMAP.md](milestones/v2.7-ROADMAP.md)
 - ✅ **v2.8 Import Filters and Guest Data Cleanup** — Phases 186–188 (shipped 2026-07-24) — user-facing import filters (time-control multiselect + per-platform game cap) on the Import tab to keep storage and Stockfish compute in check, with backward backfill on filter upgrades and grandfathering for existing users (Phase 186, SEED-117); a daily background job that prunes game data for guests inactive ≥30 days while keeping the guest account + auth (Phase 187, SEED-116); and import/eval pipeline cleanup retiring completed backfill machinery while keeping `resweep_holed_games` and tiers 4/4b as permanent safety nets (Phase 188, SEED-115) — see [milestones/v2.8-ROADMAP.md](milestones/v2.8-ROADMAP.md)
+- ⏳ **v2.9 Train — Spaced-Repetition Blunder Drills** — Phases 189–191 (in progress)
 
 ## Progress
 
@@ -144,6 +145,71 @@
 | 186. Import Filters — Time Controls + Game Cap (SEED-117, v2.8) | 3/3 | Complete | 2026-07-24 |
 | 187. Guest Game Cleanup — 30-Day Inactivity Pruning (SEED-116, v2.8) | 2/2 | Complete | 2026-07-24 |
 | 188. Import/Eval Pipeline Cleanup — Retire Completed Backfill Machinery (SEED-115, v2.8) | 1/1 | Complete | 2026-07-24 |
+| 189. Pool + Scheduler Backend (SEED-037, v2.9) | 0/? | Not started | — |
+| 190. Train Page + Solve Loop (SEED-037, v2.9) | 0/? | Not started | — |
+| 191. Schedule + Progress Surface (SEED-037, v2.9) | 0/? | Not started | — |
+
+## v2.9 Train — Spaced-Repetition Blunder Drills (In Progress)
+
+Turn FlawChess from an analysis tool into a habit: a new import-gated `/train` page re-presents the user's own blunders as puzzles on a spaced schedule until the patterns stick (SEED-037, design settled across six gsd-explore rounds, final 2026-07-25). Phase 189 builds the backend pool + scheduler (self-contained, no frontend dependency); Phase 190 builds the `/train` page and the full session solve loop against those endpoints (its UI shell and grading engine can start in parallel against mocked payloads while Phase 189 finishes); Phase 191 layers on the weekly schedule, nav surfacing, and progress/gamification surface, hard-sequential after both. Sourced from SEED-037 plus a 4-dimension research pass (2026-07-25, `.planning/research/SUMMARY.md`) confirming zero new dependencies on either stack.
+
+### Phase 189: Pool + Scheduler Backend
+
+**Goal**: The backend maintains a persistent per-(user, flaw) spaced-repetition drill pool — populated from the user's own qualifying blunders plus a red-herring source — with a pure interval-ladder scheduler, a session-composition endpoint that always returns a full session while material lasts, and a result-recording endpoint that updates streak/due-date/mastery/parked state, so the frontend has everything it needs to drive a solve loop with zero server-side grading.
+
+**Depends on**: Nothing (first phase of milestone)
+
+**Requirements**: POOL-01, POOL-02, POOL-03, POOL-04, POOL-05, POOL-06, POOL-07, POOL-08, POOL-09, POOL-10
+
+**Plan-time decisions to resolve explicitly (not default)**: the answer-key freshness policy (snapshot-at-pool-entry vs. live-join — real drift-vs-staleness tradeoff); `drill_sessions` cascade/deletion semantics on game wipe or guest purge (the one drill table that doesn't auto-cascade — product question, not just schema); timezone/day-boundary convention for due-date snapping (zero precedent elsewhere in this naive-UTC codebase, crosscutting with Phase 191's weekly-schedule logic — decide once, thread through both).
+
+**Success Criteria** (what must be TRUE):
+  1. A user's own out-of-book blunders (ply-parity filtered via the existing `is_opponent_expr` helper) that clear the winnability floor and carry a full stored answer key (`best_move` + `pv` + non-empty `missed_pv_lines`) are added to that user's drill pool, classified sharp vs avoid-the-blunder from the blob's best-vs-second gap; opponent-side flaws, hopeless positions, and answer-key-incomplete flaws never appear.
+  2. Calling the session-composition endpoint returns exactly N puzzles (~75% most-overdue-first SR items padded by recency-weighted new flaws, ~25% red herrings from non-gem `game_best_moves` rows) whenever the user has any drillable material, and the pre-attempt payload never contains the answer key or puzzle-type ground truth.
+  3. Submitting a result via the result-recording endpoint advances an item's streak/due-date per the interval ladder (0 → next session, 1 → ~3d, 2 → ~10d, snapped to the next scheduled session day) and correctly retires it as mastered after 3 spaced-correct solves or parks it after 3 zero-correct fails, in both cases removing it from the active queue.
+  4. Deleting a user's source games (guest 30-day prune, delete-all + re-import) leaves no orphaned drill rows, and the pool/session/result endpoints keep working without errors afterward.
+
+**Plans**: TBD
+
+### Phase 190: Train Page + Solve Loop
+
+**Goal**: A gated `/train` route is wired into all three nav surfaces and drives the full session solve loop end-to-end — queue → binary guess → single-move attempt → client-side graded reveal (verdicts, steppable pv, game card, analysis deep-link) → session-end score — against Phase 189's endpoints, so a user can complete a full training session start to finish.
+
+**Depends on**: Phase 189 (session-composition + result-recording endpoints; the grading engine and static UI shell can build/test in parallel against mocked payloads before Phase 189's endpoints exist)
+
+**Requirements**: SOLV-01, SOLV-02, SOLV-03, SOLV-04, SOLV-05, SOLV-06, SOLV-07, NAV-01, NAV-02
+
+**Plan-time decisions to resolve explicitly (not default)**: `VariationTree` full-component-reuse vs. a new lightweight stepper is a real build-cost unknown (the component is deeply coupled to Analysis.tsx's full editor state) and should be spiked early, not discovered mid-build; the WASM grading movetime budget needs its own headless measurement pass (the seed's assumed "~1s" figure is unvalidated for Train's single-move-eval shape) before the solve-loop UX is finalized.
+
+**Success Criteria** (what must be TRUE):
+  1. `/train` appears between Library and Bots on the desktop header, the mobile bottom bar (6 tap targets, labels intact), and the mobile More drawer, greyed out (import-gated, NOT in `IMPORT_EXEMPT_ROUTES`) until the user has games and import tier 1 is complete.
+  2. Before each move the user commits a binary "one critical move vs several fine moves" guess, then plays exactly one move on a lichess-minimal board (user-color orientation, opponent's last move animated + highlighted, no eval bar or game metadata), with a visible "N of M" session progress indicator throughout.
+  3. Every move is graded fully client-side (exact best-move match, or the vendored Stockfish WASM's expected-score-drop check against the MISTAKE threshold) with no server round-trip, and the reveal shows guess + move verdicts, the original blunder vs. the best line, the game card, and a deep link into the analysis board.
+  4. On tactic-tagged flaws the reveal offers an opt-in "step through the line" control (tactic ply countdown, covering both missed and allowed orientations) that is always offered when tagged and never auto-triggered.
+  5. Completing a session shows a total-score-out-of-2N screen mapped to a green/yellow/red rating via named threshold constants.
+
+**Plans**: TBD
+**UI hint**: yes
+
+### Phase 191: Schedule + Progress Surface
+
+**Goal**: Users configure a weekly training schedule and see it surfaced in-app (nav badge / dashboard card), can start an ad-hoc session anytime, and get an honest progress picture (weekly streak, mastered/parked counts, celebrations, cold/empty states) — turning the mechanics built in Phases 189–190 into a habit loop.
+
+**Depends on**: Phase 189 (streak/mastery/parked state to read), Phase 190 (session flow the celebrations fire from)
+
+**Requirements**: SCHD-01, SCHD-02, SCHD-03, PROG-01, PROG-02, PROG-03, PROG-04, PROG-05
+
+**Plan-time decisions to resolve explicitly (not default)**: timezone/day-boundary convention (zero precedent elsewhere in this naive-UTC codebase) must be decided consistently with Phase 189's due-date snapping — not solved twice inconsistently. SCHD-03 (ad-hoc "train now") is scoped to this phase alongside the schedule settings UI it sits next to, rather than Phase 190, since it's a manual-trigger affordance on the schedule surface, not a new solve-loop mechanic — it draws the same session-composition endpoint Phase 190 already consumes.
+
+**Success Criteria** (what must be TRUE):
+  1. A user sets a weekday picker + N-puzzles-per-session schedule, and on scheduled session days a nav badge and/or dashboard card surfaces the waiting session ("12 puzzles waiting"); an ad-hoc "train now" session is available on any day and draws the same queue.
+  2. A weekly streak counter reflects consecutive weeks with every scheduled session completed, with no freeze-token mechanics.
+  3. A green-rated session ends with a `prefers-reduced-motion`-safe confetti burst, and an item hitting 3/3 mastery triggers a distinct "Flaw fixed!" celebration with the position thumbnail.
+  4. The progress surface shows mastered and parked counts honestly (e.g. "3 parked — too hard for now"), never framed as failure.
+  5. Cold/empty states never show a dead screen: no analyzed games points to import/analysis, and an exhausted pool (everything mastered, nothing due) shows a celebratory state.
+
+**Plans**: TBD
+**UI hint**: yes
 
 ## Backlog
 

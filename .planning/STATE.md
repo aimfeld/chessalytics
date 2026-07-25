@@ -17,10 +17,10 @@ progress:
 
 ## Current Position
 
-Phase: Not started (defining requirements)
+Phase: Not started (roadmap created — next: plan Phase 189)
 Plan: —
-Status: Defining requirements
-Last activity: 2026-07-25 — Milestone v2.9 started
+Status: Roadmap created
+Last activity: 2026-07-25 — Roadmap created (Phases 189-191: Pool + Scheduler Backend, Train Page + Solve Loop, Schedule + Progress Surface; 27/27 requirements mapped)
 
 ## Project Reference
 

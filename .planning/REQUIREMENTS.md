@@ -95,13 +95,41 @@ Which phases cover which requirements. Updated during roadmap creation.
 
 | Requirement | Phase | Status |
 |-------------|-------|--------|
-| — | — | — |
+| POOL-01 | Phase 189 | Pending |
+| POOL-02 | Phase 189 | Pending |
+| POOL-03 | Phase 189 | Pending |
+| POOL-04 | Phase 189 | Pending |
+| POOL-05 | Phase 189 | Pending |
+| POOL-06 | Phase 189 | Pending |
+| POOL-07 | Phase 189 | Pending |
+| POOL-08 | Phase 189 | Pending |
+| POOL-09 | Phase 189 | Pending |
+| POOL-10 | Phase 189 | Pending |
+| SOLV-01 | Phase 190 | Pending |
+| SOLV-02 | Phase 190 | Pending |
+| SOLV-03 | Phase 190 | Pending |
+| SOLV-04 | Phase 190 | Pending |
+| SOLV-05 | Phase 190 | Pending |
+| SOLV-06 | Phase 190 | Pending |
+| SOLV-07 | Phase 190 | Pending |
+| NAV-01 | Phase 190 | Pending |
+| NAV-02 | Phase 190 | Pending |
+| SCHD-01 | Phase 191 | Pending |
+| SCHD-02 | Phase 191 | Pending |
+| SCHD-03 | Phase 191 | Pending |
+| PROG-01 | Phase 191 | Pending |
+| PROG-02 | Phase 191 | Pending |
+| PROG-03 | Phase 191 | Pending |
+| PROG-04 | Phase 191 | Pending |
+| PROG-05 | Phase 191 | Pending |
 
 **Coverage:**
-- v1 requirements: 24 total
-- Mapped to phases: 0
-- Unmapped: 24 ⚠️ (pending roadmap)
+- v1 requirements: 27 total
+- Mapped to phases: 27
+- Unmapped: 0
+
+**Note:** the original Coverage block above (and the roadmap-creation brief) stated "24 total" — recounting the actual `### `-sectioned requirement IDs in this file (POOL-01..10, SOLV-01..07, NAV-01..02, SCHD-01..03, PROG-01..05) gives 27, not 24. Corrected here; no requirement IDs were added or removed, this is a count fix only.
 
 ---
 *Requirements defined: 2026-07-25*
-*Last updated: 2026-07-25 after initial definition (SEED-037 + research pass)*
+*Last updated: 2026-07-25 after roadmap creation (v2.9 Phases 189-191; requirement-count correction 24→27)*
