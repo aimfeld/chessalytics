@@ -8,6 +8,10 @@ in `YYYY-MM-DD` (Europe/Zurich).
 
 ## [Unreleased]
 
+### Fixed
+
+- A slow analysis worker no longer restarts its engine when a search times out, which was turning one slow position into a block of missing evaluations for the rest of the game.
+
 ## [v2.8] Import Filters and Guest Data Cleanup — 2026-07-24
 
 ### Added
