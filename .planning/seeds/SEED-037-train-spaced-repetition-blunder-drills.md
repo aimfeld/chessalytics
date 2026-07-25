@@ -1,6 +1,6 @@
 ---
 id: SEED-037
-status: dormant
+status: promoted (v2.9, 2026-07-25)
 planted: 2026-06-04
 planted_during: 2026-06-04 split of SEED-010 into Library (SEED-036) + Train (this seed)
 refined: 2026-07-25 (gsd-explore round 6 — motif layer removed, name/nav settled)
