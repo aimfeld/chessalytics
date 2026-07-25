@@ -416,16 +416,13 @@ async def test_worker_hole_counters_accumulate_across_atomic_submits(
         )
 
         # ── Submit 3: hole-free ──────────────────────────────────────────────
-        body = await _post_atomic(
-            await _make_atomic_game(932000), list(_BLUNDER_SUBMIT_EVALS_142)
-        )
+        body = await _post_atomic(await _make_atomic_game(932000), list(_BLUNDER_SUBMIT_EVALS_142))
         assert body["failed_ply_count"] == 0, f"hole-free submit expected: {body}"
 
         hb = await _get_worker_heartbeat(eval_worker_session_maker, worker_id)
         assert hb is not None
         assert hb["holes_submitted"] == 2, (
-            "a hole-free submit must leave holes_submitted UNCHANGED, "
-            f"got {hb['holes_submitted']}"
+            f"a hole-free submit must leave holes_submitted UNCHANGED, got {hb['holes_submitted']}"
         )
         assert hb["plies_leased"] == 3 * n_evals, (
             "a hole-free submit must still advance plies_leased (it is the hole-rate "
