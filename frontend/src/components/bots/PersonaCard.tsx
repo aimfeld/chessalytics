@@ -106,7 +106,13 @@ export function PersonaCard({ persona, onSelect, winsForPersona }: PersonaCardPr
       data-testid={`bots-persona-card-${persona.id}`}
       aria-label={`${persona.name}, ${persona.calibratedLabel} ELO`}
       onClick={() => onSelect(persona)}
-      className="flex flex-col items-center gap-1 rounded border border-border bg-card p-2 text-center transition-colors pointer-fine:hover:bg-inactive-bg-hover"
+      /* Mobile keeps only a hairline horizontal gutter: in the 4-column grid at
+         a 360-390px viewport, the previous px-2 forced 2-9 of the persona names
+         onto a third line ("Rocco the / Armadillo" became "Rocco / the /
+         Armadillo"). The card is avatar-bound (58px wide) so the horizontal
+         padding is invisible around the avatar anyway; only the name row was
+         paying for it. Desktop (sm:) keeps the original 8px. */
+      className="flex flex-col items-center gap-1 rounded border border-border bg-card px-0.5 py-2 text-center transition-colors sm:px-2 pointer-fine:hover:bg-inactive-bg-hover"
     >
       <span
         aria-hidden="true"
