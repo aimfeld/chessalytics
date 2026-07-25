@@ -28,9 +28,12 @@ until docker compose -f docker-compose.dev.yml -p flawchess-dev exec db pg_isrea
   sleep 1
 done
 
-# Install backend dependencies
+# Install backend dependencies.
+# Include the isolated maia-inference group to mirror CI and the backend Dockerfile
+# (both sync it). A bare `uv sync` prunes it on every start, which breaks the pre-push
+# `ty check` on app/services/maia_engine.py's deferred onnxruntime/numpy imports.
 echo "Installing backend dependencies..."
-uv sync
+uv sync --group maia-inference
 
 # Run database migrations
 echo "Running migrations..."
