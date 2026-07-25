@@ -3,7 +3,7 @@ id: SEED-037
 status: dormant
 planted: 2026-06-04
 planted_during: 2026-06-04 split of SEED-010 into Library (SEED-036) + Train (this seed)
-refined: 2026-07-23 (gsd-explore session — full design settled, stale premises removed)
+refined: 2026-07-25 (gsd-explore round 6 — motif layer removed, name/nav settled)
 lineage: split from SEED-010 (planted 2026-05-01, reworked 2026-06-03); SEED-010 closed
 trigger_when: user invokes `/gsd-new-milestone` for Train (all data dependencies already shipped as of v2.5)
 scope: milestone (multi-phase)
@@ -12,10 +12,10 @@ depends_on: none open — the original SEED-036 dependencies are satisfied or ob
 
 # SEED-037: Train — spaced-repetition blunder drills
 
-> **Lineage.** Split out of SEED-010 (closed) on 2026-06-04. Refined 2026-07-23 in a
-> gsd-explore session: the design below is *settled*, not provisional. The old seed's
-> premises (best-move endpoint dependency, FSRS adoption, GM-coach prototype loop) are
-> superseded — see Rejected Alternatives.
+> **Lineage.** Split out of SEED-010 (closed) on 2026-06-04. Refined 2026-07-23 and again
+> on 2026-07-25 in gsd-explore sessions: the design below is *settled*, not provisional.
+> The old seed's premises (best-move endpoint dependency, FSRS adoption, GM-coach
+> prototype loop, motif multiple-choice quiz) are superseded — see Rejected Alternatives.
 
 ## Why This Matters
 
@@ -23,9 +23,9 @@ The **retention play** — the feature that turns FlawChess from an analysis too
 habit. Analysis tells a user *where* they went wrong; training makes them *stop* going
 wrong by re-presenting their own blunders on a spaced schedule until the pattern sticks.
 Aimchess monetizes essentially this at $7.99/mo; FlawChess differentiates on price
-(free/open) and on training from the user's *own* games rather than generic puzzles.
+(free/open).
 
-## Settled Design (2026-07-23)
+## Settled Design (2026-07-23, revised 2026-07-25)
 
 ### Training model: true spaced repetition, session-gated
 
@@ -92,11 +92,29 @@ become type 2 instead of being excluded, so the pool grows.
 - **Recency-weighted introduction** — prefer flaws from recent games when padding
   sessions with new items. No Zobrist dedup (repeat blunders may coexist).
 
-### Pool exit (retirement)
+### Pool exit — two doors: mastered, or parked
 
-Retire after **3 consecutive spaced correct solves** (correct solves in 3 separate
-sessions; a miss resets to 0). Simple to explain in UI ("2/3 mastered"). The ladder
-decides *when* reps happen; this counter decides *retirement*.
+**Door A — mastered.** Retire after **3 consecutive spaced correct solves** (correct
+solves in 3 separate sessions; a miss resets to 0). Simple to explain in UI ("2/3
+mastered"). The ladder decides *when* reps happen; this counter decides *retirement*.
+
+**Door B — parked (the fail-out escape valve).** An item failed **N times (constant,
+start at 3) with zero correct solves ever** is parked as *"too hard for now"* and leaves
+the queue. Without this, an unsolvable item never leaves streak 0, so it stays
+permanently most-overdue and reappears **every single session**, crowding out learnable
+material. This is why there is **no tactic-depth cap on pool entry** (rejected below):
+depth is only one way an item can be unsolvable — a deflection-in-9, an untagged sharp
+blunder above the user's level, and a position needing a plan rather than a move all fail
+the same way, and the fail counter catches all three without guessing which.
+
+- Item state gains `fail_count`; a single correct solve zeroes it permanently (it is a
+  *never-solved* counter, not a rolling one, so a mastered-then-lapsed item is never
+  parked).
+- **Parked items do not return in v1** — no auto-return after a cooldown, no manual
+  un-park control. Auto-return re-creates the clog; un-park UI is a knob nobody asks for
+  before they have seen the count. Cooldown re-introduction is a v2 lever.
+- Surfaced honestly on the progress screen next to the mastered count ("3 parked — too
+  hard for now"), never as a failure state.
 
 ### Solve loop
 
@@ -123,28 +141,35 @@ decides *when* reps happen; this counter decides *retirement*.
   line (pv shown passively as a playable/steppable line), plus the game card and a deep
   link into the analysis board ("see what actually happened"). Full game context lives
   here, not on the solve screen. Herring reveal: "you handled this well in the game —
-  several moves are fine"; blunder reveal names the original mistake.
+  several moves are fine"; blunder reveal names the original mistake. Tactic-tagged
+  flaws additionally get the opt-in line stepper (below).
 
-### Motif layer (tactic-tagged flaws only — the schema-abstraction lever)
+### Tactic line stepping (opt-in, on the reveal — replaces the motif layer)
 
-Learning-theory rationale: repeating an identical position risks learning *the card,
-not the concept*. Two features force semantic processing, both conditional on tactic
-tags (many sharp puzzles have a single best move but no tag — those skip this layer):
+On tactic-tagged flaws the reveal offers a **"step through the line" control with the
+tactic ply countdown (depth indicator)**, reusing the analysis board's existing
+missed/allowed tactic line-stepping UI (`VariationTree.tsx` — `tacticDepthBadge`,
+`missedDepth`/`allowedDepth`). Missed-tactic → step the tactic the user missed
+(`missed_pv_lines`); allowed-tactic → step the opponent's punishment
+(`allowed_pv_lines`). The stepper already handles both orientations, so covering both is
+free symmetry rather than extra work.
 
-- **Motif multiple-choice quiz** — on **missed-tactic** flaws only (there the tactic IS
-  the solution; on allowed-tactic flaws the tactic lives in the refutation, handled
-  below). Shown after correct moves ("what did you just play?") AND after failed ones
-  post-reveal ("what tactic did you miss?") — failers need the schema most. True motif
-  + 2–3 plausible distractors from the motif enum (e.g. fork vs discovered attack),
-  never the full taxonomy. Naming the pattern is itself retrieval practice.
-- **Escalated active walkthrough on repeat-blunder** — trigger: the user plays their
-  *exact original blunder move* AND the flaw is tactic-tagged (the strongest signal the
-  pattern hasn't encoded; ration the user's time to that moment). Missed-tactic → step
-  through the tactic they missed again (`missed_pv_lines`); allowed-tactic → step
-  through the opponent's punishment (`allowed_pv_lines`, "this allowed a [fork] —
-  again"). **Click-through stepping, reusing the analysis board's existing
-  missed/allowed tactic line-stepping UI.** Any other wrong move, or untagged flaw →
-  normal passive reveal.
+Design constraints:
+
+- **Always offered when tagged, never auto-triggered.** No escalation branch, no
+  repeat-blunder detection, no interruption. One uniform affordance on every tagged
+  reveal; the solve loop's rhythm (attempt → reveal → Next) is unchanged for anyone who
+  ignores it.
+- **Embedded in the reveal, not a navigation.** Stepping must not cost the user their
+  session. The separate "open analysis board" deep link stays for people who want the
+  full game.
+- **Motif name is a label, not a question** — shown as reveal copy ("missed tactic:
+  deflection, in 5"), with no quiz and no distractor generation.
+
+**Known deferral (be honest about it):** the motif layer existed to counter learning
+*the card, not the concept*. An opt-in stepper is weaker medicine — a user can click Next
+forever. The real cures are both parked in Deferred/v2 (motif-aggregated progress,
+motif-variation injection). v1 knowingly ships without a forcing function here.
 
 ### Scoring & gamification (solid learning, light game layer)
 
@@ -156,9 +181,6 @@ tags (many sharp puzzles have a single best move but no tag — those skip this 
 - **Scoring never touches the SR mechanics**: mastery streak and due dates are driven by
   move correctness alone. The guess layer is metacognition + score only, so pool
   behavior stays predictable.
-- **Motif quiz is a separate tally, not main-score points**: session end shows
-  "Patterns named: 4/5" as its own stat. Keeps 0–2 comparable across sessions
-  regardless of how many tactic-tagged puzzles appeared.
 - **Weekly streak** — N consecutive weeks with every scheduled session completed.
   Naturally forgiving (the user sets their own schedule), so no freeze-token mechanics.
   Guiding rule for all gamification here (self-determination theory): **competence
@@ -169,9 +191,11 @@ tags (many sharp puzzles have a single best move but no tag — those skip this 
   - **"Flaw fixed!" moment** when an item hits 3/3 and retires — distinct celebration
     with the position thumbnail. The core product promise made visceral; the higher-
     leverage moment of the two.
-- **v1 gamification inventory**: per-puzzle points, session score + color rating,
-  patterns-named tally, weekly streak, mastered count, the two celebrations. No XP,
-  leagues, or badges — the learning is the product.
+- **v1 gamification inventory**: per-puzzle points, session score + color rating, weekly
+  streak, mastered count, parked count, the two celebrations. No XP, leagues, or badges
+  — the learning is the product. (The "patterns named" tally died with the motif quiz;
+  0–2 per puzzle is now the only per-puzzle score, which makes sessions trivially
+  comparable.)
 
 ### Schedule & reminders (v1: in-app only)
 
@@ -220,6 +244,32 @@ subscription storage, scheduled sender) is its own project; defer to v2.
   user-configured schedule is self-forgiving without freeze UX.
 - **Leaderboard in v1 (hidden-gated)** — rejected; infrastructure for a feature that
   may idle for months. Deferred with an explicit active-user trigger instead.
+- **Motif multiple-choice quiz** (round 4) — rejected 2026-07-25. Tedious across a long
+  session, thin material per motif, and unreliable ground truth: tactics tagged at
+  depth > 8 are genuinely hard to *see*, let alone name, so the quiz would punish
+  perception rather than test schema. Replaced by the opt-in line stepper.
+- **Escalated auto-walkthrough on repeat-blunder** (round 4) — rejected 2026-07-25 along
+  with the quiz. It bought a forcing function at the cost of an entire conditional
+  branch (repeat-blunder move comparison, tagged-vs-untagged split, an interrupt in the
+  reveal). One always-available opt-in control is simpler and never fights the solve
+  rhythm. Accepted cost: the user who most needs the walkthrough is the least likely to
+  open it.
+- **Tactic-depth cap on pool entry** — rejected 2026-07-25 in favour of the fail-out
+  valve. A cap guesses at which items are unsolvable using one proxy; the fail counter
+  *observes* unsolvability directly and generalises to untagged sharp blunders and
+  positions above the user's level. No `MAX_DRILL_TACTIC_DEPTH` constant.
+- **Auto-returning parked items after a cooldown** — rejected for v1; it re-creates the
+  queue clog parking exists to prevent. v2 lever.
+- **Manual un-park control in v1** — rejected; a knob nobody asks for before they have
+  seen the parked count.
+- **Shrinking the mobile nav font to fit six labels** — rejected 2026-07-25. The bottom
+  bar is already at `text-xs`, one step below CLAUDE.md's `text-sm` floor, and the rule
+  says fix the layout, not the type. The measurement says six labels fit anyway.
+- **Demoting Bots to the More drawer to make room for Train** — rejected; Bots is a
+  guest-acquisition surface and losing one-tap mobile reach costs more than a tighter
+  bar does.
+- **Alternative feature names** (*Fix / FlawFix*, *Rematch / Comebacks*, *Drills /
+  Practice*) — rejected 2026-07-25; the name is **Train**.
 
 ## Data Dependencies (all shipped)
 
@@ -228,12 +278,15 @@ subscription storage, scheduled sender) is its own project; defer to v2.
 - `game_positions.best_move` / `.pv` — full-game eval pipeline (v1.26+); the answer key.
 - `game_flaws.missed_pv_lines` / `.allowed_pv_lines` — write-once JSONB blobs
   (Phase 141); `missed_pv_lines` node 0 has best (`b`/`bm`) + second-best
-  (`s`/`sm`/`su`) — the sharp-vs-soft puzzle classifier; both lines feed the escalated
-  walkthrough. Deferred columns: load via `undefer()`. Tier-4 opportunistic coverage.
+  (`s`/`sm`/`su`) — the sharp-vs-soft puzzle classifier; both lines feed the opt-in
+  reveal stepper. Deferred columns: load via `undefer()`. Tier-4 opportunistic coverage.
 - `game_flaws.missed_tactic_motif` / `.allowed_tactic_motif` (+ confidence/depth/piece)
-  — gate and content of the motif layer; motif enum supplies quiz distractors.
-- Analysis board tactic line-stepping UI — reuse for the escalated click-through
-  walkthrough (already handles both missed and allowed orientations).
+  — **demoted 2026-07-25** from "gate + content of the motif layer" to a reveal label and
+  the trigger for showing the opt-in stepper. No distractor enum needed. Depth is
+  displayed, never used as a filter.
+- Analysis board tactic line-stepping UI (`frontend/src/components/analysis/VariationTree.tsx`
+  — `tacticDepthBadge`, `missedDepth`/`allowedDepth`) — reuse for the opt-in reveal
+  stepper; already handles both missed and allowed orientations.
 - `game_best_moves` — MultiPV-2 best/second eval for plies where the user played the
   stored best move out-of-book (v2.4); **non-gem rows (best ≈ second) are the red
   herring source**. Same opportunistic-backfill caveat (two populations).
@@ -242,30 +295,67 @@ subscription storage, scheduled sender) is its own project; defer to v2.
   for the winnability floor and grading verdicts.
 - Analysis board — the reveal's deep-link target.
 
-## Name — TBD
+## Name & navigation — settled 2026-07-25
 
-Pick before the build. On-brand candidates lean into "flaws/fixing": *Fix / FlawFix*,
-*Rematch / Comebacks*, or plain *Train / Drills / Practice*. Working name for the
-top-level page is **Train** (nav `Import · Openings · Endgames · Library · Train`).
+The feature is **Train**. Not a working name — the decision is closed, and the
+alternatives (*Fix / FlawFix*, *Rematch / Comebacks*, *Drills / Practice*) are rejected.
+
+Route `/train`, placed **between Library and Bots** on all three nav surfaces. The old
+seed's `Import · Openings · Endgames · Library · Train` string was stale — there is no
+Import nav entry, and mobile has its own item list.
+
+| Surface | Const / component (`frontend/src/App.tsx`) | Result |
+|---|---|---|
+| Desktop header | `NAV_ITEMS` → `NavHeader` | `Library · Train · Bots · Openings · Endgames` (+ `Admin` for superusers) |
+| Mobile bottom bar | `BOTTOM_NAV_ITEMS` → `MobileBottomBar` | same five + the existing `More` button = **6 tap targets** |
+| Mobile more drawer | `NAV_ITEMS` → `MobileMoreDrawer` | same five (+ `Admin`) |
+
+Implementation notes for the planner:
+
+- Also needs a `ROUTE_TITLES['/train'] = 'Train'` entry and a `/train` clause in
+  `isActive()` (prefix match, since the solve loop will own sub-routes).
+- Test IDs follow the shipped convention, derived from the label:
+  `nav-train` / `mobile-nav-train` / `drawer-nav-train`.
+- **Train is import-gated.** Keep `/train` OUT of `IMPORT_EXEMPT_ROUTES` so `isNavLocked`
+  greys it out until the user has games AND import tier 1 is complete — it needs analyzed
+  flaws, so it must behave like Openings/Endgames, not like Library/Bots.
+- Icon: TBD by the planner (lucide `Target` / `Dumbbell` / `Swords` are the candidates).
+- Consider whether Train earns a first-visit notification dot in the existing
+  Openings → Endgames dot chain (`useUserFlag`), or stays out of it.
+
+**Six targets fit at the size already shipped.** The bar's links are `flex-1 ... py-2`
+with no horizontal padding, so the whole cell is available to the label; at `text-xs`
+the longest labels ("Openings"/"Endgames") measure ~50px against 53px per cell at 320px,
+60px at 360px, 65px at 390px. **Do not shrink the font to buy room** — the bar is already
+one step below the project's `text-sm` floor, and CLAUDE.md's rule is to fix the layout,
+not the type. UAT check at 320px; if it reads cramped, the fixes in order are tighter
+`tracking`, then a shorter mobile-only label (`BOTTOM_NAV_ITEMS` is already a separate
+const from `NAV_ITEMS`, so mobile labels can diverge from desktop for free).
 
 ## Phase Decomposition (rough sketch — planner refines)
 
-1. **Pool + scheduler backend.** Drill-item data model (per-user per-flaw: streak,
-   due_date, solve log), pool-entry query (blunders, ownership, winnability, blob
-   present, recency), sharp-vs-soft blob classifier, red-herring source query
-   (non-gem `game_best_moves`), interval ladder, session-composition endpoint
-   (75/25 mix), result-recording endpoint.
-2. **Train page + solve loop (frontend).** Route + nav, session flow
-   (queue → guess → solve → reveal → done), client-side grading via Stockfish WASM,
-   reveal with verdicts + pv + game card + analysis-board link, session-end score +
-   color rating screen.
+1. **Pool + scheduler backend.** Drill-item data model (per-user per-flaw: `streak`,
+   `due_date`, `fail_count`, parked flag, solve log), pool-entry query (blunders,
+   ownership, winnability, blob present, recency — **no depth filter**), sharp-vs-soft
+   blob classifier, red-herring source query (non-gem `game_best_moves`), interval
+   ladder, both exit doors (3-spaced-correct → mastered, N-fails-never-solved → parked),
+   session-composition endpoint (75/25 mix), result-recording endpoint.
+2. **Train page + solve loop (frontend).** Route `/train` + nav on all three surfaces
+   (see Name & navigation), session flow (queue → guess → solve → reveal → done),
+   client-side grading via Stockfish WASM, reveal with verdicts + pv + game card +
+   analysis-board link + **opt-in tactic line stepper** (reuse `VariationTree`),
+   session-end score + color rating screen.
 3. **Schedule + progress surface.** Weekday/N settings, nav badge + dashboard card,
-   weekly streak, celebrations (green confetti + flaw-fixed moment),
-   mastered-count/retention stats, cold/empty states.
+   weekly streak, celebrations (green confetti + flaw-fixed moment), mastered and parked
+   counts / retention stats, cold/empty states.
 
 ## Deferred / v2
 
 - **Mistakes tier** — expand pool entry beyond blunders.
+- **Un-parking** — bring parked ("too hard for now") items back after a long cooldown, or
+  once the user's rating has climbed since the last failure. Deliberately absent from v1;
+  revisit once real parked counts exist and we can see whether users want the second
+  chance or just want the item gone.
 - **Motif-aggregated progress** (candidate, not yet decided) — progress surface groups
   mastery by motif ("forks: 1/4, two failed twice"), turning stats into a diagnosis of
   conceptual weaknesses rather than an item counter.
@@ -297,6 +387,23 @@ top-level page is **Train** (nav `Import · Openings · Endgames · Library · T
 
 ## Source / decision log
 
+**2026-07-25 round 6 (user + Claude, gsd-explore — motif layer removal + naming):** the
+whole motif layer removed (multiple-choice quiz AND the escalated repeat-blunder
+walkthrough), replaced by a single opt-in "step through the line" control with the tactic
+ply countdown on the reveal, reusing the analysis board's `VariationTree` stepper and
+covering both missed and allowed orientations. Consequences recorded: "patterns named"
+tally dropped, `missed_tactic_motif` demoted to a label, repeat-blunder detection no
+longer needed by any mechanic. The user's tactic-depth concern resolved *not* with a
+depth cap but with a **fail-out escape valve** — N failures with zero correct solves
+parks an item ("too hard for now"), which generalises past tactics and keeps unsolvable
+items from permanently clogging the most-overdue queue; parked items do not return in v1.
+Name settled as **Train** (alternatives rejected), route `/train`, placed between Library
+and Bots on all three nav surfaces; the mobile bar goes to six tap targets with labels
+intact at the shipped `text-xs` (font-shrinking rejected against CLAUDE.md's type floor;
+measurement shows six fit down to 320px, flagged for UAT). Train is import-gated. The
+learning-theory gap the motif layer was covering is explicitly recorded as a knowing v1
+deferral, with motif-aggregated progress and motif-variation injection as the v2 cures.
+
 **2026-07-23 round 5 (user + Claude, gamification):** weekly streak (all scheduled
 sessions done that week; no freeze mechanics); v1 celebrations = confetti on green
 session + "Flaw fixed!" retirement moment; SDT guardrail recorded (competence feedback
@@ -304,7 +411,8 @@ yes, behavior control no); weekly leaderboard deferred to v2 behind a ≥10–15
 weekly-active-trainers trigger (opt-in, points-earned metric); milestone counters and
 personal bests parked as candidates.
 
-**2026-07-23 round 4 (user + Claude, learning-theory review):** motif layer added to
+**2026-07-23 round 4 (user + Claude, learning-theory review) — SUPERSEDED by round 6,
+kept for the rationale:** motif layer added to
 counter card-memorization — multiple-choice motif quiz on missed-tactic flaws (correct
 AND failed attempts, separate "patterns named" tally, plausible distractors), escalated
 active walkthrough (click-through, reusing analysis-board line stepping) triggered only
