@@ -292,6 +292,20 @@ async def _delete_games(
         await session.commit()
 
 
+# httpx's ASGITransport default client address — what request.client.host, and
+# therefore the heartbeat/Sentry `last_ip`, resolves to under _make_client().
+_DEFAULT_CLIENT_ADDR: tuple[str, int] = ("127.0.0.1", 123)
+
+# 260725-da3: the Path-C cap message, asserted byte-for-byte by
+# test_atomic_submit_holed_batch_at_cap_stamps_with_sentry_warning. Changing this
+# literal re-groups the ~1602 existing FLAWCHESS-8B Sentry events into a new issue,
+# so the test is a deliberate tripwire, not a tautology.
+_PATH_C_CAP_MESSAGE: str = (
+    "atomic-submit: stamping complete after MAX_EVAL_ATTEMPTS with residual holes"
+)
+_PATH_C_WORKER_ID: str = "w-path-c"
+
+
 def _make_client() -> httpx.AsyncClient:
     """Return an httpx AsyncClient using the ASGI transport."""
     return httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://test")
@@ -2865,11 +2879,17 @@ class TestAtomicSubmitEndpoint:
         monkeypatch.setattr(eval_remote_module, "_signal_flaw_completion", signal_calls.append)
 
         set_context_calls: list[tuple[str, Any]] = []
+        set_tag_calls: list[tuple[str, Any]] = []
         capture_message_calls: list[str] = []
         monkeypatch.setattr(
             eval_remote_module.sentry_sdk,
             "set_context",
             lambda name, ctx: set_context_calls.append((name, ctx)),
+        )
+        monkeypatch.setattr(
+            eval_remote_module.sentry_sdk,
+            "set_tag",
+            lambda key, value: set_tag_calls.append((key, value)),
         )
         monkeypatch.setattr(
             eval_remote_module.sentry_sdk,
@@ -2913,7 +2933,10 @@ class TestAtomicSubmitEndpoint:
                 resp = await client.post(
                     _ATOMIC_SUBMIT_URL,
                     json=payload,
-                    headers={"X-Operator-Token": _TEST_TOKEN},
+                    headers={
+                        "X-Operator-Token": _TEST_TOKEN,
+                        "X-Worker-Id": _PATH_C_WORKER_ID,
+                    },
                 )
             assert resp.status_code == 200, f"Expected 200, got {resp.status_code}: {resp.text}"
             body = resp.json()
@@ -2952,6 +2975,29 @@ class TestAtomicSubmitEndpoint:
             )
             assert eval_ctx.get("game_id") == game_id
             assert eval_ctx.get("hole_count") == 1
+
+            # 260725-da3 GROUPING GUARD: the message string must stay byte-identical
+            # so all ~1602 existing events keep grouping into FLAWCHESS-8B. A `==`
+            # against the literal, not a substring match — interpolating a variable
+            # would fragment the issue (CLAUDE.md Sentry grouping rule).
+            assert cap_events[0] == _PATH_C_CAP_MESSAGE, (
+                "the Path-C cap message must not change by a single byte (Sentry "
+                f"grouping, FLAWCHESS-8B): {cap_events[0]!r}"
+            )
+
+            # 260725-da3: worker identity on the event. Named only for the LAST
+            # attempter (see the reporter's docstring); the real attribution
+            # mechanism is worker_heartbeats.holes_submitted / plies_leased.
+            assert ("worker_id", _PATH_C_WORKER_ID) in set_tag_calls, (
+                "a filterable worker_id Sentry tag must be set at the cap event, "
+                f"got tags {set_tag_calls}"
+            )
+            assert eval_ctx.get("worker_id") == _PATH_C_WORKER_ID, (
+                f"worker_id must reach the 'eval' context, got {eval_ctx!r}"
+            )
+            assert eval_ctx.get("last_ip") == _DEFAULT_CLIENT_ADDR[0], (
+                f"last_ip must reach the 'eval' context, got {eval_ctx!r}"
+            )
 
             assert signal_calls == [user_id], (
                 f"Path C (stamp_complete=True) must signal flaw completion, got {signal_calls}"

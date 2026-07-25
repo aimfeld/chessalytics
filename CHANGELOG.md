@@ -8,6 +8,14 @@ in `YYYY-MM-DD` (Europe/Zurich).
 
 ## [Unreleased]
 
+### Changed
+
+- Reworked the bot roster's Grinder and Wall ladders. The Grinder line now runs Ant → Mole → Otter → Nell the Penguin → Tank the Ox → Gus the Gorilla, and the Wall line ends Rocco the Armadillo → Hilda the Hippo, retiring Bo the Buffalo, Yara the Yak, and Dana the Beaver. Grinder portraits also read grittier and more dogged than the previous placid look.
+
+### Fixed
+
+- A slow analysis worker no longer restarts its engine when a search times out, which was turning one slow position into a block of missing evaluations for the rest of the game.
+
 ## [v2.8] Import Filters and Guest Data Cleanup — 2026-07-24
 
 ### Added

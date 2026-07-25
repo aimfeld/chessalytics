@@ -57,6 +57,7 @@ The entry-submit endpoint calls _apply_eval_results (no shift) — entry-ply tar
 already position-keyed at the correct row; do NOT use _apply_full_eval_results.
 """
 
+import functools
 import hmac
 import io
 from collections.abc import Sequence
@@ -1029,7 +1030,13 @@ async def flaw_blob_submit(
 
 
 def _report_path_c_capacity_reached(
-    game_id: int, failed_ply_count: int, new_attempts: int, source: str
+    game_id: int,
+    failed_ply_count: int,
+    new_attempts: int,
+    source: str,
+    *,
+    worker_id: str,
+    last_ip: str | None,
 ) -> None:
     """Path-C reporting for the atomic-submit lane (R1).
 
@@ -1037,12 +1044,34 @@ def _report_path_c_capacity_reached(
     expected-but-notable cap-path outcome visible in Sentry. Variables go via
     set_context/set_tag, never embedded in the message string (CLAUDE.md rule),
     so every occurrence groups as one Sentry issue.
+
+    worker_id/last_ip (260725-da3, FLAWCHESS-8B): the event previously carried no
+    worker identity at all, and eval_jobs.leased_by is NULL for this whole
+    population (tier-3 idle-lottery claims), so a holed game could not be traced
+    to a machine. CAVEAT for future readers: this names only the LAST of the
+    up-to-MAX_EVAL_ATTEMPTS attempters — each attempt can come from a different
+    worker — so do NOT over-trust it for attribution. The per-worker
+    holes_submitted/plies_leased counters on worker_heartbeats are the real
+    attribution mechanism; this is a convenience breadcrumb on the event.
+    worker_id remains self-reported/advisory and is never an authz input
+    (T-123-03) — telemetry only.
+
+    The message string MUST stay byte-identical: ~1602 existing events group into
+    FLAWCHESS-8B on it.
     """
     sentry_sdk.set_context(
         "eval",
-        {"game_id": game_id, "hole_count": failed_ply_count, "attempts": new_attempts},
+        {
+            "game_id": game_id,
+            "hole_count": failed_ply_count,
+            "attempts": new_attempts,
+            "worker_id": worker_id,
+            "last_ip": last_ip,
+        },
     )
     sentry_sdk.set_tag("source", source)
+    # Filterable dimension in Sentry search, alongside `source`.
+    sentry_sdk.set_tag("worker_id", worker_id)
     sentry_sdk.capture_message(
         "atomic-submit: stamping complete after MAX_EVAL_ATTEMPTS with residual holes",
         level="warning",
@@ -1273,7 +1302,13 @@ async def _apply_atomic_submit(
             flaw_pv_blobs=flaw_pv_blobs if flaw_pv_blobs else None,
             current_attempts=current_attempts,
             source="remote_eval_worker",
-            on_path_c_capacity_reached=_report_path_c_capacity_reached,
+            # 260725-da3: bind this lane's worker identity onto the shared callback
+            # rather than widening apply_completion_decision's
+            # `on_path_c_capacity_reached` signature — the drain lane has no worker
+            # identity to supply (and must keep its logger.warning, FLAWCHESS-5V).
+            on_path_c_capacity_reached=functools.partial(
+                _report_path_c_capacity_reached, worker_id=worker_id, last_ip=last_ip
+            ),
             preserve_existing_evals=True,
             blobs_pending=True,
             count_flaws_written=True,

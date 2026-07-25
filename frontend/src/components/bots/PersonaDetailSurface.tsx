@@ -206,7 +206,7 @@ export function PersonaDetailSurface({
           <div className="flex items-center gap-3">
             <span
               aria-hidden="true"
-              className="flex h-[60px] w-[60px] shrink-0 items-center justify-center overflow-hidden rounded-full text-3xl"
+              className="flex h-[90px] w-[90px] shrink-0 items-center justify-center overflow-hidden rounded-full text-5xl"
               style={{ backgroundColor: avatar.tint }}
             >
               {avatarSrc !== undefined ? (

@@ -29,6 +29,8 @@ async def upsert_worker_heartbeat(
     sf_version: str | None,
     worker_schema_version: int | None,
     n_evals: int,
+    n_holes: int = 0,
+    n_plies_leased: int = 0,
 ) -> None:
     """Upsert one worker_heartbeats row by advisory worker identity (D-01/D-05).
 
@@ -36,6 +38,12 @@ async def upsert_worker_heartbeat(
     overwrites last_ip/sf_version/last_seen with the latest values. worker_schema_version
     is coalesced (D-03): a lane that omits it (entry-submit, flaw-blob-submit) must never
     clobber the last known atomic-lane value with NULL.
+
+    n_holes/n_plies_leased (260725-da3, FLAWCHESS-8B) accumulate exactly like
+    submit_count/evals_submitted, but are ATOMIC-LANE-ONLY: the default of 0 is
+    load-bearing so the untouched entry-submit and flaw-blob-submit call sites can
+    never inflate them, keeping holes_submitted/plies_leased a meaningful per-worker
+    hole rate.
 
     Does NOT commit — the caller's existing write session owns the commit.
 
@@ -58,6 +66,8 @@ async def upsert_worker_heartbeat(
         last_seen=sa.func.now(),
         submit_count=1,
         evals_submitted=n_evals,
+        holes_submitted=n_holes,
+        plies_leased=n_plies_leased,
     )
     stmt = stmt.on_conflict_do_update(
         index_elements=["worker_id"],
@@ -73,6 +83,8 @@ async def upsert_worker_heartbeat(
             "last_seen": stmt.excluded.last_seen,
             "submit_count": WorkerHeartbeat.submit_count + stmt.excluded.submit_count,
             "evals_submitted": WorkerHeartbeat.evals_submitted + stmt.excluded.evals_submitted,
+            "holes_submitted": WorkerHeartbeat.holes_submitted + stmt.excluded.holes_submitted,
+            "plies_leased": WorkerHeartbeat.plies_leased + stmt.excluded.plies_leased,
         },
     )
     try:

@@ -86,6 +86,8 @@ async def _get_worker_heartbeat(
             "worker_schema_version": row.worker_schema_version,
             "submit_count": row.submit_count,
             "evals_submitted": row.evals_submitted,
+            "holes_submitted": row.holes_submitted,
+            "plies_leased": row.plies_leased,
         }
 
 
@@ -289,6 +291,142 @@ async def test_worker_heartbeat_accumulates_across_all_three_submit_lanes(
         assert hb["worker_schema_version"] == 3, (
             "flaw-blob-submit must NOT clobber the atomic lane's worker_schema_version "
             "back to NULL (D-03 coalesce guard)"
+        )
+        # 260725-da3: the two hole counters are ATOMIC-LANE-ONLY. Only step 2 was an
+        # atomic-submit, and it was hole-free, so holes_submitted must still be 0 and
+        # plies_leased must count that one lane's evals — never the entry-submit or
+        # flaw-blob-submit ones.
+        assert hb["holes_submitted"] == 0, (
+            "entry-submit / flaw-blob-submit / a hole-free atomic-submit must all "
+            f"leave holes_submitted at 0, got {hb['holes_submitted']}"
+        )
+        assert hb["plies_leased"] == len(_BLUNDER_SUBMIT_EVALS_142), (
+            "plies_leased must count ONLY the atomic lane's submitted plies (the "
+            f"entry and flaw-blob lanes must not inflate it), got {hb['plies_leased']}"
+        )
+    finally:
+        await _delete_games(eval_worker_session_maker, game_ids)
+        await _delete_worker_heartbeat(eval_worker_session_maker, worker_id)
+
+
+@pytest.mark.asyncio
+async def test_worker_hole_counters_accumulate_across_atomic_submits(
+    monkeypatch: pytest.MonkeyPatch,
+    eval_worker_session_maker: async_sessionmaker[AsyncSession],
+    eval_worker_test_user: int,
+) -> None:
+    """holes_submitted / plies_leased accumulate across atomic-submits and are moved
+    by NON-cap (Path B) attempts (quick task 260725-da3, FLAWCHESS-8B).
+
+    Two holed submits then one hole-free submit, all from the same worker_id:
+    holes_submitted goes 1 -> 2 -> 2 (accumulator, never last-value, and a clean
+    submit leaves it alone) while plies_leased advances by len(evals) every time.
+
+    Every game is left at full_eval_attempts=0 so each holed submit takes Path B.
+    That is the point of the test: the counters must move on EVERY attempt, not
+    only at the MAX_EVAL_ATTEMPTS cap — per-attempt telemetry is what makes a slow
+    worker visible before it burns all its retries.
+    """
+    monkeypatch.setattr(settings, "EVAL_OPERATOR_TOKEN", _TEST_TOKEN)
+    monkeypatch.setattr(settings, "EXPECTED_SF_VERSION", "")
+    _patch_router_session(monkeypatch, eval_worker_session_maker)
+
+    worker_id = "w-holes"
+    user_id = eval_worker_test_user
+    game_ids: list[int] = []
+    n_evals = len(_BLUNDER_SUBMIT_EVALS_142)
+
+    async def _make_atomic_game(full_hash_base: int) -> int:
+        game_id = await _insert_game(
+            eval_worker_session_maker,
+            user_id,
+            pgn=_SIX_PLY_PGN_142,
+            full_eval_attempts=0,  # explicitly under cap -> Path B, not the Path-C cap
+        )
+        game_ids.append(game_id)
+        await _insert_game_positions(
+            eval_worker_session_maker,
+            user_id,
+            game_id,
+            # Distinct full_hash base per game so no cross-game dedup interaction
+            # can fill a hole server-side and change failed_ply_count.
+            [
+                {"ply": p, "full_hash": full_hash_base + p, "eval_cp": None, "eval_mate": None}
+                for p in range(6)
+            ],
+        )
+        return game_id
+
+    async def _post_atomic(game_id: int, evals: list[dict[str, object]]) -> dict[str, object]:
+        async with _make_client() as client:
+            resp = await client.post(
+                _ATOMIC_SUBMIT_URL,
+                json={
+                    "game_id": game_id,
+                    "sf_version": "Stockfish 18",
+                    "worker_schema_version": 1,
+                    "evals": evals,
+                    "blob_nodes": [],
+                    "job_id": None,
+                },
+                headers={"X-Operator-Token": _TEST_TOKEN, "X-Worker-Id": worker_id},
+            )
+        assert resp.status_code == 200, f"atomic-submit: {resp.status_code} {resp.text}"
+        return resp.json()
+
+    def _holed_evals() -> list[dict[str, object]]:
+        """One hole: nulling index 6 makes row 5 (pos_eval[6]) NULL on a
+        non-terminal row -> failed_ply_count == 1 (same shape as the Path-B/C
+        tests in test_eval_worker_endpoints.py).
+        """
+        evals: list[dict[str, object]] = [dict(e) for e in _BLUNDER_SUBMIT_EVALS_142]
+        evals[6]["eval_cp"] = None
+        evals[6]["eval_mate"] = None
+        return evals
+
+    try:
+        await _delete_worker_heartbeat(eval_worker_session_maker, worker_id)
+
+        # ── Submit 1: holed, under the cap (Path B) ───────────────────────────
+        body = await _post_atomic(await _make_atomic_game(930000), _holed_evals())
+        assert body["failed_ply_count"] == 1, f"one hole expected: {body}"
+        assert body["stamp_complete"] is False, f"Path B expected (under cap): {body}"
+
+        hb = await _get_worker_heartbeat(eval_worker_session_maker, worker_id)
+        assert hb is not None, "worker_heartbeats row must exist after atomic-submit"
+        assert hb["holes_submitted"] == 1, (
+            f"a Path-B holed submit must count its hole, got {hb['holes_submitted']}"
+        )
+        assert hb["plies_leased"] == n_evals, (
+            f"plies_leased must count the submitted plies, got {hb['plies_leased']}"
+        )
+
+        # ── Submit 2: holed again, different game, same worker ────────────────
+        body = await _post_atomic(await _make_atomic_game(931000), _holed_evals())
+        assert body["failed_ply_count"] == 1, f"one hole expected: {body}"
+
+        hb = await _get_worker_heartbeat(eval_worker_session_maker, worker_id)
+        assert hb is not None
+        assert hb["holes_submitted"] == 2, (
+            "holes_submitted must ACCUMULATE across submits (not be last-value), "
+            f"got {hb['holes_submitted']}"
+        )
+        assert hb["plies_leased"] == 2 * n_evals, (
+            f"plies_leased must accumulate too, got {hb['plies_leased']}"
+        )
+
+        # ── Submit 3: hole-free ──────────────────────────────────────────────
+        body = await _post_atomic(await _make_atomic_game(932000), list(_BLUNDER_SUBMIT_EVALS_142))
+        assert body["failed_ply_count"] == 0, f"hole-free submit expected: {body}"
+
+        hb = await _get_worker_heartbeat(eval_worker_session_maker, worker_id)
+        assert hb is not None
+        assert hb["holes_submitted"] == 2, (
+            f"a hole-free submit must leave holes_submitted UNCHANGED, got {hb['holes_submitted']}"
+        )
+        assert hb["plies_leased"] == 3 * n_evals, (
+            "a hole-free submit must still advance plies_leased (it is the hole-rate "
+            f"denominator), got {hb['plies_leased']}"
         )
     finally:
         await _delete_games(eval_worker_session_maker, game_ids)

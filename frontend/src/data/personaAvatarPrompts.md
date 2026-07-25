@@ -33,9 +33,10 @@ detective-horse logo — exactly in rendering style:
 > shadows, or props (it gets chroma-keyed to transparency by the generation
 > script). No text or watermark. The animal's expression should signal
 > its chess playstyle personality — [insert per-persona demeanor/accessory
-> notes below]. Render exactly the accessory named in the persona notes and
-> only that one; if the notes say "none", the animal wears and holds
-> nothing — no scarf, bandana, collar, or clothing of any kind. Warm,
+> notes below]. Render exactly the accessory (or, where the notes name more
+> than one, exactly that set) and nothing beyond it; if the notes say
+> "none", the animal wears and holds nothing — no scarf, bandana, collar,
+> or clothing of any kind. Warm,
 > approachable, a little playful; never sinister or photorealistic.
 
 Per-style demeanor to layer on top of the master prompt:
@@ -44,14 +45,17 @@ Per-style demeanor to layer on top of the master prompt:
   expression; energetic but never overtly aggressive or scary.
 - **Trickster** — a mischievous, crooked grin, one eyebrow slightly raised,
   a sly knowing look.
-- **Grinder** — calm, focused, a patient or slightly stoic expression; a
-  no-nonsense, steady character.
+- **Grinder** — gritty and insistent: brows lowered in concentration, jaw
+  set, a stubborn line to the mouth, leaning slightly into the work.
+  Weathered, unglamorous, visibly willing to keep at this all day. Dogged
+  rather than serene — never placid, sleepy, or merely content.
 - **Wall** — composed, unbothered, a small confident smile; a sturdy,
   unshakeable character.
 
-Accessory rule: render EXACTLY the accessory named in the persona's own
-"Accessory:" note below — nothing else. If it says "none", the animal wears
-and holds nothing. Never add a default scarf, bandana, or collar: each
+Accessory rule: render EXACTLY the accessory (or set of accessories) named
+in the persona's own "Accessory:" note below — nothing else. If it says
+"none", the animal wears and holds nothing. Never add a default scarf,
+bandana, or collar: each
 persona's accessory was picked for roster-wide variety, and generation runs
 one persona at a time, so any improvised extra collapses the roster back
 into sameness.
@@ -138,38 +142,56 @@ Each line: `persona-id — Name the Species — demeanor/accessory notes`.
 
 ### Grinder (steady, methodical, trade-happy)
 
-- `grinder-800` — Pip the Ant — tiny, industrious, a determined little
-  expression. Accessory: carries an oversized white chess pawn (twice her
+- `grinder-800` — Pip the Ant — tiny but wiry, straining under the load with
+  a fierce little scowl of effort; small and outmatched, and refusing to
+  notice. Accessory: carries an oversized white chess pawn (twice her
   size) over one shoulder. Bio: Pip trades pieces the
   moment she gets the chance, happiest when the board is empty and simple.
   She is not fighting for the initiative — she is fighting for the endgame.
-- `grinder-1000` — Dig the Mole — round and earthy, a patient expression,
-  paws ready to dig in. Accessory: small round wire-rim glasses. Bio: Dig burrows toward a
+- `grinder-1000` — Dig the Mole — round and earthy, dirt on the fur, a
+  stubborn squint and a set jaw, paws already dug in and working.
+  Accessory: exactly two items and no others — small
+  round wire-rim glasses, plus a soft slouched beret tilted on the head.
+  Bio: Dig burrows toward a
   simplified position, offering trades whenever the exchange is even. He
   rarely storms forward — he would rather grind you down one pawn at a time.
-- `grinder-1200` — Otto the Otter — calm and content. Accessory: holds a
+- `grinder-1200` — Otto the Otter — lean and wiry, wet fur slicked back, a
+  narrow-eyed working focus and a set mouth; unhurried but never relaxed.
+  Accessory: holds a
   small smooth stone in both paws (a nod to its patient, methodical
   nature). Bio: Otto swims calmly
   toward the endgame, trading down whenever the position allows it. He
   never resigns early, choosing to paddle on even in a difficult position.
-- `grinder-1400` — Tank the Ox — sturdy and grounded, a calm stoic
-  expression. Accessory: a plain leather work harness strap across the
-  chest. Bio: Tank plows through
+- `grinder-1400` — Nell the Penguin — a compact, solidly built emperor
+  penguin, chest out and braced as if leaning into a headwind; feathers
+  wind-ruffled, eyes narrowed against the cold, beak set in a flat
+  determined line. Weathered endurance, not cuteness — she has stood
+  through worse than this. Accessory: a faded soot-stained knitted wool
+  watch cap pulled down snug over the head. Bio: Nell simply outlasts
+  people. She trades down without fuss and settles into the endgame like
+  it is the part she was waiting for, unbothered by how long it takes.
+- `grinder-1600` — Tank the Ox — sturdy and grounded, built like a soldier;
+  pushes the Grinder grit all the way to open aggression: brows pulled
+  down hard, jaw set, nostrils flared, a defiant "come and try me" scowl
+  (still cartoon-tough, never gory or genuinely menacing). Accessory:
+  exactly two items and no others — a military ammunition belt of brass
+  cartridges slung diagonally across one shoulder and chest, plus black
+  aviator sunglasses. Bio: Tank plows through
   complications by simplifying them away, trading pieces until only the
   essentials remain. He is stubborn in a lost position, playing on long
   past the point most bots would resign.
-- `grinder-1600` — Bo the Buffalo — broad and solid, a calm confident
-  stance, unshaken expression. Accessory: none — the broad build carries
-  it. Bio: Bo calculates its way into favorable
-  trades, steering the game toward the flat, grounded endgames it measures
-  best in. It genuinely enjoys a long fight and will not give up a
+- `grinder-1800` — Gus the Gorilla — the top-rung Grinder: a massive
+  silverback, grizzled grey across the back and shoulders, heavy through
+  the arms, knuckles planted and leaning forward into the work; brows low,
+  jaw set, an unshakeable "I can do this all day" stare with a seasoned
+  veteran's calm behind it. Accessory: exactly two
+  items and no others — a necklace of a small bleached animal skull on a
+  leather cord hanging at the chest, plus a simple dark tribal tattoo
+  marking on one side of the neck (flat black line art on the hide, no
+  color). Bio: Gus calculates his way into favorable
+  trades, steering the game toward the flat, grounded endgames he measures
+  best in. He genuinely enjoys a long fight and will not give up a
   difficult position without one.
-- `grinder-1800` — Yara the Yak — the largest Grinder, shaggy and imposing
-  but gentle-eyed, a wise, unhurried expression. Accessory: a small round
-  bell on a cord around the neck (species-natural). Bio: Yara calculates deep
-  into the endgame before she ever agrees to trade, and by the time the
-  dust settles she usually has the better structure. She almost never
-  resigns, grinding on long after the position looks lost.
 
 ### Wall (composed, defensive, simplifying)
 
@@ -193,19 +215,24 @@ Each line: `persona-id — Name the Species — demeanor/accessory notes`.
   only scarf). Bio: Bruno digs into his favorite system
   openings and holds his ground, trading down at every opportunity. He is a
   touch too eager to offer a draw, even from a perfectly fine position.
-- `wall-1600` — Dana the Beaver — practical and industrious-looking, a calm
-  focused expression. Accessory: holds a small wooden log across the chest
-  like a shield. Bio: Dana calculates
-  carefully to keep the position as flat and quiet as possible, damming up
-  any complications before they start. She is genuinely comfortable
-  steering toward a solid, simplified draw.
-- `wall-1800` — Rocco the Armadillo — the largest Wall, armored and solid,
-  a composed, immovable expression — "genuinely difficult to crack."
-  Accessory: none — the natural armor plating is the whole statement. Bio:
+- `wall-1600` — Rocco the Armadillo — armored and solid, a composed,
+  immovable expression — "genuinely difficult to crack." Accessory: none —
+  the natural armor plating is the whole statement. Bio:
   Rocco calculates deep to keep everything under control, curling into the
   least chaotic line available whenever the position allows it. By this
   level his system openings and simplifying trades add up to a genuinely
   difficult wall to crack.
+- `wall-1800` — Hilda the Hippo — the largest Wall by a wide margin: an
+  enormous, heavy-jawed hippo filling the frame, thick grey hide, small
+  eyes set high. Serenely unbothered, faintly amused, entirely unmoved —
+  the look of something that has never once needed to hurry, and quietly
+  knows you cannot shift it. Accessory: a small delicate porcelain teacup
+  held daintily in one enormous foot (the comic contrast is the point).
+  Bio: Hilda
+  calculates carefully to keep the position as flat and quiet as possible,
+  smothering complications before they start. She is genuinely comfortable
+  steering toward a solid, simplified draw, and by this level she is very
+  hard to talk out of one.
 
 ## Generating and Curating Avatars
 

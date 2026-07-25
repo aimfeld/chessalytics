@@ -2503,6 +2503,14 @@ async def apply_full_eval(
 
     if record_heartbeat:
         # PRUNE-06: passive telemetry only (D-01/D-04) — no gate, submits only.
+        #
+        # 260725-da3 (FLAWCHESS-8B): n_holes/n_plies_leased give a per-worker hole
+        # RATE, the only mechanism that can answer "is it one slow worker?" — the
+        # holed population is tier-3 idle-lottery derived, so eval_jobs.leased_by is
+        # NULL for all of it. Deliberately counted on EVERY attempt (Path A/B/C
+        # alike), not just the Path-C cap path: per-attempt telemetry makes a slow
+        # worker visible before it burns all MAX_EVAL_ATTEMPTS. Only the atomic lane
+        # sets record_heartbeat=True, so the rate's denominator stays lane-pure.
         await upsert_worker_heartbeat(
             write_session,
             worker_id=heartbeat_worker_id or "",
@@ -2510,6 +2518,8 @@ async def apply_full_eval(
             sf_version=heartbeat_sf_version,
             worker_schema_version=heartbeat_worker_schema_version,
             n_evals=heartbeat_n_evals,
+            n_holes=failed_ply_count,
+            n_plies_leased=heartbeat_n_evals,
         )
 
     # _signal_flaw_completion is deliberately NOT called here: both pre-move call
