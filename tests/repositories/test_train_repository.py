@@ -429,6 +429,90 @@ async def test_second_compose_resumes_open_session(db_session: AsyncSession) -> 
 
 
 @pytest.mark.asyncio
+async def test_completed_session_in_window_blocks_recompose(db_session: AsyncSession) -> None:
+    """190.1 bug fix: finishing a session must not unlock a fresh one within
+    the same D-10 window. A `status='completed'` row is invisible to the
+    open-session resume path, so before the `completed_session_in_window`
+    guard the very next compose call built a brand-new session on the same
+    day (unlimited sessions per day, pool drained)."""
+    await ensure_test_user(db_session, _USER_ID)
+    await _seed_flaw_game(db_session, _USER_ID, "completed-window-1")
+
+    first = await train_repository.compose_and_materialize_session(
+        db_session, user_id=_USER_ID, now_utc=_NOW
+    )
+    assert first.session_id is not None
+    assert first.puzzle_count == 1
+
+    # Solve the only puzzle and complete the session — the exact state
+    # `_mark_session_complete_if_done` leaves behind after the last solve.
+    await db_session.execute(
+        update(DrillSolve)
+        .where(DrillSolve.session_id == first.session_id)
+        .values(solved_at=_NOW, correct_move=True)
+    )
+    await db_session.execute(
+        update(DrillSession)
+        .where(DrillSession.id == first.session_id)
+        .values(status="completed", completed_at=_NOW)
+    )
+    await db_session.flush()
+
+    # Fresh material IS available — without the guard this composes a
+    # brand-new session from it instead of returning the completed one.
+    await _seed_flaw_game(db_session, _USER_ID, "completed-window-2")
+
+    second = await train_repository.compose_and_materialize_session(
+        db_session, user_id=_USER_ID, now_utc=_NOW
+    )
+    assert second.session_id == first.session_id
+    assert second.puzzles == []
+    assert second.solved_count == 1
+    assert second.puzzle_count == 1
+
+    session_ids = (
+        (await db_session.execute(select(DrillSession.id).where(DrillSession.user_id == _USER_ID)))
+        .scalars()
+        .all()
+    )
+    assert session_ids == [first.session_id]
+
+
+@pytest.mark.asyncio
+async def test_completed_session_past_window_recomposes(db_session: AsyncSession) -> None:
+    """The completed-session guard only holds inside the D-10 window: once
+    `expires_on` arrives, compose builds the next session normally."""
+    await ensure_test_user(db_session, _USER_ID)
+    await _seed_flaw_game(db_session, _USER_ID, "completed-expired-1")
+
+    first = await train_repository.compose_and_materialize_session(
+        db_session, user_id=_USER_ID, now_utc=_NOW
+    )
+    assert first.session_id is not None
+
+    await db_session.execute(
+        update(DrillSolve)
+        .where(DrillSolve.session_id == first.session_id)
+        .values(solved_at=_NOW, correct_move=True)
+    )
+    await db_session.execute(
+        update(DrillSession)
+        .where(DrillSession.id == first.session_id)
+        .values(status="completed", completed_at=_NOW, expires_on=datetime.date(2020, 1, 1))
+    )
+    await db_session.flush()
+
+    await _seed_flaw_game(db_session, _USER_ID, "completed-expired-2")
+
+    second = await train_repository.compose_and_materialize_session(
+        db_session, user_id=_USER_ID, now_utc=_NOW
+    )
+    assert second.session_id is not None
+    assert second.session_id != first.session_id
+    assert second.puzzle_count >= 1
+
+
+@pytest.mark.asyncio
 async def test_integrity_error_race_resumes_winner_session(
     db_session: AsyncSession, monkeypatch: pytest.MonkeyPatch
 ) -> None:

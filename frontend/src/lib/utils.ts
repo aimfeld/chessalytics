@@ -5,9 +5,14 @@ export function cn(...inputs: ClassValue[]) {
   return twMerge(clsx(inputs))
 }
 
-/** Parse a "YYYY-MM-DD" string into a Date (local time). */
+/** Parse a "YYYY-MM-DD" string (a full ISO 8601 timestamp also works — its
+ * time part is ignored) into a Date (local time). */
 function parseDate(d: string): Date {
-  const [year, month, day] = d.split('-');
+  // Bug fix (190.1 UAT): callers pass full ISO timestamps too (e.g.
+  // games.played_at "2026-07-20T12:00:00Z"); splitting the raw string on '-'
+  // made the day component "20T12:00:00Z" -> NaN -> "Invalid Date".
+  const datePart = d.split('T')[0] ?? d;
+  const [year, month, day] = datePart.split('-');
   return new Date(Number(year), Number(month) - 1, Number(day));
 }
 

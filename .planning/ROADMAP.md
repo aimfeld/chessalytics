@@ -44,7 +44,7 @@
 - ✅ **v2.6 Bot Strength Calibration** — Phases 173, 180, 181 (shipped 2026-07-21; dev-only, no deploy) — put the bot's play-style presets on a measured strength scale without ever playing a human. Phase 173 (SEED-101) round-robins the calibration anchors into one internal rating scale (verdict: the Maia-3 argmax ladder is ~2.8x compressed); Phase 180 (SEED-102) measures the three-preset (Human/Light/Deep) strength curves on that scale plus the cross-family style-inflation gap `G_preset`; Phase 181 (SEED-104) inverts those curves into per-preset `target_blitz_elo → bot_elo` lookups with honest measured ranges (Human 900–1400, Light 1500–1600, Deep 1600–1800) and an approximate-ELO disclaimer. Nothing in the product reads the lookup yet — see [milestones/v2.6-ROADMAP.md](milestones/v2.6-ROADMAP.md)
 - ✅ **v2.7 Bot Personas & Playstyle Layer** — Phases 182–185 (shipped 2026-07-23; deployed to production, PRs through #275) — a roster of 24 named bot personas (4 styles × 6 ELO rungs, 800–1800) on the Bots page, each a complete pinned opponent (preset, calibrated ELO, style params, opening book, resign/draw-offer policy, avatar, bio). Style levers land first (Phase 182), then the persona registry + Bots page UI (Phase 183), then per-persona harness calibration replaces the provisional labels with measured values (Phase 184, `PERSONA_CALIBRATION_MEASURED=true`), then the roster is re-laid-out as a rung-ladder grid with per-persona win stars (Phase 185) (SEED-098) — see [milestones/v2.7-ROADMAP.md](milestones/v2.7-ROADMAP.md)
 - ✅ **v2.8 Import Filters and Guest Data Cleanup** — Phases 186–188 (shipped 2026-07-24) — user-facing import filters (time-control multiselect + per-platform game cap) on the Import tab to keep storage and Stockfish compute in check, with backward backfill on filter upgrades and grandfathering for existing users (Phase 186, SEED-117); a daily background job that prunes game data for guests inactive ≥30 days while keeping the guest account + auth (Phase 187, SEED-116); and import/eval pipeline cleanup retiring completed backfill machinery while keeping `resweep_holed_games` and tiers 4/4b as permanent safety nets (Phase 188, SEED-115) — see [milestones/v2.8-ROADMAP.md](milestones/v2.8-ROADMAP.md)
-- ⏳ **v2.9 Train — Spaced-Repetition Blunder Drills** — Phases 189–191 (in progress)
+- ⏳ **v2.9 Train — Spaced-Repetition Blunder Drills** — Phases 189–191 (incl. 190.1, in progress)
 
 ## Progress
 
@@ -146,7 +146,8 @@
 | 187. Guest Game Cleanup — 30-Day Inactivity Pruning (SEED-116, v2.8) | 2/2 | Complete | 2026-07-24 |
 | 188. Import/Eval Pipeline Cleanup — Retire Completed Backfill Machinery (SEED-115, v2.8) | 1/1 | Complete | 2026-07-24 |
 | 189. Pool + Scheduler Backend (SEED-037, v2.9) | 6/6 | Complete | 2026-07-25 |
-| 190. Train Page + Solve Loop (SEED-037, v2.9) | 0/? | Not started | — |
+| 190. Train Page + Solve Loop (SEED-037, v2.9) | 6/6 | In progress (UAT) | — |
+| 190.1. Train Reveal Redesign (INSERTED, 190 UAT feedback) | 5/5 | Complete | 2026-07-26 |
 | 191. Schedule + Progress Surface (SEED-037, v2.9) | 0/? | Not started | — |
 
 ## v2.9 Train — Spaced-Repetition Blunder Drills (In Progress)
@@ -212,8 +213,72 @@ Plans:
   4. On tactic-tagged flaws the reveal offers an opt-in "step through the line" control (tactic ply countdown, covering both missed and allowed orientations) that is always offered when tagged and never auto-triggered.
   5. Completing a session shows a total-score-out-of-2N screen mapped to a green/yellow/red rating via named threshold constants.
 
-**Plans**: TBD
+**Plans**: 6 plans
 **UI hint**: yes
+
+Plans:
+**Wave 1**
+
+- [x] 190-01-PLAN.md — Tracer: one puzzle solved end to end + measured WASM grading budget (SOLV-01, SOLV-03)
+
+**Wave 2** *(blocked on Wave 1 completion)*
+
+- [x] 190-02-PLAN.md — Additive Phase-189 payload fields: arriving move + reveal best line (SOLV-02, SOLV-05)
+- [x] 190-03-PLAN.md — Nav wiring on all three surfaces + first-visit dot (NAV-01, NAV-02)
+
+**Wave 3** *(blocked on Wave 2 completion)*
+
+- [x] 190-04-PLAN.md — Landing states, progress indicator, last-move highlight, block-and-retry solve (SOLV-02, SOLV-04)
+
+**Wave 4** *(blocked on Wave 3 completion)*
+
+- [x] 190-05-PLAN.md — Reveal panel, line stepper, session score + rating bands (SOLV-05, SOLV-06, SOLV-07)
+
+**Wave 5** *(blocked on Wave 4 completion)*
+
+- [x] 190-06-PLAN.md — Blocking human checkpoint: full-session UAT + backstop/prohibition discharge
+
+### Phase 190.1: Train Reveal Redesign (INSERTED, 190 UAT feedback 2026-07-26)
+
+**Goal**: The post-solve reveal becomes a self-contained, engine-consistent study surface: the board shows what was good and what was played via arrows, the verdict rows state the answers actually given, and three steppable engine lines (your move, best move, played-in-game refutation) replace the game card — all evals and lines sourced from the client-side grading engine so no two numbers can disagree with the verdict.
+
+**Depends on**: Phase 190 (the solve loop + reveal panel this redesigns)
+
+**Requirements**: none new — refines the SOLV-05/SOLV-02 reveal surfaces from Phase 190 (UAT feedback, gsd-explore session 2026-07-26; see `.planning/phases/190.1-train-reveal-redesign/190.1-CONTEXT.md`)
+
+**Plan-time decisions to resolve explicitly (not default)**: dedupe/collapse rules when lines coincide (played move == best move; game move == best move; herring positions where "refutation" framing is wrong); MultiPV width and the good-move cutoff wiring (reuse the live-flaw inaccuracy threshold, never a new magic number); whether the server reveal keeps `best_move`/`pv` as a fallback or is slimmed to game-move + puzzle-type + tactic pointer.
+
+**Success Criteria** (what must be TRUE):
+
+  1. On reveal, the board shows green arrows for the actual good moves (better than an inaccuracy per the project's existing expected-score thresholds), count following puzzle type — exactly 1 for sharp, up to 3 for soft/herring — plus an arrow for the user's played move and a smaller white analysis-board-style arrow for the move played in the game.
+  2. The verdict rows state the answers given, e.g. "Guess: One critical move ✗" and "Move: Nc3 ✓", not bare check/cross marks.
+  3. The reveal shows three steppable line boxes — YOUR MOVE, BEST MOVE, PLAYED IN GAME (engine refutation line) — each with an eval, all lines and evals computed by the client grading engine (MultiPV mount search; kept PV from the grading after-search; lazy refutation search at reveal), never mixed with stored server evals.
+  4. The full game card is gone from the reveal, replaced by an opponent + date footer; Analyze and Next sit on one line, and Analyze deep-links to the analysis board at the position shown in the puzzle (one ply before the mistake).
+  5. The current session score is visible at the top-right of the progress bar throughout the solve loop and survives a resume (localStorage-backed score).
+
+**Plans**: 5 plans
+**UI hint**: yes
+
+Plans:
+**Wave 1**
+
+- [x] 190.1-01-PLAN.md — Tracer: the "played in game" engine line end to end (backend game-move UCI → lazy client search → steppable box with an eval)
+
+**Wave 2** *(blocked on Wave 1 completion)*
+
+- [x] 190.1-02-PLAN.md — MultiPV mount search, kept after-move PV, and the good-moves set, with a measured width/budget
+
+**Wave 3** *(blocked on Wave 2 completion)*
+
+- [x] 190.1-03-PLAN.md — Reveal panel rebuild (verdict-answer rows, three merged line boxes, footer, one-line Analyze/Next) + server answer-key slimming
+
+**Wave 4** *(blocked on Wave 3 completion)*
+
+- [x] 190.1-04-PLAN.md — Reveal board arrows (good/played/game) and the running session score on the progress bar
+
+**Wave 5** *(blocked on Wave 4 completion)*
+
+- [x] 190.1-05-PLAN.md — Blocking human checkpoint: full-gate green + desktop/mobile UAT of the redesigned reveal
 
 ### Phase 191: Schedule + Progress Surface
 

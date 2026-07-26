@@ -2311,13 +2311,17 @@ async def fetch_tactic_comparison(
 # ---------------------------------------------------------------------------
 
 
-def _pv_to_san_list(board: chess.Board, pv: str | None) -> list[str] | None:
+def pv_to_san_list(board: chess.Board, pv: str | None) -> list[str] | None:
     """Convert a space-joined UCI PV string to a SAN list.
 
     Walks each UCI move from `board`, returning SAN for each position visited.
     Returns None when pv is falsy (NULL/empty) or unparseable.
     ValueError from _parse_pv (bad UCI) is an expected/graceful case — do NOT
     capture_exception (CLAUDE.md: skip expected exceptions; T-135-04 accept).
+
+    Public (190-02): this walk was previously module-private; promoted so
+    `app.repositories.train_repository`'s reveal path can reuse this exact
+    walk for `PuzzleRevealResponse.pv` rather than re-deriving a second one.
     """
     if not pv:
         return None
@@ -2398,7 +2402,7 @@ async def fetch_tactic_lines(
     # 4. Convert missed PV from decision board (board_before, no flaw move pushed).
     # Full PV (no truncation, Phase 135 UAT) — show every move the engine returned.
     missed_pv = pos_n.pv if pos_n is not None else None
-    missed_sans = _pv_to_san_list(board_before.copy(), missed_pv)
+    missed_sans = pv_to_san_list(board_before.copy(), missed_pv)
 
     # 5. Build allowed PV: push flaw move to get board_after_flaw, convert pos[n+1].pv,
     #    then prepend the flaw move SAN so allowed_moves[0] is the red error move.
@@ -2410,7 +2414,7 @@ async def fetch_tactic_lines(
             board_after_flaw = board_before.copy()
             board_after_flaw.push(flaw_move)
             allowed_pv = pos_n1.pv if pos_n1 is not None else None
-            allowed_raw = _pv_to_san_list(board_after_flaw, allowed_pv)
+            allowed_raw = pv_to_san_list(board_after_flaw, allowed_pv)
             if allowed_raw is not None:
                 allowed_sans = [flaw_move_san] + allowed_raw
         except (ValueError, chess.InvalidMoveError):

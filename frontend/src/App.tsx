@@ -10,13 +10,13 @@ import { TooltipProvider } from '@/components/ui/tooltip';
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
 import { cn } from '@/lib/utils';
-import { ArrowLeft, BookOpenIcon, MenuIcon, LogOutIcon, TrophyIcon, DoorOpen, Shield, FolderOpen, Bot } from 'lucide-react';
+import { ArrowLeft, BookOpenIcon, MenuIcon, LogOutIcon, TrophyIcon, DoorOpen, Shield, FolderOpen, Bot, Dumbbell } from 'lucide-react';
 import {
   Drawer, DrawerContent, DrawerHeader, DrawerTitle, DrawerClose,
 } from '@/components/ui/drawer';
 
 import { apiClient } from '@/api/client';
-import { useBotPlayActive } from '@/lib/botPlayActive';
+import { usePlayActive } from '@/lib/playActive';
 import { AuthProvider, useAuth } from '@/hooks/useAuth';
 import { InstallPromptBanner } from '@/components/install/InstallPromptBanner';
 import { FeedbackButton } from '@/components/feedback/FeedbackButton';
@@ -41,9 +41,13 @@ const AnalysisPage = lazy(() => import('./pages/Analysis'));
 // Phase 169 D-14: lazy-loaded, unlinked-from-nav /bots route. Bots.tsx also
 // uses export default (mirrors AnalysisPage's Pitfall 1 divergence).
 const BotsPage = lazy(() => import('./pages/Bots'));
+// Phase 190 Plan 01: lazy-loaded because it pulls the Stockfish WASM grading
+// worker. Train.tsx also uses export default (mirrors Analysis/Bots).
+const TrainPage = lazy(() => import('./pages/Train'));
 
 const FLAG_OPENINGS_VISITED = 'openings_visited';
 const FLAG_ENDGAMES_VISITED = 'endgames_visited';
+const FLAG_TRAIN_VISITED = 'train_visited';
 const IMPORT_REQUIRED_MESSAGE = 'Import your games first to unlock this feature.';
 
 // ─── Non-visual job completion watcher ────────────────────────────────────────
@@ -64,16 +68,18 @@ function ImportJobWatcher({ jobId, onDone }: { jobId: string; onDone: (jobId: st
 
 const NAV_ITEMS = [
   { to: '/library', label: 'Library', Icon: FolderOpen },
+  { to: '/train', label: 'Train', Icon: Dumbbell },
   { to: '/bots', label: 'Bots', Icon: Bot },
-  { to: '/openings', label: 'Openings', Icon: BookOpenIcon },
-  { to: '/endgames', label: 'Endgames', Icon: TrophyIcon },
+  { to: '/openings', label: 'Opening', Icon: BookOpenIcon },
+  { to: '/endgames', label: 'Endgame', Icon: TrophyIcon },
 ] as const;
 
 const BOTTOM_NAV_ITEMS = [
   { to: '/library', label: 'Library', Icon: FolderOpen },
+  { to: '/train', label: 'Train', Icon: Dumbbell },
   { to: '/bots', label: 'Bots', Icon: Bot },
-  { to: '/openings', label: 'Openings', Icon: BookOpenIcon },
-  { to: '/endgames', label: 'Endgames', Icon: TrophyIcon },
+  { to: '/openings', label: 'Opening', Icon: BookOpenIcon },
+  { to: '/endgames', label: 'Endgame', Icon: TrophyIcon },
 ] as const;
 
 // D-16: Admin nav item appended at render time when profile.is_superuser === true.
@@ -84,9 +90,10 @@ const ADMIN_NAV_ITEM = { to: '/admin', label: 'Admin', Icon: Shield } as const;
 
 const ROUTE_TITLES: Record<string, string> = {
   '/library': 'Library',
+  '/train': 'Train',
   '/bots': 'Bots',
-  '/openings': 'Openings',
-  '/endgames': 'Endgames',
+  '/openings': 'Opening',
+  '/endgames': 'Endgame',
   '/admin': 'Admin',
   '/analysis': 'Analysis',
 };
@@ -114,6 +121,7 @@ function isNavLocked(to: string, navUnlocked: boolean): boolean {
 
 function isActive(to: string, pathname: string): boolean {
   if (to === '/library') return pathname.startsWith('/library');
+  if (to === '/train') return pathname.startsWith('/train');
   if (to === '/bots') return pathname.startsWith('/bots');
   if (to === '/openings') return pathname.startsWith('/openings');
   if (to === '/endgames') return pathname.startsWith('/endgames');
@@ -139,10 +147,13 @@ export function NavHeader() {
   const navUnlocked = totalGames > 0 && tier1;
   const openingsVisited = useUserFlag(FLAG_OPENINGS_VISITED, profile?.email);
   const endgamesVisited = useUserFlag(FLAG_ENDGAMES_VISITED, profile?.email);
+  const trainVisited = useUserFlag(FLAG_TRAIN_VISITED, profile?.email);
   const showOpeningsDot = navUnlocked && !openingsVisited;
   // Endgames dot is gated behind the Openings dot — we want users to discover
   // Openings first, then Endgames after that dot is cleared.
   const showEndgamesDot = navUnlocked && openingsVisited && !endgamesVisited;
+  // Train dot chained after Endgames (D-16): Openings -> Endgames -> Train.
+  const showTrainDot = navUnlocked && openingsVisited && endgamesVisited && !trainVisited;
   // D-16: Admin tab rightmost for superusers, absent otherwise.
   const navItems = profile?.is_superuser ? [...NAV_ITEMS, ADMIN_NAV_ITEM] : NAV_ITEMS;
 
@@ -161,7 +172,7 @@ export function NavHeader() {
               <Link
                 key={to}
                 to={to}
-                data-testid={`nav-${label.toLowerCase().replace(/\s+/g, '-')}`}
+                data-testid={`nav-${to.slice(1)}`}
                 aria-disabled={locked || undefined}
                 title={locked ? IMPORT_REQUIRED_MESSAGE : undefined}
                 onClick={locked ? (e) => e.preventDefault() : undefined}
@@ -198,6 +209,15 @@ export function NavHeader() {
                   <span
                     className="absolute top-0.5 right-0.5 flex h-2.5 w-2.5"
                     data-testid="endgames-notification-dot"
+                  >
+                    <span className="absolute inline-flex h-full w-full animate-ping rounded-full bg-red-500 opacity-75" />
+                    <span className="relative inline-flex h-2.5 w-2.5 rounded-full bg-red-500" />
+                  </span>
+                )}
+                {to === '/train' && showTrainDot && (
+                  <span
+                    className="absolute top-0.5 right-0.5 flex h-2.5 w-2.5"
+                    data-testid="train-notification-dot"
                   >
                     <span className="absolute inline-flex h-full w-full animate-ping rounded-full bg-red-500 opacity-75" />
                     <span className="relative inline-flex h-2.5 w-2.5 rounded-full bg-red-500" />
@@ -311,8 +331,11 @@ export function MobileBottomBar({ onMoreClick }: { onMoreClick: () => void }) {
   const navUnlocked = totalGames > 0 && tier1;
   const openingsVisited = useUserFlag(FLAG_OPENINGS_VISITED, profile?.email);
   const endgamesVisited = useUserFlag(FLAG_ENDGAMES_VISITED, profile?.email);
+  const trainVisited = useUserFlag(FLAG_TRAIN_VISITED, profile?.email);
   const showOpeningsDot = navUnlocked && !openingsVisited;
   const showEndgamesDot = navUnlocked && openingsVisited && !endgamesVisited;
+  // Train dot chained after Endgames (D-16): Openings -> Endgames -> Train.
+  const showTrainDot = navUnlocked && openingsVisited && endgamesVisited && !trainVisited;
 
   return (
     <nav
@@ -326,7 +349,7 @@ export function MobileBottomBar({ onMoreClick }: { onMoreClick: () => void }) {
         <Link
           key={to}
           to={to}
-          data-testid={`mobile-nav-${label.toLowerCase().replace(/\s+/g, '-')}`}
+          data-testid={`mobile-nav-${to.slice(1)}`}
           aria-disabled={locked || undefined}
           title={locked ? IMPORT_REQUIRED_MESSAGE : undefined}
           onClick={locked ? (e) => e.preventDefault() : undefined}
@@ -361,6 +384,15 @@ export function MobileBottomBar({ onMoreClick }: { onMoreClick: () => void }) {
             <span
               className="absolute top-1.5 right-[30%] flex h-2 w-2"
               data-testid="endgames-notification-dot-mobile"
+            >
+              <span className="absolute inline-flex h-full w-full animate-ping rounded-full bg-red-500 opacity-75" />
+              <span className="relative inline-flex h-2 w-2 rounded-full bg-red-500" />
+            </span>
+          )}
+          {to === '/train' && showTrainDot && (
+            <span
+              className="absolute top-1.5 right-[30%] flex h-2 w-2"
+              data-testid="train-notification-dot-mobile"
             >
               <span className="absolute inline-flex h-full w-full animate-ping rounded-full bg-red-500 opacity-75" />
               <span className="relative inline-flex h-2 w-2 rounded-full bg-red-500" />
@@ -412,7 +444,7 @@ export function MobileMoreDrawer({ open, onOpenChange }: { open: boolean; onOpen
               <DrawerClose key={to} asChild>
                 <Link
                   to={to}
-                  data-testid={`drawer-nav-${label.toLowerCase().replace(/\s+/g, '-')}`}
+                  data-testid={`drawer-nav-${to.slice(1)}`}
                   aria-disabled={locked || undefined}
                   title={locked ? IMPORT_REQUIRED_MESSAGE : undefined}
                   onClick={locked ? (e) => e.preventDefault() : undefined}
@@ -464,14 +496,16 @@ function ProtectedLayout() {
   const [moreOpen, setMoreOpen] = useState(false);
   const isOpeningsRoute = location.pathname.startsWith('/openings');
   const isEndgamesRoute = location.pathname.startsWith('/endgames');
+  const isTrainRoute = location.pathname.startsWith('/train');
   // The analysis page takes over the mobile shell (back-button header + board-controls
   // footer owned by the page), so it gets a full-height flex chain on mobile and the
   // standard mobile header / bottom nav are suppressed. Desktop (sm+) is unaffected.
   const isAnalysisRoute = location.pathname.startsWith('/analysis');
-  // A mounted bot-game board suppresses the mobile header (NavHeader is
-  // desktop-only and unaffected) — the board + clocks need the vertical
-  // space on small screens. Set by BotsGame via useMarkBotPlayActive().
-  const botPlayActive = useBotPlayActive();
+  // A mounted immersive board screen (bot game, Train solve loop) suppresses
+  // the mobile header (NavHeader is desktop-only and unaffected) — the board
+  // needs the vertical space on small screens. Set by BotsGame and
+  // TrainSolveScreen via useMarkPlayActive().
+  const playActive = usePlayActive();
   const refreshedRef = useRef(false);
 
   useEffect(() => {
@@ -485,6 +519,12 @@ function ProtectedLayout() {
       setUserFlag(FLAG_ENDGAMES_VISITED, profile.email);
     }
   }, [isEndgamesRoute, profile?.email]);
+
+  useEffect(() => {
+    if (isTrainRoute && profile?.email) {
+      setUserFlag(FLAG_TRAIN_VISITED, profile.email);
+    }
+  }, [isTrainRoute, profile?.email]);
 
   // Show deferred toast from OAuth callback — checked here because ProtectedLayout
   // is the stable destination after the redirect chain (callback → / → /openings).
@@ -559,7 +599,7 @@ function ProtectedLayout() {
   return (
     <>
       <NavHeader />
-      {!isOpeningsRoute && !botPlayActive && (
+      {!isOpeningsRoute && !playActive && (
         <>
           <MobileHeader />
         </>
@@ -756,6 +796,24 @@ function AppRoutes() {
           <Route path="/welcome" element={<WelcomePage />} />
           <Route path="/openings/*" element={<ImportRequiredRoute><OpeningsPage /></ImportRequiredRoute>} />
           <Route path="/endgames/*" element={<ImportRequiredRoute><EndgamesPage /></ImportRequiredRoute>} />
+          {/* Phase 190 Plan 01: gated like Openings/Endgames (NAV-02) — NOT added
+              to IMPORT_EXEMPT_ROUTES. Nav wiring (NAV-01) is Plan 03's. */}
+          <Route
+            path="/train/*"
+            element={
+              <ImportRequiredRoute>
+                <Suspense
+                  fallback={
+                    <div className="p-6 text-sm text-muted-foreground" data-testid="train-loading">
+                      Loading your training session…
+                    </div>
+                  }
+                >
+                  <TrainPage />
+                </Suspense>
+              </ImportRequiredRoute>
+            }
+          />
           <Route path="/admin" element={<SuperuserRoute><AdminPage /></SuperuserRoute>} />
           <Route path="/analysis" element={<AnalysisRoute />} />
           {/* Phase 169 D-14: real /bots route, lazy-loaded, UNLINKED from nav this

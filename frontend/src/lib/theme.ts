@@ -28,6 +28,11 @@ export const MOVE_HIGHLIGHT_GOOD = 'oklch(0.55 0.16 145 / 0.35)';
 // badge color instead of the generic "clean move" green.
 export const MOVE_HIGHLIGHT_GEM = 'oklch(0.58 0.20 290 / 0.35)';
 export const MOVE_HIGHLIGHT_GREAT = 'oklch(0.58 0.18 220 / 0.35)';
+// Engine-line last-move square highlight (Train reveal stepping, 190.1 UAT):
+// the engine-pointer blue (BEST_MOVE_ARROW's hue) at the same 0.35 alpha as
+// the other MOVE_HIGHLIGHT_* overlays, so a stepped engine move's squares
+// read as "engine line", not as a played-move verdict color.
+export const MOVE_HIGHLIGHT_BEST = 'rgba(37, 99, 235, 0.35)';
 
 // WDL colors — used in all win/draw/loss visualizations
 // Richer base colors; the glass overlay softens them visually when applied
@@ -512,3 +517,33 @@ export const WALL_ACCENT_BG = 'oklch(0.55 0.12 235 / 0.14)';
 // without an accidental cross-feature recolor.
 export const STAR_FILLED = 'oklch(0.78 0.14 80)'; // gold/amber
 export const STAR_EMPTY = 'oklch(0.45 0 0)'; // mid-grey outline
+
+// Train verdict colors (Phase 190-05, D-10) — alias the existing WDL palette
+// so "correct"/"incorrect" verdict rows read with the same green/red the
+// rest of the app already uses for win/loss, rather than inventing a
+// parallel pair of hues for the same semantic.
+export const TRAIN_VERDICT_CORRECT = WDL_WIN;
+export const TRAIN_VERDICT_INCORRECT = WDL_LOSS;
+
+// Train score-screen rating bands (Phase 190-05, SOLV-07: green/yellow/red).
+// Green/red alias the same WDL hues as the verdict colors above; yellow is a
+// genuinely new amber value. Deliberately NOT SEV_INACCURACY, even though
+// both are amber-family: SEV_INACCURACY belongs to the flaw-severity
+// taxonomy elsewhere in the app and repurposing it here would couple two
+// unrelated scales (a future retune of one would silently retune the
+// other). The named threshold constants themselves (TRAIN_RATING_GREEN_MIN /
+// TRAIN_RATING_YELLOW_MIN) are pure logic and live in lib/trainScore.ts, not
+// here — this file only carries color, never a threshold value.
+export const TRAIN_RATING_GREEN = WDL_WIN;
+export const TRAIN_RATING_YELLOW = 'oklch(0.75 0.15 85)'; // amber
+export const TRAIN_RATING_RED = WDL_LOSS;
+
+// Train reveal-board best-move arrow (Phase 190.1, D-02; recolored per 190.1
+// UAT) — blue marks the engine's BEST move (matching what blue means
+// everywhere else in the app: an engine/analysis pointer), never the user's
+// played move. The played move is colored by its own move quality
+// (MOVE_QUALITY_* above) in lib/trainArrows.ts. Aliases the existing blue
+// BEST_MOVE_ARROW value (same aliasing style as TRAIN_VERDICT_CORRECT/
+// TRAIN_RATING_GREEN above); the two never coexist on one board (that token
+// is only used on Library miniboards).
+export const TRAIN_BEST_MOVE_ARROW = BEST_MOVE_ARROW;

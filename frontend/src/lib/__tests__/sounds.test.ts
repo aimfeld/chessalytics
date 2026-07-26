@@ -132,8 +132,9 @@ describe('sounds', () => {
 
     unlockAudio();
 
-    // Nine SoundEvent members (Task 1: added game-win/game-loss/game-draw),
-    // each gets its own preloaded Audio instance.
+    // Nine SoundEvent members (Task 1 added game-win/game-loss/game-draw;
+    // 190.1 UAT round 7 removed the short-lived victory event again), each
+    // gets its own preloaded Audio instance.
     expect(instances).toHaveLength(9);
     for (const instance of instances) {
       expect(instance.play).toHaveBeenCalledTimes(1);

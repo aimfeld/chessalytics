@@ -58,8 +58,9 @@ const MUTED_VALUE = '1';
  * remaining undiscriminated caller); `game-loss`/`game-draw` (Quick 260723-tqn)
  * use the vendored lila Defeat/Draw clips. `game-win` uses `WinChime` — a
  * gentle, self-authored (CC0, no attribution) chime chosen over the vendored
- * `Victory` fanfare, which read as too aggressive; `Victory.mp3` stays in the
- * folder for any future surface that wants the fuller sound. */
+ * `Victory` fanfare, which read as too aggressive for bot games (and, per
+ * 190.1 UAT round 7, for the Train reveal's perfect-score moment too — the
+ * short-lived `victory` event was removed again). */
 const SOUND_FILES: Record<SoundEvent, string> = {
   move: 'Move',
   capture: 'Capture',

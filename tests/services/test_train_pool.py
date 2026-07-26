@@ -51,6 +51,8 @@ from app.services.train_pool import (
     blob_pending_stmt,
     classify_puzzle_type,
     expected_score_for,
+    fen_and_last_move_at_ply,
+    full_fen_at_ply,
     herring_stmt,
     pool_entry_stmt,
 )
@@ -189,6 +191,45 @@ class TestClassifyPuzzleType:
         soft_node = {"b": 50, "bm": None, "s": 50, "sm": None, "su": "e2e4"}
         assert classify_puzzle_type([sharp_node, soft_node], "white") == "sharp"
         assert classify_puzzle_type([soft_node, sharp_node], "white") == "soft"
+
+
+# ---------------------------------------------------------------------------
+# TestFenAndLastMoveAtPly (190-02, SOLV-02) — the shared PGN-replay helper
+# behind TrainPuzzle.last_move_uci and full_fen_at_ply's delegation.
+# ---------------------------------------------------------------------------
+
+
+class TestFenAndLastMoveAtPly:
+    """fen_and_last_move_at_ply — one PGN replay, returning (fen, last_move_uci)."""
+
+    def test_mid_game_ply_returns_correct_last_move_uci(self) -> None:
+        # _PGN's 5th half-move (index 4) is 3. Bb5 -> f1b5.
+        result = fen_and_last_move_at_ply(_PGN, 5)
+        assert result is not None
+        _fen, last_move_uci = result
+        assert last_move_uci == "f1b5"
+
+    def test_ply_zero_returns_none_move_and_valid_starting_fen(self) -> None:
+        result = fen_and_last_move_at_ply(_PGN, 0)
+        assert result is not None
+        fen, last_move_uci = result
+        assert last_move_uci is None
+        assert fen == "rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1"
+
+    def test_unparseable_pgn_returns_none(self) -> None:
+        assert fen_and_last_move_at_ply("not a real pgn {{{", 1) is None
+
+    def test_ply_past_end_returns_none(self) -> None:
+        # _PGN has 14 half-moves; ply=15 is one past the end.
+        assert fen_and_last_move_at_ply(_PGN, 15) is None
+
+    def test_fen_matches_full_fen_at_ply_delegation_guard(self) -> None:
+        """full_fen_at_ply delegates to this helper — the FEN must be byte-identical."""
+        for ply in (0, 1, 5, 14):
+            result = fen_and_last_move_at_ply(_PGN, ply)
+            assert result is not None
+            fen, _last_move_uci = result
+            assert fen == full_fen_at_ply(_PGN, ply)
 
 
 # ---------------------------------------------------------------------------

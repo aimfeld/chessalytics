@@ -28,10 +28,11 @@ import math
 from typing import Any, Literal
 
 import chess.pgn
-from sqlalchemy import Select, and_, case, cast, exists, func, literal, select
+from sqlalchemy import Select, and_, case, cast, exists, func, literal, select, true
 from sqlalchemy.dialects.postgresql import JSONB
-from sqlalchemy.orm import aliased, undefer
+from sqlalchemy.orm import undefer
 from sqlalchemy.sql.elements import ColumnElement
+from sqlalchemy.sql.selectable import LateralFromClause
 
 from app.models.drill_solve import DrillSolve, DrillSource
 from app.models.game import Game
@@ -258,6 +259,58 @@ def answer_key_pending(col: Any) -> ColumnElement[bool]:
     return col.is_(None)
 
 
+def _prior_position_lateral(
+    *, name: str, user_id_col: Any, game_id_col: Any, ply_expr: Any
+) -> LateralFromClause:
+    """A `LEFT JOIN LATERAL` onto `game_positions` for one correlated
+    `(user_id, game_id, ply)` lookup, yielding `.c.eval_cp` / `.c.eval_mate`.
+
+    Bug fix (Phase 190-01 checkpoint, discovered via manual browser UAT):
+    a plain `isouter`-joined self-alias of `GamePosition`, correlated on
+    `(user_id, game_id, ply [- N])` inside a larger query, defeats
+    Postgres's ability to push that correlation into `game_positions_pkey`
+    `(user_id, game_id, ply)` as an `Index Cond` on this schema/query
+    shape. Confirmed via `EXPLAIN (ANALYZE, BUFFERS)` against the dev DB
+    (a real user, ~200k `game_positions` rows, ~1.1k qualifying outer
+    rows): the planner used ONLY `user_id` as the `Index Cond` and pushed
+    `game_id`/`ply` down to a `Join Filter` instead, re-scanning that
+    user's entire index range on every outer row — 108M rows filtered,
+    ~21-27s wall time. The identical predicates as a `LATERAL` subquery
+    (this function) resolve the correlation BEFORE the inner scan is
+    planned, so Postgres parameterizes the composite index scan on all
+    three columns — same result set, ~140ms. `LIMIT 1` is a semantic no-op
+    (`game_positions_pkey` is unique on these three columns) but keeps the
+    per-call cost estimate honest. Do not revert to a plain self-join here.
+
+    Args:
+        name: Distinct SQL alias for the LATERAL subquery (each call site
+            in this module needs its own, matching the old aliased-join
+            names so `EXPLAIN` output stays readable).
+        user_id_col: The outer query's `user_id`-equivalent column to
+            correlate against (`GameFlaw.user_id` / `Game.user_id` — the
+            candidate table's own user scope).
+        game_id_col: The outer query's `game_id` column to correlate
+            against.
+        ply_expr: The outer query's ply expression to match (`X.ply - 1`
+            for the PRE-flaw-move position, or `X.ply` for the flaw ply
+            itself).
+
+    Returns:
+        A `Lateral` construct — `.outerjoin(this, true())` it onto the
+        query's FROM clause, then read `.c.eval_cp` / `.c.eval_mate`.
+    """
+    return (
+        select(GamePosition.eval_cp, GamePosition.eval_mate)
+        .where(
+            GamePosition.user_id == user_id_col,
+            GamePosition.game_id == game_id_col,
+            GamePosition.ply == ply_expr,
+        )
+        .limit(1)
+        .lateral(name)
+    )
+
+
 def pool_entry_stmt(user_id: int) -> Select[tuple[GameFlaw, Game]]:
     """Own-blunder pool-entry candidates for `user_id` (POOL-01).
 
@@ -282,22 +335,19 @@ def pool_entry_stmt(user_id: int) -> Select[tuple[GameFlaw, Game]]:
         A SQLAlchemy Select yielding `(GameFlaw, Game)` rows for every
         qualifying own blunder, unordered (callers apply their own ORDER BY).
     """
-    PriorPosition = aliased(GamePosition)
+    prior_position = _prior_position_lateral(
+        name="pool_entry_prior_position",
+        user_id_col=GameFlaw.user_id,
+        game_id_col=GameFlaw.game_id,
+        ply_expr=GameFlaw.ply - 1,
+    )
     expected_score = expected_score_sql(
-        PriorPosition.eval_cp, PriorPosition.eval_mate, Game.user_color
+        prior_position.c.eval_cp, prior_position.c.eval_mate, Game.user_color
     )
     return (
         select(GameFlaw, Game)
         .join(Game, Game.id == GameFlaw.game_id)
-        .join(
-            PriorPosition,
-            and_(
-                PriorPosition.user_id == GameFlaw.user_id,
-                PriorPosition.game_id == GameFlaw.game_id,
-                PriorPosition.ply == GameFlaw.ply - 1,
-            ),
-            isouter=True,
-        )
+        .outerjoin(prior_position, true())
         .options(undefer(GameFlaw.missed_pv_lines))
         .where(
             GameFlaw.user_id == user_id,
@@ -359,8 +409,22 @@ def herring_stmt(user_id: int, *, exclude_served: bool = True) -> Select[tuple[G
         then `GameBestMove.ply ASC` — recency-weighted and fully
         deterministic.
     """
-    PriorPosition = aliased(GamePosition, name="herring_prior_position")
-    GuardPos = aliased(GamePosition, name="herring_guard_pos")
+    # LATERAL, not a plain self-join — see `_prior_position_lateral`'s
+    # docstring (Phase 190-01 checkpoint bug fix): the same composite-index
+    # planner pathology applies to both correlations here, offset ply and
+    # same-ply alike.
+    prior_position = _prior_position_lateral(
+        name="herring_prior_position",
+        user_id_col=Game.user_id,
+        game_id_col=GameBestMove.game_id,
+        ply_expr=GameBestMove.ply - 1,
+    )
+    guard_position = _prior_position_lateral(
+        name="herring_guard_pos",
+        user_id_col=Game.user_id,
+        game_id_col=GameBestMove.game_id,
+        ply_expr=GameBestMove.ply,
+    )
 
     tier_expr = best_move_tier_sql(
         GameBestMove.maia_prob,
@@ -369,34 +433,22 @@ def herring_stmt(user_id: int, *, exclude_served: bool = True) -> Select[tuple[G
         GameBestMove.second_cp,
         GameBestMove.second_mate,
         Game.user_color,
-        GuardPos.eval_cp,
-        GuardPos.eval_mate,
+        guard_position.c.eval_cp,
+        guard_position.c.eval_mate,
         Game.lichess_evals_at.isnot(None),
     )
     gap_expr = expected_score_sql(
         GameBestMove.best_cp, GameBestMove.best_mate, Game.user_color
     ) - expected_score_sql(GameBestMove.second_cp, GameBestMove.second_mate, Game.user_color)
-    prior_es = expected_score_sql(PriorPosition.eval_cp, PriorPosition.eval_mate, Game.user_color)
+    prior_es = expected_score_sql(
+        prior_position.c.eval_cp, prior_position.c.eval_mate, Game.user_color
+    )
 
     stmt = (
         select(GameBestMove, Game)
         .join(Game, Game.id == GameBestMove.game_id)
-        .outerjoin(
-            PriorPosition,
-            and_(
-                PriorPosition.game_id == GameBestMove.game_id,
-                PriorPosition.user_id == Game.user_id,
-                PriorPosition.ply == GameBestMove.ply - 1,
-            ),
-        )
-        .outerjoin(
-            GuardPos,
-            and_(
-                GuardPos.game_id == GameBestMove.game_id,
-                GuardPos.user_id == Game.user_id,
-                GuardPos.ply == GameBestMove.ply,
-            ),
-        )
+        .outerjoin(prior_position, true())
+        .outerjoin(guard_position, true())
         .where(
             Game.user_id == user_id,
             player_only_gate(GameBestMove.ply, Game.user_color),
@@ -466,23 +518,20 @@ def blob_pending_stmt(user_id: int) -> Select[tuple[int]]:
     Returns:
         A SQLAlchemy Select yielding a single integer count.
     """
-    PriorPosition = aliased(GamePosition, name="blob_pending_prior_position")
+    prior_position = _prior_position_lateral(
+        name="blob_pending_prior_position",
+        user_id_col=GameFlaw.user_id,
+        game_id_col=GameFlaw.game_id,
+        ply_expr=GameFlaw.ply - 1,
+    )
     expected_score = expected_score_sql(
-        PriorPosition.eval_cp, PriorPosition.eval_mate, Game.user_color
+        prior_position.c.eval_cp, prior_position.c.eval_mate, Game.user_color
     )
     return (
         select(func.count())
         .select_from(GameFlaw)
         .join(Game, Game.id == GameFlaw.game_id)
-        .join(
-            PriorPosition,
-            and_(
-                PriorPosition.user_id == GameFlaw.user_id,
-                PriorPosition.game_id == GameFlaw.game_id,
-                PriorPosition.ply == GameFlaw.ply - 1,
-            ),
-            isouter=True,
-        )
+        .outerjoin(prior_position, true())
         .where(
             GameFlaw.user_id == user_id,
             GameFlaw.severity == _SEVERITY_BLUNDER,
@@ -493,16 +542,24 @@ def blob_pending_stmt(user_id: int) -> Select[tuple[int]]:
     )
 
 
-def full_fen_at_ply(pgn: str, ply: int) -> str | None:
-    """Reconstruct the FULL FEN (side-to-move, castling rights, en-passant) at `ply`.
+def fen_and_last_move_at_ply(pgn: str, ply: int) -> tuple[str, str | None] | None:
+    """Reconstruct the FULL FEN and the arriving move's UCI at `ply` (190-02).
 
-    P-03: `game_flaws.fen` is `board_fen()` (piece placement only — see its
-    model docstring) and loses castling rights/en-passant, which a drill
-    puzzle needs for legal-move generation. Parses `pgn` and replays `ply`
-    half-moves. Wrapped in try/except per the project's PGN-parsing
-    constraint (per-game try/except, handle malformed input gracefully) —
-    an unparseable PGN or a ply past the game's end is an EXPECTED case for
-    old/malformed imports, not a bug, so it is not `sentry_sdk.capture_exception`'d.
+    The single PGN-replay implementation shared by `full_fen_at_ply` (FEN
+    only) and every Train puzzle-construction site that also needs the
+    arriving move. P-03: `game_flaws.fen` is `board_fen()` (piece placement
+    only — see its model docstring) and loses castling rights/en-passant,
+    which a drill puzzle needs for legal-move generation. Parses `pgn` and
+    replays `ply` half-moves. Wrapped in try/except per the project's
+    PGN-parsing constraint (per-game try/except, handle malformed input
+    gracefully) — an unparseable PGN or a ply past the game's end is an
+    EXPECTED case for old/malformed imports, not a bug, so it is not
+    `sentry_sdk.capture_exception`'d.
+
+    The returned move describes HOW the position was reached — the
+    half-move immediately before `ply` (the opponent's or the user's own
+    prior move) — and is deliberately NOT answer-key data: it never reveals
+    what to play next, only what was just played (T-190-05).
 
     Args:
         pgn: The game's full PGN text.
@@ -510,9 +567,10 @@ def full_fen_at_ply(pgn: str, ply: int) -> str | None:
             starting position).
 
     Returns:
-        The full FEN string at `ply`, or None if the PGN could not be parsed
-        or `ply` is past the end of the game. Callers (composition) must drop
-        a puzzle whose FEN cannot be reconstructed rather than serving a
+        `(fen, last_move_uci)`, where `last_move_uci` is None at ply 0 (no
+        prior move exists), or None if the PGN could not be parsed or `ply`
+        is past the end of the game. Callers (composition) must drop a
+        puzzle whose FEN cannot be reconstructed rather than serving a
         broken board.
     """
     try:
@@ -525,9 +583,33 @@ def full_fen_at_ply(pgn: str, ply: int) -> str | None:
         board = game.board()
         for move in moves[:ply]:
             board.push(move)
-        return board.fen()
+        last_move_uci = moves[ply - 1].uci() if ply > 0 else None
+        return board.fen(), last_move_uci
     except (ValueError, IndexError, AttributeError):
         return None
+
+
+def full_fen_at_ply(pgn: str, ply: int) -> str | None:
+    """Reconstruct the FULL FEN (side-to-move, castling rights, en-passant) at `ply`.
+
+    Delegates to `fen_and_last_move_at_ply` (the single PGN-replay
+    implementation) and returns only the FEN — for callers that don't need
+    the arriving move (e.g. the reveal path, which already has the played
+    move from `game_positions.move_san`).
+
+    Args:
+        pgn: The game's full PGN text.
+        ply: The half-move index to reconstruct the position at (0 = the
+            starting position).
+
+    Returns:
+        The full FEN string at `ply`, or None if the PGN could not be parsed
+        or `ply` is past the end of the game. Callers (composition) must drop
+        a puzzle whose FEN cannot be reconstructed rather than serving a
+        broken board.
+    """
+    result = fen_and_last_move_at_ply(pgn, ply)
+    return result[0] if result is not None else None
 
 
 __all__ = [
@@ -542,6 +624,7 @@ __all__ = [
     "compose_slots",
     "expected_score_for",
     "expected_score_sql",
+    "fen_and_last_move_at_ply",
     "full_fen_at_ply",
     "herring_stmt",
     "pool_entry_stmt",

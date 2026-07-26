@@ -2,29 +2,34 @@
 gsd_state_version: 1.0
 milestone: v2.9
 milestone_name: Train — Spaced-Repetition Blunder Drills
-current_phase: 190
-current_phase_name: Train Page + Solve Loop
-status: planning
-stopped_at: Phase 189 shipped — secured (threats_open 0) and squash-merged to main
-last_updated: "2026-07-25T18:10:00.000Z"
-last_activity: 2026-07-25
-last_activity_desc: Phase 189 shipped to main (local squash-merge, no PR per GitLab Flow)
+current_phase: 190.1
+current_phase_name: train-reveal-redesign
+status: complete
+stopped_at: ""
+last_updated: "2026-07-26T16:20:00.000Z"
+last_activity: 2026-07-26
+last_activity_desc: Phase 190.1 shipped — squash-merged to main
 progress:
-  total_phases: 3
-  completed_phases: 1
-  total_plans: 6
-  completed_plans: 6
-  percent: 33
+  total_phases: 4
+  completed_phases: 3
+  total_plans: 17
+  completed_plans: 17
+  percent: 75
 ---
 
 # Project State: FlawChess
 
 ## Current Position
 
-Phase: 190 — Train Page + Solve Loop
-Plan: Not started
-Status: Ready to plan
-Last activity: 2026-07-25 — Phase 189 shipped to main (secured, full pre-merge gate green, squash-merged)
+Phase: 190.1 (train-reveal-redesign) — COMPLETE (verified, shipped to `main`)
+Plan: 5 of 5
+Status: Phases 190 + 190.1 squash-merged to `main` 2026-07-26. Next: Phase 191 (Schedule + Progress Surface).
+Last activity: 2026-07-26 — Phase 190.1 shipped
+
+The 190.1-05 blocking checkpoint was discharged through nine live UAT fix rounds
+(`7550424e` … `57a1ff1f`); the verdict is recorded per numbered item in
+`190.1-05-SUMMARY.md`, and `190.1-VERIFICATION.md` passes 5/5 success criteria. Not yet
+deployed — the v2.9 release to `production` is a separate `main → production` PR.
 
 ## Project Reference
 
@@ -442,6 +447,32 @@ v1.29 Live-Engine Analysis Page shipped 2026-06-29 — 5 phases (136–140), 14 
 - [Phase ?]: correct_guess is computed server-side from the live game_flaws blob at solve/reveal time (never snapshotted); a reclassified-away flaw falls back to classify_puzzle_type's soft default rather than failing the solve
 - [Phase ?]: reveal_for_puzzle returns internal sentinel strings (not_found/not_attempted) alongside a RevealedPuzzle dataclass rather than raising from the repository — the router maps these to 404/409
 - [Phase ?]: D-GAP-01: the D-06 empty-array missed_pv_lines sentinel counts toward NEITHER pool_entry_stmt NOR blob_pending_count (terminal, not transient — never self-heals via the tier-4 lottery)
+- [Phase 190-01]: Kept TRAIN_GRADING_MOVETIME_MS at 1500ms after headless measurement (10 real sharp-blunder FENs) showed the engine's top move never disagreed across the ladder and expected-score stabilized by 1000ms worst-case — one rung of margin above the measured floor, not a blind copy of useStockfishEngine's default
+- [Phase 190-01]: Fixed an out-of-plan backend file (app/services/train_pool.py) during checkpoint UAT — rewrote 3 GamePosition self-joins as LATERAL subqueries after EXPLAIN ANALYZE showed 20-27s query times (108M rows filtered vs a clean composite-index lookup); 190-02+ must be aware this file changed
+- [Phase 190-01]: Removed TrainSolveScreen.tsx's startedForFenRef guard, which was itself causing an indefinite grading hang under React StrictMode's dev double-invoke; added a hard TRAIN_GRADING_TIMEOUT_MS ceiling + Worker onerror handling as defense-in-depth
+- [Phase ?]: TrainPuzzle.last_move_uci is arrival data (opponent's prior half-move), never answer data — enforced by a key-set equality test, not a comment (T-190-05)
+- [Phase ?]: One PGN replay for both full_fen_at_ply and the new arriving-move helper: fen_and_last_move_at_ply is the sole implementation
+- [Phase ?]: PuzzleRevealResponse.pv uses SAN (not UCI), matching library_repository.TacticLinesResponse's shape so one stepper component consumes both PV sources
+- [Phase 190-03]: Dumbbell (lucide-react) chosen as the Train nav icon per UI-SPEC — distinct silhouette, literal name match
+- [Phase 190-03]: Train first-visit dot requires BOTH openingsVisited AND endgamesVisited (D-16 chain), not endgamesVisited alone
+- [Phase 190-03]: Updated pre-existing Phase 171 V-04 Bots-ordering test assertions to reflect Train's insertion at index 1 (Bots legitimately shifted to index 2)
+- [Phase ?]: POST /train/sessions fires automatically on Train.tsx mount as a status read (no separate preview endpoint exists); pressing Start/Resume only flips local loop-entry state
+- [Phase ?]: sessionScore for the completed-session recap is client-accumulated and localStorage-persisted per session_id, since TrainSessionResponse carries no server-side score aggregate field
+- [Phase ?]: useTrainGradingEngine gained restartEngine() and TrainSolveScreen a bounded TRAIN_ENGINE_READY_TIMEOUT_MS so a dead/slow grading Worker degrades to a retry affordance instead of an indefinite wait
+- [Phase ?]: [Phase 190-05]: TrainLineStepper is a small purpose-built SAN stepper (no branching/forking/deletion), never mounts its own board — settles the ROADMAP's VariationTree-reuse-vs-lightweight-stepper spike
+- [Phase ?]: [Phase 190-05]: chess.js 1.4.0's .move() throws (never returns null) on an illegal SAN — TrainLineStepper's replay wraps it in try/catch so the stop-not-crash contract actually holds
+- [Phase ?]: [Phase 190-05]: Tactic opt-in trigger renders generic pre-fetch copy (motif name genuinely unavailable before the opt-in press, per T-190-16's fetch gate); D-11 miss copy omits the illustrative consequence clause no backend field supplies — both flagged for the Plan 06 copy-read checkpoint
+- [Phase ?]: [Phase 190-05]: Updated two pre-existing tests (Train.solveLoop.test.tsx, TrainSolveScreen.test.tsx) whose assertions were factually superseded by this plan's own D-08 board-reset and SOLV-05 real reveal fetch — mirrors the Plan 03 precedent
+- [Phase ?]: 190-06: Resume dead-click found live and fixed test-first (5bf33fee) rather than deferred; both WINDOWS.md copy deviations re-read and accepted as-is at the checkpoint
+- [Phase ?]: [Phase 190.1-01]: A superseded startGameMoveSearch never resolves through the hook's normal bestmove path (single-Worker stop/queue serialization discards the stale pendingRef) — settles only via the TRAIN_GRADING_TIMEOUT_MS race, by design
+- [Phase ?]: [Phase 190.1-01]: Promotion-UCI backend test uses a custom hand-verified pawn-race PGN rather than extending the shared _PGN Ruy Lopez fixture, which never reaches a promotable position
+- [Phase ?]: [Phase 190.1-02]: TRAIN_GRADING_MULTIPV_WIDTH = 4 (smallest width returning the full requested rank count across all 10 measured FENs); TRAIN_GRADING_MOUNT_MOVETIME_MS kept equal to TRAIN_GRADING_MOVETIME_MS (1500ms) since raising it did not remove one FEN's near-boundary search-timing noise
+- [Phase ?]: [Phase 190.1-02]: pvMapRef is committed to the resolved lines array only at bestmove (not per info line like useStockfishEngine.ts's live-rendering pvMapRef) since this hook has no per-tick UI consumer
+- [Phase ?]: [Phase 190.1-03]: GUESS_LABELS/Guess extracted to frontend/src/lib/trainGuessLabels.ts (not exported from TrainSolveScreen) to avoid a parent/child circular import with TrainReveal
+- [Phase ?]: [Phase 190.1-03]: Reveal answer-key fields (best_move/best_move_san/pv) promoted (removed), not kept as fallback -- a stored server eval that might still be read would reintroduce the YOUR-MOVE/BEST-MOVE eval contradiction D-01 exists to prevent
+- [Phase ?]: [Phase 190.1-04]: TRAIN_PLAYED_MOVE_ARROW_WIDTH kept as its own named constant despite sharing TRAIN_GOOD_MOVE_ARROW_WIDTH's value (0.5), per the plan's explicit three-arrow-widths requirement
+- [Phase ?]: [Phase 190.1-04]: buildTrainRevealArrows takes an explicit verdictLanded flag (from verdict !== null) rather than inferring landed-ness from goodMoveUcis non-emptiness
+- [Phase ?]: [Phase 190.1-04]: TrainReveal reports gameMoveUci to TrainSolveScreen via onGameMoveUciChange rather than lifting the reveal query itself, preserving single ownership of the reveal GET
 
 ### Pending Todos
 
@@ -449,7 +480,8 @@ None active.
 
 ### Blockers/Concerns
 
-- None active. (v1.31 and v1.32 are both deployed to production.)
+- active. (v1.31 and v1.32 are both deployed to production.)
+- 190.1-05 Task 2: blocking human checkpoint (gate=blocking) — operator must UAT the redesigned Train reveal on desktop and mobile browsers against D-01..D-05 and the two 190.1-VALIDATION.md manual-only rows before the phase can close.
 
 ### Quick Tasks Completed
 
@@ -539,13 +571,13 @@ Items acknowledged and deferred at **v1.29 milestone close on 2026-06-29** (user
 
 ## Session Continuity
 
-**Stopped at:** Completed 189-06-PLAN.md (Phase 189 fully closed — POOL-01 complete)
+**Stopped at:** 190.1-05 Task 1 (full gate) green; blocked at Task 2 (checkpoint:human-verify, gate=blocking) awaiting operator UAT on desktop+mobile
 
-**Last session:** 2026-07-25T15:34:30.020Z
+**Last session:** 2026-07-26T13:22:14.252Z
 
 **Resume file:**
 
-None
+.planning/phases/190.1-train-reveal-redesign/190.1-05-PLAN.md
 
 ## Performance Metrics
 
@@ -609,6 +641,16 @@ None
 | Phase 189 P04 | 45min | 2 tasks | 5 files |
 | Phase 189 P05 | 45min | 3 tasks | 4 files |
 | Phase 189 P06 | 12min | 2 tasks | 6 files |
+| Phase 190 P01 | 105min | 2 tasks | 11 files |
+| Phase 190 P02 | 35min | 2 tasks | 9 files |
+| Phase 190 P03 | 25min | 2 tasks | 2 files |
+| Phase 190 P04 | 55min | 3 tasks | 8 files |
+| Phase 190 P05 | 35min | 3 tasks | 12 files |
+| Phase 190 P06 | 65min | 1 tasks | 3 files |
+| Phase 190.1 P01 | 25min | 2 tasks | 14 files |
+| Phase 190.1 P02 | 55min | 2 tasks | 5 files |
+| Phase 190.1 P03 | 55min | 3 tasks | 11 files |
+| Phase 190.1 P04 | 50min | 2 tasks | 11 files |
 
 ## Performance Metrics
 

@@ -77,6 +77,7 @@ async def compose_or_resume_session(
                 ply=p.ply,
                 fen=p.fen,
                 side_to_move=p.side_to_move,
+                last_move_uci=p.last_move_uci,
             )
             for p in composed.puzzles
         ],
@@ -157,9 +158,8 @@ async def reveal_puzzle(
         game_id=result.game_id,
         ply=result.ply,
         fen=result.fen,
-        best_move=result.best_move,
-        best_move_san=result.best_move_san,
         played_in_game_san=result.played_in_game_san,
+        played_in_game_move_uci=result.played_in_game_move_uci,
         puzzle_type=result.puzzle_type,
         source=result.source,
         has_tactic_lines=result.has_tactic_lines,

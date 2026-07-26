@@ -15,13 +15,17 @@ from pydantic import BaseModel, Field, field_validator
 
 
 class TrainPuzzle(BaseModel):
-    """One pre-attempt puzzle. EXACTLY these five fields — no more, no less.
+    """One pre-attempt puzzle.
 
     POOL-10 / P-01 (LOCKED): the pre-attempt payload carries no answer key.
-    Adding `best_move`, `pv`, `puzzle_type`, or `source` to this schema
-    re-opens the POOL-10 leak this schema exists to close — the client's
-    exact-match/grading path runs entirely client-side against its own
-    vendored Stockfish WASM output (see 189-01-PLAN.md P-01). Do not add
+    `last_move_uci` (190-02, SOLV-02) describes the position's ARRIVAL — the
+    half-move immediately before `ply`, i.e. the opponent's (or the user's
+    own) prior move — so the solve screen can animate/highlight it. It does
+    not reveal what to play next, so it does not reopen POOL-10. `best_move`,
+    `pv`, `puzzle_type`, and `source` remain forbidden: adding any of them
+    here re-opens the POOL-10 leak this schema exists to close — the
+    client's exact-match/grading path runs entirely client-side against its
+    own vendored Stockfish WASM output (see 189-01-PLAN.md P-01). Do not add
     fields here without re-reading that decision.
     """
 
@@ -30,6 +34,7 @@ class TrainPuzzle(BaseModel):
     ply: int
     fen: str
     side_to_move: Literal["white", "black"]
+    last_move_uci: str | None
 
 
 class TrainSessionResponse(BaseModel):
@@ -97,8 +102,22 @@ class PuzzleRevealResponse(BaseModel):
     """Response for GET /train/sessions/{session_id}/puzzles/{position}/reveal.
 
     Reachable ONLY after the attempt is recorded (409 otherwise — T-189-17):
-    the answer key (`best_move`/`best_move_san`), the puzzle type, and the
-    in-game move are unreachable before `solved_at` is set.
+    the puzzle type and the in-game move are unreachable before `solved_at`
+    is set.
+
+    190.1-03 (D-01/D-05): this response is DELIBERATELY thin. The answer key
+    it carries is the puzzle type, the in-game move (SAN + UCI), and a
+    tactic-lines pointer — no `best_move`, `best_move_san`, or `pv` field.
+    The best move, the best line, and every eval shown in the reveal panel
+    are computed CLIENT-SIDE by the grading engine (`useTrainGradingEngine.ts`),
+    never derived or stored here — a server-stored Stockfish eval and the
+    client's own WASM search are not guaranteed to agree bit-for-bit
+    (project_eval_nondeterminism), so this endpoint must never be a second,
+    contradicting source of truth for a number the reveal panel displays.
+
+    `played_in_game_move_uci` (190.1-01, D-05) is the UCI counterpart of
+    `played_in_game_san`, behind the identical 409 gate — the client uses it
+    to dispatch its own reveal-time engine search (T-190.1-01/T-190.1-02).
 
     `has_tactic_lines` is a POINTER, not a payload: when True, the client
     calls the existing `GET /api/library/flaws/{game_id}/{ply}/tactic-lines`
@@ -109,9 +128,8 @@ class PuzzleRevealResponse(BaseModel):
     game_id: int
     ply: int
     fen: str
-    best_move: str | None
-    best_move_san: str | None
     played_in_game_san: str | None
+    played_in_game_move_uci: str | None
     puzzle_type: Literal["sharp", "soft", "herring"]
     source: Literal["sr_item", "red_herring"]
     has_tactic_lines: bool

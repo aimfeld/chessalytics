@@ -21,7 +21,7 @@ from dataclasses import dataclass
 from typing import Literal
 
 import chess
-from sqlalchemy import and_, func, select, update
+from sqlalchemy import and_, func, or_, select, update
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -40,6 +40,7 @@ from app.services.train_pool import (
     blob_pending_stmt,
     classify_puzzle_type,
     compose_slots,
+    fen_and_last_move_at_ply,
     full_fen_at_ply,
     herring_stmt,
     pool_entry_stmt,
@@ -85,6 +86,7 @@ class ComposedPuzzle:
     ply: int
     fen: str
     side_to_move: Literal["white", "black"]
+    last_move_uci: str | None
 
 
 @dataclass(frozen=True)
@@ -255,6 +257,48 @@ async def open_session_for_user(session: AsyncSession, *, user_id: int) -> Drill
     return result.scalar_one_or_none()
 
 
+async def completed_session_in_window(
+    session: AsyncSession, *, user_id: int, today: datetime.date
+) -> DrillSession | None:
+    """Return the user's latest `status='completed'` session still inside its D-10 window.
+
+    Bug fix (190.1 pre-deploy): completing a session flips it to
+    `status='completed'` (`_mark_session_complete_if_done`), so the D-12
+    resume path — which only looks at `status='open'` rows — stopped seeing
+    it, and the very next compose call built a brand-new session on the same
+    day. That defeated the D-10 session window ("one session until the next
+    scheduled day") and made the 'completed' landing state unreachable after
+    a page reload. Compose must treat a completed-but-unexpired session
+    exactly like an open one: return it, don't recompose.
+
+    In-window means `expires_on > today` — the strict inequality mirrors
+    `is_session_expired`'s inclusive boundary (`today >= expires_on` means
+    expired). `expire_stale_sessions` never touches completed rows (it only
+    flips `open` -> `expired`), so `status='completed'` rows keep their
+    status forever and this date predicate is the only window authority.
+
+    Ordered by id DESC because pre-fix data may legitimately hold several
+    completed sessions inside one window; the newest one is the user's
+    current recap.
+
+    Args:
+        session: AsyncSession.
+        user_id: Authenticated user's internal PK (V4: never client-supplied).
+        today: The local calendar day (from `local_today`).
+    """
+    result = await session.execute(
+        select(DrillSession)
+        .where(
+            DrillSession.user_id == user_id,
+            DrillSession.status == "completed",
+            DrillSession.expires_on > today,
+        )
+        .order_by(DrillSession.id.desc())
+        .limit(1)
+    )
+    return result.scalar_one_or_none()
+
+
 async def load_session_puzzles(
     session: AsyncSession, *, user_id: int, session_id: int
 ) -> list[ComposedPuzzle]:
@@ -262,7 +306,7 @@ async def load_session_puzzles(
 
     `drill_solves` rows with `solved_at IS NULL`, ordered by `position` (the
     frozen composition order), joined to `games` for the PGN and rebuilt into
-    a `ComposedPuzzle` via `full_fen_at_ply`. Scoped by `user_id` in the WHERE
+    a `ComposedPuzzle` via `fen_and_last_move_at_ply`. Scoped by `user_id` in the WHERE
     clause IN ADDITION to `session_id` — a session id arriving from a request
     body/path parameter is untrusted client input (T-189-12 / V4 IDOR guard);
     a foreign session id resolves to zero rows rather than another user's
@@ -312,9 +356,10 @@ async def load_session_puzzles(
             and (solve.game_id, solve.ply) not in existing_flaw_keys
         ):
             continue  # lazy eviction: the backing flaw row vanished (D-02)
-        fen = full_fen_at_ply(game.pgn, solve.ply)
-        if fen is None:
+        result = fen_and_last_move_at_ply(game.pgn, solve.ply)
+        if result is None:
             continue  # never serve a puzzle whose FEN can't reconstruct
+        fen, last_move_uci = result
         puzzles.append(
             ComposedPuzzle(
                 position=solve.position,
@@ -322,12 +367,13 @@ async def load_session_puzzles(
                 ply=solve.ply,
                 fen=fen,
                 side_to_move=mover_color_for_ply(solve.ply),
+                last_move_uci=last_move_uci,
             )
         )
     return puzzles
 
 
-async def _resume_open_session(
+async def _resume_session(
     session: AsyncSession,
     *,
     user_id: int,
@@ -335,7 +381,13 @@ async def _resume_open_session(
     requested_count: int,
     blob_pending_count: int,
 ) -> ComposedSession:
-    """Build a `ComposedSession` for an already-open session (D-12 resume path)."""
+    """Build a `ComposedSession` for an existing session row.
+
+    Serves both the D-12 resume path (an open session: unsolved puzzles
+    returned for the loop to continue) and the completed-in-window path (a
+    `status='completed'` session: `load_session_puzzles` returns [] and the
+    landing screen renders the D-03 recap from `solved_count`/`expires_on`).
+    """
     puzzles = await load_session_puzzles(session, user_id=user_id, session_id=drill_session.id)
     solved_count_stmt = (
         select(func.count())
@@ -369,15 +421,22 @@ async def compose_and_materialize_session(
        only path taken on a second call inside an open session's window,
        including an ad-hoc "train now" request from a future phase that hits
        this same endpoint.
+    3b. D-10 guard (190.1 bug fix): if a COMPLETED session's window still
+       covers today (`completed_session_in_window`), return it instead of
+       composing fresh — completing a session must not unlock an immediate
+       replacement on reload; the next session arrives when the window rolls
+       over. Phase 191's ad-hoc "train now" (SCHD-03) will need an explicit
+       opt-out of this guard, not a bypass of the open-session resume above.
     4. Otherwise compose fresh: due `drill_items` (most-overdue-first) padded
        from `pool_entry_stmt` up to `sr_slots`, plus `herring_stmt` up to
        `herring_slots` (retried with `exclude_served=False` when the source
        is exhausted). Cross-backfill (Pitfall 4): if one side comes up short,
        the OTHER side fills the gap up to `n`, so a lopsided pool still
        yields a full session whenever enough total material exists.
-    5. Reconstruct each puzzle's full FEN via `full_fen_at_ply`; a puzzle
-       whose FEN cannot be reconstructed is dropped rather than served
-       broken (never backfilled — the slot arithmetic already ran).
+    5. Reconstruct each puzzle's full FEN + arriving move via
+       `fen_and_last_move_at_ply`; a puzzle whose FEN cannot be
+       reconstructed is dropped rather than served broken (never
+       backfilled — the slot arithmetic already ran).
     6. If nothing survives, return zero puzzles and write NO `drill_sessions`
        row. Otherwise shuffle deterministically by `(user_id, today)` (D-09:
        a red herring's position must not be inferable from ordering) and
@@ -410,10 +469,25 @@ async def compose_and_materialize_session(
 
     open_session = await open_session_for_user(session, user_id=user_id)
     if open_session is not None:
-        return await _resume_open_session(
+        return await _resume_session(
             session,
             user_id=user_id,
             drill_session=open_session,
+            requested_count=n,
+            blob_pending_count=blob_pending_count,
+        )
+
+    # Step 3b (190.1 bug fix): a completed session still inside its D-10
+    # window blocks fresh composition — without this, a reload right after
+    # finishing a session composed a brand-new one (status='completed' rows
+    # are invisible to the open-session resume above), granting unlimited
+    # same-day sessions and draining the pool.
+    completed = await completed_session_in_window(session, user_id=user_id, today=today)
+    if completed is not None:
+        return await _resume_session(
+            session,
+            user_id=user_id,
+            drill_session=completed,
             requested_count=n,
             blob_pending_count=blob_pending_count,
         )
@@ -524,18 +598,25 @@ async def compose_and_materialize_session(
                 new_sr_items.append(pick)
                 shortfall -= 1
 
-    # --- Reconstruct FENs, dropping (never backfilling) unparseable puzzles ---
-    reconstructed: list[tuple[int, int, str, Literal["white", "black"], int]] = []
+    # --- Reconstruct FENs + arriving move, dropping (never backfilling)
+    # unparseable puzzles ---
+    reconstructed: list[tuple[int, int, str, str | None, Literal["white", "black"], int]] = []
     for game_id, ply, game in sr_candidates:
-        fen = full_fen_at_ply(game.pgn, ply)
-        if fen is None:
+        result = fen_and_last_move_at_ply(game.pgn, ply)
+        if result is None:
             continue
-        reconstructed.append((game_id, ply, fen, mover_color_for_ply(ply), DrillSource.SR_ITEM))
+        fen, last_move_uci = result
+        reconstructed.append(
+            (game_id, ply, fen, last_move_uci, mover_color_for_ply(ply), DrillSource.SR_ITEM)
+        )
     for game_id, ply, game in herring_candidates:
-        fen = full_fen_at_ply(game.pgn, ply)
-        if fen is None:
+        result = fen_and_last_move_at_ply(game.pgn, ply)
+        if result is None:
             continue
-        reconstructed.append((game_id, ply, fen, mover_color_for_ply(ply), DrillSource.RED_HERRING))
+        fen, last_move_uci = result
+        reconstructed.append(
+            (game_id, ply, fen, last_move_uci, mover_color_for_ply(ply), DrillSource.RED_HERRING)
+        )
     reconstructed = reconstructed[:n]  # defensive cap; slot arithmetic already sums to <= n
 
     if not reconstructed:
@@ -557,7 +638,7 @@ async def compose_and_materialize_session(
 
     surviving_sr_keys = {
         (gid, ply)
-        for gid, ply, _fen, _side, source in reconstructed
+        for gid, ply, _fen, _last_move_uci, _side, source in reconstructed
         if source == DrillSource.SR_ITEM
     }
 
@@ -593,7 +674,9 @@ async def compose_and_materialize_session(
             await session.flush()
 
             puzzles: list[ComposedPuzzle] = []
-            for position, (game_id, ply, fen, side_to_move, source) in enumerate(reconstructed):
+            for position, (game_id, ply, fen, last_move_uci, side_to_move, source) in enumerate(
+                reconstructed
+            ):
                 session.add(
                     DrillSolve(
                         session_id=drill_session.id,
@@ -612,6 +695,7 @@ async def compose_and_materialize_session(
                         ply=ply,
                         fen=fen,
                         side_to_move=side_to_move,
+                        last_move_uci=last_move_uci,
                     )
                 )
             await session.flush()
@@ -625,7 +709,7 @@ async def compose_and_materialize_session(
         resumed = await open_session_for_user(session, user_id=user_id)
         if resumed is None:
             raise
-        return await _resume_open_session(
+        return await _resume_session(
             session,
             user_id=user_id,
             drill_session=resumed,
@@ -782,6 +866,20 @@ async def _mark_session_complete_if_done(
     "Still servable" excludes `drill_solves` rows whose `games` row has since
     vanished (mirrors `load_session_puzzles`'s lazy-eviction posture — a
     deleted game can never be attempted, so it must not block completion).
+
+    Bug fix (WR-02): ALSO excludes SR-source rows whose backing `game_flaws`
+    row has vanished under reclassification. `load_session_puzzles` already
+    documents this as "lazy eviction" (a delete-then-insert reclassify can
+    drop the flaw row a `drill_solves` SR item points at) and simply skips
+    serving such a row rather than deleting it — leaving it `solved_at IS
+    NULL` forever. Before this fix, this count still treated that row as
+    outstanding, so `remaining` could never reach 0 and the session got stuck
+    showing "resume" indefinitely (only self-healing once `expires_on`
+    passed). The LEFT OUTER JOIN mirrors `load_session_puzzles`'s own
+    `existing_flaw_keys` check, keyed the same way: (user_id, game_id, ply).
+    Red herrings carry no `game_flaws` row by design (source != SR_ITEM), so
+    they're never excluded here regardless of the join's outcome.
+
     The `status = 'open'` guard makes the UPDATE a no-op on a session that's
     already completed, so re-running this after an idempotent re-submit never
     stomps a real `completed_at` with a later timestamp.
@@ -790,7 +888,22 @@ async def _mark_session_complete_if_done(
         select(func.count())
         .select_from(DrillSolve)
         .join(Game, Game.id == DrillSolve.game_id)
-        .where(DrillSolve.session_id == session_id, DrillSolve.solved_at.is_(None))
+        .outerjoin(
+            GameFlaw,
+            and_(
+                GameFlaw.user_id == DrillSolve.user_id,
+                GameFlaw.game_id == DrillSolve.game_id,
+                GameFlaw.ply == DrillSolve.ply,
+            ),
+        )
+        .where(
+            DrillSolve.session_id == session_id,
+            DrillSolve.solved_at.is_(None),
+            or_(
+                DrillSolve.source != DrillSource.SR_ITEM,
+                GameFlaw.game_id.isnot(None),
+            ),
+        )
     )
     remaining = (await session.execute(remaining_stmt)).scalar_one()
     if remaining == 0:
@@ -960,9 +1073,11 @@ class RevealedPuzzle:
     game_id: int
     ply: int
     fen: str
-    best_move: str | None
-    best_move_san: str | None
     played_in_game_san: str | None
+    # 190.1-01, D-05: the game move as UCI (SAN -> UCI derivation below) so
+    # the client can dispatch its own reveal-time engine search. Same
+    # post-attempt 409 gate as every other answer-key field.
+    played_in_game_move_uci: str | None
     puzzle_type: Literal["sharp", "soft", "herring"]
     source: Literal["sr_item", "red_herring"]
     has_tactic_lines: bool
@@ -976,8 +1091,18 @@ async def reveal_for_puzzle(
     Resolves the `drill_solves` row scoped by `user_id` AND `session_id`
     (T-189-16 / IDOR guard) — a foreign or invented `(session_id, position)`
     returns `"not_found"`. `solved_at IS NULL` returns `"not_attempted"`
-    (T-189-17): the answer key, puzzle type, and in-game move are
-    unreachable before the attempt is recorded.
+    (T-189-17): the puzzle type and in-game move are unreachable before the
+    attempt is recorded.
+
+    190.1-03 (D-01/D-05): the answer key here is deliberately thin — the
+    puzzle type, the in-game move (SAN + UCI), and a tactic-lines pointer.
+    The best move, the best line, and every displayed eval are computed
+    CLIENT-SIDE by the grading engine (`useTrainGradingEngine.ts`'s
+    `gradeMove` and reveal-time searches) — never derived here, never stored,
+    never sent over the wire — because a server-stored Stockfish eval and the
+    client's own WASM search are not guaranteed to agree bit-for-bit
+    (project_eval_nondeterminism), and this endpoint must never be a second,
+    contradicting source of truth for a number the reveal panel displays.
 
     `has_tactic_lines` is a pointer, not a payload — the client fetches the
     steppable PV line from the pre-existing
@@ -1009,27 +1134,29 @@ async def reveal_for_puzzle(
 
     position_row = (
         await session.execute(
-            select(GamePosition.best_move, GamePosition.move_san).where(
+            select(GamePosition.move_san).where(
                 GamePosition.user_id == user_id,
                 GamePosition.game_id == solve.game_id,
                 GamePosition.ply == solve.ply,
             )
         )
     ).one_or_none()
-    best_move = position_row.best_move if position_row is not None else None
     played_in_game_san = position_row.move_san if position_row is not None else None
 
     # P-03: game_flaws.fen is board_fen() only (no castling/en-passant) —
     # reconstruct the full FEN the same way composition did.
     fen = full_fen_at_ply(game.pgn, solve.ply) or ""
 
-    best_move_san: str | None = None
-    if fen and best_move is not None:
+    # 190.1-01, D-05: the game move as UCI — SAN -> UCI, never-raise contract,
+    # same house try/except shape (app/services/library_service.py:135,
+    # app/services/flaws_service.py:407,515).
+    played_in_game_move_uci: str | None = None
+    if fen and played_in_game_san is not None:
         try:
             board = chess.Board(fen)
-            best_move_san = board.san(chess.Move.from_uci(best_move))
+            played_in_game_move_uci = board.parse_san(played_in_game_san).uci()
         except (ValueError, chess.IllegalMoveError, AssertionError):
-            best_move_san = None  # never raise on an unparseable best_move (Task 2 contract)
+            played_in_game_move_uci = None  # never raise on an unparseable move_san
 
     if solve.source == DrillSource.RED_HERRING:
         puzzle_type: Literal["sharp", "soft", "herring"] = "herring"
@@ -1056,9 +1183,8 @@ async def reveal_for_puzzle(
         game_id=solve.game_id,
         ply=solve.ply,
         fen=fen,
-        best_move=best_move,
-        best_move_san=best_move_san,
         played_in_game_san=played_in_game_san,
+        played_in_game_move_uci=played_in_game_move_uci,
         puzzle_type=puzzle_type,
         source="sr_item" if solve.source == DrillSource.SR_ITEM else "red_herring",
         has_tactic_lines=has_tactic_lines,
@@ -1071,6 +1197,7 @@ __all__ = [
     "RecordedSolve",
     "RevealedPuzzle",
     "TrainSettingsRow",
+    "completed_session_in_window",
     "compose_and_materialize_session",
     "expire_stale_sessions",
     "get_or_create_settings",

@@ -11,11 +11,22 @@ Coverage:
 - test_below_winnability_floor_excluded   : a hopeless pre-flaw position is excluded
 - test_403_guest                          : a guest account is rejected before any pool query
 - test_401_unauthenticated                : no auth token returns 401
-- test_pre_attempt_payload_shape          : the puzzle dict's key set is exactly the POOL-10 five
+- test_pre_attempt_payload_shape          : the puzzle dict's key set is exactly the POOL-10 six
 - test_drill_items_fk_targets             : drill_items' FK referenced-table set is {users, games}
 - test_compose_twice_returns_same_session_id      : D-12 resume over real HTTP
 - test_concurrent_compose_yields_one_open_session : uq_drill_sessions_user_open holds
                                              under two simultaneous requests (T-189-14)
+
+Plan 02 (190-02, SOLV-02/SOLV-05 payload additions):
+- test_last_move_uci_matches_pgn_at_ply_minus_one : last_move_uci is the game's own
+                                             PGN half-move at ply-1
+- test_ply_zero_puzzle_serialises_last_move_uci_as_null : ply=0 -> null, not "" or a
+                                             fabricated move
+
+190.1-03 (Task 3, D-01/D-05 — best_move/best_move_san/pv retired from the reveal):
+- test_reveal_key_set_excludes_stored_answer_key_fields : the exact response key
+                                             set is the standing assertion that no
+                                             stored engine line/eval creeps back in
 
 Plan 05 (POOL-08/POOL-10, solve/reveal/settings):
 - test_solve_records_and_advances_streak / test_solve_masters_item_at_three /
@@ -192,6 +203,35 @@ async def _seed_game_with_blunder(
     return game_id
 
 
+async def _seed_game_with_pgn(test_engine, user_id: int, pgn: str, label: str) -> int:
+    """Seed a bare Game row with a CUSTOM PGN (190.1-01 promotion-UCI test —
+    the default `_PGN` fixture never reaches a promotable position)."""
+    session_maker = async_sessionmaker(test_engine, expire_on_commit=False)
+    async with session_maker() as session:
+        async with session.begin():
+            game = Game(
+                user_id=user_id,
+                platform="lichess",
+                platform_game_id=f"{label}-{uuid.uuid4().hex[:8]}",
+                platform_url="https://lichess.org/test",
+                pgn=pgn,
+                result="1-0",
+                user_color="white",
+                time_control_str="600+0",
+                time_control_bucket="blitz",
+                time_control_seconds=600,
+                base_time_seconds=600,
+                increment_seconds=0.0,
+                rated=True,
+                is_computer_game=False,
+                ply_count=10,
+                full_evals_completed_at=datetime.datetime(2026, 1, 1, tzinfo=datetime.timezone.utc),
+            )
+            session.add(game)
+            await session.flush()
+            return game.id
+
+
 async def _delete_games(test_engine, game_ids: list[int]) -> None:
     if not game_ids:
         return
@@ -319,8 +359,16 @@ async def _seed_position_meta(
     *,
     best_move: str,
     move_san: str,
+    pv: str | None = None,
 ) -> None:
-    """Seed a game_positions row carrying the answer-key fields reveal reads."""
+    """Seed a game_positions row carrying `best_move`/`move_san`/`pv`.
+
+    190.1-03: the reveal endpoint itself only reads `move_san` now (the
+    in-game move) — `best_move`/`pv` are written here purely because they are
+    real, non-nullable-adjacent `game_positions` columns other features
+    (gem/great detection, tactic lines) still depend on; `pv` defaults to
+    None since no reveal test needs a stored line anymore.
+    """
     session_maker = async_sessionmaker(test_engine, expire_on_commit=False)
     async with session_maker() as session:
         async with session.begin():
@@ -334,6 +382,7 @@ async def _seed_position_meta(
                     black_hash=9_000_000 + game_id * 100 + ply,
                     best_move=best_move,
                     move_san=move_san,
+                    pv=pv,
                 )
             )
 
@@ -574,7 +623,12 @@ async def test_401_unauthenticated() -> None:
 
 @pytest.mark.asyncio
 async def test_pre_attempt_payload_shape(test_engine) -> None:
-    """The puzzle dict's key set is EXACTLY the POOL-10 five fields (P-01)."""
+    """The puzzle dict's key set is EXACTLY the POOL-10 six fields (P-01, 190-02).
+
+    Equality, not membership (`set(...) == {...}`, never `in`/`assertIn`): a
+    future answer-key field addition (best_move, pv, puzzle_type, source)
+    must fail this test, not silently pass it.
+    """
     email = f"train-shape-{uuid.uuid4().hex[:8]}@example.com"
     user_id, token = await _register_and_login(email)
     game_id = await _seed_game_with_blunder(test_engine, user_id)
@@ -589,7 +643,68 @@ async def test_pre_attempt_payload_shape(test_engine) -> None:
         body = resp.json()
         assert body["puzzle_count"] == 1
         puzzle = body["puzzles"][0]
-        assert set(puzzle.keys()) == {"position", "game_id", "ply", "fen", "side_to_move"}
+        assert set(puzzle.keys()) == {
+            "position",
+            "game_id",
+            "ply",
+            "fen",
+            "side_to_move",
+            "last_move_uci",
+        }
+    finally:
+        await _delete_games(test_engine, [game_id])
+
+
+@pytest.mark.asyncio
+async def test_last_move_uci_matches_pgn_at_ply_minus_one(test_engine) -> None:
+    """last_move_uci (190-02, SOLV-02) is the game's own PGN half-move at ply-1."""
+    email = f"train-lastmove-{uuid.uuid4().hex[:8]}@example.com"
+    user_id, token = await _register_and_login(email)
+    # _FLAW_PLY_WHITE == 6; _PGN's half-move at index 5 (0-based) is "a6" (a7a6).
+    game_id = await _seed_game_with_blunder(test_engine, user_id, ply=_FLAW_PLY_WHITE)
+
+    try:
+        async with httpx.AsyncClient(
+            transport=httpx.ASGITransport(app=app), base_url="http://test"
+        ) as client:
+            resp = await client.post(ENDPOINT, headers={"Authorization": f"Bearer {token}"})
+
+        assert resp.status_code == 200
+        puzzle = resp.json()["puzzles"][0]
+        assert puzzle["last_move_uci"] == "a7a6"
+    finally:
+        await _delete_games(test_engine, [game_id])
+
+
+@pytest.mark.asyncio
+async def test_ply_zero_puzzle_serialises_last_move_uci_as_null(test_engine) -> None:
+    """A ply=0 puzzle (no prior move) carries last_move_uci: null, not "" or a fabricated move.
+
+    pool_entry_stmt's winnability floor reads the PRE-flaw-move eval at
+    ply-1, which cannot exist for ply=0 (no row -1) — a ply-0 blunder can
+    never qualify through fresh composition. The resume path
+    (load_session_puzzles) has no such floor, so a directly-seeded session
+    entry at ply=0 (mirroring what a real red herring or SR item resume
+    would reconstruct) exercises the same fen_and_last_move_at_ply(pgn, 0)
+    call the composition path uses.
+    """
+    email = f"train-ply0-{uuid.uuid4().hex[:8]}@example.com"
+    user_id, token = await _register_and_login(email)
+    game_id = await _seed_bare_game(test_engine, user_id, "ply0")
+    await _seed_session(test_engine, user_id, [(game_id, 0, int(DrillSource.RED_HERRING))])
+
+    try:
+        async with httpx.AsyncClient(
+            transport=httpx.ASGITransport(app=app), base_url="http://test"
+        ) as client:
+            resp = await client.post(ENDPOINT, headers={"Authorization": f"Bearer {token}"})
+
+        assert resp.status_code == 200
+        body = resp.json()
+        assert body["puzzle_count"] == 1
+        puzzle = body["puzzles"][0]
+        assert puzzle["ply"] == 0
+        assert puzzle["last_move_uci"] is None
     finally:
         await _delete_games(test_engine, [game_id])
 
@@ -1016,6 +1131,57 @@ async def test_last_solve_completes_session(test_engine) -> None:
         await _delete_games(test_engine, [game_id_sr, game_id_herring])
 
 
+@pytest.mark.asyncio
+async def test_session_completes_when_sr_item_flaw_row_vanishes_under_reclassification(
+    test_engine,
+) -> None:
+    """WR-02 fix: an SR-source puzzle whose backing `game_flaws` row is
+    reclassified away (lazy eviction, mirroring `load_session_puzzles`'s own
+    posture) must not block session completion forever, even though its
+    `drill_solves` row stays `solved_at IS NULL`. Deleting the `GameFlaw` row
+    directly simulates the delete-then-insert reclassify path documented on
+    `pool_entry_stmt`/`compose_and_materialize_session`.
+    """
+    email = f"train-complete-evicted-{uuid.uuid4().hex[:8]}@example.com"
+    user_id, token = await _register_and_login(email)
+    game_id_sr = await _seed_game_with_blunder(test_engine, user_id, ply=_FLAW_PLY_WHITE)
+    game_id_herring = await _seed_bare_game(test_engine, user_id, "complete-evicted-herring")
+    await _seed_drill_item(test_engine, user_id, game_id_sr, _FLAW_PLY_WHITE)
+    session_id = await _seed_session(
+        test_engine,
+        user_id,
+        [
+            (game_id_sr, _FLAW_PLY_WHITE, int(DrillSource.SR_ITEM)),
+            (game_id_herring, 8, int(DrillSource.RED_HERRING)),
+        ],
+    )
+
+    # Simulate reclassification evicting the SR item's backing flaw row —
+    # its drill_solves row (position 0) now stays solved_at IS NULL forever,
+    # since load_session_puzzles will never serve it again.
+    session_maker = async_sessionmaker(test_engine, expire_on_commit=False)
+    async with session_maker() as session:
+        async with session.begin():
+            await session.execute(
+                delete(GameFlaw).where(
+                    GameFlaw.user_id == user_id,
+                    GameFlaw.game_id == game_id_sr,
+                    GameFlaw.ply == _FLAW_PLY_WHITE,
+                )
+            )
+
+    try:
+        # Only the herring (position 1) is servable now — solving it must
+        # complete the session, not leave it "open" forever waiting on the
+        # now-unreachable SR item.
+        resp = await _solve(token, session_id, 1, guess="several", correct_move=True)
+        assert resp.status_code == 200
+        assert resp.json()["session_complete"] is True
+        assert await _get_session_status(test_engine, session_id) == "completed"
+    finally:
+        await _delete_games(test_engine, [game_id_sr, game_id_herring])
+
+
 # ---------------------------------------------------------------------------
 # Plan 05 Task 2 — GET /sessions/{session_id}/puzzles/{position}/reveal
 # ---------------------------------------------------------------------------
@@ -1038,13 +1204,82 @@ async def test_reveal_409_before_attempt(test_engine) -> None:
         body = resp.json()
         assert "best_move" not in body
         assert "puzzle_type" not in body
+        assert "pv" not in body  # 190-02: the stored best line is no exception to the gate
+        # 190.1-01: the game move's UCI counterpart is no exception either.
+        assert "played_in_game_move_uci" not in body
+    finally:
+        await _delete_games(test_engine, [game_id])
+
+
+@pytest.mark.asyncio
+async def test_reveal_played_in_game_move_uci_normal_move(test_engine) -> None:
+    """A normal (4-char) move_san reveals its 4-character UCI (190.1-01, D-05)."""
+    email = f"train-reveal-uci-{uuid.uuid4().hex[:8]}@example.com"
+    user_id, token = await _register_and_login(email)
+    game_id = await _seed_game_with_blunder(test_engine, user_id, missed_pv_lines=_SHARP_PV_LINES)
+    await _seed_drill_item(test_engine, user_id, game_id, _FLAW_PLY_WHITE)
+    await _seed_position_meta(
+        test_engine, user_id, game_id, _FLAW_PLY_WHITE, best_move="b5a4", move_san="Ba4"
+    )
+    session_id = await _seed_session(
+        test_engine, user_id, [(game_id, _FLAW_PLY_WHITE, int(DrillSource.SR_ITEM))]
+    )
+
+    try:
+        solved = await _solve(token, session_id, 0, guess="critical", correct_move=True)
+        assert solved.status_code == 200
+
+        resp = await _reveal(token, session_id, 0)
+        assert resp.status_code == 200
+        body = resp.json()
+        assert body["played_in_game_san"] == "Ba4"
+        assert body["played_in_game_move_uci"] == "b5a4"
+    finally:
+        await _delete_games(test_engine, [game_id])
+
+
+# A classic double-pawn-promotion race: at ply 8 (before White's 5th move),
+# White's g7 pawn can only promote by capturing the still-unmoved h8 rook —
+# "gxh8=Q" -> UCI "g7h8q" (5 chars), the promotion case the 4-char normal-move
+# test above cannot exercise.
+_PROMOTION_PGN = "1. h4 a5 2. h5 a4 3. h6 a3 4. hxg7 axb2 5. gxh8=Q bxa1=Q *"
+_PROMOTION_PLY = 8
+
+
+@pytest.mark.asyncio
+async def test_reveal_played_in_game_move_uci_promotion(test_engine) -> None:
+    """A 5-char promotion move_san reveals its 5-character UCI (190.1-01, D-05)."""
+    email = f"train-reveal-uci-promo-{uuid.uuid4().hex[:8]}@example.com"
+    user_id, token = await _register_and_login(email)
+    game_id = await _seed_game_with_pgn(test_engine, user_id, _PROMOTION_PGN, "promo")
+    await _seed_position_meta(
+        test_engine, user_id, game_id, _PROMOTION_PLY, best_move="g7h8q", move_san="gxh8=Q"
+    )
+    session_id = await _seed_session(
+        test_engine, user_id, [(game_id, _PROMOTION_PLY, int(DrillSource.RED_HERRING))]
+    )
+
+    try:
+        solved = await _solve(token, session_id, 0, guess="several", correct_move=True)
+        assert solved.status_code == 200
+
+        resp = await _reveal(token, session_id, 0)
+        assert resp.status_code == 200
+        body = resp.json()
+        assert body["played_in_game_san"] == "gxh8=Q"
+        assert body["played_in_game_move_uci"] == "g7h8q"
     finally:
         await _delete_games(test_engine, [game_id])
 
 
 @pytest.mark.asyncio
 async def test_reveal_200_after_attempt(test_engine) -> None:
-    """Once solved, reveal returns 200 with a non-null best_move/best_move_san/puzzle_type."""
+    """Once solved, reveal returns 200 with the correct puzzle_type/source.
+
+    190.1-03: no best_move/best_move_san/pv assertions here — see
+    test_reveal_key_set_excludes_stored_answer_key_fields for the standing
+    exact-key-set assertion covering their removal.
+    """
     email = f"train-reveal-200-{uuid.uuid4().hex[:8]}@example.com"
     user_id, token = await _register_and_login(email)
     game_id = await _seed_game_with_blunder(test_engine, user_id, missed_pv_lines=_SHARP_PV_LINES)
@@ -1063,10 +1298,45 @@ async def test_reveal_200_after_attempt(test_engine) -> None:
         resp = await _reveal(token, session_id, 0)
         assert resp.status_code == 200
         body = resp.json()
-        assert body["best_move"] == "b5a4"
-        assert body["best_move_san"] == "Ba4"
         assert body["puzzle_type"] == "sharp"
         assert body["source"] == "sr_item"
+    finally:
+        await _delete_games(test_engine, [game_id])
+
+
+@pytest.mark.asyncio
+async def test_reveal_key_set_excludes_stored_answer_key_fields(test_engine) -> None:
+    """190.1-03 T-190.1-12: the reveal response's key set is the standing assertion
+    that no stored engine line/eval (best_move/best_move_san/pv) ever creeps
+    back in — the client grading engine is the sole source of those numbers.
+    """
+    email = f"train-reveal-keyset-{uuid.uuid4().hex[:8]}@example.com"
+    user_id, token = await _register_and_login(email)
+    game_id = await _seed_game_with_blunder(test_engine, user_id, missed_pv_lines=_SHARP_PV_LINES)
+    await _seed_drill_item(test_engine, user_id, game_id, _FLAW_PLY_WHITE)
+    await _seed_position_meta(
+        test_engine, user_id, game_id, _FLAW_PLY_WHITE, best_move="b5a4", move_san="Ba4"
+    )
+    session_id = await _seed_session(
+        test_engine, user_id, [(game_id, _FLAW_PLY_WHITE, int(DrillSource.SR_ITEM))]
+    )
+
+    try:
+        solved = await _solve(token, session_id, 0, guess="critical", correct_move=True)
+        assert solved.status_code == 200
+
+        resp = await _reveal(token, session_id, 0)
+        assert resp.status_code == 200
+        assert set(resp.json().keys()) == {
+            "game_id",
+            "ply",
+            "fen",
+            "played_in_game_san",
+            "played_in_game_move_uci",
+            "puzzle_type",
+            "source",
+            "has_tactic_lines",
+        }
     finally:
         await _delete_games(test_engine, [game_id])
 

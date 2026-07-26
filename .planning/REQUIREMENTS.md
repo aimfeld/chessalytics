@@ -21,18 +21,18 @@
 
 ### Solve Loop (frontend)
 
-- [ ] **SOLV-01**: Before moving, the user commits a binary guess: "one critical move" vs "several fine moves" (ground truth from the sharp/soft classifier; herrings count as "several")
-- [ ] **SOLV-02**: The user then plays exactly one move, one attempt, on a lichess-minimal solve screen: board oriented to the user's color, opponent's last move animated + highlighted, side-to-move prompt, no eval bar or game metadata
-- [ ] **SOLV-03**: Grading is fully client-side and uniform across puzzle types: exact match to stored `best_move` is instantly correct; any other move is evaluated by the vendored Stockfish WASM and passes if its expected-score drop vs best stays below the MISTAKE threshold (reuse `liveFlaw.ts` / `flawThresholds.ts`)
-- [ ] **SOLV-04**: A session progress indicator (e.g. "4 of 12") is visible during the solve loop
-- [ ] **SOLV-05**: The reveal shows guess + move verdicts, the original blunder vs the best line (steppable pv), the game card, and a deep link into the analysis board; herring reveals say the user handled the position well
-- [ ] **SOLV-06**: On tactic-tagged flaws the reveal offers an opt-in "step through the line" control with the tactic ply countdown (motif name as a label), covering both missed and allowed orientations — always offered when tagged, never auto-triggered, embedded in the reveal
-- [ ] **SOLV-07**: Each puzzle scores 0–2 independent points (+1 correct guess, +1 correct move); the session ends with a score screen showing total / 2N as a percentage mapped to a green/yellow/red rating (named threshold constants)
+- [x] **SOLV-01**: Before moving, the user commits a binary guess: "one critical move" vs "several fine moves" (ground truth from the sharp/soft classifier; herrings count as "several")
+- [x] **SOLV-02**: The user then plays exactly one move, one attempt, on a lichess-minimal solve screen: board oriented to the user's color, opponent's last move animated + highlighted, side-to-move prompt, no eval bar or game metadata
+- [x] **SOLV-03**: Grading is fully client-side and uniform across puzzle types: exact match to stored `best_move` is instantly correct; any other move is evaluated by the vendored Stockfish WASM and passes if its expected-score drop vs best stays below the MISTAKE threshold (reuse `liveFlaw.ts` / `flawThresholds.ts`)
+- [x] **SOLV-04**: A session progress indicator (e.g. "4 of 12") is visible during the solve loop
+- [x] **SOLV-05**: The reveal shows guess + move verdicts, the original blunder vs the best line (steppable pv), the game card, and a deep link into the analysis board; herring reveals say the user handled the position well
+- [x] **SOLV-06**: On tactic-tagged flaws the reveal offers an opt-in "step through the line" control with the tactic ply countdown (motif name as a label), covering both missed and allowed orientations — always offered when tagged, never auto-triggered, embedded in the reveal
+- [x] **SOLV-07**: Each puzzle scores 0–2 independent points (+1 correct guess, +1 correct move); the session ends with a score screen showing total / 2N as a percentage mapped to a green/yellow/red rating (named threshold constants)
 
 ### Train Page & Navigation
 
-- [ ] **NAV-01**: A `/train` route exists between Library and Bots on all three nav surfaces (desktop header, mobile bottom bar at six tap targets with labels intact, mobile More drawer), with route title, prefix-matched `isActive`, and convention-following test IDs
-- [ ] **NAV-02**: Train is import-gated like Openings/Endgames (`/train` NOT in `IMPORT_EXEMPT_ROUTES`): greyed out until the user has games and import tier 1 is complete
+- [x] **NAV-01**: A `/train` route exists between Library and Bots on all three nav surfaces (desktop header, mobile bottom bar at six tap targets with labels intact, mobile More drawer), with route title, prefix-matched `isActive`, and convention-following test IDs
+- [x] **NAV-02**: Train is import-gated like Openings/Endgames (`/train` NOT in `IMPORT_EXEMPT_ROUTES`): greyed out until the user has games and import tier 1 is complete
 
 ### Schedule & Reminders
 
@@ -105,15 +105,15 @@ Which phases cover which requirements. Updated during roadmap creation.
 | POOL-08 | Phase 189 | Complete |
 | POOL-09 | Phase 189 | Complete |
 | POOL-10 | Phase 189 | Complete |
-| SOLV-01 | Phase 190 | Pending |
-| SOLV-02 | Phase 190 | Pending |
-| SOLV-03 | Phase 190 | Pending |
-| SOLV-04 | Phase 190 | Pending |
-| SOLV-05 | Phase 190 | Pending |
-| SOLV-06 | Phase 190 | Pending |
-| SOLV-07 | Phase 190 | Pending |
-| NAV-01 | Phase 190 | Pending |
-| NAV-02 | Phase 190 | Pending |
+| SOLV-01 | Phase 190 | Complete |
+| SOLV-02 | Phase 190 | Complete |
+| SOLV-03 | Phase 190 | Complete |
+| SOLV-04 | Phase 190 | Complete |
+| SOLV-05 | Phase 190 | Complete |
+| SOLV-06 | Phase 190 | Complete |
+| SOLV-07 | Phase 190 | Complete |
+| NAV-01 | Phase 190 | Complete |
+| NAV-02 | Phase 190 | Complete |
 | SCHD-01 | Phase 191 | Pending |
 | SCHD-02 | Phase 191 | Pending |
 | SCHD-03 | Phase 191 | Pending |

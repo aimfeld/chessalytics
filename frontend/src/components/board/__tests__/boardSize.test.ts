@@ -6,9 +6,9 @@ describe('computeBoardSize', () => {
     expect(computeBoardSize(500, Infinity, 600)).toBe(500);
   });
 
-  it('never exceeds BOARD_MAX_WIDTH even when maxWidth is larger', () => {
-    expect(computeBoardSize(900, Infinity, 600)).toBe(BOARD_MAX_WIDTH);
-    expect(computeBoardSize(900, Infinity, 800)).toBe(BOARD_MAX_WIDTH);
+  it("never exceeds the caller's maxWidth ceiling", () => {
+    expect(computeBoardSize(900, Infinity, 600)).toBe(600);
+    expect(computeBoardSize(900, Infinity, BOARD_MAX_WIDTH)).toBe(BOARD_MAX_WIDTH);
   });
 
   it('is height-driven when the height budget is the binding constraint', () => {

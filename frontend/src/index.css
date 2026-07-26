@@ -319,6 +319,24 @@
   animation-fill-mode: forwards;
 }
 
+/* Train reveal "Points: +N" flash (190.1 UAT round 7, TrainSolveScreen).
+   The translate(-50%, -50%) board-centering lives INSIDE the keyframes on
+   purpose — the element uses no Tailwind translate utilities, because the
+   animated transform would overwrite them. Ends (and holds, via forwards) at
+   opacity 0: the element stays mounted but invisible until the next puzzle
+   unmounts it, so no JS unmount timer is needed. */
+@keyframes train-points-pop {
+  0%   { opacity: 0; transform: translate(-50%, -50%) scale(0.4); }
+  15%  { opacity: 1; transform: translate(-50%, -50%) scale(1.15); }
+  25%  { transform: translate(-50%, -50%) scale(1); }
+  70%  { opacity: 1; transform: translate(-50%, -50%) scale(1); }
+  100% { opacity: 0; transform: translate(-50%, -50%) scale(1); }
+}
+
+.animate-train-points-pop {
+  animation: train-points-pop 1.6s ease-in-out forwards;
+}
+
 /* Mobile typography bump.
    Below the sm: breakpoint, lift Tailwind's default type scale by one tier so
    labels, filter chips, table captions, and body copy match typical mobile-app
