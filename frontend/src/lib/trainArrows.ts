@@ -6,8 +6,9 @@
  * Color language (190.1 UAT): BLUE always marks the engine's best move (the
  * app-wide "engine pointer" hue), the user's PLAYED move is colored by its
  * own move quality (good/inaccuracy/mistake/blunder), alternative fine moves
- * stay dark green, and the thin white on-top arrow still marks the move
- * played in the original game. Every arrow additionally gets the matching
+ * are dark green when clean and yellow when inaccuracy-level (quick
+ * 260726-fma), and the thin white on-top arrow still marks the move played
+ * in the original game. Every arrow additionally gets the matching
  * move-quality badge (the shared SquareMarker corner glyphs) on its target
  * square.
  *
@@ -44,12 +45,25 @@ export type TrainPuzzleType = 'sharp' | 'soft' | 'herring';
  */
 export type TrainMoveQuality = 'best' | 'good' | FlawSeverity;
 
+/**
+ * One "fine move" from the grading engine's MultiPV mount search — a move the
+ * verdict itself would grade correct (quick 260726-fma). `quality` mirrors the
+ * verdict's own two correct tiers: 'good' (drop not even an inaccuracy) or
+ * 'inaccuracy' (drop within [INACCURACY_DROP, MISTAKE_DROP), still a correct
+ * move by SOLV-03's rule AND still within the backend's soft-puzzle gap).
+ */
+export interface TrainFineMove {
+  uci: string;
+  quality: 'good' | 'inaccuracy';
+}
+
 /** D-02: a sharp puzzle has exactly one right move by definition — exactly
  * one quality arrow (the best move) regardless of how many entries
- * goodMoveUcis has. */
+ * the fine-moves set has. */
 export const TRAIN_SHARP_GOOD_MOVE_ARROWS = 1;
 /** D-02: a soft or herring puzzle may have several fine moves — up to 3
- * quality arrows (the blue best move plus up to 2 green alternatives). */
+ * quality arrows (the blue best move plus up to 2 green/yellow
+ * alternatives). */
 export const TRAIN_SOFT_GOOD_MOVE_ARROWS = 3;
 
 /** Normal engine-arrow width (matches Analysis.tsx's
@@ -177,8 +191,9 @@ function markerForQuality(square: string, quality: TrainMoveQuality): SquareMark
 /**
  * Builds the reveal board's full overlay (D-02, recolored per 190.1 UAT):
  * - a BLUE best-move arrow (the engine's top move) with a 'best' badge
- * - up to cap-1 additional green good-move arrows (soft/herring only), each
- *   with a 'good' badge
+ * - up to cap-1 additional fine-move arrows (soft/herring only), green with a
+ *   'good' badge when clean, yellow with the inaccuracy badge when the drop
+ *   is inaccuracy-level (quick 260726-fma)
  * - the user's played-move arrow colored by its own quality, with the
  *   matching quality badge — merged into the blue arrow when the played move
  *   IS the best move
@@ -189,12 +204,12 @@ function markerForQuality(square: string, quality: TrainMoveQuality): SquareMark
  * visible before the attempt is graded. Every arrow gets its own `layerKey`
  * so a coincident from-to pair across roles renders as concentric arrows
  * instead of collapsing under `dedupeArrowsByMove`. Badges are deduped by
- * TARGET SQUARE with precedence played > best > good > game (the played
+ * TARGET SQUARE with precedence played > best > fine > game (the played
  * move's verdict is the one the user is here to learn).
  */
 export function buildTrainRevealOverlay(
   puzzleType: TrainPuzzleType,
-  goodMoveUcis: string[],
+  fineMoves: TrainFineMove[],
   bestMoveUci: string | null,
   playedMove: TrainOverlayMove | null,
   gameMove: TrainOverlayMove | null,
@@ -214,13 +229,13 @@ export function buildTrainRevealOverlay(
     markers.push(markerForQuality(squares.endSquare, quality));
   }
 
-  // Badge precedence pass first (played > best > good > game), independent of
+  // Badge precedence pass first (played > best > fine > game), independent of
   // arrow draw order.
   if (playedMove !== null) pushMarker(playedMove.uci, playedMove.quality);
   if (bestMoveUci !== null) pushMarker(bestMoveUci, 'best');
   const cap = goodMoveArrowCap(puzzleType);
-  const cappedGoodUcis = goodMoveUcis.slice(0, cap);
-  for (const uci of cappedGoodUcis) pushMarker(uci, 'good');
+  const cappedFineMoves = fineMoves.slice(0, cap);
+  for (const fine of cappedFineMoves) pushMarker(fine.uci, fine.quality);
   if (gameMove !== null) pushMarker(gameMove.uci, gameMove.quality);
 
   // Played-move arrow, colored by its quality — unless it IS the best move,
@@ -248,15 +263,16 @@ export function buildTrainRevealOverlay(
     });
   }
 
-  // Alternative fine moves (soft/herring rank 2+): green, skipping moves
-  // already drawn as the best or played arrow.
-  cappedGoodUcis.forEach((uci, index) => {
-    if (uci === bestMoveUci || uci === playedMove?.uci) return;
-    const squares = squaresFromUci(uci);
+  // Alternative fine moves (soft/herring rank 2+): green when clean, yellow
+  // when inaccuracy-level (quick 260726-fma), skipping moves already drawn as
+  // the best or played arrow.
+  cappedFineMoves.forEach((fine, index) => {
+    if (fine.uci === bestMoveUci || fine.uci === playedMove?.uci) return;
+    const squares = squaresFromUci(fine.uci);
     if (squares === null) return;
     arrows.push({
       ...squares,
-      color: DARK_GREEN,
+      color: fine.quality === 'inaccuracy' ? MOVE_QUALITY_INACCURACY : DARK_GREEN,
       width: TRAIN_GOOD_MOVE_ARROW_WIDTH,
       layerKey: `good-${index}`,
     });

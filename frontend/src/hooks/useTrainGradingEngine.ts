@@ -33,6 +33,7 @@ import { parseInfoLine, parseBestmove } from './uciParser';
 import type { PvLine } from './uciParser';
 import { classifyLiveSeverity, evalToExpectedScore, sideToMoveFromFen } from '@/lib/liveFlaw';
 import type { MoverColor } from '@/lib/liveFlaw';
+import type { TrainFineMove } from '@/lib/trainArrows';
 
 // ─── Constants ──────────────────────────────────────────────────────────────
 
@@ -169,14 +170,20 @@ export interface GradeResult {
    */
   playedLine: TrainEngineLine;
   /**
-   * UCI moves (one per returned mount-search rank) whose expected-score
-   * drop against rank 1 is classified `null` (not even an inaccuracy) by
-   * the project's existing `classifyLiveSeverity` — never a new cutoff
-   * (190.1-02 D-02). Ordered by rank; rank 1 is always included (its own
-   * drop against itself is 0). Uncapped — puzzle-type capping is the board
-   * consumer's job, not this hook's.
+   * Fine moves (one per returned mount-search rank) — every rank whose
+   * expected-score drop against rank 1 the verdict itself would grade
+   * CORRECT: severity `null` (quality 'good') or `'inaccuracy'` (quality
+   * 'inaccuracy'), via the project's existing `classifyLiveSeverity` — never
+   * a new cutoff. Bug fix (quick 260726-fma): the original 190.1-02
+   * predicate kept only severity-null ranks (drop < INACCURACY_DROP), which
+   * contradicted both the verdict rule (`correctMove` accepts inaccuracies)
+   * and the backend's soft-puzzle definition (second-best gap <
+   * MISTAKE_DROP) — ~1/3 of soft puzzles rendered no alternative arrow at
+   * all. Ordered by rank; rank 1 is always included (its own drop against
+   * itself is 0). Uncapped — puzzle-type capping is the board consumer's
+   * job, not this hook's.
    */
-  goodMoveUcis: string[];
+  fineMoves: TrainFineMove[];
 }
 
 /**
@@ -241,22 +248,29 @@ function bestLineFrom(best: BestSearchResult): TrainEngineLine {
   return { moves, evalCp: best.evalCp, evalMate: best.evalMate };
 }
 
-/** For each mount-search rank actually returned, include its move iff its
- * expected-score drop against rank 1 (`esRank1`) is classified `null` (not
- * even an inaccuracy) — the project's existing live-flaw severity function,
- * never a new cutoff (190.1-02 D-02). Iterates `lines` as returned (never a
- * fixed loop to the requested width) so a partial rank count never throws. */
-function deriveGoodMoveUcis(lines: PvLine[], esRank1: number, mover: MoverColor): string[] {
-  const good: string[] = [];
+/** For each mount-search rank actually returned, include its move iff the
+ * verdict itself would grade it correct: severity `null` (quality 'good') or
+ * `'inaccuracy'` (quality 'inaccuracy') against rank 1 (`esRank1`) — the
+ * project's existing live-flaw severity function, never a new cutoff. The
+ * predicate deliberately matches `gradeMoveInner`'s `correctMove` rule and
+ * the backend's soft-puzzle gap (`SHARP_GAP_ES = MISTAKE_DROP`) — see the
+ * `GradeResult.fineMoves` doc comment for the 260726-fma bug this alignment
+ * fixed. Iterates `lines` as returned (never a fixed loop to the requested
+ * width) so a partial rank count never throws. */
+function deriveFineMoves(lines: PvLine[], esRank1: number, mover: MoverColor): TrainFineMove[] {
+  const fine: TrainFineMove[] = [];
   for (const line of lines) {
     const move = line.moves[0];
     if (move === undefined) continue;
     const esRankK = evalToExpectedScore(line.evalCp, line.evalMate, mover);
-    if (classifyLiveSeverity(esRank1, esRankK) === null) {
-      good.push(move);
+    const severity = classifyLiveSeverity(esRank1, esRankK);
+    if (severity === null) {
+      fine.push({ uci: move, quality: 'good' });
+    } else if (severity === 'inaccuracy') {
+      fine.push({ uci: move, quality: 'inaccuracy' });
     }
   }
-  return good;
+  return fine;
 }
 
 /** Find the settled mount-search rank whose first move is `uci`, or null.
@@ -671,13 +685,13 @@ export function useTrainGradingEngine({
           esAfter: 0.5,
           bestLine: emptyLine,
           playedLine: emptyLine,
-          goodMoveUcis: [],
+          fineMoves: [],
         };
       }
 
       const esBefore = evalToExpectedScore(best.evalCp, best.evalMate, mover);
       const bestLine = bestLineFrom(best);
-      const goodMoveUcis = deriveGoodMoveUcis(best.lines, esBefore, mover);
+      const fineMoves = deriveFineMoves(best.lines, esBefore, mover);
 
       if (playedMoveUci === best.bestMoveUci) {
         // D-06 fast path: exact match to the engine's own top move — no
@@ -690,7 +704,7 @@ export function useTrainGradingEngine({
           esAfter: esBefore,
           bestLine,
           playedLine: bestLine,
-          goodMoveUcis,
+          fineMoves,
         };
       }
 
@@ -711,7 +725,7 @@ export function useTrainGradingEngine({
           esAfter,
           bestLine,
           playedLine: { moves: rankLine.moves, evalCp: rankLine.evalCp, evalMate: rankLine.evalMate },
-          goodMoveUcis,
+          fineMoves,
         };
       }
 
@@ -724,7 +738,7 @@ export function useTrainGradingEngine({
           esAfter: esBefore,
           bestLine,
           playedLine: bestLine,
-          goodMoveUcis,
+          fineMoves,
         };
       }
 
@@ -748,7 +762,7 @@ export function useTrainGradingEngine({
         bestLine,
         mover,
       );
-      return { correctMove, bestMoveUci: best.bestMoveUci, esBefore, esAfter, bestLine, playedLine, goodMoveUcis };
+      return { correctMove, bestMoveUci: best.bestMoveUci, esBefore, esAfter, bestLine, playedLine, fineMoves };
     },
     [search],
   );
