@@ -436,7 +436,10 @@ export function TrainSolveScreen({
         : null;
     return buildTrainRevealOverlay(
       verdict?.puzzle_type ?? 'sharp',
-      gradeResult?.goodMoveUcis ?? [],
+      // `?? []` also covers a stale sessionStorage reveal-cache entry written
+      // before fineMoves replaced goodMoveUcis (quick 260726-fma) — the cache's
+      // shallow shape check does not validate this field.
+      gradeResult?.fineMoves ?? [],
       gradeResult?.bestMoveUci ?? null,
       playedMove,
       gameMoveUci !== null ? { uci: gameMoveUci, quality: gameMoveQuality } : null,

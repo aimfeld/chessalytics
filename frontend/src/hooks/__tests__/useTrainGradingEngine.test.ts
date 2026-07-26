@@ -649,7 +649,7 @@ describe('useTrainGradingEngine — MultiPV mount search (190.1-02 Task 2)', () 
     await gradePromise;
   });
 
-  it('a mount search emitting 4 ranks yields goodMoveUcis containing rank 1 first and preserving rank order', async () => {
+  it('a mount search emitting 4 ranks yields fineMoves containing rank 1 first and preserving rank order', async () => {
     const { result } = renderHook(() => useTrainGradingEngine({ enabled: true }));
     driveInit(mockWorker);
 
@@ -675,20 +675,29 @@ describe('useTrainGradingEngine — MultiPV mount search (190.1-02 Task 2)', () 
     });
 
     const grade = await result.current.gradeMove(FEN, 'e2e4');
-    expect(grade.goodMoveUcis).toEqual(['e2e4', 'd2d4', 'g1f3', 'b1c3']);
+    expect(grade.fineMoves).toEqual([
+      { uci: 'e2e4', quality: 'good' },
+      { uci: 'd2d4', quality: 'good' },
+      { uci: 'g1f3', quality: 'good' },
+      { uci: 'b1c3', quality: 'good' },
+    ]);
   });
 
-  it('a rank whose expected-score drop straddles INACCURACY_DROP is included just under the boundary and excluded at/beyond it', async () => {
+  it('ranks straddling the two verdict boundaries: under INACCURACY_DROP is good, between the boundaries is an inaccuracy fine move, at/beyond MISTAKE_DROP is excluded (quick 260726-fma)', async () => {
     const { result } = renderHook(() => useTrainGradingEngine({ enabled: true }));
     driveInit(mockWorker);
 
     const rank1Cp = 200;
     const esRank1 = evalToExpectedScore(rank1Cp, null, 'white');
     // A small margin (well above per-integer-cp rounding noise, well below
-    // the tier width) on each side of the INACCURACY_DROP boundary.
+    // the tier width) on each side of the two severity boundaries.
     const margin = 0.004;
-    const justUnderCp = Math.round(expectedScoreToWhitePovCp(esRank1 - (INACCURACY_DROP - margin), 'white'));
-    const atOrBeyondCp = Math.round(expectedScoreToWhitePovCp(esRank1 - (INACCURACY_DROP + margin), 'white'));
+    const goodCp = Math.round(expectedScoreToWhitePovCp(esRank1 - (INACCURACY_DROP - margin), 'white'));
+    // Squarely in the inaccuracy band [INACCURACY_DROP, MISTAKE_DROP) — the
+    // verdict grades this correct, so it MUST appear as a fine move (the
+    // 260726-fma bug excluded it, leaving soft puzzles with a lone arrow).
+    const inaccuracyCp = Math.round(expectedScoreToWhitePovCp(esRank1 - (INACCURACY_DROP + margin), 'white'));
+    const mistakeCp = Math.round(expectedScoreToWhitePovCp(esRank1 - (MISTAKE_DROP + margin), 'white'));
 
     act(() => {
       result.current.startGrading(FEN);
@@ -697,24 +706,29 @@ describe('useTrainGradingEngine — MultiPV mount search (190.1-02 Task 2)', () 
       mockWorker.simulateMessage(`info depth 12 multipv 1 score cp ${rank1Cp} nodes 1000 pv e2e4`);
     });
     act(() => {
-      mockWorker.simulateMessage(`info depth 12 multipv 2 score cp ${justUnderCp} nodes 1000 pv d2d4`);
+      mockWorker.simulateMessage(`info depth 12 multipv 2 score cp ${goodCp} nodes 1000 pv d2d4`);
     });
     act(() => {
-      mockWorker.simulateMessage(`info depth 12 multipv 3 score cp ${atOrBeyondCp} nodes 1000 pv g1f3`);
+      mockWorker.simulateMessage(`info depth 12 multipv 3 score cp ${inaccuracyCp} nodes 1000 pv g1f3`);
+    });
+    act(() => {
+      mockWorker.simulateMessage(`info depth 12 multipv 4 score cp ${mistakeCp} nodes 1000 pv b1c3`);
     });
     act(() => {
       mockWorker.simulateMessage('bestmove e2e4');
     });
 
     const grade = await result.current.gradeMove(FEN, 'e2e4');
-    expect(grade.goodMoveUcis).toContain('d2d4');
-    expect(grade.goodMoveUcis).not.toContain('g1f3');
-    // Regression guard: the test must import the real threshold, not a
-    // hand-copied literal, so it stays correct if the tier ever retunes.
+    expect(grade.fineMoves).toContainEqual({ uci: 'd2d4', quality: 'good' });
+    expect(grade.fineMoves).toContainEqual({ uci: 'g1f3', quality: 'inaccuracy' });
+    expect(grade.fineMoves.map((m) => m.uci)).not.toContain('b1c3');
+    // Regression guard: the test must import the real thresholds, not
+    // hand-copied literals, so it stays correct if the tiers ever retune.
     expect(INACCURACY_DROP).toBeGreaterThan(0);
+    expect(MISTAKE_DROP).toBeGreaterThan(INACCURACY_DROP);
   });
 
-  it('a mount search that returns only 2 ranks (fewer than the requested width) never throws, and goodMoveUcis has at most 2 entries', async () => {
+  it('a mount search that returns only 2 ranks (fewer than the requested width) never throws, and fineMoves has at most 2 entries', async () => {
     const { result } = renderHook(() => useTrainGradingEngine({ enabled: true }));
     driveInit(mockWorker);
 
@@ -734,7 +748,7 @@ describe('useTrainGradingEngine — MultiPV mount search (190.1-02 Task 2)', () 
     });
 
     const grade = await result.current.gradeMove(FEN, 'e2e4');
-    expect(grade.goodMoveUcis.length).toBeLessThanOrEqual(2);
+    expect(grade.fineMoves.length).toBeLessThanOrEqual(2);
   });
 
   it('the exact-match fast path returns esAfter === esBefore, posts no second go, and playedLine deep-equals bestLine', async () => {

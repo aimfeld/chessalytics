@@ -8,21 +8,29 @@ import {
   TRAIN_GAME_MOVE_ARROW_WIDTH,
   TRAIN_STEP_HIGHLIGHT,
 } from '@/lib/trainArrows';
+import type { TrainFineMove } from '@/lib/trainArrows';
 import { DARK_GREEN } from '@/lib/arrowColor';
 import {
   MOVE_HIGHLIGHT_BEST,
   MOVE_HIGHLIGHT_SQUARE,
   MOVE_QUALITY_BLUNDER,
   MOVE_QUALITY_GOOD,
+  MOVE_QUALITY_INACCURACY,
   NEXT_MOVE_ARROW,
   TRAIN_BEST_MOVE_ARROW,
 } from '@/lib/theme';
+
+/** Shorthand: wrap UCIs as clean ('good') fine moves — the pre-260726-fma
+ * shape every legacy case in this file exercised. */
+function good(...ucis: string[]): TrainFineMove[] {
+  return ucis.map((uci) => ({ uci, quality: 'good' as const }));
+}
 
 describe('buildTrainRevealOverlay', () => {
   it('returns an empty overlay when the verdict has not landed, even with a full good-moves list, a played move and a game move supplied', () => {
     const overlay = buildTrainRevealOverlay(
       'soft',
-      ['e2e4', 'd2d4', 'g1f3', 'c2c4'],
+      good('e2e4', 'd2d4', 'g1f3', 'c2c4'),
       'e2e4',
       { uci: 'e2e4', quality: 'best' },
       { uci: 'd2d4', quality: 'good' },
@@ -35,7 +43,7 @@ describe('buildTrainRevealOverlay', () => {
   it('a sharp puzzle with four good moves returns exactly one arrow — the BLUE best move — with a best badge on its target square (190.1 UAT)', () => {
     const overlay = buildTrainRevealOverlay(
       'sharp',
-      ['e2e4', 'd2d4', 'g1f3', 'c2c4'],
+      good('e2e4', 'd2d4', 'g1f3', 'c2c4'),
       'e2e4',
       null,
       null,
@@ -53,7 +61,7 @@ describe('buildTrainRevealOverlay', () => {
   it('a soft puzzle with five good moves returns the blue best arrow plus two green alternatives, each alternative badged good', () => {
     const overlay = buildTrainRevealOverlay(
       'soft',
-      ['e2e4', 'd2d4', 'g1f3', 'c2c4', 'b1c3'],
+      good('e2e4', 'd2d4', 'g1f3', 'c2c4', 'b1c3'),
       'e2e4',
       null,
       null,
@@ -75,10 +83,38 @@ describe('buildTrainRevealOverlay', () => {
     ]);
   });
 
+  it('an inaccuracy-level fine move renders a yellow arrow with the inaccuracy severity badge, next to a green good alternative (quick 260726-fma)', () => {
+    const overlay = buildTrainRevealOverlay(
+      'soft',
+      [
+        { uci: 'e2e4', quality: 'good' },
+        { uci: 'd2d4', quality: 'good' },
+        { uci: 'g1f3', quality: 'inaccuracy' },
+      ],
+      'e2e4',
+      null,
+      null,
+      true,
+    );
+    expect(overlay.arrows).toHaveLength(3);
+    const greenAlt = overlay.arrows.find((a) => a.endSquare === 'd4');
+    const yellowAlt = overlay.arrows.find((a) => a.endSquare === 'f3');
+    expect(greenAlt).toMatchObject({ color: DARK_GREEN, width: TRAIN_GOOD_MOVE_ARROW_WIDTH });
+    expect(yellowAlt).toMatchObject({
+      color: MOVE_QUALITY_INACCURACY,
+      width: TRAIN_GOOD_MOVE_ARROW_WIDTH,
+    });
+    expect(overlay.markers).toEqual([
+      { square: 'e4', best: true },
+      { square: 'd4', good: true },
+      { square: 'f3', severity: 'inaccuracy' },
+    ]);
+  });
+
   it('a herring puzzle uses the same cap as soft', () => {
     const overlay = buildTrainRevealOverlay(
       'herring',
-      ['e2e4', 'd2d4', 'g1f3', 'c2c4', 'b1c3'],
+      good('e2e4', 'd2d4', 'g1f3', 'c2c4', 'b1c3'),
       'e2e4',
       null,
       null,
@@ -90,7 +126,7 @@ describe('buildTrainRevealOverlay', () => {
   it('a blundered played move gets a blunder-colored arrow and a blunder severity badge, alongside the blue best arrow', () => {
     const overlay = buildTrainRevealOverlay(
       'sharp',
-      ['e2e4'],
+      good('e2e4'),
       'e2e4',
       { uci: 'd2d4', quality: 'blunder' },
       null,
@@ -110,7 +146,7 @@ describe('buildTrainRevealOverlay', () => {
   it('a played move that IS the best move merges into the single blue arrow with one best badge — never two arrows for one move', () => {
     const overlay = buildTrainRevealOverlay(
       'sharp',
-      ['e2e4'],
+      good('e2e4'),
       'e2e4',
       { uci: 'e2e4', quality: 'best' },
       null,
@@ -124,7 +160,7 @@ describe('buildTrainRevealOverlay', () => {
   it('a played move matching a green alternative replaces that green arrow with the quality-colored played arrow', () => {
     const overlay = buildTrainRevealOverlay(
       'soft',
-      ['e2e4', 'd2d4', 'g1f3'],
+      good('e2e4', 'd2d4', 'g1f3'),
       'e2e4',
       { uci: 'd2d4', quality: 'good' },
       null,
@@ -171,7 +207,7 @@ describe('buildTrainRevealOverlay', () => {
   it('badges dedupe by target square with the played move winning (played and best land on the same square from different origins)', () => {
     const overlay = buildTrainRevealOverlay(
       'sharp',
-      ['e2e4'],
+      good('e2e4'),
       'e2e4',
       { uci: 'd3e4', quality: 'inaccuracy' },
       null,
@@ -184,7 +220,7 @@ describe('buildTrainRevealOverlay', () => {
   it('a coincident from-to pair across played, best and game moves keeps distinct layerKeys so concentric arrows survive dedupe', () => {
     const overlay = buildTrainRevealOverlay(
       'sharp',
-      ['e2e4'],
+      good('e2e4'),
       'e2e4',
       { uci: 'd2d4', quality: 'mistake' },
       { uci: 'd2d4', quality: 'mistake' },
@@ -196,11 +232,11 @@ describe('buildTrainRevealOverlay', () => {
 
   it('a three-character UCI and an empty string each contribute no arrow and do not throw', () => {
     expect(() =>
-      buildTrainRevealOverlay('sharp', ['e2e'], '', { uci: '', quality: 'good' }, { uci: '', quality: null }, true),
+      buildTrainRevealOverlay('sharp', good('e2e'), '', { uci: '', quality: 'good' }, { uci: '', quality: null }, true),
     ).not.toThrow();
     const overlay = buildTrainRevealOverlay(
       'sharp',
-      ['e2e'],
+      good('e2e'),
       '',
       { uci: '', quality: 'good' },
       { uci: '', quality: null },

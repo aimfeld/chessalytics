@@ -101,7 +101,7 @@ function makeGradeResult(overrides: Partial<GradeResult> = {}): GradeResult {
     esAfter: 0.5,
     bestLine: makeEngineLine(),
     playedLine: makeEngineLine(),
-    goodMoveUcis: ['e2e4'],
+    fineMoves: [{ uci: 'e2e4', quality: 'good' }],
     ...overrides,
   };
 }

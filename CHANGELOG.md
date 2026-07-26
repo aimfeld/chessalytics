@@ -27,6 +27,8 @@ in `YYYY-MM-DD` (Europe/Zurich).
 
 - Pressing Analyze from a solved Train puzzle and then going back now returns you to that puzzle's reveal instead of the start screen. (Phase 190.1)
 
+- Train reveals on "several fine moves" puzzles no longer show just the single best-move arrow: alternative moves the grading itself would accept now always appear, with clean alternatives in green and slightly imprecise ones in yellow with the inaccuracy icon. Previously about a third of these puzzles drew no alternative arrow at all because the arrows used a stricter cutoff than the verdict. (quick 260726-fma)
+
 ## [v2.8] Import Filters and Guest Data Cleanup — 2026-07-24
 
 ### Added
