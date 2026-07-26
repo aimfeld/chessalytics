@@ -55,6 +55,11 @@ const VALUE_ROWS: ValueRow[] = [
     highlight: true,
   },
   {
+    feature: 'Train with personalized puzzles from your mistakes',
+    guestHas: false,
+    signedUpHas: true,
+  },
+  {
     feature: 'Cross-device access',
     guestHas: false,
     signedUpHas: true,
