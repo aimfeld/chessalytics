@@ -1,376 +1,490 @@
-# Architecture Research
+# Architecture Research: Train (v2.9)
 
-**Domain:** Client-side clocked bot-play integrated into an existing chess-analysis PWA (FlawChess v2.3)
-**Researched:** 2026-07-11
-**Confidence:** HIGH (engine + harness reuse verified against live source; store path verified against normalization + Game model; some schema choices are open by design)
+**Domain:** Spaced-repetition blunder-drill feature, bolted onto an existing FastAPI/React chess-analysis app
+**Researched:** 2026-07-25
+**Confidence:** HIGH (grounded entirely in real files read in this repo, not generic SRS-app patterns)
 
-> Scope: how the NEW bot-play surface plugs into the EXISTING architecture. Every integration point below is named against real files. "NEW" vs "MODIFIED" is called out explicitly. The single load-bearing decision that makes the whole milestone cheap is **provider injection**: the search core (`mctsSearch`) and the Maia policy worker already accept an `EngineProviders` seam, so the same move-selection logic runs unchanged in the browser (Workers) and in a headless Node harness (direct sessions).
+This is a **subsequent-milestone** integration doc, not a greenfield architecture. SEED-037's
+design is settled; everything below is about *where it plugs into the actual codebase*.
 
----
-
-## Standard Architecture
-
-### System Overview
+## System Overview
 
 ```
-┌──────────────────────────────────────────────────────────────────────┐
-│                        BROWSER (Bots page — NEW)                       │
-├──────────────────────────────────────────────────────────────────────┤
-│  BotsPage (NEW)  ── setup screen (reuse EloSelector + style slider +   │
-│    │                 color + lichess TC preset) → live clocked board   │
-│    ▼                                                                   │
-│  useBotGame (NEW hook) ── chess.js move tree · dual clocks · side ·    │
-│    │      result · pacing · flag detection · localStorage persist      │
-│    ▼                                                                   │
-│  selectBotMove(fen, settings, providers) (NEW pure module) ───────────┐│
-│    │  human end  → policy() → applyPolicyTemperature → sample (NO MCTS)││
-│    │  mid/SF end → mctsSearch() → practicalScore weighted-sample/argmax││
-│    ▼                                                                   ││
-│  EngineProviders  { policy, grade }   ← injected                       ││
-│    │            (browser: createMaiaQueue + createWorkerPool)          ││
-├────┼──────────────────────────────────────────────────────────────────┤│
-│  createMaiaQueue() [EXISTING]      createWorkerPool() [EXISTING]        ││
-│  Maia-3 ONNX Worker                Stockfish.wasm pool                  ││
-├──────────────────────────────────────────────────────────────────────┤│
-│  localStorage  "flawchess:botgame:active" (NEW, isolated from ?fen=)   ││
-└───────────────────────────────┬───────────────────────────────────────┘│
-              POST /bot-games    │  (finished PGN with [%clk] + settings)  │
-                                 ▼                                         │
-┌──────────────────────────────────────────────────────────────────────┐ │
-│                     BACKEND (one small endpoint — NEW)                 │ │
-├──────────────────────────────────────────────────────────────────────┤ │
-│  routers/bot_games.py (NEW)  → services/bot_game_service.py (NEW)      │ │
-│     │  build NormalizedGame(platform='flawchess', gen id, rated=False) │ │
-│     │  derive converted player rating (user_rating_anchors) [EXISTING] │ │
-│     ▼                                                                  │ │
-│  persist_normalized_games()  ← extracted from import_service._flush_   │ │
-│     │   batch [EXISTING logic]: bulk-insert + process_game_pgn Zobrist │ │
-│     │   positions + classify_game_flaws                                │ │
-│     ▼                                                                  │ │
-│  games (platform='flawchess') + game_positions + bot_game_settings(NEW)│ │
-└──────────────────────────────────────────────────────────────────────┘ │
-                                                                           │
-┌──────────────────────────────────────────────────────────────────────┐ │
-│          HEADLESS NODE HARNESS (calibration — NEW, non-browser)        │◄┘
-├──────────────────────────────────────────────────────────────────────┤
-│  scripts/bot-calibration.mjs (NEW)                                     │
-│    imports selectBotMove + mctsSearch + encoding from LIVE src via     │
-│    scripts/lib/frontend-alias-hook.mjs [EXISTING @/ resolve hook]      │
-│    builds NODE EngineProviders: onnxruntime-web session (policy) +     │
-│    spawned Stockfish WASM .cjs over UCI (grade) — same recipe as       │
-│    scripts/gem-elo-calibration.mjs [EXISTING, proven]                  │
-│    plays bot × anchor over (ELO × slider) grid → TSV in reports/data/  │
-└──────────────────────────────────────────────────────────────────────┘
+┌────────────────────────────────────────────────────────────────────────┐
+│ Existing eval pipeline (unchanged, all shipped v1.24–v2.4)             │
+│  games ─┬─▶ game_positions (best_move, pv, eval_cp/eval_mate per ply)  │
+│         ├─▶ game_flaws (user_id,game_id,ply PK; missed/allowed_pv_lines)│
+│         └─▶ game_best_moves (game_id,ply PK; maia_prob, best/second cp)│
+└────────────────────────────────────────────────────────────────────────┘
+                    │  READ ONLY — Train writes nothing here
+                    ▼
+┌────────────────────────────────────────────────────────────────────────┐
+│ NEW: app/routers/train.py  (prefix "/train")                           │
+│   GET/PUT  /train/settings         → train_settings (1 row/user)       │
+│   POST     /train/sessions         → compose session (pool query)      │
+│   POST     /train/sessions/{id}/solve    → record one puzzle result    │
+│   POST     /train/sessions/{id}/complete → finalize, weekly streak     │
+│   GET      /train/progress         → mastered/parked/streak counts     │
+├────────────────────────────────────────────────────────────────────────┤
+│ NEW: app/services/train_scheduler.py  (pure functions, no I/O)         │
+│   interval ladder, due-date snapping, mastery/park transitions         │
+│ NEW: app/services/train_pool.py  (SQL assembly, uses query_utils)      │
+│   SR-item pool query, blob classifier, herring source query            │
+├────────────────────────────────────────────────────────────────────────┤
+│ NEW: app/repositories/train_repository.py                              │
+│   drill_items / drill_sessions / drill_solves / train_settings CRUD    │
+└────────────────────────────────────────────────────────────────────────┘
+                    │
+                    ▼
+┌────────────────────────────────────────────────────────────────────────┐
+│ NEW: frontend/src/pages/Train.tsx (lazy route, mirrors Bots/Analysis)  │
+│   session queue → guess → solve (client-grades via WASM) → reveal      │
+│   reveal embeds: game card, analysis deep-link, opt-in VariationTree   │
+│   stepper fed by the EXISTING /library/flaws/{game_id}/{ply}/tactic-   │
+│   lines endpoint (no new backend PV endpoint needed)                   │
+└────────────────────────────────────────────────────────────────────────┘
 ```
 
-### Component Responsibilities
+## 1. Drill-item data model
 
-| Component | Responsibility | New / Modified / Existing |
-|-----------|----------------|---------------------------|
-| `selectBotMove.ts` | Pure move picker: maps `(fen, {elo, styleSlider}, providers)` → chosen UCI. Owns the sample↔argmax blend. **No React, no Worker, no DOM.** | **NEW** |
-| `useBotGame.ts` | Game-loop hook: chess.js move tree, dual clocks + increment, side-to-move, result/termination, bot think-time pacing, flag detection, localStorage snapshot each move. Holds one persistent `pool`+`queue`. | **NEW** |
-| `BotsPage.tsx` + setup/board subcomponents | Nav-sibling page: setup screen (reuse `EloSelector`, style slider, color, TC preset) then live board; "Resume game?" gate; POST on finish. | **NEW** |
-| `createMaiaQueue()` (`lib/engine/maiaQueue.ts`) | `policy(fen, elo, side) → UCI-keyed prob map`. The human-end path calls this **once per move**. | EXISTING, reused unchanged |
-| `mctsSearch` (`lib/engine/mctsSearch.ts`) | Full practical-play search → `rankedLines[]` sorted by `practicalScore`. Mid/Stockfish-end path only. | EXISTING, reused unchanged |
-| `applyPolicyTemperature`, `truncateAndRenormalize` | Reshape/trim the raw Maia policy before sampling. | EXISTING, reused |
-| `useMaiaEloDefault` + `chesscom_to_lichess`/`user_rating_anchors` | Save-time converted, TC-bucket-matched player rating. | EXISTING, reused |
-| `routers/bot_games.py` / `bot_game_service.py` | Accept finished PGN+settings, build `NormalizedGame`, persist via shared path. | **NEW** |
-| `import_service._flush_batch` | Bulk insert + Zobrist positions + flaw classification. | EXISTING → **extract** a shared `persist_normalized_games()` |
-| `bot_game_settings` table + model/migration | Authoritative record of `(nominal_elo, style_slider, tc_preset, player_rating, rating_source)` per stored bot game. | **NEW** |
-| `scripts/bot-calibration.mjs` | Headless bot×anchor grid → TSV. | **NEW** (clone of `gem-elo-calibration.mjs` structure) |
+Four new tables. All follow CLAUDE.md's DB rules: mandatory `ForeignKey(..., ondelete=...)`,
+`SMALLINT` + `IntEnum` + `CHECK` for enumerated columns (no native PG enum), and composite
+natural PKs where the codebase already establishes that idiom (`game_flaws`, `game_positions`,
+`game_best_moves` all use composite PKs — no surrogate `id` for position-scoped rows).
 
----
+### `drill_items` — one row per (user, flaw), SR state only
 
-## Recommended Project Structure
+Mirrors `game_flaws`'s composite-PK convention (`app/models/game_flaw.py`) and reuses its
+exact key shape so the FK is a straight composite reference:
 
-```
-frontend/src/
-├── lib/engine/
-│   ├── selectBotMove.ts        # NEW — pure blend picker (shared browser+Node)
-│   ├── botMoveSelection.test.ts# NEW — sampling/argmax/determinism unit tests
-│   ├── mctsSearch.ts           # EXISTING — reused via EngineProviders seam
-│   ├── maiaQueue.ts            # EXISTING — policy() provider
-│   ├── workerPool.ts           # EXISTING — grade() provider
-│   └── policyTemperature.ts    # EXISTING — applyPolicyTemperature
-├── hooks/
-│   ├── useBotGame.ts           # NEW — game loop, clocks, pacing, persist
-│   └── useMaiaEloDefault.ts    # EXISTING — converted-rating default
-├── lib/
-│   ├── botGamePersistence.ts   # NEW — localStorage snapshot schema + load/save
-│   └── botGamePgn.ts           # NEW — chess.js history → PGN WITH [%clk] comments
-├── pages/
-│   └── Bots.tsx                # NEW — lazy-loaded page (like Analysis.tsx)
-└── components/bots/            # NEW — BotSetup, BotBoard, BotClock, ResumePrompt
+```python
+class DrillStatus(IntEnum):   # app/services/train_scheduler.py, mirrors TacticMotifInt convention
+    ACTIVE = 0
+    MASTERED = 1
+    PARKED = 2
 
-app/
-├── routers/bot_games.py        # NEW — POST /bot-games (thin)
-├── services/bot_game_service.py# NEW — NormalizedGame build + persist + rating
-├── services/import_service.py  # MODIFIED — expose persist_normalized_games()
-├── schemas/bot_games.py        # NEW — request/response Pydantic models
-├── schemas/normalization.py    # MODIFIED — Platform Literal += "flawchess"
-├── models/bot_game_settings.py # NEW — FK(game_id) settings side-table
-└── alembic/versions/xxxx_bot_game_settings.py  # NEW migration
+class DrillItem(Base):
+    __tablename__ = "drill_items"
+    __table_args__ = (
+        # Composite FK to game_flaws — NOT to games.id directly. This is the load-bearing
+        # choice: game_flaws already cascades from games.id (ondelete="CASCADE" on its own
+        # game_id FK), so chaining through game_flaws means drill_items needs no knowledge
+        # of games at all, and a flaw that somehow stops qualifying (future re-classification)
+        # cascades drill_items with it.
+        ForeignKeyConstraint(
+            ["user_id", "game_id", "ply"],
+            ["game_flaws.user_id", "game_flaws.game_id", "game_flaws.ply"],
+            ondelete="CASCADE",
+            name="drill_items_game_flaws_fkey",
+        ),
+        CheckConstraint("status IN (0, 1, 2)", name="ck_drill_items_status"),
+        Index("ix_drill_items_user_status_due", "user_id", "status", "due_date"),  # session-compose scan
+    )
+    user_id: Mapped[int] = mapped_column(ForeignKey("users.id", ondelete="CASCADE"), primary_key=True)
+    game_id: Mapped[int] = mapped_column(primary_key=True)
+    ply: Mapped[int] = mapped_column(SmallInteger, primary_key=True)
 
-scripts/
-├── bot-calibration.mjs         # NEW — reuses frontend-alias-hook + Node providers
-└── lib/frontend-alias-hook.mjs # EXISTING — @/ resolve hook (zero-drift code share)
-
-reports/data/                   # EXISTING — calibration TSV output dir
+    status: Mapped[int] = mapped_column(SmallInteger, nullable=False, server_default="0")
+    streak: Mapped[int] = mapped_column(SmallInteger, nullable=False, server_default="0")  # mastery streak
+    due_date: Mapped[datetime.date] = mapped_column(nullable=False)  # snapped to a scheduled session day
+    fail_count: Mapped[int] = mapped_column(SmallInteger, nullable=False, server_default="0")  # never-solved counter
+    ever_correct: Mapped[bool] = mapped_column(Boolean, nullable=False, server_default="false")
+    created_at: Mapped[datetime.datetime] = mapped_column(server_default=func.now())
 ```
 
-### Structure Rationale
+Why no extra surrogate key: `user_id` is already part of the PK (matches `game_flaws`'s own
+PK, not `game_best_moves`'s user-agnostic PK — drill candidacy is user-scoped like flaws, not
+position-scoped like best-move candidates).
 
-- **`selectBotMove.ts` lives in `lib/engine/` beside `mctsSearch.ts`, not in `hooks/`.** It must be a *pure* provider-agnostic function so the Node harness can import it through the `@/` alias hook without dragging in React or `new Worker()`. This is the single most important structural constraint of the milestone.
-- **`useBotGame` owns lifecycle, not selection.** It mirrors `useFlawChessEngine`'s provider-lifecycle pattern (create `pool`+`queue` once while mounted, terminate on cleanup) but drives a stateful game rather than a single-position search.
-- **Backend stays a one-endpoint touch.** No websockets, no server game session. The router is thin (CLAUDE.md router convention); all logic is in `bot_game_service`; persistence reuses the existing import path.
-- **Bot settings in a side table, not new `games` columns.** Keeps the hot, ~300k-row `games` table free of mostly-NULL bot columns (DB design rule: lookup table + FK when the value carries metadata).
+`fail_count` vs `streak` — two independent counters per the seed's two exit doors:
+- `streak` resets to 0 on **any** wrong move (drives the interval ladder + mastery-at-3).
+- `fail_count` increments only while `ever_correct=false`, and freezes forever once
+  `ever_correct` flips true (Door B is a *never-solved* counter, not rolling — seed explicit:
+  "a mastered-then-lapsed item is never parked").
 
----
+### `drill_sessions` — one row per session (scheduled or ad-hoc), header
 
-## Architectural Patterns
+```python
+class DrillRating(IntEnum):
+    RED = 0
+    YELLOW = 1
+    GREEN = 2
 
-### Pattern 1: Provider-injected move selection (the code-sharing keystone)
-
-**What:** `selectBotMove` takes the search primitives as arguments, exactly as `mctsSearch` already takes `EngineProviders`. The browser and the Node harness differ only in how they *build* providers.
-
-**When to use:** every bot move, both environments.
-
-**Trade-offs:** one extra parameter object vs. total elimination of duplicated selection logic and a browser-only dependency in the harness. Strongly worth it.
-
-```typescript
-// frontend/src/lib/engine/selectBotMove.ts  (NEW — sketch)
-export interface BotMoveSettings {
-  elo: number;
-  styleSlider: number; // 0 = full human (sample), 1 = full stockfish (argmax)
-}
-export interface BotMoveProviders {
-  policy: EngineProviders['policy'];          // Maia (human-end, one inference)
-  runSearch: (fen: string, budget: SearchBudget) => Promise<EngineSnapshot>; // = mctsSearch bound to full providers
-  random?: () => number;                      // injectable RNG → deterministic harness/tests
-}
-
-export async function selectBotMove(
-  fen: string, settings: BotMoveSettings, providers: BotMoveProviders,
-  searchBudget: SearchBudget,                 // clock-derived ceiling (Pattern 3)
-): Promise<string /* uci */> {
-  const side = fen.split(' ')[1] as 'w' | 'b';
-  const rng = providers.random ?? Math.random;
-
-  if (settings.styleSlider <= HUMAN_ONLY_THRESHOLD) {
-    // Human end — NO MCTS: one Maia inference, temperature reshape, sample.
-    const raw = await providers.policy(fen, settings.elo, side);
-    const temp = sliderToTemperature(settings.styleSlider);
-    const shaped = temp === DEFAULT_POLICY_TEMPERATURE ? raw : applyPolicyTemperature(raw, temp);
-    return sampleFromDistribution(truncateAndRenormalize(shaped), rng);
-  }
-  // Mid / Stockfish end — practical scores require the search.
-  const snap = await providers.runSearch(fen, searchBudget);
-  if (settings.styleSlider >= STOCKFISH_ARGMAX_THRESHOLD) {
-    return snap.rankedLines[0].rootMove;                      // deterministic argmax
-  }
-  return sampleByPracticalScore(snap.rankedLines, sliderToSharpness(settings.styleSlider), rng);
-}
+class DrillSession(Base):
+    __tablename__ = "drill_sessions"
+    __table_args__ = (
+        CheckConstraint("rating IN (0, 1, 2)", name="ck_drill_sessions_rating"),
+        Index("ix_drill_sessions_user_started", "user_id", "started_at"),  # weekly-streak scan
+    )
+    id: Mapped[int] = mapped_column(primary_key=True)
+    user_id: Mapped[int] = mapped_column(ForeignKey("users.id", ondelete="CASCADE"), nullable=False)
+    target_count: Mapped[int] = mapped_column(SmallInteger, nullable=False)  # N at composition time
+    started_at: Mapped[datetime.datetime] = mapped_column(server_default=func.now())
+    completed_at: Mapped[datetime.datetime | None] = mapped_column(nullable=True)
+    score: Mapped[int | None] = mapped_column(SmallInteger, nullable=True)   # 0..2N, set on complete
+    rating: Mapped[int | None] = mapped_column(SmallInteger, nullable=True)  # DrillRating, set on complete
 ```
 
-### Pattern 2: Two selection regimes, one slider (flag for plan)
+### `drill_solves` — one row per puzzle attempted within a session
 
-**What:** the play-style slider has *different* meaning in bot play than on `/analysis`. On `/analysis` it maps to `policyTemperature` feeding a full MCTS. In bot play it maps to **both** a temperature (human-end sampling sharpness) **and** the sample→argmax transition.
+```python
+class DrillSource(IntEnum):
+    SR_ITEM = 0
+    RED_HERRING = 1
 
-**When to use:** interpreting the reused slider widget on the setup screen.
-
-**Trade-offs:** reusing the widget is free UX consistency, but the mapping is a genuine design decision with a discontinuity at the regime boundary (`HUMAN_ONLY_THRESHOLD`): below it there is no MCTS and moves are Maia-policy samples; above it moves are practical-score samples. The two distributions are not continuous across the seam. Recommend the calibration harness sweep *through* the boundary so the strength curve exposes any cliff. Resolve the exact slider→(temperature, sharpness, thresholds) curve at plan time; it is itself a calibration target.
-
-> Note on `policyTemperature` polarity (from `policyTemperature.ts`): T<1 is the *Human* end (sharpen toward the single most-human move); T>1 is the *Stockfish* end (flatten so rare-but-strong moves surface). Do not re-invert this when mapping the slider — the inverted assumption was a prior bug.
-
-### Pattern 3: Clock-derived search budget + human-like pacing
-
-**What:** the bot's remaining clock drives (a) a *think-time budget* (wall-clock delay before the move appears) and (b) the *search ceiling* (`SearchBudget.maxNodes` / grade movetime). Both scale down under time pressure so a 3+0 game stays responsive on a mid-range phone.
-
-```typescript
-const thinkMs = clamp(remainingMs / THINK_DIVISOR, MIN_THINK_MS, MAX_THINK_MS); // e.g. /30
-const budget: SearchBudget = {
-  maxNodes: nodesForThinkTime(thinkMs),   // fewer nodes when short on time
-  maxPlies: FLAWCHESS_ENGINE_MAX_PLIES, concurrency: computePoolSize(),
-  elo: { w: elo, b: elo }, policyTemperature: sliderToTemperature(slider),
-};
-// Human end is ~instant (one inference) → still enforce a minimum pacing delay
-// so replies aren't robotic and the bot actually spends clock.
+class DrillSolve(Base):
+    __tablename__ = "drill_solves"
+    __table_args__ = (
+        CheckConstraint("source IN (0, 1)", name="ck_drill_solves_source"),
+        # No composite FK to drill_items: a herring solve has no drill_items row (source=1),
+        # so a conditional/partial FK isn't expressible in Postgres. game_id already FKs to
+        # games.id (below) which is sufficient for cascade cleanup (mirrors game_best_moves'
+        # precedent of NOT FK-ing to game_flaws despite a conceptual relationship).
+    )
+    id: Mapped[int] = mapped_column(primary_key=True)
+    session_id: Mapped[int] = mapped_column(ForeignKey("drill_sessions.id", ondelete="CASCADE"), nullable=False, index=True)
+    user_id: Mapped[int] = mapped_column(ForeignKey("users.id", ondelete="CASCADE"), nullable=False)  # denormalized, mirrors game_positions.user_id
+    game_id: Mapped[int] = mapped_column(ForeignKey("games.id", ondelete="CASCADE"), nullable=False)
+    ply: Mapped[int] = mapped_column(SmallInteger, nullable=False)
+    source: Mapped[int] = mapped_column(SmallInteger, nullable=False)
+    correct_guess: Mapped[bool] = mapped_column(Boolean, nullable=False)
+    correct_move: Mapped[bool] = mapped_column(Boolean, nullable=False)
+    solved_at: Mapped[datetime.datetime] = mapped_column(server_default=func.now())
 ```
 
-**Trade-offs:** best-effort only (SEED: perf tuning is polish, not a blocker). Backgrounded-tab `setTimeout`/rAF throttling while the bot "thinks" is a real edge case — detect via `document.visibilityState` and treat clock consistently. Flagging is checked in the clock tick loop: when the side-to-move clock crosses 0, the game ends by timeout attributed to that side.
+### `train_settings` — one row per user, weekday picker + N
 
-### Pattern 4: Persist-every-move, restore-paused (localStorage resume)
+Directly mirrors `app/models/user_import_settings.py`'s shape (PK = `user_id`,
+create-on-first-touch defaults via a repository constant, not a migration backfill for new
+users):
 
-**What:** after each applied move, serialize a compact snapshot to `localStorage["flawchess:botgame:active"]`; on Bots-page mount, if a snapshot exists show "Resume game?" and restore with **clocks paused** until the user resumes.
-
-```typescript
-interface BotGameSnapshot {
-  schemaVersion: 1;
-  settings: { elo: number; styleSlider: number; tcPreset: string; userColor: 'white'|'black' };
-  sanMoves: string[];        // replay via chess.js — source of truth for the board
-  clocksMs: { white: number; black: number };
-  sideToMove: 'white'|'black';
-  startedAt: string; lastMoveAt: string;   // wall-clock, for "time away" handling
-}
+```python
+class TrainSettings(Base):
+    __tablename__ = "train_settings"
+    __table_args__ = (
+        CheckConstraint("weekday_mask BETWEEN 0 AND 127", name="ck_train_settings_weekday_mask"),
+        CheckConstraint("puzzles_per_session > 0", name="ck_train_settings_puzzles"),
+    )
+    user_id: Mapped[int] = mapped_column(ForeignKey("users.id", ondelete="CASCADE"), primary_key=True)
+    weekday_mask: Mapped[int] = mapped_column(SmallInteger, nullable=False)  # bit i = weekday i scheduled
+    puzzles_per_session: Mapped[int] = mapped_column(SmallInteger, nullable=False)
 ```
 
-**Trade-offs:** localStorage is the *only* store for an in-progress game (SEED: rage-quits leave no server trace in v1). It is strictly isolated from `/analysis`, which keeps ephemeral position state in the `?fen=` URL param (`lib/analysisUrl.ts`) and no localStorage. The two surfaces share no state. On finish (mate/resign/flag/draw/stalemate) the key is **removed** after a successful POST.
+### Mastery/parked state → columns
 
----
+| Seed concept | Column |
+|---|---|
+| "2/3 mastered" progress | `drill_items.streak` (0..2 while active; retirement at 3 flips `status=MASTERED`) |
+| "3 parked — too hard for now" | `drill_items.status = PARKED`, set when `fail_count` hits the fail-threshold constant AND `ever_correct=false` |
+| due-date snapping to schedule | `drill_items.due_date`, written by the pure interval-ladder function using `train_settings.weekday_mask` |
+| weekly streak | derived from `drill_sessions` grouped by ISO week + `train_settings.weekday_mask` (no stored streak column — compute at read time like `useReadiness`'s tier flags, not a running counter that can desync) |
 
-## Data Flow
+**Registration note (easy to miss):** new models must be added to `alembic/env.py`'s explicit
+`from app.models.X import Y  # noqa: F401` import list (see lines 12–22) or `alembic revision
+--autogenerate` silently won't see them. `app/models/__init__.py` is a second, separately
+(and incompletely) maintained list — don't rely on it alone.
 
-### Bot move (per turn)
+## 2. Guest cleanup & game-deletion cascade interaction
 
-```
-useBotGame (bot's turn)
-   → derive clock budget (Pattern 3)
-   → selectBotMove(fen, settings, providers, budget)
-        human end:  queue.policy() ──1 Maia inference──► sample           (NO MCTS)
-        mid/SF end: mctsSearch(pool.grade + queue.policy) ► rankedLines ► sample/argmax
-   → chess.js.move(uci) · add increment · flip side · persist snapshot
-   → render board + clocks
-```
+**Key finding: there is no single-game delete endpoint in this codebase.** The only two code
+paths that ever delete `games` rows both wipe a user's **entire** game history at once:
 
-### Game finish → server
+1. `DELETE /api/games` (`app/routers/imports.py:455`) — registered-user "wipe and reimport".
+2. `guest_cleanup_service._purge_guest` (`app/services/guest_cleanup_service.py:64`) — the
+   30-day-inactive-guest daily job (Phase 187), which **reuses**
+   `game_repository.delete_all_games_for_user` — the same function path #1 calls.
 
-```
-useBotGame detects terminal (mate/stalemate/3-fold/50-move/insufficient/resign/flag/draw)
-   → botGamePgn.ts: chess.js history → PGN with [%clk h:mm:ss] per move  (REQUIRED — else time-mgmt stats silently exclude bot games)
-   → POST /bot-games { pgn, result, termination, userColor, botSettings }
-       router (thin) → bot_game_service:
-          build NormalizedGame(platform='flawchess', platform_game_id=<generated>,
-             rated=False, is_computer_game=True,
-             {user_color}_rating = converted player rating (user_rating_anchors),
-             {bot_color}_rating  = bot nominal ELO,
-             {bot_color}_username = "FlawChess Bot ({elo})")
-          persist_normalized_games(session, [game], user_id)   # EXISTING logic:
-             process_game_pgn → Zobrist white/black/full hashes → game_positions
-             classify_game_flaws (guest games excluded by eval pipeline as today)
-          insert bot_game_settings(game_id, nominal_elo, style_slider, tc_preset,
-             player_rating, rating_source)
-          commit
-   → remove localStorage key
-Game now appears in Library games tab, analyzable like any imported game.
-```
+Both explicitly bulk-delete a short list of *derived-stats* tables that don't have a natural
+FK-cascade path from `games` (because they're not game-scoped rows — `UserBenchmarkPercentile`,
+`UserRatingAnchor`, `ImportJob`), then delete `game_positions` and `games` rows. They do
+**not** explicitly touch `game_flaws` or `game_best_moves` — both cascade automatically via
+their existing `ForeignKey("games.id", ondelete="CASCADE")` (`app/models/game_flaw.py:36`,
+`app/models/game_best_move.py:36`). This is the precedent Train's cascade design must match:
 
-### Calibration (offline)
+- `drill_items` cascades **for free**, no code changes needed, via its composite FK to
+  `game_flaws` (which itself cascades from `games.id`). When a user wipes their games (or a
+  guest is purged), every `drill_items` row referencing a now-deleted flaw disappears
+  automatically the moment `DELETE FROM games WHERE user_id = ...` fires.
+- `drill_solves` cascades **for free** the same way, via its direct `game_id` FK.
+- `drill_sessions` does **not** auto-cascade from a single game delete (it's a session
+  header with no `game_id` column — it can span many games). It only cascades from
+  `user_id` on full **user** deletion. This means after `DELETE /api/games` or a guest
+  purge, `drill_sessions` rows (and any `drill_solves` children, now orphaned in spirit even
+  though DB-consistent) survive as stale training history pointing at flaws that no longer
+  exist.
 
-```
-scripts/bot-calibration.mjs  (node --import ...frontend-alias-hook.mjs)
-   → import { selectBotMove, mctsSearch, encodeBoard, maskAndSoftmax, ... } from '@/...'
-   → build NODE providers:
-        policy = onnxruntime-web session (maia3_simplified.onnx, wasm, 1 thread)
-        grade  = spawned Stockfish .cjs over UCI (MultiPV)     ← both proven in gem harness
-   → for each (elo × slider) cell, for each anchor (raw-Maia argmax rungs, SF skill levels):
-        play bot vs anchor to termination via repeated selectBotMove
-   → stream rows to reports/data/bot-calibration-<ts>.tsv
-```
+**Recommendation, flagged for planner confirmation (not decided here):** explicitly delete
+`drill_sessions` (which cascades `drill_solves` and needs no `drill_items` handling — those
+already cascaded) alongside the existing `UserBenchmarkPercentile`/`UserRatingAnchor`/
+`ImportJob` deletes in **both** call sites — `imports.py`'s `DELETE /games` handler (line
+~465-470) and `guest_cleanup_service._purge_guest` (line ~103-106). This mirrors the exact
+precedent already documented in that file's own comment: *"mirror the DELETE /api/games
+precedent and also drop derived-stats rows tied to the now-deleted games, so a returning
+guest never sees stale [...] computed from history that no longer exists"* — Train's session
+history is the same category of derived-stats row. Whether a session-score history really
+counts as "derived from games" (arguably it's *training progress*, which a returning user
+might reasonably want preserved even after a game wipe) is a product call the phase planner
+should make explicitly, not infer — but the mechanical fact (drill_sessions is the ONE table
+that does not self-cascade) is unambiguous and must be handled one way or the other.
 
----
+Also relevant: `guest_cleanup_service.py`'s own docstring (D-05) states a purged guest's
+`User` row, auth, **bookmarks**, and **import-settings preferences survive**. `train_settings`
+should follow the same precedent as `user_import_settings` — survive guest purge (a returning
+guest keeps their schedule preference), while `drill_items`/`drill_solves` (and, per the
+recommendation above, `drill_sessions`) are wiped alongside the games they reference.
 
-## Store-on-finish schema decisions (RESOLVE-AT-PLAN, with recommendation)
+## 3. Session-composition & result-recording endpoints
 
-| Question | Options | Recommendation |
-|----------|---------|----------------|
-| **`platform` value** | new literal `"flawchess"` | Add `"flawchess"` to `Platform` Literal in `schemas/normalization.py`. **No DB migration for the column** — `games.platform` is `String(20)` with no CHECK constraint (verified in migrations + model). Analytics inclusion/exclusion comes free via the existing platform filter. |
-| **`platform_game_id` (unique-key component)** | client UUID · server UUID · content hash | **Server-generated `uuid4().hex`** in `bot_game_service`. Satisfies the `(user_id, platform, platform_game_id)` unique constraint, avoids trusting/colliding on client-supplied ids. Client may send its own idempotency key, but the stored id is server-owned. |
-| **`rated` flag** | True · False | **`False`.** Bot games are not rated ladder games. They still show in the Library games tab (not rated-gated) and still feed calibration via the stored settings + converted rating. |
-| **opponent-type value** | reuse `is_computer_game` | **`is_computer_game=True`.** It *is* a computer opponent; the existing `opponent_type` filter and the Global-Stats default-exclude-bots behavior then work with zero new plumbing. |
-| **Bot nominal ELO storage** | opponent rating column | **`{bot_color}_rating = nominal ELO`** (SEED-locked) + duplicated into the settings side-table as the authoritative calibration field. Display: `"vs FlawChess Bot (1400)"` via `{bot_color}_username`. |
-| **Converted player rating** | user rating column | **`{user_color}_rating` = converted, TC-bucket-matched, lichess-scale rating** from `user_rating_anchors_repository.fetch_anchors_for_user` (blended median) / `chesscom_to_lichess`; NULL only when the user has no imported games. Record `rating_source` (`lichess_native`/`chesscom_converted`/`none`) in the side-table for the ±100–150 caveat. |
-| **Full bot settings (nominal_elo, style_slider, tc_preset)** | new `games` columns · JSONB on `games` · **separate table** | **Separate `bot_game_settings` table**: `game_id` PK + FK→`games(id, user_id)` `ON DELETE CASCADE`, `bot_nominal_elo SMALLINT`, `style_slider REAL`, `tc_preset TEXT` (+ CHECK of the preset set), `player_rating SMALLINT NULL`, `player_rating_source TEXT`. Matches DB design rules (FK mandatory, no NULL pollution of the hot table, metadata-carrying value → lookup table). |
+New router `app/routers/train.py`, `APIRouter(prefix="/train", tags=["train"])`, following the
+router convention in CLAUDE.md (`prefix` on the `APIRouter`, relative paths in decorators —
+see `app/routers/position_bookmarks.py` and `app/routers/bots.py` for the two closest analogs
+already in the codebase: bookmarks for per-user-owned-item CRUD, bots for a
+POST-to-record-a-result shape).
 
-**Reuse boundary for persistence:** extract the body of `import_service._flush_batch` into a public `persist_normalized_games(session, games, user_id) -> int` (or call `_flush_batch` directly). It already does single-parse `process_game_pgn` → Zobrist positions → `classify_game_flaws`, and it deliberately does **not** commit (caller owns the transaction), which suits the bot service wrapping insert-game + insert-settings in one transaction.
+| Endpoint | Pattern reused from | Notes |
+|---|---|---|
+| `GET/PUT /train/settings` | `user_import_settings_repository`'s create-on-first-touch + `DEFAULT_IMPORT_SETTINGS` constant (`app/repositories/user_import_settings_repository.py`) | Same shape: PK=`user_id`, GET creates-if-absent, PUT upserts. |
+| `POST /train/sessions` | none exactly — new pool-composition service, but the *query shape* reuses `apply_game_filters`/`player_only_gate` conventions from `app/repositories/query_utils.py` | Composes 75% SR (most-overdue-first from `drill_items`, backfilled by recency-weighted new flaws) + 25% herrings (`game_best_moves` non-gem rows). Returns puzzle list with `game_id`, `ply`, `fen`, `best_move`, and the blob-derived `assess_ground_truth` (sharp/soft) needed for **client-side** guess grading — none of this leaks severity/eval visually, it's payload data consumed only after the user commits their guess. |
+| `POST /train/sessions/{id}/solve` | `app/routers/bots.py`'s `POST /games` (`store_game`) — client already graded, backend just records | Body: `{game_id, ply, correct_guess, correct_move}`. Backend does NOT grade (grading is 100% client-side per the seed — "No grading endpoint, no backend engine load"). It writes one `drill_solves` row and, for `source=SR_ITEM`, runs the pure interval-ladder function (`train_scheduler.py`) against the matching `drill_items` row to update `streak`/`due_date`/`fail_count`/`status`. |
+| `POST /train/sessions/{id}/complete` | new | Finalizes `drill_sessions.score`/`rating`; triggers the weekly-streak read-time computation. |
+| `GET /train/progress` | new | mastered/parked counts, weekly streak, next-session date+count for the nav badge/dashboard card. |
 
----
+**Pool-entry query building blocks that already exist and should be reused, not
+re-derived:**
 
-## Build Order (dependencies first)
+- **Ownership + ply parity**: `player_only_gate(GameFlaw.ply, Game.user_color)` from
+  `app/repositories/query_utils.py:74` — the exact "own flaws only" filter the seed calls for.
+- **Winnability floor**: `eval_cp_to_expected_score` (`app/services/eval_utils.py:44`) is the
+  named function the seed explicitly points at (not the stricter, already-existing
+  `is_decided_lost`/`decided_lost_sql` in `app/repositories/library_repository.py:447-500`,
+  which implements a harder "decisively lost" mate-ladder cutoff for a different purpose —
+  Train's ~20–25% floor is a softer, percentage-based gate and needs its own predicate,
+  written the same way `best_move_candidates.py`'s `_es_sql` is: a Python function plus an
+  optional SQL twin if the floor needs to run inside a WHERE rather than post-filter).
+- **Answer-key present / blob classifier**: `game_flaws.missed_pv_lines` is `deferred=True`
+  (`app/models/game_flaw.py:120`) — any query reading it must `.options(undefer(...))`
+  explicitly (structural leak guard, D-02) or it silently stays absent. Node 0's `b`/`bm` vs
+  `s`/`sm`/`su` keys are exactly the sharp-vs-soft classifier data the seed describes.
+- **Red-herring source**: `app/services/best_move_candidates.py` already implements the
+  gem/great tier classifier (`classify_best_move`, `best_move_tier_sql`) whose **complement**
+  is the herring source: rows where the C2 gate (`best_es - second_es < MISTAKE_DROP`, using
+  the module's own `MISTAKE_DROP` import from `flaws_service.py`) fails — i.e. best ≈ second.
+  `best_move_tier_sql` returns `NULL` for exactly these rows today (used by the Library
+  gem/great filter's `EXISTS`); a herring query is the SQL-level negation of that same
+  predicate against `game_best_moves`, not a new classification concept.
+- **Severity encoding**: `GameFlaw.severity` is already `1=mistake, 2=blunder`
+  (`app/models/game_flaw.py:43-45`) — pool entry filters `severity == 2` (blunders only, v1).
 
-1. **`selectBotMove.ts` + unit tests** — pure, depends only on existing engine primitives. Foundational; shared by app and harness. Injectable RNG for determinism.
-2. **Backend store-on-finish** (parallelizable with 1): `Platform` literal widen · `bot_game_settings` model+migration · extract `persist_normalized_games` · `bot_game_service` (rating conversion reuse) · thin `routers/bot_games.py` · Pydantic schemas. Independent of any engine work.
-3. **`scripts/bot-calibration.mjs`** — depends on (1); reuses `frontend-alias-hook.mjs` + the gem harness's Maia-ONNX-in-Node and Stockfish-WASM-in-Node recipes. **De-risks the SEED "Maia headless in Node at harness-viable speed" open question — already answered YES by the shipped `gem-elo-calibration.mjs`.** Produces the first strength map and doubles as the engine test bench.
-4. **`useBotGame` hook** — depends on (1): game loop, dual clocks + increment, pacing, flag detection, terminal detection (mate/stalemate/3-fold/50-move/insufficient), resign, draw offer, move sounds, `botGamePgn` `[%clk]` emission.
-5. **localStorage resume** (`botGamePersistence.ts`) — depends on (4).
-6. **Bots page + nav wiring** — depends on (4), (5), (2): setup screen (reuse `EloSelector`/style slider/color/TC preset), live board, resume prompt, POST on finish, `App.tsx` route (`/bots/*`, lazy like `Analysis`) + nav sibling in the Library·Openings·Endgames set.
+**Service/repo split** should mirror `best_move_candidates.py` (pure classification, no I/O) +
+`library_repository.py` (DB access): put the interval ladder, mastery/park transitions, and
+sharp/soft blob interpretation in a pure `app/services/train_scheduler.py` (unit-testable with
+zero DB), and all `SELECT`/`INSERT`/`UPDATE` in `app/repositories/train_repository.py`. Do not
+put SQL in `app/services/*` (CLAUDE.md router/service/repository layering).
 
-Waves: **A** = {1, 2}; **B** = {3, 4}; **C** = {5, 6}.
+## 4. Frontend integration points
 
----
+### Routing & nav (all locations settled by the seed, listed here as exact file/line targets)
 
-## Anti-Patterns
+- `frontend/src/App.tsx`: add `const TrainPage = lazy(() => import('./pages/Train'));` next to
+  the existing `AnalysisPage`/`BotsPage` lazy declarations (lines 40–43) — Train's solve loop
+  will run the grading WASM worker, so it must stay off the initial bundle exactly like
+  Analysis/Bots (ROUTE-01/D-07 precedent, same comment block).
+- `NAV_ITEMS` (line 65) and `BOTTOM_NAV_ITEMS` (line 72) both need
+  `{ to: '/train', label: 'Train', Icon: <TBD> }` inserted at index 1 (between Library and
+  Bots) — **both** arrays, not one; they're already deliberately separate consts so mobile
+  labels can diverge, but the *order and membership* must match per the seed.
+- `ROUTE_TITLES` (line 85): add `'/train': 'Train'`.
+- `isActive()` (line 115): add a `if (to === '/train') return pathname.startsWith('/train');`
+  clause — Train's solve loop will own sub-routes (session/reveal), same reasoning as the
+  existing `/library`/`/bots`/`/openings`/`/endgames` prefix-match clauses.
+- `IMPORT_EXEMPT_ROUTES` (line 107): explicitly **do not** add `/train` — it must stay
+  import-gated (`isNavLocked`), unlike `/bots` which is deliberately exempt for guest
+  acquisition. This is the one place a naive copy-paste of the Bots nav entry would be wrong.
+- Test IDs: `nav-train` / `mobile-nav-train` / `drawer-nav-train`, matching the pattern visible
+  at `frontend/src/App.tsx:153,250,374` (`nav-home`, `nav-home-mobile`, `mobile-nav-more`).
+- Notification dot: `useUserFlag` (`frontend/src/hooks/useUserFlag.ts`) is a generic
+  per-email localStorage flag already chained `Openings → Endgames` in `NavHeader`
+  (`FLAG_OPENINGS_VISITED` / `FLAG_ENDGAMES_VISITED`, App.tsx lines 45-46, 140-145) — adding
+  Train to that chain (or starting a parallel one) is a one-constant, one-`useUserFlag()` call
+  addition, not new infrastructure.
+- Gating: `useReadiness()`'s `tier1` flag (`frontend/src/hooks/useReadiness.ts:28`) combined
+  with `totalGames > 0`, exactly as `NavHeader` already computes `navUnlocked` (App.tsx:134-139)
+  — Train's page-level guard should reuse this, not invent a second readiness check.
 
-### Anti-Pattern 1: Running MCTS at the human end
-**What people do:** route every bot move through `mctsSearch` and vary only the temperature.
-**Why it's wrong:** the human end needs exactly one Maia inference; a 400-node search per move is 100–1000× the compute and blows the 3+0 phone budget. It also makes the human end *stronger* than nominal ELO (argmax-practical never makes Maia's predicted mistakes) — corrupting calibration.
-**Do this instead:** the two-regime `selectBotMove` (Pattern 1) — policy-sample below `HUMAN_ONLY_THRESHOLD`, search only above it.
+### Grading engine — which existing hook is the template
 
-### Anti-Pattern 2: `new Worker()` inside `selectBotMove`
-**What people do:** build the Maia queue / Stockfish pool inside the selection function.
-**Why it's wrong:** it makes the function browser-only and un-importable by the Node harness → duplicated selection logic → drift (the exact failure mode the gem harness's `@/`-import discipline was built to prevent).
-**Do this instead:** inject `EngineProviders`; build them in `useBotGame` (Workers) and in the harness (direct ONNX + spawned Stockfish).
+There are **two** structurally-sibling Stockfish-WASM hooks already in the codebase, both
+spinning up a separate `Worker('/engine/stockfish-18-lite-single.js')` instance from the
+primary eval-bar engine (SC3 isolation convention):
 
-### Anti-Pattern 3: Adaptive bot strength
-**What people do:** nudge bot ELO toward the player to keep games close.
-**Why it's wrong:** there is then no fixed strength to measure — calibration is meaningless (SEED-locked: bot plays its own symmetric ELO, never adapts).
-**Do this instead:** `budget.elo = { w: elo, b: elo }` fixed for the whole game.
+- `frontend/src/hooks/useStockfishEngine.ts` — the primary single-line position eval (used
+  for the live eval bar / Bot Play).
+- `frontend/src/hooks/useStockfishGradingEngine.ts` — a **second** worker doing
+  `searchmoves`-restricted MultiPV grading of a fixed candidate set (built for the
+  Moves-by-Rating chart, Phase 158).
 
-### Anti-Pattern 4: Omitting `[%clk]` from the stored PGN
-**What people do:** store the bare SAN PGN.
-**Why it's wrong:** the Time-Management analytics parse `[%clk]`; without it, bot games are silently excluded from every clock-based stat (SEED-locked requirement).
-**Do this instead:** `botGamePgn.ts` writes `{ [%clk h:mm:ss] }` after each move; python-chess `process_game_pgn` already reads it.
+Train's grading need — "evaluate the position resulting from whatever single move the user
+just played, then classify its expected-score drop against the stored best move" — is closer
+to `useStockfishEngine`'s single-line-eval shape than `useStockfishGradingEngine`'s
+`searchmoves` shape (the played move isn't a member of a pre-known candidate set to rank; it's
+one ad-hoc line to score). The **grading classification itself is already written and
+reusable, not something to reinvent**:
 
-### Anti-Pattern 5: Bot-game state in the URL / shared with `/analysis`
-**What people do:** reuse the `?fen=` analysis URL param for the live bot board.
-**Why it's wrong:** the bot game is a stateful multi-move session with clocks; the `?fen=` param is ephemeral single-position analysis state. Mixing them breaks resume and pollutes analysis deep-links.
-**Do this instead:** bot state lives only in the dedicated localStorage key; `/analysis` stays URL-driven and untouched.
+- `frontend/src/lib/liveFlaw.ts`'s `evalToExpectedScore` + `classifyLiveSeverity` are the exact
+  TS twins of the backend's `eval_cp_to_expected_score` + mistake/blunder-drop thresholds,
+  already wired into a hook doing almost precisely Train's grading job:
+  `frontend/src/hooks/useLiveMoveFlaw.ts` grades a freely-played analysis-board move by
+  comparing a stored "before" eval against a freshly-computed "after" eval, and returns a
+  `FlawSeverity | null` (null = clean/correct). Train's client-side grading rule ("correct =
+  the played move's ES drop vs best stays below MISTAKE_DROP") is functionally the same
+  computation, just against the pre-known best-move eval (already in the session payload, from
+  `missed_pv_lines` node 0 or `game_positions.best_move`/eval) instead of a freshly-searched
+  parent position.
+- The threshold constant itself doesn't need re-deriving either:
+  `frontend/src/generated/flawThresholds.ts` (regenerated from `flaws_service.py` by
+  `scripts/gen_flaw_thresholds_ts.py`, CI-drift-checked) already exports `MISTAKE_DROP = 0.1`.
 
----
+**Recommendation:** build a third structural sibling, e.g. `useTrainGradingEngine.ts`, copying
+`useStockfishEngine.ts`'s single-line-search shape (not the MultiPV one), and feed its output
+through `classifyLiveSeverity`/`evalToExpectedScore` from `liveFlaw.ts` rather than writing new
+sigmoid/threshold code on the frontend.
 
-## Integration Points
+### VariationTree reuse for the opt-in reveal stepper
 
-### Internal boundaries
+The tactic-line **data** is already served by an existing, non-owner-scoped endpoint:
+`GET /library/flaws/{game_id}/{ply}/tactic-lines` (`app/routers/library.py:356`, resolved via
+`app/repositories/library_repository.py:2331 fetch_tactic_lines`, returning
+`TacticLinesResponse` — `app/schemas/library.py:462` — with `missed_moves`/`allowed_moves` SAN
+lists, `position_fen`, and depth indices). **No new backend endpoint is needed for the reveal
+stepper's line data** — Train can call this exact endpoint with the drill item's own
+`(game_id, ply)`.
 
-| Boundary | Communication | Notes |
-|----------|---------------|-------|
-| `useBotGame` ↔ `selectBotMove` | direct async call with injected providers | providers built once per mounted game (mirror `useFlawChessEngine` lifecycle) |
-| `selectBotMove` ↔ `mctsSearch` / `createMaiaQueue` | `EngineProviders` seam (existing frozen contract) | zero change to the engine core |
-| Browser ↔ backend | one `POST /bot-games` (REST) | no websockets, no server session |
-| `bot_game_service` ↔ import pipeline | `persist_normalized_games()` (extracted from `_flush_batch`) | shared Zobrist + flaw classification; no SQL in the service (CLAUDE.md layering) |
-| Harness ↔ frontend source | `@/` alias resolve hook + Node TS type-stripping | `scripts/lib/frontend-alias-hook.mjs`; gem-parity-style tripwire if a non-erasable TS edit lands |
-| Bot game ↔ eval pipeline | `platform='flawchess'` games flow through the existing tiered eval queue | guest bot games stored but not auto-analyzed until promotion (existing guest exclusion — no new work) |
+The **component**, `frontend/src/components/analysis/VariationTree.tsx`, is however deeply
+coupled to `Analysis.tsx`'s full interactive move-tree editor state: it expects a
+`Map<NodeId, MoveNode>` node graph, a `mainLine` array, `pvNodeIds`, `flawMarkerByNodeId`, and
+click handlers (`onPvChipClick`) wired to `Analysis.tsx`'s local `insertPvLine` function
+(`frontend/src/pages/Analysis.tsx:930-968`) that grafts fetched PV data into that graph. This
+is the free-play fork/sideline editor, not a standalone single-line stepper — there is no
+extracted lighter-weight component (a prior `TacticLineExplorer.tsx` referenced only in a
+docstring no longer exists as a separate file; its function was absorbed into
+`VariationTree.tsx`).
 
-### External runtimes (already vendored)
+The seed's reuse claim is accurate at the *utility* level — `tacticDepthBadge` and
+`tacticMotifLabel` (imported at `VariationTree.tsx:33` from
+`frontend/src/lib/tacticComparisonMeta.ts`) plus the `missedDepth`/`allowedDepth` display
+convention are genuinely reusable, self-contained functions. Whether Train's reveal embeds the
+**full** `VariationTree` component (feeding it a minimal single-chain node map built from the
+`missed_moves`/`allowed_moves` SAN list — its props contract technically supports a
+no-sibling, no-fork instantiation since `onDeleteLine`/`decorations`/multi-block rendering only
+activate when siblings exist) or a **new**, purpose-built lightweight stepper reusing only the
+depth-badge/motif-label utilities is a real build-cost decision the phase planner should make
+explicitly, not assume away — flagging it here rather than picking one.
 
-| Runtime | Integration pattern | Notes |
-|---------|---------------------|-------|
-| Maia-3 ONNX | browser: Web Worker (`createMaiaQueue`); Node: `onnxruntime-web` wasm session, 1 thread | Node headless inference **verified working** in `gem-elo-calibration.mjs` (`createMaiaSession`/`maiaProbsForPosition`) |
-| Stockfish.wasm | browser: `createWorkerPool`; Node: copy glue to `.cjs`, spawn, drive over UCI | Node recipe verified (`project_headless_stockfish_wasm_verification`); illegal `searchmoves` silently dropped, MultiPV keyed by `pv[0]` |
+### Bots page as the lazy-route + WASM-engine mounting precedent
 
----
+`frontend/src/pages/Bots.tsx` is the closest structural precedent for `Train.tsx`: a default
+export (required by `React.lazy`, deliberately diverging from the app's named-export
+convention — same "Pitfall 1" noted in both `Analysis.tsx` and `Bots.tsx`'s own header
+comments), an outer page component handling entry-state resolution (for Bots: snapshot/resume;
+for Train: session-in-progress resume, if that's in scope) and an inner game-body component
+taking settings as a required prop. `useBotGame.ts` (`frontend/src/hooks/useBotGame.ts`) shows
+the established pattern for a hook owning an entire play-loop's client state machine — Train's
+solve loop (queue → guess → move → grade → reveal → next) is the same shape of problem.
 
-## Scaling Considerations
+## 5. Suggested build order (elaborating the seed's 3-phase sketch)
 
-| Scale | Adjustments |
-|-------|-------------|
-| Any user count | Game is 100% client-side; server sees only a small POST per finished game. No new sustained backend load. |
-| Store endpoint | Reuses the import persistence path (bulk insert + COPY positions); one game ≈ one small batch. Negligible vs. multi-hundred-game imports. |
-| Calibration | Offline, single-box, hours-long sweep; unrelated to prod. Emit durable per-row TSV (stream-append, crash-safe — copy the gem harness's incremental writer). |
+The seed's sketch (SEED-037 "Phase Decomposition") is directionally right; the dependency
+analysis above sharpens the sequencing rationale:
 
-### Scaling Priorities
+1. **Phase A — Pool + scheduler backend.**
+   - Migration: `drill_items`, `drill_sessions`, `drill_solves`, `train_settings` (register in
+     `alembic/env.py`'s import list, not just `app/models/__init__.py`).
+   - `app/services/train_scheduler.py` (pure, unit-tested first — interval ladder, due-date
+     snapping to `weekday_mask`, mastery-at-3, park-at-N-fails) — this has **zero** DB
+     dependency and should be built/tested before touching a repository, mirroring
+     `best_move_candidates.py`'s pure-function-first precedent.
+   - `app/services/train_pool.py` / `app/repositories/train_repository.py`: SR pool query
+     (reusing `player_only_gate`, `eval_cp_to_expected_score`, `undefer(GameFlaw.missed_pv_lines)`),
+     herring query (negation of `best_move_tier_sql`'s C2 gate against `game_best_moves`),
+     session-composition (75/25 mix), `solve`/`complete` endpoints.
+   - **Must precede Phase B**: the frontend session queue and solve-recording UI have nothing
+     to call otherwise. This phase is self-contained and independently testable via the
+     backend suite (no frontend dependency).
+   - **Decide the `drill_sessions` cascade question (§2) here**, since it touches
+     `imports.py`'s existing `DELETE /games` handler and `guest_cleanup_service.py` — both
+     live, production code paths that must not regress.
 
-1. **First bottleneck is on-device compute**, not the server — the bot's move in blitz (3+0) on a mid-range phone. Mitigations are all client-side: human-end single-inference path, clock-scaled `maxNodes`, bullet excluded by design.
-2. **Second: harness wall-clock** for a full (ELO × slider × anchor) grid. Keep games short-capped, reuse one ONNX session + one Stockfish process across positions (as the gem harness does), stream output.
+2. **Phase B — Train page + solve loop (frontend).**
+   - Nav/routing wiring (§4) — mechanical, do first as it unblocks manual QA of everything else.
+   - `useTrainGradingEngine.ts` (new sibling of `useStockfishEngine.ts`) + reuse of
+     `classifyLiveSeverity`/`evalToExpectedScore` from `liveFlaw.ts` — **no backend
+     dependency**, can be built/tested in isolation against fixture FENs before Phase A's
+     endpoints exist, the same way `useStockfishGradingEngine.test.ts` and
+     `useStockfishGradingEngine.integration.test.ts` already test the sibling hook headlessly.
+   - Session queue UI, guess/move/reveal flow, wired to Phase A's endpoints.
+   - **Resolve the VariationTree-reuse build-cost question (§4) here** — it's the single
+     largest unknown-effort item in this phase and should be spiked early, not discovered
+     mid-implementation.
+   - **Depends on Phase A** for real data (though the grading engine and static UI shell can
+     start in parallel against mocked session payloads).
 
----
+3. **Phase C — Schedule + progress surface.**
+   - `train_settings` UI (weekday/N picker) — depends on Phase A's settings endpoint only.
+   - Nav badge / dashboard card, weekly-streak display (read-time computation, §1), mastered/
+     parked counts, celebrations (confetti, "Flaw fixed!").
+   - Cold/empty states.
+   - **Depends on Phase A + B** being functionally complete (streak/mastery data must exist,
+     and the reveal screen's "Flaw fixed!" moment fires from the solve loop built in Phase B).
+
+This order matches the seed's sketch exactly but makes explicit *why* B can partially overlap A
+(engine + static shell are backend-independent) while C is a hard sequential dependent on both.
+
+## Anti-Patterns to Avoid
+
+### Re-deriving the expected-score sigmoid or drop thresholds on the frontend
+
+`liveFlaw.ts` + `flawThresholds.ts` already exist and are CI-drift-checked against the Python
+source of truth (`scripts/gen_flaw_thresholds_ts.py`). A hand-rolled Train-specific version
+would silently drift from the backend's own classification the first time a threshold is
+retuned.
+
+### Treating `game_flaws.missed_pv_lines` as a normal eagerly-loaded column
+
+It's `deferred=True` by design (structural leak guard, D-02) — any pool-entry or solve-payload
+query touching it needs an explicit `.options(undefer(...))`, or an implicit async access will
+raise `MissingGreenlet` rather than silently returning `None`.
+
+### Adding a single-game-delete code path without threading drill cascades through it
+
+There isn't one today, but if Train motivates adding one (e.g. "delete this one bad import"),
+it must go through the same `ondelete="CASCADE"` chain analysis in §2 — a naive
+`DELETE FROM games WHERE id = X` without checking whether new derived-stats tables (Train's
+`drill_sessions` in particular) need explicit cleanup would reintroduce exactly the staleness
+bug D-05/Pitfall-2 already fixed once for benchmark percentiles and rating anchors.
+
+### Building `drill_items` with a surrogate `id` PK
+
+Every position-scoped or user+flaw-scoped table in this codebase (`game_flaws`,
+`game_positions`, `game_best_moves`) uses a natural composite PK, not a surrogate `id`. A
+surrogate PK on `drill_items` would be inconsistent with house style and would require an
+extra `UniqueConstraint(user_id, game_id, ply)` to enforce the actual invariant anyway —
+strictly worse.
 
 ## Sources
 
-- Live source (HIGH): `frontend/src/hooks/useFlawChessEngine.ts`, `lib/engine/mctsSearch.ts`, `lib/engine/maiaQueue.ts`, `lib/engine/types.ts`, `lib/engine/policyTemperature.ts`, `hooks/useMaiaEloDefault.ts`, `scripts/gem-elo-calibration.mjs`, `scripts/lib/frontend-alias-hook.mjs`, `app/services/normalization.py`, `app/services/import_service.py` (`_flush_batch`), `app/models/game.py`, `app/schemas/normalization.py`, `app/services/chesscom_to_lichess.py`, `app/repositories/user_rating_anchors_repository.py`, `frontend/src/App.tsx`
-- Design decisions (HIGH): `.planning/seeds/SEED-091` (5 locked decisions), `.planning/PROJECT.md` "Current Milestone: v2.3 Bot Play"
-- Constraints (HIGH): `CLAUDE.md` (router convention, DB design rules, TC bucketing, PGN parsing, type-safety)
-- Memory (MEDIUM): `project_headless_stockfish_wasm_verification`, `project_flawchess_engine_prior_art`
+- `.planning/seeds/SEED-037-train-spaced-repetition-blunder-drills.md` — settled design (read in full)
+- `app/models/game_flaw.py`, `app/models/game_best_move.py`, `app/models/game_position.py`, `app/models/game.py`, `app/models/position_bookmark.py`, `app/models/user_import_settings.py`, `app/models/bot_game_settings.py`
+- `app/repositories/query_utils.py`, `app/repositories/game_repository.py`, `app/repositories/library_repository.py`, `app/repositories/user_import_settings_repository.py`
+- `app/routers/position_bookmarks.py`, `app/routers/bots.py`, `app/routers/library.py`, `app/routers/imports.py`
+- `app/services/eval_utils.py`, `app/services/best_move_candidates.py`, `app/services/guest_cleanup_service.py`, `app/services/flaws_service.py`
+- `app/schemas/library.py` (`TacticLinesResponse`)
+- `alembic/env.py`, `app/models/__init__.py`
+- `frontend/src/App.tsx`, `frontend/src/pages/Bots.tsx`, `frontend/src/pages/Analysis.tsx`
+- `frontend/src/components/analysis/VariationTree.tsx`
+- `frontend/src/hooks/useStockfishEngine.ts`, `frontend/src/hooks/useStockfishGradingEngine.ts`, `frontend/src/hooks/useLiveMoveFlaw.ts`, `frontend/src/hooks/useReadiness.ts`, `frontend/src/hooks/useUserFlag.ts`, `frontend/src/hooks/useBotGame.ts`
+- `frontend/src/lib/liveFlaw.ts`, `frontend/src/lib/moveQuality.ts`
+- `frontend/src/generated/flawThresholds.ts`, `scripts/gen_flaw_thresholds_ts.py`
 
 ---
-*Architecture research for: client-side clocked bot-play integration (FlawChess v2.3)*
-*Researched: 2026-07-11*
+*Architecture research for: FlawChess v2.9 Train milestone*
+*Researched: 2026-07-25*

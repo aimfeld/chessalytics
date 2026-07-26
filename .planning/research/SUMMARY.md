@@ -1,172 +1,141 @@
 # Project Research Summary
 
-**Project:** FlawChess — v2.3 Bot Play
-**Domain:** Client-side clocked bot-play + synthetic-game storage + headless calibration harness, layered onto an existing React 19 / FastAPI / PostgreSQL chess-analysis PWA
-**Researched:** 2026-07-11
+**Project:** FlawChess — v2.9 Train (spaced-repetition blunder drills, SEED-037)
+**Domain:** Own-mistake spaced-repetition chess training bolted onto an existing FastAPI/React chess-analysis platform
+**Researched:** 2026-07-25
 **Confidence:** HIGH
 
 ## Executive Summary
 
-v2.3 adds a "play against the computer" surface on top of an app whose hard parts already ship in prod: the FlawChess practical-play engine (`mctsSearch` + Maia-3 ONNX policy + Stockfish.wasm grading), the `/analysis` ELO and play-style sliders, the Library games corpus, and the import→normalization→Zobrist→flaw pipeline. The play UI itself is well-trodden table-stakes (lichess "Play with the computer", chess.com "Play Bots"): a setup screen (strength / color / time control), a live clocked board, resign/draw/flag, game-end detection, a result screen, and move sounds. The genuinely differentiated part is that **every finished bot game is stored as a first-class analyzable Library game** (`platform='flawchess'`), feeding the same WDL / endgame / time-management analytics as imported games, and that a **headless Node calibration harness** produces the engine's first real (ELO × play-style) strength map.
+Train is a feature-build milestone, not a data-pipeline milestone: every backend dependency it needs (game_flaws severity/ownership, missed_pv_lines/allowed_pv_lines blobs, game_best_moves gem/great classification, eval_cp_to_expected_score) already shipped in v1.24-v2.4, and every client capability it needs (Stockfish WASM grading, click-to-move board, VariationTree tactic display, canvas-confetti) is already installed and working elsewhere in the codebase. Zero new dependencies are required on either stack. This is the strongest possible starting position for a milestone: SEED-037's design is settled after six rounds of gsd-explore, and research across all four tracks confirms the design's major calls (hand-rolled interval ladder over FSRS, one-attempt client grading over retry-until-correct, cap+backfill session composition, weekly self-scheduled cadence over rigid daily) are correct, validated against Anki's own documented dropout research and against every comparable product surveyed (Aimchess, Chessable Puzzle Connect, Lichess Puzzles/Streak, Noctie, ChessMood). No surveyed product combines free plus own-game plus true dated SR plus a pre-move judgment layer plus an honest "parked" escape hatch; Train's differentiation claim holds up.
 
-The recommended build is deliberately thin on new dependencies. The clock, move sounds, and `[%clk]` PGN annotations add **zero** new runtime packages: the clock is a ~80-line hand-rolled deadline-based hook, sounds are a small Web Audio wrapper over CC0 assets, and `chess.js@1.4.0` (already installed) emits `[%clk]` via `setComment()`. The only net-new packages are **dev-only** harness tooling — `onnxruntime-node` and `tsx`. Architecturally, the milestone is cheap because of one load-bearing decision already baked into the codebase: **provider injection**. `selectBotMove` (new, pure) and `mctsSearch` (existing) take an `EngineProviders` seam, so the identical move-selection logic runs unchanged in the browser (Workers) and in the Node harness (direct sessions) — the harness therefore measures the exact code users play against. The backend is a one-endpoint touch (`POST /bot-games`) reusing the import persistence path; no websockets, no server game session.
+The real risk in this milestone is not "what to build" (settled) but getting the plumbing right against a codebase with sharp edges already known to have bitten similar features once. Architecture research resolves most integration ambiguity down to concrete file-level targets (new drill_items/drill_sessions/drill_solves/train_settings tables following the composite-PK convention of game_flaws, a new app/routers/train.py plus train_scheduler.py plus train_pool.py plus train_repository.py stack, nav wiring at exact App.tsx line numbers, grading via a new sibling of useStockfishEngine.ts feeding the existing liveFlaw.ts classifier). But four architecture-level decisions are genuinely open and must be pinned down explicitly in Phase 1/2 planning rather than left to accidental defaults: drill_sessions deletion semantics on game wipe/guest-purge (the one table that doesn't auto-cascade), answer-key snapshot-vs-live-join (drift risk if a flaw's blob gets re-classified mid-ladder), VariationTree full-component-reuse vs. a new lightweight stepper (real build-cost unknown), and timezone/day-boundary handling (zero precedent anywhere in this codebase; every other timestamp is naive UTC).
 
-The risks are concentrated and well-understood. The clock **must** be a `Date.now()`-delta model (never `setInterval` decrement) and must treat the Page Visibility API as first-class game state, or backgrounded tabs will self-flag the bot or bleed the human's clock. Move selection **must** sample (not argmax) at the human end and run exactly one Maia inference there (no MCTS), or the bot plays hundreds of Elo above nominal and every game is identical — corrupting both playability and calibration. The "reuse the existing normalization path" instruction is a trap: there is **no** PGN→game normalizer today (only chess.com/lichess JSON normalizers with a narrow `Platform` Literal), so a new `normalize_flawchess_game(pgn, …)` is required. And `[%clk]` emission is load-bearing, not cosmetic — omit it and every bot game is silently invisible to time-management stats, permanently (clocks can't be recovered post-hoc).
+Pitfalls research found nine concrete failure modes, all grounded in specific already-shipped code in this repo (not generic SR advice), several of which have already bitten adjacent features once (opponent-flaw leakage via ply-parity, post-move eval-shift confusion, blob backfill being opportunistic/lagged). Two are worth flagging as genuinely novel to this feature: client-side WASM grading can disagree with the server's deep answer key near the MISTAKE_DROP threshold (a real SR-integrity risk, not cosmetic), and the answer key is structurally present in the browser before the user acts, an accepted tradeoff of the "no grading endpoint" design that must not be made worse than necessary by over-eagerly bundling reveal-only fields into the pre-attempt payload. One genuine feature gap was found across all research tracks and is not yet in the settled design: a session progress indicator ("N of M"), which is table stakes in every comparable product and is pure frontend work with zero backend dependency.
 
 ## Key Findings
 
 ### Recommended Stack
 
-The stack story is "consume what ships, add almost nothing." All four net-new concerns (chess clock, move sounds, calibration harness, `[%clk]` emission) resolve without new runtime dependencies except the dev-only harness. Versions were verified via `npm view` and behaviors (chess.js `[%clk]`, engine-module browser-independence, headless Stockfish) confirmed by direct Node execution against the repo's own `node_modules` — hence HIGH confidence. See `STACK.md`.
+Zero new dependencies, confirmed with file-level precedent for three of four capability areas. canvas-confetti (already shipped for Bot Play wins, frontend/src/lib/confetti.ts) extends with a second helper for session-end/flaw-fixed celebrations. Stdlib datetime/timedelta handles the weekday-snap ladder logic, this exact pattern already exists in endgame_service.py. date-fns (already the project's sole date library) covers frontend display. Radix ToggleGroup (already used in ImportFilterCard.tsx) is the weekday-picker control, no dedicated package needed.
 
 **Core technologies:**
-- **Hand-rolled `useGameClock`** (deadline-based) — accurate clock — no maintained React chess-clock lib gets the accuracy model right; ~80 lines of `Date.now()`-delta math is the correct pattern and is background-tab-safe.
-- **Hand-rolled `useMoveSounds`** (Web Audio, preloaded buffers) — move/capture/check/end cues — platform-native, no per-play latency, overlapping plays; source **CC0** assets (freesound.org / synthetic), NOT lichess's non-CC0 files. Precache via the existing `vite-plugin-pwa` Workbox config.
-- **`chess.js@1.4.0` `setComment('[%clk h:mm:ss]')`** (already installed) — per-move clock annotation — verified to emit the exact lichess/PGN convention; python-chess already parses it on ingest. No PGN-writer lib.
-- **`onnxruntime-node@1.27.0`** (**devDependency**) — Maia inference in the Node harness — pin to *exactly* match the browser's `onnxruntime-web@1.27.0` (identical opset/kernels → zero model-compat risk); native CPU EP, no browser globals. Must NOT ship in the browser bundle.
-- **`tsx@4.23.0`** (**devDependency**) — run harness TS unbundled — esbuild loader, `@/` alias-aware, no jsdom/build step.
-- **Reused as-is (do NOT replace/re-benchmark):** `mctsSearch` / `useFlawChessEngine`, Maia worker + `onnxruntime-web@1.27.0`, vendored `stockfish-18-lite-single.{js,wasm}`, `policyTemperature`, the import normalization downstream, `react-chessboard`.
+- canvas-confetti 1.9.4 (installed): session/flaw celebration bursts, already themed, reduced-motion-guarded, zero new bundle weight
+- Python stdlib datetime/timedelta: interval-ladder due-date computation plus weekday snapping, matches existing endgame_service.py pattern, keeps the ladder pure/testable per the seed's own design goal
+- date-fns 4.4.0 (installed): frontend date display, sole date library in the codebase, no reason to add a second
+- Radix ToggleGroup (installed, wrapped in toggle-group.tsx): weekday-picker multi-select control, exact shape already used elsewhere
 
-> **Version reconciliation (confirm at plan time):** STACK recommends `onnxruntime-node@1.27.0` to match the pinned `onnxruntime-web@1.27.0` opset exactly. PITFALLS loosely referenced `~1.20.1` "per project memory" — but that `1.20.1` figure is the unrelated **Python** `onnxruntime` package from a different Maia repro, not the Node package. Prefer **1.27.0** (version-match rationale); flag as a plan-time confirm.
+**Explicitly rejected (settled, do not revisit):** fsrs/ts-fsrs (memory-model fitting has nothing to bite on with a 3-6 rep item lifetime), any scheduler library (due dates are computed at result-recording time, pulled on page load, no background job), a second date library, a dedicated weekday-picker/calendar package, a second confetti library.
 
 ### Expected Features
 
-The play UI is table-stakes; the storage-as-first-class-game and the calibration harness are the differentiators. v1 IN/OUT boundaries are locked in SEED-091: draw offers + move sounds IN; premove + takeback OUT. FlawChess deliberately **strips the training aids** (no hints/takeback/live-eval) precisely to keep the game an honest, calibration-grade strength measurement. See `FEATURES.md`.
+SEED-037's settled scope matches or exceeds every comparable product's table stakes, with one confirmed gap.
 
-**Must have (table stakes):**
-- Setup screen — reused ELO + play-style sliders, color choice, TC presets (**bullet excluded** by design for compute headroom).
-- Live clocked board driving the engine client-side; dual clocks + Fischer increment + flag-on-time (background-tab-safe).
-- Whose-move indication + turn-gated legal input (drag + click); bot "thinking" affordance + human-like pacing.
-- Full game-end detection (mate/stalemate/threefold/50-move/insufficient/resign/flag/draw-agreed); result screen with "Analyze this game" + "New game".
-- Resign + draw offers; move sounds (with mute).
-- PGN capture with `[%clk]`; store finished game → `games` row (`platform='flawchess'`); localStorage resume (clock paused while away).
+**Must have (table stakes) - all covered by the settled design except one:**
+- Immediate move feedback, one clear "next puzzle" action, board orientation plus last-move highlight, visible game provenance on reveal, session-end score/rating, a queue that's never empty (cap+backfill), one-attempt grading (validated against Lichess's own rated-puzzle norm), mobile tap-to-move (reuse) - all covered
+- **Session progress indicator ("N of M")** - genuine gap, not addressed anywhere in the settled design or phase decomposition. Universal in every surveyed product (Lichess Streak, chess.com puzzle sets, Chessable). Pure frontend, zero backend dependency, no reason not to fold into Phase 2 (solve loop)
 
-**Should have (competitive / this-app differentiators):**
-- Finished bot games become first-class analyzable Library games (WDL / mistake tags / endgame + time analytics) — nothing on lichess/chess.com folds bot games into a personal analytics corpus.
-- Practical-play engine as opponent (Maia-conditioned, human-like at chosen ELO, symmetric — never adapts).
-- Save-time converted player rating on every stored game (calibration substrate, not a thrown-away NULL).
-- Headless anchor-calibration harness — first real (ELO × play-style) strength map + reusable engine bench.
+**Should have (differentiators, already in scope):**
+- Free, transparent, own-game SR (no free equivalent exists in the market - Aimchess is $7.99/mo, Chessable Puzzle Connect gates past 10 puzzles at $75/yr)
+- Pre-move metacognition guess (critical vs. several-fine) - genuinely novel, untested pedagogy, flagged for extra UAT attention on session-pace friction
+- Red herrings from the user's own well-handled positions (non-gem game_best_moves) - novel, cheap (data already exists)
+- Honest two-tier exit (mastered vs. parked) - ahead of Anki/Chessable, which have no first-party "too hard, set aside" mechanic
+- User-configured weekly cadence over rigid daily streak - correctly avoids Anki's #1 documented dropout cause (rigid-schedule review-debt compounding)
 
-**Defer (v1.x / v2+):**
-- Rematch button, bot resignation/draw-offers in dead positions, phone-perf tuning, low-time warnings (v1.x).
-- Preset bot character cards, 3-star victory system, user-results ELO relabeling, rage-quit accounting (v2+ — several need server-side in-progress tracking that v1's client-side design avoids).
-- **CUT entirely:** takeback, premove, hints, live eval during play, opening book for the bot, adaptive difficulty, server-enforced clock/websockets (each corrupts calibration or adds server complexity the design rejects).
+**Defer (v2+, already scoped this way in the seed):**
+- Motif-aggregated progress dashboard, un-parking after cooldown, push/email reminders, weekly leaderboard (gated on 10-15 weekly-active-trainer trigger, matching this research's general finding that social layers need a concurrency floor)
 
 ### Architecture Approach
 
-The NEW bot surface plugs into EXISTING architecture through the frozen `EngineProviders` seam. The single most important structural constraint: `selectBotMove` must be a **pure, provider-agnostic** function in `lib/engine/` (no React, no `new Worker()`, no DOM) so the Node harness can import it through the `@/` alias hook without dragging in browser dependencies. The browser and harness differ only in how they *build* providers. Backend stays a one-endpoint touch reusing the import persistence path; bot settings live in a side-table, not new columns on the hot `games` table. See `ARCHITECTURE.md`.
+Four new tables (drill_items, drill_sessions, drill_solves, train_settings) following this codebase's established composite-PK convention (drill_items FK-chains through game_flaws rather than games directly, matching how game_flaws itself already cascades). New backend stack: app/routers/train.py (settings/sessions/solve/complete/progress endpoints), app/services/train_scheduler.py (pure interval-ladder functions, zero I/O, unit-testable first), app/services/train_pool.py plus app/repositories/train_repository.py (SQL assembly reusing player_only_gate, eval_cp_to_expected_score, best_move_tier_sql's complement for herrings). Frontend: Train.tsx as a lazy route mirroring Bots.tsx's structure, a new useTrainGradingEngine.ts sibling of useStockfishEngine.ts feeding the already-shipped liveFlaw.ts classifier (no new sigmoid/threshold math), and the existing /library/flaws/{game_id}/{ply}/tactic-lines endpoint serves the reveal stepper's data with no new backend endpoint needed.
 
 **Major components:**
-1. **`selectBotMove.ts`** (NEW, pure) — maps `(fen, {elo, styleSlider}, providers, budget)` → chosen UCI; owns the sample↔argmax blend across two regimes.
-2. **`useBotGame.ts`** (NEW hook) — game loop: chess.js move tree, dual clocks + increment, side-to-move, pacing, flag/terminal detection, localStorage snapshot each move; holds one persistent pool+queue.
-3. **`BotsPage` + subcomponents** (NEW) — setup screen (reuse `EloSelector` + style slider + color + TC preset), live board, resume prompt, POST on finish; lazy-loaded route, nav sibling to Library/Openings/Endgames.
-4. **`routers/bot_games.py` + `bot_game_service.py`** (NEW) — thin router → build `NormalizedGame`, derive converted player rating, persist via shared path.
-5. **`persist_normalized_games()`** (extracted from `import_service._flush_batch`) + **`bot_game_settings`** side-table + **`normalize_flawchess_game`** (NEW) — the reuse boundary.
-6. **`scripts/bot-calibration.mjs`** (NEW) — clone of the proven `gem-elo-calibration.mjs`; Node providers (onnxruntime-web wasm session + spawned Stockfish `.cjs`) over the (ELO × slider × anchor) grid → TSV.
-
-> **Store-on-finish reconciliation (compatible, not a contradiction):** ARCHITECTURE says "reuse `_flush_batch` / extract `persist_normalized_games`"; PITFALLS clarifies there is no PGN front-door. The reconciliation: a NEW `normalize_flawchess_game(pgn, …)` builds a `NormalizedGame`, which then feeds the SAME reusable downstream (`find_opening` + position hashing + `_flush_batch`/`persist_normalized_games`). The `Platform` Literal must be **widened** to include `"flawchess"`, but `games.platform` is `String(20)` with no CHECK constraint, so **no column migration** is needed.
+1. **Pool + scheduler backend (Phase A)** - drill-item data model, pure interval-ladder scheduler, session-composition query (75% SR most-overdue-first + 25% herring backfill), solve/complete endpoints. Self-contained, no frontend dependency, must precede everything else.
+2. **Train page + solve loop (Phase B)** - nav/routing wiring, grading engine (WASM-based, reusing existing classifiers), session queue to guess to move to grade to reveal flow. Grading engine and static UI shell can build in parallel against mocked payloads while Phase A finishes.
+3. **Schedule + progress surface (Phase C)** - weekday/N settings UI, nav badge, weekly-streak display (computed at read time, not a stored running counter, avoids desync), mastered/parked counts, celebrations, cold/empty states. Hard sequential dependent on both A and B.
 
 ### Critical Pitfalls
 
-Top items from `PITFALLS.md` (14 total, each mapped to a phase and verification):
-
-1. **Timer drift + backgrounded-tab throttle (Pitfalls 1–2)** — never subtract per `setInterval` tick; store absolute deadlines and derive display from `Date.now()` deltas (interval repaints only). Make the Page Visibility API first-class: on hide, pause the clock and don't bill away-time; on show, recompute against the wall clock. Otherwise the bot self-flags while hidden or the human returns already flagged.
-2. **Argmax at the human end (Pitfalls 3–5)** — argmax over Maia-predicted human moves plays hundreds of Elo above nominal and makes every game identical. Sample the temperature-reshaped Maia policy at the human end; argmax only at the Stockfish extreme. Fixed sampler order: `policy()` → drop illegal (via `applyUciMoveFen`) → apply temperature → renormalize → sample; fall back to a legal move on empty policy.
-3. **Full MCTS at the human end (Pitfall 4)** — run exactly ONE Maia inference at full-human (no tree); engage `mctsSearch` only as the Stockfish weight rises. Branch on the slider *before* the compute path, or blitz on a mid-range phone can't answer in 1–2 s.
-4. **The "reuse normalization" trap + missing `[%clk]` (Pitfalls 6–7)** — no PGN→game path exists; write `normalize_flawchess_game` and widen the `Platform` Literal. Emit `{[%clk h:mm:ss]}` after every move (both colors) using true post-move remaining time — load-bearing for time-management analytics, unrecoverable if omitted. Add a store-endpoint validation gate that rejects a bot PGN missing `[%clk]`.
-5. **Synthetic id collisions + NULL player rating (Pitfalls 8–9)** — mint `crypto.randomUUID()` at game *start*, persist it in localStorage (survives resume), send as `platform_game_id`; make the store endpoint idempotent on unique-constraint conflict (return 200). Derive a lichess-scale, TC-bucket-matched player rating at save via the existing `useMaiaEloDefault` machinery; NULL only when the user has zero imported games. Record `rating_source` for the ±100–150 caveat.
-6. **Node-ONNX feasibility + unanchored self-play (Pitfalls 13–14)** — de-risk Maia-in-Node with a spike *first* (measure per-inference latency + games/hour); note the gem harness already proves this path works. Always fit strength against external anchors (raw-Maia 1100–1900 argmax rungs + Stockfish skill levels), never pure self-play; sample grid cells evenly.
+1. **Opponent-flaw leakage via hand-rolled ply-parity** - a ply % 2 inline check gets the white/black mapping wrong for one color; must reuse query_utils.py's player_only_gate/is_opponent_expr verbatim (this exact bug has happened once before in this codebase).
+2. **Post-move eval shift misapplied to the winnability floor** - eval_cp on a game_positions row describes the position after the ply, while best_move/pv on that same row describe the position before it; the winnability floor must read the prior row's eval, not the flaw row's own.
+3. **Answer key drift after a drill item is mid-ladder** - best_move/blob content can be silently overwritten by later re-analysis passes; must explicitly choose snapshot-at-pool-entry vs. live-join, not default into a live join by accident.
+4. **Source-game deletion silently orphans drill progress** - Game.id is a surrogate key; re-import after "delete all games" gets new IDs, and drill_sessions is the one table that doesn't auto-cascade from a game delete. Must be a conscious schema plus messaging decision.
+5. **Client-side WASM grading disagrees with the server answer key near MISTAKE_DROP** - the vendored WASM engine's movetime-capped search can miss saving/refuting lines a full-strength server search finds; corrupts SR mechanics directly (streak/mastery/parking), not just a cosmetic mismatch. Needs a generous, measured movetime budget and an accepted noise band.
 
 ## Implications for Roadmap
 
-Research points to **six phases in three dependency waves**, closely mirroring the `ARCHITECTURE.md` build order. The keystone is `selectBotMove` (Phase 1): everything on the play side and the harness depends on it. The backend store path (Phase 2) is fully independent of engine work and parallelizable. The harness (Phase 3) and clocked board (Phase 4) both depend only on Phase 1 and can run in parallel.
+Based on research, the seed's own three-phase decomposition is directionally correct and should be the roadmap's phase structure, with the dependency/sequencing rationale sharpened by architecture research and one added scope item (session progress indicator, folded into Phase 2 rather than treated separately).
 
-### Phase 1: Move selection core (`selectBotMove`)
-**Rationale:** Pure, provider-agnostic, depends only on existing engine primitives; foundational to both the app and the harness. Building it wrong (argmax / MCTS-everywhere) is the single highest-impact failure.
-**Delivers:** `selectBotMove.ts` (two-regime sample↔argmax blend) + unit tests with injectable RNG for determinism.
-**Addresses:** practical-play engine as opponent; play-style slider semantics.
-**Avoids:** Pitfalls 3, 4, 5, 10 (argmax, full-MCTS-at-human-end, botched blend, adaptive strength).
+### Phase 1: Pool + Scheduler Backend
+**Rationale:** Every other phase depends on this; it is fully self-contained (unit-testable via the pure train_scheduler.py functions with zero DB, then the repository/router layer against the existing backend test suite) with no frontend dependency. All data dependencies (game_flaws, game_positions, game_best_moves, missed_pv_lines/allowed_pv_lines) are already shipped, so this is schema plus query work, not a data pipeline.
+**Delivers:** drill_items/drill_sessions/drill_solves/train_settings migration; pure interval-ladder scheduler; SR pool plus red-herring session-composition query (75/25 mix); solve/complete/settings/progress endpoints; explicit answer-key freshness policy (snapshot vs. live-join) and drill_sessions cascade/deletion decision, both made deliberately here.
+**Addresses:** Pool entry (own blunders, ownership-filtered, winnability floor, answer-key present), interval-ladder scheduler with cap+backfill.
+**Avoids:** Pitfalls 1 (ply-parity), 2 (eval-shift), 3 (answer-key drift), 4 (game-deletion orphaning, schema half), 5 (blob-backfill degenerate session composition), 7 (timezone, ladder half), 9 (payload shape half).
 
-### Phase 2: Backend store-on-finish
-**Rationale:** Independent of all engine work; parallelizable with Phase 1. Settles the schema/id/rating contracts everything else persists through.
-**Delivers:** `normalize_flawchess_game`, widened `Platform` Literal (no column migration), `bot_game_settings` model+migration, extracted `persist_normalized_games`, `bot_game_service`, thin `routers/bot_games.py`, Pydantic schemas, idempotent + PGN-validating + server-sanity-checked endpoint.
-**Uses:** existing import persistence path, `user_rating_anchors` / `chesscom_to_lichess` rating conversion.
-**Avoids:** Pitfalls 6, 7 (validation gate), 8, 9 (server-derived id + rating).
+### Phase 2: Train Page + Solve Loop (Frontend)
+**Rationale:** Nav/routing is mechanical and unblocks manual QA of everything else; the grading engine and static UI shell can build/test in parallel against mocked session payloads before Phase 1's endpoints exist, mirroring the sibling useStockfishGradingEngine hook's existing headless test pattern. VariationTree reuse cost should be spiked early in this phase, not discovered mid-implementation.
+**Delivers:** Nav wiring (App.tsx exact insertion points already identified); useTrainGradingEngine.ts (sibling of useStockfishEngine.ts, reusing liveFlaw.ts's classifier, no new threshold math); session queue to guess to move to grade to reveal flow; session progress indicator ("N of M"); resolved VariationTree-reuse decision (full-component embed vs. new lightweight stepper).
+**Uses:** Existing WASM Stockfish/Maia infrastructure, liveFlaw.ts, flawThresholds.ts, click-to-move board, VariationTree.tsx utilities.
+**Implements:** Solve-loop client state machine (mirrors useBotGame.ts's play-loop pattern).
+**Avoids:** Pitfall 8 (WASM grading vs. server threshold, needs a dedicated headless measurement pass before ship), Pitfall 9 (UI half, pre-attempt component state must not hold reveal-only fields), the "reimplementing the grading worker from scratch" and "per-puzzle Worker recreation" technical-debt/performance traps.
 
-### Phase 3: Calibration harness (spike-gated)
-**Rationale:** Committed deliverable, architecturally independent of the play UI (depends only on Phase 1). Gate on a Maia-in-Node feasibility spike as the first task — though the shipped `gem-elo-calibration.mjs` already answers the open question YES.
-**Delivers:** `scripts/bot-calibration.mjs` reusing the `@/` alias hook + proven Node providers; first (ELO × play-style) strength map streamed to `reports/data/`.
-**Uses:** `onnxruntime-node@1.27.0` (or onnxruntime-web wasm, per the harness's existing recipe), vendored Stockfish `.cjs`, `tsx`.
-**Avoids:** Pitfalls 13 (spike first), 14 (external anchors, even grid sampling).
-
-### Phase 4: Clocked board + game loop (`useBotGame`)
-**Rationale:** Depends on Phase 1. The heart of the play experience and the home of the highest-risk clock/visibility work.
-**Delivers:** `useBotGame` (dual clocks + increment, pacing, flag + terminal detection, resign, draw offers, move sounds), `useGameClock`, `useMoveSounds`, `botGamePgn` `[%clk]` emission.
-**Uses:** hand-rolled clock/sound hooks, chess.js, `chess.js setComment`.
-**Avoids:** Pitfalls 1, 2 (Date.now()-delta clock + Page Visibility), 7 (client emission).
-
-### Phase 5: localStorage resume
-**Rationale:** Depends on Phase 4; enhances the board with tab-close forgiveness.
-**Delivers:** `botGamePersistence.ts` — persist paused-clock snapshot every move; "Resume game?" gate; clear only after a confirmed 2xx.
-**Avoids:** Pitfall 12 (paused-remaining persistence, no terminal-state resume, no double-store).
-
-### Phase 6: Bots page + nav wiring
-**Rationale:** Depends on Phases 4, 5, 2 — the integration layer.
-**Delivers:** setup screen (reused sliders/color/TC), live board wiring, resume prompt, POST-on-finish, lazy `/bots/*` route + nav sibling, guest analyzed-coverage caveat.
-**Avoids:** Pitfall 11 (guest eval-exclusion UX), analytics-contamination posture (bot games excluded from defaults, opted into Bots + Library Games).
+### Phase 3: Schedule + Progress Surface
+**Rationale:** Hard sequential dependent on both Phase 1 and Phase 2, streak/mastery data must exist, and the "Flaw fixed!" celebration fires from the solve loop built in Phase 2.
+**Delivers:** Weekday/N settings UI; nav badge and dashboard card; weekly-streak display (read-time computed); mastered/parked counts with non-shaming visual treatment; cold/empty states (including the distinct "still analyzing, not caught up" state); comeback-session messaging that doesn't compound streak-reset with a red session rating.
+**Addresses:** Weekly self-scheduled cadence plus nav badge, mastered/parked exit doors, session-end score/rating plus confetti.
+**Avoids:** Pitfall 4 (deletion messaging half), 5 (cold-state copy half), 6 (returning-user re-entry shock), 7 (schedule UI plus weekly-streak timezone half), "parked-count shame" UX pitfall.
 
 ### Phase Ordering Rationale
-- **Waves:** A = {1, 2}, B = {3, 4}, C = {5, 6} — matches `ARCHITECTURE.md`'s dependency graph exactly.
-- **`selectBotMove` first** because both the play loop and the harness import it; getting the two-regime blend right up front prevents calibration-corrupting rework.
-- **Backend parallel to engine** because store-on-finish shares no code with move selection and unblocks persistence early.
-- **Harness parallel to the board** because it's non-browser and independent; spiking it early de-risks the one open feasibility item without blocking the UI.
-- **Clock/visibility risk is concentrated in Phase 4**, so it gets a dedicated phase with explicit wall-clock and hide-tab verification rather than being smeared across the UI work.
+
+- Backend-first sequencing is forced by data dependency, not preference: the solve loop has nothing to call without Phase 1's endpoints, and the progress surface has no streak/mastery data without Phase 1+2 both running.
+- Phase 2 can start its engine/UI-shell work in parallel with Phase 1's tail end because the grading engine and static components are backend-independent (mocked payloads suffice); this is a wave-parallelization opportunity, not a strict phase boundary.
+- Grouping mirrors the seed's own decomposition exactly; research didn't find a reason to reshuffle, only to sharpen the why and surface the four decisions (cascade, freshness policy, VariationTree reuse, timezone) that must be resolved within Phase 1/2 rather than deferred.
 
 ### Research Flags
 
-Phases likely needing deeper research/spike during planning:
-- **Phase 1:** the exact slider → (temperature, sharpness, regime thresholds) curve is itself a calibration target with a genuine discontinuity at `HUMAN_ONLY_THRESHOLD`; resolve the mapping at plan time and have the harness sweep *through* the boundary. Watch the `policyTemperature` polarity (T<1 = human end) — inverting it was a prior bug.
-- **Phase 3:** gate on a Maia-in-Node feasibility spike (latency + games/hour) as the first task; also confirm the `onnxruntime-node@1.27.0` vs `~1.20.1` version question (prefer 1.27.0 to match the browser opset).
+Phases likely needing deeper research or an explicit spike during planning:
+- **Phase 1:** The answer-key freshness policy (snapshot vs. live-join) and drill_sessions cascade decision are real product/architecture calls, not mechanical, flag for plan-phase to force an explicit decision, not an implicit default.
+- **Phase 2:** VariationTree full-component-reuse vs. new lightweight stepper is a real build-cost unknown flagged by architecture research as needing a spike before implementation proceeds. The WASM grading movetime budget also needs a dedicated headless measurement pass (precedent: project_headless_stockfish_wasm_verification memory note) rather than assuming the seed's "~1s" figure holds.
+- **Phase 1 and 3 (crosscutting):** Timezone/day-boundary handling has zero precedent anywhere in this codebase, needs an explicit decision (lightweight UTC-offset field vs. documented UTC-approximation) made once and threaded through both the ladder logic and the schedule UI, not solved twice inconsistently.
 
-Phases with standard patterns (skip research-phase):
-- **Phase 2:** well-understood extend-the-import-path work against named files; the only design choices (id/rated/opponent-type/rating) are already recommended in `ARCHITECTURE.md`.
-- **Phase 5:** localStorage snapshot/restore is a solved pattern; the pitfalls are enumerated.
-- **Phase 6:** page/nav/route wiring reuses existing `Analysis` lazy-route + slider components.
+Phases with standard, well-documented patterns (skip deep research-phase):
+- **Phase 2 (nav/routing wiring)** - architecture research already identified exact file/line targets in App.tsx; mechanical work.
+- **Phase 3 (settings UI, celebrations)** - direct reuse of user_import_settings create-on-first-touch pattern and confetti.ts's existing wrapper; no new patterns needed.
 
 ## Confidence Assessment
 
 | Area | Confidence | Notes |
 |------|------------|-------|
-| Stack | HIGH | Versions verified via `npm view`; chess.js `[%clk]`, engine browser-independence, and headless Stockfish confirmed by direct Node execution against the repo's own install. Only soft spot: sound-asset licensing (verify each CC0 file at plan time). |
-| Features | HIGH | Well-trodden lichess/chess.com UX; scope tightly locked in SEED-091's 5 decisions + PROJECT.md. IN/OUT boundaries explicit. |
-| Architecture | HIGH | Every integration point named against real source; the `EngineProviders` seam and the `gem-elo-calibration.mjs` harness pattern are proven in prod. Store-schema choices are open-by-design but come with clear recommendations. |
-| Pitfalls | HIGH | Grounded in the actual codebase (`mctsSearch.ts`, `normalization.py`, `eval_queue_service.py`, `useMaiaEngine.ts`) plus well-established browser-platform behavior. |
+| Stack | HIGH | Confirmed via direct package.json/pyproject.toml reads and npm version checks; every recommendation has in-repo file-level precedent, not inference |
+| Features | MEDIUM | HIGH on Lichess/Anki mechanics (documented/open-source); MEDIUM on Aimchess/Chessable/Noctie/ChessMood (marketing copy plus user reports, no source/API access to closed products) |
+| Architecture | HIGH | Grounded entirely in direct reads of real files in this repo, not generic SRS-app patterns; every integration point has an exact file/line target |
+| Pitfalls | HIGH | Every pitfall grounded in direct reads of shipped code plus this project's own memory notes on eval nondeterminism and blob backfill behavior; several pitfalls reference bugs that have already occurred once in this exact codebase, not hypothetical risks |
 
 **Overall confidence:** HIGH
 
 ### Gaps to Address
 
-- **`onnxruntime-node` version (1.27.0 vs ~1.20.1):** cross-file discrepancy resolved in favor of 1.27.0 (matches the pinned browser `onnxruntime-web` opset; the 1.20.1 figure was the unrelated Python package). Confirm at Phase 3 plan time with a one-inference smoke test.
-- **Slider → (temperature, sharpness, thresholds) mapping:** a genuine design decision AND a calibration target, with a distribution discontinuity at the human/search regime boundary. Resolve at Phase 1 plan time; validate with a harness sweep through the seam.
-- **Store-on-finish schema knobs:** `platform_game_id` source (→ server `uuid4`), `rated` (→ False), opponent-type (→ `is_computer_game=True`), bot-ELO/player-rating columns — all have recommendations in `ARCHITECTURE.md` but must be locked at Phase 2 plan time.
-- **Maia-in-Node harness speed:** the one open feasibility item; de-risk with a spike as the first Phase 3 task (fallback: Playwright headless-browser harness driving the real worker).
-- **Sound-asset licensing:** confirm each audio file is genuinely CC0 before committing; do NOT copy lichess assets.
+- **Session progress indicator**: not in the settled design at all, needs to be added as an explicit Phase 2 requirement (low cost, high table-stakes value; do not let it slip to a v1.x follow-up).
+- **drill_sessions cascade/deletion semantics on game wipe or guest purge**: mechanically clear (it's the one table that doesn't auto-cascade) but the product question (does training-progress history count as "derived from games" that should wipe, or as progress a user would want preserved) needs an explicit call in Phase 1 planning, not inference.
+- **Answer-key snapshot vs. live-join**: an open architecture decision with real tradeoffs on both sides (drift risk vs. staleness risk); must be picked and documented in Phase 1, not left to whatever a straightforward query produces.
+- **VariationTree reuse build cost**: the component is deeply coupled to Analysis.tsx's full editor state; whether a minimal single-chain instantiation is viable vs. building a new lightweight stepper is a real unknown that should be spiked early in Phase 2, not discovered mid-build.
+- **Timezone/day-boundary convention**: zero existing precedent in this codebase (every other timestamp is naive UTC); needs an explicit, once-made decision threaded through both the Phase 1 ladder and the Phase 3 schedule UI/weekly-streak logic.
+- **Grading movetime budget**: the seed's assumed "~1s" grading time is unvalidated for Train's single-move-eval shape (the sibling hook's measured cap is 4000ms for a different search shape), needs its own headless measurement pass before the Phase 2 UX is finalized.
 
 ## Sources
 
 ### Primary (HIGH confidence)
-- `STACK.md` — verified package versions (`npm view`), direct Node execution of `chess.js` `[%clk]` emission and vendored Stockfish, source inspection confirming engine math is browser-global-free.
-- `FEATURES.md` — lichess "Play with the computer" + chess.com "Play Bots" UX; SEED-091 locked scope + PROJECT.md milestone.
-- `ARCHITECTURE.md` — live-source integration points (`useFlawChessEngine`, `mctsSearch`, `maiaQueue`, `import_service._flush_batch`, `normalization.py`, `user_rating_anchors`, `gem-elo-calibration.mjs`); SEED-091 + CLAUDE.md constraints.
-- `PITFALLS.md` — codebase-grounded failure modes (`mctsSearch.ts` determinism/WR-04/WR-07, `normalization.py` Platform Literal, `eval_queue_service.py` guest exclusion, `useMaiaEngine.ts`); CLAUDE.md critical constraints; well-established browser platform behavior (Page Visibility, timer clamping, Worker throttling).
+- Direct file reads: app/models/game_flaw.py, app/models/game_best_move.py, app/models/game_position.py, app/models/user_import_settings.py, app/repositories/query_utils.py, app/repositories/library_repository.py, app/repositories/game_repository.py, app/services/eval_apply.py, app/services/forcing_line_gate.py, app/services/best_move_candidates.py, app/services/guest_cleanup_service.py, app/routers/position_bookmarks.py, app/routers/bots.py, app/routers/library.py, app/routers/imports.py, frontend/src/App.tsx, frontend/src/pages/Bots.tsx, frontend/src/pages/Analysis.tsx, frontend/src/components/analysis/VariationTree.tsx, frontend/src/hooks/useStockfishEngine.ts, frontend/src/hooks/useStockfishGradingEngine.ts, frontend/src/hooks/useLiveMoveFlaw.ts, frontend/src/lib/liveFlaw.ts, frontend/src/lib/confetti.ts, frontend/package.json
+- .planning/seeds/SEED-037-train-spaced-repetition-blunder-drills.md - settled design, read in full across all four research tracks
+- npm version checks confirming installed package versions match current latest
 
 ### Secondary (MEDIUM confidence)
-- Project memory: `project_headless_stockfish_wasm_verification` (Stockfish-WASM-in-Node verified), `project_flawchess_engine_prior_art`, `project_frontend_beta_gating_source`.
-- Sound-asset licensing guidance (freesound.org CC0 vs lichess non-CC0) — verify per-file at plan time.
+- Comparable-product research (Aimchess, Chessable Puzzle Connect, Noctie, ChessMood) - marketing copy and user reports, no source/API access
+- Anki dropout/session-length research (SmartRecallAI, StudyCardsAI) and Duolingo streak-mechanic teardowns, used as inputs to planner-tunable constants, not prescriptions
 
 ### Tertiary (LOW confidence)
-- The `onnxruntime==1.20.1` memory note — refers to the Python package for a different Maia repro; superseded here by the STACK `onnxruntime-node@1.27.0` recommendation.
+- None flagged - all findings cross-referenced against either this codebase directly or documented mechanics of open-source/well-documented competitor products (Lichess, Anki)
 
 ---
-*Research completed: 2026-07-11*
+*Research completed: 2026-07-25*
 *Ready for roadmap: yes*

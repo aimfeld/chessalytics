@@ -18,6 +18,14 @@ import type { OpponentStrengthRange } from '@/types/api';
 import { rangeToQueryParams } from '@/lib/opponentStrength';
 import type { FeedbackRequest, FeedbackResponse } from '@/types/feedback';
 import type { StoreBotGameRequest, StoreBotGameResponse, PersonaWinsResponse } from '@/types/bots';
+import type {
+  TrainSessionResponse,
+  SolveRequest,
+  SolveResponse,
+  PuzzleRevealResponse,
+  TrainSettingsResponse,
+  TrainSettingsUpdate,
+} from '@/types/train';
 
 /**
  * Central Axios instance.
@@ -233,6 +241,23 @@ export const botsApi = {
     apiClient.post<StoreBotGameResponse>('/bots/games', data).then(r => r.data),
   getPersonaWins: () =>
     apiClient.get<PersonaWinsResponse>('/bots/persona-wins').then(r => r.data),
+};
+
+// ─── Train API ────────────────────────────────────────────────────────────────
+
+export const trainApi = {
+  composeOrResumeSession: () =>
+    apiClient.post<TrainSessionResponse>('/train/sessions').then(r => r.data),
+  solvePuzzle: (sessionId: number, data: SolveRequest) =>
+    apiClient.post<SolveResponse>(`/train/sessions/${sessionId}/solve`, data).then(r => r.data),
+  revealPuzzle: (sessionId: number, position: number) =>
+    apiClient
+      .get<PuzzleRevealResponse>(`/train/sessions/${sessionId}/puzzles/${position}/reveal`)
+      .then(r => r.data),
+  getSettings: () =>
+    apiClient.get<TrainSettingsResponse>('/train/settings').then(r => r.data),
+  updateSettings: (data: TrainSettingsUpdate) =>
+    apiClient.put<TrainSettingsResponse>('/train/settings', data).then(r => r.data),
 };
 
 // ─── Library API ──────────────────────────────────────────────────────────────

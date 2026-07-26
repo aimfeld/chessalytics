@@ -1,0 +1,136 @@
+# Requirements: FlawChess v2.9 Train — Spaced-Repetition Blunder Drills
+
+**Defined:** 2026-07-25
+**Core Value:** Position-precise WDL analysis on the user's own games; Train turns that analysis into a habit by drilling the user's own blunders on a spaced schedule until the patterns stick.
+**Source:** SEED-037 (design settled across six gsd-explore rounds, final 2026-07-25) + `.planning/research/` (4-dimension research pass, 2026-07-25).
+
+## v1 Requirements
+
+### Drill Pool & Scheduler (backend)
+
+- [x] **POOL-01**: User's own blunders (ply parity vs `user_color` via the existing `is_opponent_expr` helper) enter the drill pool when they clear the winnability floor (expected score ≥ ~20–25% via `eval_cp_to_expected_score`, respecting the post-move eval-shift convention) and carry a stored answer key (`best_move` + `pv` + non-empty `missed_pv_lines` blob)
+- [x] **POOL-02**: Each drill item is classified sharp vs avoid-the-blunder from the `missed_pv_lines` node-0 best-vs-second expected-score gap (classifier, not entry gate)
+- [x] **POOL-03**: Red herrings are sourced from non-gem `game_best_moves` candidate rows (user played the stored best move out-of-book, best ≈ second), winnability-floored, recency-weighted, no repeats until the source is exhausted, with no SR bookkeeping
+- [x] **POOL-04**: Per-item SR state (streak, due date, fail count, parked flag, solve log) persists per (user, flaw); the streak-keyed interval ladder (0 → next session, 1 → ~3d, 2 → ~10d) snaps due dates forward to the next scheduled session day
+- [x] **POOL-05**: An item retires as mastered after 3 correct solves in 3 separate sessions (a miss resets the counter); mastery is driven by move correctness alone, never the guess
+- [x] **POOL-06**: An item failed 3 times with zero correct solves ever is parked ("too hard for now") and leaves the queue; a single correct solve permanently zeroes the fail counter; parked items do not return in v1
+- [x] **POOL-07**: A session-composition endpoint returns exactly N puzzles while material lasts: ~75% SR items (due most-overdue first, padded by introducing new flaws recency-weighted) + ~25% red herrings
+- [x] **POOL-08**: A result-recording endpoint persists per-puzzle outcomes (guess verdict, move verdict, played move) and updates streak/due/fail/parked state; grading itself happens client-side
+- [x] **POOL-09**: Drill data stays consistent when source games are deleted (guest 30-day prune, delete-all + re-import): no orphaned drill rows, no crashes on dangling references
+- [x] **POOL-10**: The pre-attempt puzzle payload does not contain the answer key or puzzle-type ground truth (no answer leak before the attempt); reveal data is fetched or unlocked only after the attempt
+
+### Solve Loop (frontend)
+
+- [x] **SOLV-01**: Before moving, the user commits a binary guess: "one critical move" vs "several fine moves" (ground truth from the sharp/soft classifier; herrings count as "several")
+- [x] **SOLV-02**: The user then plays exactly one move, one attempt, on a lichess-minimal solve screen: board oriented to the user's color, opponent's last move animated + highlighted, side-to-move prompt, no eval bar or game metadata
+- [x] **SOLV-03**: Grading is fully client-side and uniform across puzzle types: exact match to stored `best_move` is instantly correct; any other move is evaluated by the vendored Stockfish WASM and passes if its expected-score drop vs best stays below the MISTAKE threshold (reuse `liveFlaw.ts` / `flawThresholds.ts`)
+- [x] **SOLV-04**: A session progress indicator (e.g. "4 of 12") is visible during the solve loop
+- [x] **SOLV-05**: The reveal shows guess + move verdicts, the original blunder vs the best line (steppable pv), the game card, and a deep link into the analysis board; herring reveals say the user handled the position well
+- [x] **SOLV-06**: On tactic-tagged flaws the reveal offers an opt-in "step through the line" control with the tactic ply countdown (motif name as a label), covering both missed and allowed orientations — always offered when tagged, never auto-triggered, embedded in the reveal
+- [x] **SOLV-07**: Each puzzle scores 0–2 independent points (+1 correct guess, +1 correct move); the session ends with a score screen showing total / 2N as a percentage mapped to a green/yellow/red rating (named threshold constants)
+
+### Train Page & Navigation
+
+- [x] **NAV-01**: A `/train` route exists between Library and Bots on all three nav surfaces (desktop header, mobile bottom bar at six tap targets with labels intact, mobile More drawer), with route title, prefix-matched `isActive`, and convention-following test IDs
+- [x] **NAV-02**: Train is import-gated like Openings/Endgames (`/train` NOT in `IMPORT_EXEMPT_ROUTES`): greyed out until the user has games and import tier 1 is complete
+
+### Schedule & Reminders
+
+- [ ] **SCHD-01**: User configures a weekly training schedule: weekday picker + N puzzles per session
+- [ ] **SCHD-02**: On session days, an in-app nav badge and/or dashboard card surfaces the waiting session ("12 puzzles waiting"); no push, no email
+- [ ] **SCHD-03**: An ad-hoc "train now" session on an off day is allowed and draws the same queue
+
+### Progress & Gamification
+
+- [ ] **PROG-01**: A weekly streak counts consecutive weeks with every scheduled session completed (no freeze mechanics; competence feedback, no behavior control)
+- [ ] **PROG-02**: A green-rated session ends with a confetti burst (`prefers-reduced-motion` safe, reusing the existing confetti helper)
+- [ ] **PROG-03**: When an item hits 3/3 and retires, a distinct "Flaw fixed!" celebration shows with the position thumbnail
+- [ ] **PROG-04**: A progress surface shows mastered and parked counts honestly ("3 parked — too hard for now", never framed as failure)
+- [ ] **PROG-05**: Cold/empty states: no analyzed games → point to import/analysis; pool exhausted → celebrate, never a dead screen
+
+## v2 Requirements
+
+Deferred per SEED-037 (tracked, not in the current roadmap).
+
+### Pool Expansion
+
+- **POOL-V2-01**: Mistakes tier — expand pool entry beyond blunders when active users run dry
+- **POOL-V2-02**: Un-parking — parked items return after a long cooldown or rating climb
+
+### Motif Learning Layer
+
+- **MOTIF-V2-01**: Motif-aggregated progress (mastery grouped by motif)
+- **MOTIF-V2-02**: Motif-variation injection (prefer unseen positions sharing a repeatedly-failed motif)
+- **MOTIF-V2-03**: LLM one-line "why" explanation on the reveal
+
+### Engagement
+
+- **ENGA-V2-01**: Weekly leaderboard, gated on ≥10–15 weekly-active trainers (opt-in, points-earned metric)
+- **ENGA-V2-02**: Milestone counters / personal-best callouts
+- **ENGA-V2-03**: Push/email reminders (PWA push subsystem or email pipeline)
+- **ENGA-V2-04**: Half-credit / retry variants if one-attempt proves too harsh
+
+## Out of Scope
+
+Explicitly excluded per SEED-037's decision log. Documented to prevent re-litigating.
+
+| Feature | Reason |
+|---------|--------|
+| FSRS scheduler | Item lifetime ~3–6 reps, binary grading, session-day quantization — nothing for per-user memory-model fitting to bite on |
+| Backend grading endpoint | Answer key is stored per-ply; client Stockfish WASM grades locally with zero server engine load |
+| Retry on wrong move | One attempt matches "in the real game you got one chance" |
+| Eval bar / game metadata on the solve screen | Leaks answer and severity; context lives on the reveal |
+| 3-way type guess (sharp/soft/herring) | Types 2 and 3 differ by user history, not position character — would test memory, not judgment |
+| Motif multiple-choice quiz + escalated walkthrough | Rejected round 6: tedious, thin material, unreliable ground truth at depth > 8; replaced by the opt-in line stepper |
+| Tactic-depth cap on pool entry | The parked fail-out valve observes unsolvability directly instead of guessing via one proxy |
+| SR-tracked red herrings | Herrings are one-off fillers, not material to master |
+| Per-session streak + freeze tokens | Weekly streak over a user-set schedule is self-forgiving |
+| Leaderboard in v1 (hidden-gated) | Infrastructure for a feature that may idle for months; explicit active-user trigger instead |
+| Shrinking the mobile nav font for six labels | Bar is already at `text-xs`; measurement shows six labels fit to 320px — fix layout, not type |
+| Zobrist dedup of repeat blunders | Repeat blunders may coexist; not necessary |
+
+## Traceability
+
+Which phases cover which requirements. Updated during roadmap creation.
+
+| Requirement | Phase | Status |
+|-------------|-------|--------|
+| POOL-01 | Phase 189 | Complete |
+| POOL-02 | Phase 189 | Complete |
+| POOL-03 | Phase 189 | Complete |
+| POOL-04 | Phase 189 | Complete |
+| POOL-05 | Phase 189 | Complete |
+| POOL-06 | Phase 189 | Complete |
+| POOL-07 | Phase 189 | Complete |
+| POOL-08 | Phase 189 | Complete |
+| POOL-09 | Phase 189 | Complete |
+| POOL-10 | Phase 189 | Complete |
+| SOLV-01 | Phase 190 | Complete |
+| SOLV-02 | Phase 190 | Complete |
+| SOLV-03 | Phase 190 | Complete |
+| SOLV-04 | Phase 190 | Complete |
+| SOLV-05 | Phase 190 | Complete |
+| SOLV-06 | Phase 190 | Complete |
+| SOLV-07 | Phase 190 | Complete |
+| NAV-01 | Phase 190 | Complete |
+| NAV-02 | Phase 190 | Complete |
+| SCHD-01 | Phase 191 | Pending |
+| SCHD-02 | Phase 191 | Pending |
+| SCHD-03 | Phase 191 | Pending |
+| PROG-01 | Phase 191 | Pending |
+| PROG-02 | Phase 191 | Pending |
+| PROG-03 | Phase 191 | Pending |
+| PROG-04 | Phase 191 | Pending |
+| PROG-05 | Phase 191 | Pending |
+
+**Coverage:**
+
+- v1 requirements: 27 total
+- Mapped to phases: 27
+- Unmapped: 0
+
+**Note:** the original Coverage block above (and the roadmap-creation brief) stated "24 total" — recounting the actual `### `-sectioned requirement IDs in this file (POOL-01..10, SOLV-01..07, NAV-01..02, SCHD-01..03, PROG-01..05) gives 27, not 24. Corrected here; no requirement IDs were added or removed, this is a count fix only.
+
+---
+*Requirements defined: 2026-07-25*
+*Last updated: 2026-07-25 after roadmap creation (v2.9 Phases 189-191; requirement-count correction 24→27)*

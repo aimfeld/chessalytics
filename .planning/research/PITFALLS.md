@@ -1,380 +1,503 @@
-# Pitfalls Research
+# Pitfalls Research — v2.9 Train (Spaced-Repetition Blunder Drills)
 
-**Domain:** Client-side clocked bot-play + synthetic-game storage + headless calibration harness, added to an existing React 19 / FastAPI / PostgreSQL chess-analysis app (FlawChess v2.3 "Bot Play")
-**Researched:** 2026-07-11
-**Confidence:** HIGH (grounded in the actual codebase: `mctsSearch.ts`, `normalization.py`, `query_utils.py`, `eval_queue_service.py`, `useMaiaEngine.ts`, `SEED-091`)
-
-This file is scoped to mistakes specific to bolting clocked bot-play onto THIS app. Generic web-dev advice is omitted. Every pitfall names a warning sign, an app-specific prevention, and the owning stage. Stage names are logical (the roadmap isn't written yet): **Setup/Engine-wiring**, **Clocked-board/Lifecycle**, **Resume**, **Store-endpoint/Normalization**, **Calibration-harness**, **Perf-polish**.
-
----
+**Domain:** Adding a spaced-repetition training feature on top of an existing chess-analysis
+platform's data pipeline (FlawChess-specific, not generic SR advice)
+**Researched:** 2026-07-25
+**Confidence:** HIGH — every pitfall below is grounded in direct reads of the shipped code
+(`app/models/game_flaw.py`, `app/services/eval_apply.py`, `app/services/forcing_line_gate.py`,
+`app/services/best_move_candidates.py`, `app/repositories/query_utils.py`,
+`app/repositories/library_repository.py`, `app/services/guest_cleanup_service.py`,
+`app/repositories/game_repository.py`, `frontend/src/hooks/useStockfishGradingEngine.ts`,
+`frontend/src/lib/confetti.ts`, `frontend/src/App.tsx`) plus this project's own memory notes
+on eval nondeterminism and blob backfill behavior, not web search — the failure modes are
+specific to how THIS codebase already stores and reprocesses this data. SEED-037's settled
+design is treated as fixed; every item below is a failure mode *in executing* it, not a
+proposal to reverse a decision.
 
 ## Critical Pitfalls
 
-### Pitfall 1: Timer drift from `setInterval` as the clock source of truth
+### Pitfall 1: Opponent-flaw leakage via a hand-rolled ply-parity check
 
 **What goes wrong:**
-The chess clock is decremented by a fixed amount every `setInterval(…, 100)` tick. `setInterval` does not fire on a precise schedule — it drifts under main-thread contention (Maia/Stockfish inference, React re-renders, GC), and browsers coalesce/clamp it. After a 5-minute blitz game the displayed clock can be off by seconds, unacceptable when flagging decides the stored, calibrated-on result.
+The pool-entry query (and any other place Train needs "this flaw belongs to the user, not
+their opponent") re-derives ownership from `ply % 2` instead of reusing the project's
+canonical ownership predicate. A sign error here silently pulls the *opponent's* blunders
+into the user's drill pool, or excludes half the user's own blunders depending on which
+color they played.
 
 **Why it happens:**
-`setInterval` is the obvious first reach. Its callback frequency is a hint, not a guarantee; accumulated per-tick subtraction compounds every missed/late fire.
+`game_flaws` deliberately stores both players' flaws in one table (ply parity vs
+`Game.user_color` is the only ownership signal — see CLAUDE.md and the model's own comments).
+It is very easy to write `ply % 2 == 0` inline and get the white/black mapping backwards for
+one color, because the mapping also depends on `user_color`, not ply alone.
 
 **How to avoid:**
-Never subtract a fixed delta per tick. Store an absolute `turnStartedAt = Date.now()` (or `performance.now()`) plus `msRemainingAtTurnStart` when each side's turn begins; on every render compute `displayed = msRemainingAtTurnStart - (Date.now() - turnStartedAt)`. The interval drives *repaint only*, never the value. On move commit, snapshot true remaining time once and add the increment. This mirrors the discipline `mctsSearch.ts` already enforces ("no `Date.now()`/`performance.now()` anywhere in this file" — timing lives outside the search).
+Reuse `app/repositories/query_utils.py`'s `player_only_gate` / `is_opponent_expr` (SQL) and
+`app/services/best_move_candidates.py`'s `mover_color_for_ply` (Python) verbatim. Do not
+write a new `ply % 2` predicate anywhere in the Train pool-entry query, the red-herring
+source query, or the reveal.
 
 **Warning signs:**
-Clock and wall-clock diverge on a running game; two clocks that don't sum to (start − elapsed); flags firing at displayed time ≠ 0.
+`query_utils.py` already carries a comment noting "a prior" bug in this exact area
+(`TestIsOpponentExpr`) — this is not a hypothetical risk, it has happened once already in
+this codebase. Any manual test where a black-playing user's Train session surfaces a
+suspiciously "good" move as the answer key (because it was really the opponent's blunder) is
+this bug.
 
-**Phase to address:** Clocked-board/Lifecycle (build the clock as a `Date.now()`-delta model from day one; retrofitting is painful).
+**Phase to address:**
+Phase 1 (Pool + scheduler backend) — the pool-entry and red-herring source queries.
 
 ---
 
-### Pitfall 2: Backgrounded/inactive-tab throttling — clock keeps real time but bot compute stalls (the seed's flagged edge case)
+### Pitfall 2: Post-move eval shift misapplied to the winnability floor
 
 **What goes wrong:**
-When the tab is hidden or the phone screen locks, browsers clamp timers (≥1000 ms, often frozen on mobile) AND throttle/suspend Web Workers — which is exactly what the Maia ONNX worker and Stockfish WASM worker are. If the bot is "thinking" when the tab backgrounds, its move computation stalls. Meanwhile a correct `Date.now()`-delta clock keeps elapsing, so the **bot can flag itself while backgrounded**, or the human returns to a game that silently timed out. Naively pausing compute but not the clock bleeds the human's clock while they're away instead.
+The winnability floor ("exclude positions already lost before the blunder, expected score
+below ~20–25%") reads `game_positions.eval_cp` at the flaw's own row instead of the row
+whose eval actually describes the *pre-move* position, producing a floor computed one ply
+late — sometimes excluding genuinely-winnable blunders, sometimes admitting hopeless ones.
 
 **Why it happens:**
-Timers and workers are throttled by different, platform-dependent rules; developers test only on a focused desktop tab where neither throttle triggers.
+`game_positions` stores `eval_cp` under a **post-move convention**: the eval at row `ply` is
+the eval of the position *after* move `ply` was played (SEED-044's "+1 shift", implemented at
+`app/services/eval_apply.py:342` and inverted by `app/services/eval_apply.py:2057`). But
+`best_move`/`pv` on that same row are **decision-ply-keyed and NOT shifted** — they describe
+the position *before* move `ply`, i.e. the exact position the drill puzzle presents. Mixing
+these two different reference frames on the same row is the single easiest bug to write here,
+because both columns live on the identical `GamePosition` row and look symmetric.
 
 **How to avoid:**
-Make the Page Visibility API a first-class game state. On `visibilitychange → hidden`: pause the clock (record the instant) and defer/mark any in-flight bot search as "must not count toward flag." On `→ visible`: resume from the recorded pause instant, do NOT bill away-time to either player (SEED-091 decision 4 commits to "clock paused while away"). "Tab hidden while bot is thinking" = freeze; on return resume or recompute the search. This must work within a single live session, distinct from localStorage Resume.
+For the winnability floor, use the eval that describes the position **before** the flaw move
+(the previous row's post-move eval, or the pipeline's existing un-shift helper at
+`eval_apply.py:2057`) — never the flaw row's own `eval_cp`. For the answer key (`best_move`,
+`pv`), the flaw row's own value is correct as-is (it is already decision-ply-keyed). Add an
+explicit code comment at the query site distinguishing the two, mirroring the existing
+`eval_apply.py` comments (SEED-044).
 
 **Warning signs:**
-Refocusing shows a flagged/decided game; bot moves land seconds after refocus; mobile users report the bot never moving after screen-lock.
+Manually verify one drilled position against its FEN + eval on the `/analysis` board deep
+link. If the winnability floor's expected score doesn't match what the analysis board shows
+for the position immediately before the flaw move, the shift is backwards.
 
-**Phase to address:** Clocked-board/Lifecycle (visibility-driven pause is core, not polish; Perf-polish only tunes the search-budget side).
+**Phase to address:**
+Phase 1 (Pool + scheduler backend) — pool-entry query.
 
 ---
 
-### Pitfall 3: Argmax-practical is deterministic → same game every time, and stronger than the nominal ELO
+### Pitfall 3: Answer key drifts after a drill item is already mid-ladder
 
 **What goes wrong:**
-`mctsSearch` is documented as **deterministic per concurrency level** (bit-identical repeated runs). If the bot always plays the argmax practical move, every game at a given (ELO, color, opening) is *identical* — trivially exploitable, boring, and useless for calibration (no distribution to fit). Worse, "argmax over Maia-predicted human moves" is a player who *never makes the mistakes Maia predicts*, so it plays far above nominal ELO (SEED-091 decision 2). Shipping argmax at the human end silently mis-rates the bot by hundreds of Elo.
+A user progresses an item to streak 1 or 2 (or even "3 spaced correct → mastered"). Later,
+the underlying `game_flaws` row's `best_move`, `pv`, or `missed_pv_lines`/`allowed_pv_lines`
+blob is silently overwritten by a subsequent re-analysis pass — and the drill item's history
+(what the user was actually graded against) no longer matches what the reveal now shows, or
+the sharp/soft classification (which fed the pre-move guess's ground truth) flips underneath
+an in-flight item.
 
 **Why it happens:**
-The engine's analysis surface returns one best practical move; reusing it verbatim for play is the path of least resistance.
+This is not hypothetical in this codebase: `eval_apply.py` explicitly overwrites `best_move`
+"unconditionally" when re-evaluated (`eval_apply.py:440`), and the flaw-classification write
+path (`_classify_and_fill_oracle`) has historically been delete-then-insert and is now a
+diff/upsert that can still drop or replace a flaw ply's blob content depending on what the
+reclassification finds (per this project's own memory notes on "dedup transplants" and
+"tier-4 `[]`-sentinels the flaw's blob permanently"). `missed_pv_lines` is tier-4
+*opportunistic* — a flaw can legitimately enter the pool with a blob computed by one engine
+pass, and get re-blobbed by a later, different pass (dedup transplant, backfill, or an engine
+upgrade) while the item is already in a user's queue.
 
 **How to avoid:**
-ELO-faithfulness comes from **sampling**, not argmax. Full-human: draw from the temperature-reshaped Maia root policy (Pitfall 5). Full-stockfish: argmax the practical score. Between: practical-score-weighted sampling with slider-controlled sharpness (`policyTemperature`), collapsing to argmax only at the extreme. Seed the RNG per move from game state if you want *replay* determinism, but never make the *policy* a point mass except at the stockfish extreme. Test that a full-human position yields a move *distribution* over many samples, not one move.
+Decide explicitly (Phase 1) whether Train's drill item stores a **snapshot** of the answer
+key at pool-entry time (immune to drift, but can go stale relative to a genuinely-improved
+re-analysis) or **joins live** to `game_flaws`/`game_positions` every session (always current,
+but an item's graded answer can change between sessions). Either choice is fine — the pitfall
+is not picking one and instead silently getting a live join by accident (the natural default
+when writing a straightforward query), which means the reveal a user sees for a "mastered"
+item's retrospective badge may not match what was actually graded when they solved it.
 
 **Warning signs:**
-Two games with identical settings/opening play move-for-move; a "1200" bot beating 1500s consistently; near-zero result variance in self-play.
+A parked or mastered item whose reveal `best_move`/blob-derived classification doesn't match
+what the solve log recorded for an earlier session on the same item.
 
-**Phase to address:** Setup/Engine-wiring (the move-selection function is the heart of the milestone).
+**Phase to address:**
+Phase 1 (Pool + scheduler backend) — drill-item data model decision.
 
 ---
 
-### Pitfall 4: Running a full MCTS at the full-human end when one Maia inference is required
+### Pitfall 4: Source-game deletion silently orphans drill progress
 
 **What goes wrong:**
-The natural implementation calls `mctsSearch` for every move regardless of slider. At full-human that runs the whole tree (many `policy()` + batched `grade()` expansions) just to then sample — wasting a second+ per move on a phone, blowing the blitz budget, and defeating SEED-091 decision 2 ("**no MCTS needed — one Maia inference per move**").
+A user's mastered/in-progress drill items disappear (or worse, the drill-item table itself
+errors on an FK violation) when their underlying game is deleted — via the **already-shipped**
+30-day guest-inactivity prune (`app/services/guest_cleanup_service.py`) or via the
+**already-shipped** user-facing "delete all games" + re-import flow. Because `Game.id` is a
+plain serial surrogate key and `delete_all_games_for_user` does a real `DELETE`
+(`app/repositories/game_repository.py:249`), a re-imported game — even the *exact same*
+chess.com/lichess game — gets a **new** `Game.id`. Any drill item CASCADE-FK'd to the old
+`game_id` is gone for good; a user who re-imports their whole history to fix a filter setting
+loses all Train progress with zero warning, indistinguishable from a bug.
 
 **Why it happens:**
-A single `search(fen, budget)` entry point is convenient; the slider becomes just a budget parameter instead of a fork in the algorithm.
+`game_flaws`/`game_positions`/`game_best_moves` all use `ForeignKey(..., ondelete="CASCADE")`
+to `games.id` (per CLAUDE.md's mandatory-FK rule), which is correct for those tables — but a
+drill-item table naturally inherits the same CASCADE by following the same pattern, and
+nobody on the Train team is likely to be thinking about the guest-pruning job or the
+"DELETE /api/games" endpoint when designing the drill-item schema.
 
 **How to avoid:**
-Branch on the slider *before* choosing the compute path. Full-human (and a band near it) = one `providers.policy(fen, elo, side)` → `applyPolicyTemperature` → sample. Engage `mctsSearch` only as the stockfish weight rises and search actually changes the move. Reuse `applyPolicyTemperature` / `truncateAndRenormalize` from `mctsSearch.ts` so play-side reshaping matches analysis semantics. Budget-scale `maxNodes` with the slider so the human end is genuinely cheap.
+Make this a conscious decision, not an accident: either (a) accept CASCADE deletion of drill
+items as correct (mastery is tied to the specific analyzed game; re-import legitimately means
+"start over" and the empty/cold state in Phase 3 should say so), or (b) explicitly
+`SET NULL` / soft-orphan the drill item and keep its solve-log history detached from a live
+FK for user-visible stats. Whichever is chosen, the guest-pruning path and the "delete all
+games" path both need to be in scope when reasoning about drill-item lifecycle, not just
+normal usage.
 
 **Warning signs:**
-Flat per-move latency across the slider; profiler shows Stockfish `grade()` calls at full-human; blitz on a mid phone can't answer in 1–2 s.
+Mastered/parked counts drop after a user re-imports; a guest who re-registers finds their
+train history gone with no explanation (their `User` row survives guest cleanup per
+`guest_cleanup_service.py`'s D-05, but their games — and by inheritance their drill items —
+do not).
 
-**Phase to address:** Setup/Engine-wiring.
+**Phase to address:**
+Phase 1 (Pool + scheduler backend) — schema decision; Phase 3 (Schedule + progress surface)
+— must message the outcome honestly in the empty/cold states, matching CLAUDE.md's precedent
+for the readiness gate ("no message claims full completion while X is still running" applies
+symmetrically here — no screen should imply progress was lost to a bug when it was lost by
+design).
 
 ---
 
-### Pitfall 5: Botched sample↔argmax blend — reshape side, illegal/degenerate handling, temperature direction
+### Pitfall 5: Tier-4 blob backfill starves session composition for recently-analyzed flaws
 
 **What goes wrong:**
-Several subtle traps in the sampler:
-- **Reshape on the wrong side.** `mctsSearch` reshapes only when `sideMatchesMover(leaf.side, rootMover)` and short-circuits at the default temperature. For play the bot only moves on its own side; copying the analysis reshape naively can reshape opponent replies or skip reshaping at the default temperature, giving a different distribution than the sampler expects.
-- **Illegal candidates.** Maia can emit a UCI illegal in the actual position; `mctsSearch` drops these via `applyUciMoveFen(...) === null` (WR-07). A sampler that plays a raw sampled UCI will occasionally attempt an illegal move → crash/forfeit. Filter to legal moves *before* renormalizing.
-- **Degenerate empty policy** (WR-04): `mctsSearch` closes such a node as a dead end. A sampler must fall back to a legal move (e.g. uniform over `chess.js` legal moves) rather than throw or pass.
-- **Temperature direction.** High temperature should *flatten* toward weaker/varied play; low should sharpen to the mode. Inverting makes the "weak" bot play sharper than the "strong" one.
+Pool entry requires a non-empty `missed_pv_lines` blob (the sharp/soft classifier). Blob
+coverage is **tier-4, opportunistic**: new games get it ~100% inline, but the backlog is
+still filling and — per this project's own memory notes — the tier-4b lottery is "the
+lowest idle rung" that "starves behind #1." A user whose games were imported and analyzed
+before this backfill caught up (or a very recently re-analyzed batch) can have real, severe
+blunders that simply don't qualify for the pool yet. Combined with "pad due < slots by
+introducing new flaws," a low-blob-coverage user's sessions silently skew almost entirely to
+red herrings, or (worse) come up genuinely short of N — which looks exactly like a Train bug
+("why does my session only have 2 puzzles?") rather than a known, present-data filter
+limitation.
 
 **Why it happens:**
-The sample path is new code lacking the guardrails baked into `mctsSearch`; the reshape/legality/renormalize order is easy to get wrong.
+The seed correctly treats blob presence as "a present-data filter, not a blocker" for pool
+*eligibility* — but session *composition* (Phase 1's 75/25 mix, exactly-N-while-material-lasts
+contract) is a separate mechanism that was designed assuming a healthy-sized pool. It wasn't
+explicitly re-checked against a thin-pool scenario driven by backfill lag specifically (as
+opposed to a genuinely low-blunder-count user).
 
 **How to avoid:**
-Fixed order: `policy()` → drop illegal (via `applyUciMoveFen`/chess.js) → apply temperature → renormalize → sample. Reuse `applyPolicyTemperature` and `truncateAndRenormalize` verbatim. Unit-test: illegal-UCI injection dropped; empty policy falls back to a legal move; temperature monotonicity (higher T → higher entropy → more distinct moves).
+Session composition must have an explicit, tested degenerate path for "fewer SR-eligible
+items than requested, red-herring source also thin" that renders as an honest "still catching
+up on your recent games" state rather than a truncated or empty-looking session. This is
+distinct from the seed's already-covered "pool exhausted, everything mastered" cold state —
+it needs its own copy.
 
 **Warning signs:**
-Rare "illegal move" crashes; bot passes/hangs; higher-temperature bots play better; NaN priors after renormalizing an all-illegal set.
+A user with a large, freshly-imported game history (common: a first-time Train visit right
+after finishing initial import) sees a suspiciously thin or all-herring first session.
 
-**Phase to address:** Setup/Engine-wiring.
+**Phase to address:**
+Phase 1 (session-composition endpoint) for the degenerate-path logic; Phase 3 (cold/empty
+states) for user-facing messaging that distinguishes "no eligible material yet, still
+analyzing" from "genuinely caught up."
 
 ---
 
-### Pitfall 6: The "reuse the existing normalization path" trap — there is no PGN→game normalizer
+### Pitfall 6: Returning-user re-entry shock — overdue pileup compounds with streak loss
 
 **What goes wrong:**
-SEED-091 says "reuse the existing normalization path," which reads as "hand it a PGN and get a `games` row." But `app/services/normalization.py` has only `normalize_chesscom_game(game: dict, …)` and `normalize_lichess_game(game: dict, …)` — both parse **raw platform JSON**, not PGN, and both hard-return `platform="chess.com"`/`"lichess"`. `Platform` is `Literal["chess.com", "lichess"]`. There is no `platform="flawchess"` path and no PGN→`NormalizedGame` function. A literal reuse won't compile.
+A user who skips their scheduled sessions for a few weeks (illness, travel, life) returns to
+find every scheduled session unactioned, so on their next visit **the entire due queue is
+backlog** — by design this drains gradually over several sessions (capped at N, "Anki's
+model"), so there's no *volume* pileup. But two second-order effects compound at the same
+moment: (1) a rusty user is more likely to fail several of those overdue items, and a fail
+resets `streak` to 0 with `due_date` = next scheduled session — meaning several of the exact
+same items come right back in the very next session, producing 2-3 consecutive
+mostly-familiar-failures sessions; (2) the weekly streak (all scheduled sessions completed)
+broke the moment they missed a day, so the comeback session is scored and rated at the same
+time the streak resets. The net first-impression-back experience can read as "wall of
+red-rated sessions + streak reset," which cuts directly against the seed's own explicit
+guardrail ("competence feedback yes, behavior control no").
 
 **Why it happens:**
-"Normalization" sounds format-agnostic; the shared downstream (position hashing, `find_opening`, `_flush_batch`) *is* reusable, but the front door isn't.
+Both mechanisms (most-overdue-first scheduling, streak-reset-on-fail, weekly-streak-on-every-
+scheduled-day) are individually well-reasoned and explicitly chosen in the settled design —
+the risk is purely the *interaction* at the specific moment a lapsed user returns, which is
+also the highest-leverage moment for retention.
 
 **How to avoid:**
-Add `normalize_flawchess_game(pgn, user_id, bot_settings, player_rating, …) -> NormalizedGame` that:
-- Widens the `Platform` Literal to include `"flawchess"` (and update the `game.platform` column comment / any CHECK per the DB rules; the column is `String(20)`).
-- Parses the PGN with python-chess (per CLAUDE.md: per-game try/except, `board.board_fen()` for positions, Standard-only), extracts the client-set result/termination, reuses `find_opening(pgn)` for opening tagging, maps client end-reasons to the `Termination` Literal.
-- Feeds the same `NormalizedGame` into the *existing* position-hashing + `_flush_batch` path (that part IS the safe reuse).
+Not a design reversal — the mechanics stay as specified. But the *messaging* on the
+comeback session should not amplify it: avoid a session-end rating that reads as "you failed"
+for a session dominated by cold-restart material, and don't let the weekly-streak reset and
+the session color-rating fire in the same visual beat without separating them. This is a
+copy/sequencing concern for Phase 3, not a scheduler change.
 
 **Warning signs:**
-Type errors on `platform="flawchess"`; passing a PGN string into `normalize_chesscom_game`; positions not hashed because you bypassed `_flush_batch`.
+Watch qualitatively for user drop-off specifically correlated with a return-after-gap
+session; this is the kind of thing that won't show up in a unit test.
 
-**Phase to address:** Store-endpoint/Normalization.
+**Phase to address:**
+Phase 3 (Schedule + progress surface) — session-end and streak-reset messaging.
 
 ---
 
-### Pitfall 7: Forgetting `[%clk]` annotations — time-management stats silently exclude every bot game
+### Pitfall 7: No user-timezone infrastructure exists — schedule/due-date/streak day boundaries default to UTC
 
 **What goes wrong:**
-FlawChess Time Management analytics (clock advantage/deficit at endgame entry, flag rates, time-pressure-vs-performance) read per-move clocks from `[%clk H:MM:SS]` PGN comments. A bare PGN stores fine and shows in the Library, but is **silently invisible** to every time-management stat (SEED-091 decision 1 warns of this). No error, no empty state — just missing data found months later.
+The weekday picker ("session days"), due-date snapping ("next scheduled session day"), and
+weekly streak ("all scheduled sessions completed that week") all require a concept of
+"day" and "week" — but every timestamp column in this codebase (`users.created_at`,
+`last_login`, `last_activity`, everywhere else) is stored and reasoned about in UTC with no
+per-user timezone or offset field anywhere in the schema. Left unaddressed, "Monday" is
+computed in UTC: a US-based user's local Sunday evening or Monday-night session can silently
+land on the wrong UTC calendar day, causing a scheduled session to appear a day early/late,
+or — worse — causing a legitimately-completed session to not count toward that week's streak
+because it landed on the "wrong" UTC weekday.
 
 **Why it happens:**
-`chess.js` `.pgn()` does not emit `[%clk]`; the clock lives in React state, not the move objects. Easy to omit because everything else works.
+This is genuinely new ground for the codebase, not an existing pattern being misapplied —
+which is exactly why it's easy to skip: there's no precedent method to copy, so the natural
+default (server `datetime.now(timezone.utc)`, matching every other service in this repo) is
+silently wrong for anyone not near UTC.
 
 **How to avoid:**
-The client must write `{[%clk H:MM:SS]}` after every move using the true post-move remaining time (the snapshot Pitfall 1 takes on commit). Add a store-endpoint validation that flags a bot PGN missing `[%clk]`, and a normalization test asserting the flawchess path populates the clock columns. Match the format the existing v1.1 clock-import path already parses.
+Decide explicitly in Phase 1/3: either (a) add a lightweight per-user UTC-offset (captured
+client-side, e.g. `Intl.DateTimeFormat().resolvedOptions().timeZone` or a simple minutes
+offset, stored alongside the schedule settings — not a full IANA-timezone system, just enough
+to compute "today" correctly) or (b) explicitly document and accept UTC-day boundaries as a
+known approximation and surface the schedule in the user's LOCAL time on the settings screen
+while computing under the hood in UTC (so at minimum the display doesn't lie about which day
+is selected). Whatever is chosen, `due_date`'s column type (DATE vs TIMESTAMPTZ) should be
+picked deliberately with this decision in mind — it's expensive to change once items are
+mid-ladder.
 
 **Warning signs:**
-Bot games absent from Time Management charts but present in the Games tab; clock columns NULL for `platform='flawchess'` rows; `[%clk` grep on the stored PGN returns nothing.
+QA a schedule with a UTC-offset persona (e.g. UTC-8) and check whether their "Monday" session
+actually appears on their local Monday, and whether a session completed at 11pm local time
+counts for the correct calendar week.
 
-**Phase to address:** Store-endpoint/Normalization (validation gate) + Clocked-board/Lifecycle (client emission).
+**Phase to address:**
+Phase 1 (due-date/ladder pure functions — day-boundary convention baked into the interval
+ladder from day one) and Phase 3 (schedule settings UI, weekly streak).
 
 ---
 
-### Pitfall 8: Synthetic `platform_game_id` / unique-key collisions
+### Pitfall 8: Client-side WASM grading disagrees with the server-computed answer key near the MISTAKE threshold
 
 **What goes wrong:**
-`games` enforces uniqueness on `(user_id, platform, platform_game_id)`. Real platforms supply that id; a synthetic `flawchess` game has none. A weak id (timestamp, counter) collides on fast games or double-submit → the second POST 500s on the unique constraint, or silently overwrites. Guests replaying across devices can collide too.
+A played move whose true expected-score drop (per the server's deep, native-Stockfish
+analysis, 1M nodes/move) sits just under `MISTAKE_DROP` (0.10) grades as **wrong** in the
+client, because the vendored single-threaded WASM engine — capped by wall-clock movetime, not
+node count — doesn't reach the depth needed to find the saving line within its budget. The
+inverse also happens: a genuinely bad move grades **correct** because the WASM search hasn't
+found the refutation yet. This directly corrupts the SR mechanics (streak advancement,
+mastery, and parking all key off "correct"), not just a cosmetic eval-number mismatch.
 
 **Why it happens:**
-The id is an afterthought; "current timestamp" feels unique enough until it isn't.
+This project's own memory notes already establish that `eval_cp` is "not reproducible across
+machines" even for the *same* engine — Train's situation is strictly harder, because the
+server answer key and the client grading engine are **two structurally different search
+configurations** (native full-strength Stockfish vs. a vendored, single-thread,
+movetime-capped WASM build; the sibling `useStockfishGradingEngine` hook caps grading runs at
+up to `GRADING_MOVETIME_SAFETY_CAP_MS = 4000` ms, not the "~1s" figure the seed's UX
+description assumes). Near the MISTAKE_DROP boundary is exactly where shallower search is
+most likely to disagree with the deep one, because that's where "does the refutation exist"
+is genuinely hard to see.
 
 **How to avoid:**
-Mint `crypto.randomUUID()` client-side at *game start*, persist it in the localStorage game state (so a resumed-then-finished game keeps one id), send it as `platform_game_id`. Make the store endpoint idempotent: on unique-constraint conflict for the same `(user, platform, id)`, treat as already-stored and return 200. This also makes Resume safe (Pitfall 12) — one game, one id, one row.
+Budget the grading search generously (reuse the sibling hook's measured 4000ms cap rather
+than assuming ~1s is enough — that number was NOT re-validated for Train's single-move-eval
+shape and may need its own headless measurement, mirroring Phase 158's approach). Treat
+near-threshold disagreement as an accepted, bounded noise band rather than something to chase
+to zero, and make sure the reveal doesn't overstate certainty ("close — Stockfish rates this
+within X of the best move" reads more honestly than a hard right/wrong at the boundary).
 
 **Warning signs:**
-500s under fast play; duplicate rows for one game; a resumed game creating a second row.
+User reports of "I know that was the right move" contesting a wrong grading, clustered near
+MISTAKE_DROP-adjacent evals rather than randomly distributed.
 
-**Phase to address:** Store-endpoint/Normalization (id contract) + Clocked-board (id minted at start).
+**Phase to address:**
+Phase 2 (solve loop / client-side grading) — movetime budget and grading-search design;
+worth a dedicated headless measurement pass before shipping, per this project's own precedent
+(`project_headless_stockfish_wasm_verification` memory note).
 
 ---
 
-### Pitfall 9: NULL player rating throws away the calibration data point
+### Pitfall 9: The answer key is structurally present in the browser before the user acts
 
 **What goes wrong:**
-Storing the human's rating as NULL "because it's a bot game" discards exactly the signal calibration needs (SEED-091 decision 5: "every game saved with a NULL player rating is a calibration data point thrown away"). The bot's nominal ELO is known; without a paired player rating there's nothing to fit result-vs-strength against.
+Because grading is fully client-side by design (no grading endpoint), `best_move` must ship
+to the browser before the user attempts the puzzle, so it can be exact-matched instantly. If
+the session-fetch payload also eagerly includes `missed_pv_lines`/`allowed_pv_lines` (needed
+later for the reveal's tactic stepper) up front, the node-0 `b`/`s`/`sm`/`su` fields — the
+**exact ground truth for the pre-move "critical move vs several fine moves" guess** — are
+also sitting in the network tab / React state before the user commits to their guess. A
+technically curious (not even malicious) user can trivially see both answers via devtools
+before doing anything.
 
 **Why it happens:**
-There's no opponent rating on a casual bot game by default; the human never entered one.
+This is not a bug so much as an unavoidable consequence of the settled "no grading endpoint,
+no backend engine load" design — but it's easy to make *worse than necessary* by fetching
+everything the reveal will eventually need in the same initial request as a simplification,
+when only `best_move` (for exact-match) needs to be present pre-attempt.
 
 **How to avoid:**
-At save time derive a lichess-scale, TC-bucket-matched player rating using the **existing** `useMaiaEloDefault` machinery (it already solves this for the slider default): user's lichess rating for that TC bucket if recent games exist, else converted chess.com. Store it in the human's side rating column, bot nominal ELO in the opponent side. NULL only when the user has zero imported games. Persist the bot's full settings (nominal ELO, slider, TC) on the row for the later curve-fit milestone. Carry the ±100–150 conversion-error caveat into any strength claim — fine for fitting across many games, not for a precise ELO from ten.
+Split the session/puzzle payload: ship only what grading actually needs before the attempt
+(`best_move`, the position FEN, side to move) in the pre-attempt fetch; fetch or reveal the
+blob-derived classification, `pv`, and tactic-stepper data lazily, **after** the attempt is
+submitted. This doesn't make the feature cheat-proof (it can't be, given the design), but it
+keeps the casual-inspection surface honest with what the solve screen is actually asking the
+user to do at each step, and specifically protects the pre-move guess (which is otherwise
+trivially defeatable by anyone who opens devtools once). Also keep pre-attempt components from
+receiving these fields as props at all — a value never passed down can't leak through React
+DevTools even before any network-level fix.
 
 **Warning signs:**
-`platform='flawchess'` rows with NULL player rating despite imported games; missing bot-settings columns; calibration query returning mostly NULLs.
+Inspect the network response for the session-fetch call during code review: if it contains
+`sm`/`su`/full `pv` arrays before the first move of the session is even attempted, this
+pitfall is present.
 
-**Phase to address:** Store-endpoint/Normalization + Setup/Engine-wiring (compute where the slider default already does).
-
----
-
-### Pitfall 10: The bot adapting to the player corrupts calibration
-
-**What goes wrong:**
-A tempting "fun" feature — easing off when the human is losing, ramping up when winning — destroys the one property calibration requires: a **fixed, symmetric strength to measure** (SEED-091 decision 5). If effective strength depends on game state, there's no single ELO to fit and stored games become uninterpretable.
-
-**Why it happens:**
-Adaptive difficulty is a common "good UX" instinct; the engine's per-side `budget.elo` makes it easy to nudge.
-
-**How to avoid:**
-The bot plays its configured ELO on **both** sides, symmetric, constant for the whole game. No in-game adaptation. Encode as an invariant: `budget.elo[bot_side]` set once at game start from the setup screen, never mutated. Easier bots = a *new bot card at lower ELO*, not runtime adaptation.
-
-**Warning signs:**
-Any code reading the current score/result to adjust `budget`; players reporting the bot "goes easy"; self-play variance correlating with position eval.
-
-**Phase to address:** Setup/Engine-wiring.
-
----
-
-### Pitfall 11: Guest bot games look "broken" because the eval pipeline excludes guests
-
-**What goes wrong:**
-Guests are first-class `User` rows and can play + save bot games (SEED-091: no beta gate). But `eval_queue_service.py` excludes guests from **automatic** analysis (`WHERE u.is_guest = false` for bulk; `AND (u.is_guest = false OR ej.tier = 1)` on claim). So a stored guest bot game shows in the Library but never auto-analyzes → the eval-based surfaces (mistake dots, expected-score chart, "% analyzed" coverage badge) stay empty. A guest sees a perpetually "unanalyzed" game and thinks it's broken.
-
-**Why it happens:**
-The exclusion is intentional (guests don't get free bulk Stockfish), but bot-play makes guests *create analyzable content* for the first time, surfacing the gap in a new place.
-
-**How to avoid:**
-Set expectations in UI: for guests show the coverage/"% analyzed" caveat and a "promote your account to analyze this game" affordance (reuse the existing guest-banner/promotion pattern) rather than a bare empty chart. Note the nuance: guests CAN still trigger a **tier-1 explicit** analysis (`OR ej.tier = 1`), so an on-demand "Analyze this game" button may work for a guest even though bulk drain skips them — decide which behavior you want and match the copy. Do NOT "fix" this by removing the guest exclusion (that opens unbounded guest Stockfish load and reverts QUEUE-08).
-
-**Warning signs:**
-Guest Library shows bot games at 0% analyzed with no explanation; "my bot game won't analyze" reports; a proposal to drop `is_guest = false` from the drain.
-
-**Phase to address:** Store-endpoint/Normalization (behavior) + a small UI caveat in Clocked-board/Library surfacing.
-
----
-
-### Pitfall 12: localStorage resume corrupting the clock or double-storing
-
-**What goes wrong:**
-Two failure modes around SEED-091 decision 4:
-- **Clock bleed across the gap.** If the persisted state stores a live `Date.now()` anchor, the *away* elapsed time is billed on resume → the human returns already flagged. The clock must persist as *paused remaining ms*, not a running anchor.
-- **Double-store / ghost rows.** A finished, POSTed game whose localStorage entry wasn't cleared offers "Resume game?" on a finished game, or a re-finish re-POSTs. With a fresh id this creates duplicate rows.
-
-**Why it happens:**
-Serializing "current" clock state is easier than serializing "paused" state; clearing localStorage on successful store is easy to miss.
-
-**How to avoid:**
-Persist the *paused* clock model (remaining ms per side, whose move, no running anchor) every move. On resume the clock stays paused until the human's first move. Clear the localStorage game only after a confirmed 2xx from the store endpoint (the idempotent id from Pitfall 8 makes an accidental re-POST harmless). Never offer resume for a terminal-result state.
-
-**Warning signs:**
-Resumed games start with time already burned; "Resume game?" on a finished game; duplicate `flawchess` rows after a resume.
-
-**Phase to address:** Resume.
-
----
-
-### Pitfall 13: Maia ONNX won't run headlessly in Node at harness-viable speed (the open feasibility item)
-
-**What goes wrong:**
-The browser Maia path uses **onnxruntime-web** (`webgpu`/`wasm` EP) loaded via `importScripts()` in a classic Worker (`useMaiaEngine.ts`). That path doesn't exist in Node — no DOM worker, no webgpu, different `.wasm` loading. The harness needs **onnxruntime-node** (native): a different package, different EPs, different numerics. If nobody validates this early, the calibration harness (a committed deliverable) can stall late. SEED-091 flags this as the open question; project memory notes "Maia repro needs onnxruntime==1.20.1".
-
-**Why it happens:**
-"It runs in the browser, Node is just JS" hides that the runtime, EP, and model-loading are entirely different in Node.
-
-**How to avoid:**
-De-risk with a **feasibility spike first** (before committing harness scope): load the Maia ONNX model under `onnxruntime-node`, run one inference, measure per-inference latency and games/hour. Pin `onnxruntime-node` to a version compatible with the model opset (memory: 1.20.1). Reuse the framework-agnostic encoding (`maskAndSoftmax`, `maiaEncoding.ts`); only session creation/run differs. Stockfish-WASM-in-Node is already verified (project memory), so the anchor side is lower risk. If Node inference is too slow, fall back to a headless-browser harness (Playwright) driving the real worker — decide that fork *before* building the grid runner.
-
-**Warning signs:**
-Spike shows seconds-per-inference in Node; `onnxruntime-node` version incompatible with the model; numerics diverge enough from the browser that anchor results don't transfer.
-
-**Phase to address:** Calibration-harness (gate on a spike; make it the first task).
-
----
-
-### Pitfall 14: Pure self-play ELO with no external anchor
-
-**What goes wrong:**
-Estimating strength by playing the bot against itself yields a *self-consistent but unanchored* number — it says nothing about lichess/chess.com Elo. SEED-091 is explicit: "pure self-play ELO without external anchors is unreliable — don't bother."
-
-**Why it happens:**
-Self-play is the easiest harness (no external opponents to wire).
-
-**How to avoid:**
-Always play against **known-strength anchors**: raw Maia 1100–1900 in argmax mode (published lichess-rating behavior) and Stockfish skill levels. Fit the bot's Elo relative to those anchors across the coarse (ELO × slider) grid. Self-play is fine only as a plumbing smoke test, never the strength number. Beware strata-sampling bias — cover the grid cells evenly (each ELO × slider cell gets enough anchored games), or the map is confident where you happened to sample and blank elsewhere.
-
-**Warning signs:**
-A "measured ELO" produced with no anchor opponent in the loop; strength numbers untied to any external scale; a grid where some cells have 100 games and others 2.
-
-**Phase to address:** Calibration-harness.
+**Phase to address:**
+Phase 1 (session-fetch endpoint response shape — split solve vs. reveal payloads) and
+Phase 2 (solve UI must not prefetch/hold reveal-only fields in pre-attempt component state).
 
 ---
 
 ## Technical Debt Patterns
 
 | Shortcut | Immediate Benefit | Long-term Cost | When Acceptable |
-|----------|-------------------|----------------|-----------------|
-| Call `mctsSearch` for every move regardless of slider | One code path | Wastes phone compute at the human end (Pitfall 4); flat latency; misses blitz budget | Never — branch on the slider |
-| `setInterval`-decrement clock | Trivial to write | Drift; flag at wrong time; corrupt stored result (Pitfall 1) | Never — use `Date.now()` deltas |
-| Bare PGN without `[%clk]` | Simpler client serialization | Time-management stats silently drop every bot game (Pitfall 7) | Never — clocks are a headline feature |
-| NULL player rating on save | Skip the conversion call | Every game a lost calibration point (Pitfall 9) | Only when the user has zero imported games |
-| Timestamp-based `platform_game_id` | No UUID plumbing | Collisions / duplicate rows / non-idempotent store (Pitfall 8) | Never — `crypto.randomUUID()` at game start |
-| Self-play strength number | No anchors to wire | Unanchored, meaningless ELO (Pitfall 14) | Only as a plumbing smoke test |
-| Defer the Node-ONNX check to harness build | Faster to "start" the harness | Late discovery blocks a committed deliverable (Pitfall 13) | Never — spike first |
-| Remove `is_guest` exclusion to "fix" guest analysis | Guest bot games auto-analyze | Unbounded guest Stockfish load; reverts QUEUE-08 | Never — UI caveat + tier-1 explicit |
+|----------|-------------------|-----------------|------------------|
+| Building a third from-scratch Stockfish Worker wrapper for grading instead of extending `useStockfishGradingEngine.ts` | Feels like a clean, single-purpose implementation | Re-discovers already-fixed bugs (searchmoves-must-be-last-clause silently swallowing movetime; illegal searchmoves silently dropped; multipv-index vs pv[0] keying; the stop-before-go race on the single-threaded engine) | Never — the sibling hook's single-move case (`searchmoves <one move>`) is a strict subset of what it already does |
+| Denormalizing the flaw's answer key into `drill_item` at pool-entry time (snapshot, not live join) | Immune to mid-ladder answer-key drift (Pitfall 3); simpler queries | Can go stale relative to a genuinely-improved re-analysis; needs its own "does the source flaw still exist" reconciliation | Acceptable, and arguably the right default, **if** it's a conscious, documented choice (Pitfall 3) — not acceptable as an accidental side effect of a naive query |
+| Hand-rolling `ply % 2` ownership or expected-score sigmoid math instead of importing `player_only_gate` / `eval_cp_to_expected_score` / `classify_best_move` | Fewer imports, feels self-contained | Silently diverges from the Library's own gem/great and flaw-severity definitions the moment either threshold is retuned there (both threshold surfaces are designed as single-retune-point code per their own docstrings) | Never |
+| Adding a second `canvas-confetti` call site with new colors instead of generalizing `frontend/src/lib/confetti.ts`'s `fireWinConfetti`/`prefersReducedMotion` | Slightly faster to ship two visually-distinct celebrations | Bundle duplication risk, and a second `prefers-reduced-motion` check that can drift from the first if one gets fixed and not the other | Acceptable only as a thin variant (different colors/particle count) that still calls the same `prefersReducedMotion()` gate |
 
 ## Integration Gotchas
 
+Internal-subsystem reuse, not external services — this feature's biggest integration risk is
+with FlawChess's own eval/blob pipeline and existing client engine code, not any third party.
+
 | Integration | Common Mistake | Correct Approach |
-|-------------|----------------|------------------|
-| Existing import/normalization pipeline | Assuming a PGN→game path exists; passing PGN to `normalize_chesscom_game` | New `normalize_flawchess_game(pgn,…)` → `NormalizedGame`; widen `Platform` Literal to `"flawchess"`; reuse only the downstream hashing/`_flush_batch` (Pitfall 6) |
-| `mctsSearch` / `useFlawChessEngine` | Reusing analysis argmax verbatim for play (deterministic, too strong) | Sample the reshaped Maia policy at the human end; argmax only at the stockfish extreme (Pitfalls 3–5) |
-| `applyPolicyTemperature` / `truncateAndRenormalize` | Re-implementing reshape/renormalize in the sampler | Import the exact primitives; drop illegal UCIs before renormalizing |
-| Maia inference in Node | Expecting the browser onnxruntime-web + Worker path to work | `onnxruntime-node` (pin ~1.20.1); reuse `maiaEncoding`/`maskAndSoftmax`; spike before committing (Pitfall 13) |
-| Game filters (`apply_game_filters`) | Bot games leaking into opening/endgame/global analytics | `is_computer_game=True` + `platform='flawchess'`; verify the default posture excludes bots (opponent_type='human' and/or native-platform default) while Bots page + Library Games explicitly include them |
-| Eval queue (`eval_queue_service`) | Expecting guest bot games to auto-analyze | Guests excluded from bulk (`is_guest=false`); tier-1 explicit allowed (`OR ej.tier=1`); set UI expectations (Pitfall 11) |
+|-------------|-----------------|-------------------|
+| Vendored Stockfish WASM (`stockfish-18-lite-single.js`) | Put `movetime` before `searchmoves` in the `go` command | `searchmoves` must be the LAST clause — the engine silently swallows everything after it into the move list, so a wrong order means movetime never actually limits the search (fixed once already in `useStockfishGradingEngine.ts`, comment cites the exact bug) |
+| `game_flaws` / `game_positions` join for the answer key | Reading `eval_cp` and `best_move` off the same row as if both describe the same position | `eval_cp` is post-move (position AFTER `ply`); `best_move`/`pv` are decision-ply-keyed (position BEFORE `ply`) — see Pitfall 2 |
+| `game_best_moves` as the red-herring source | Re-deriving "non-gem" via a fresh margin check instead of `classify_best_move`/`best_move_tier_sql` | Reuse those functions so "herring" (neither gem nor great) stays consistent with what the Library's own "has gem/great" filter already shows for the same rows |
+| `VariationTree.tsx` reuse for the reveal stepper | Assuming `missed_pv_lines` and `allowed_pv_lines` share one uniform node shape when adapting them to the component's expected props | The two lines have different POV/indexing conventions per `forcing_line_gate.py`'s own documented asymmetry (missed = decision-ply POV, allowed = flaw_ply+1 POV) — map each orientation explicitly, don't assume symmetry |
 
 ## Performance Traps
 
 | Trap | Symptoms | Prevention | When It Breaks |
-|------|----------|------------|----------------|
-| Full MCTS at full-human on a phone | 1+ s/move, blitz budget blown | One Maia inference at the human end (Pitfall 4) | Mid-range phones on blitz (3+0) |
-| Fixed search budget under clock pressure | Bot flags itself; UI jank | Scale `maxNodes` from remaining clock; degrade gracefully; bullet excluded by design for headroom | Low remaining time on slow devices |
-| Worker throttling in background tab | Bot never moves after screen-lock; flags | Page Visibility pause of clock + search (Pitfall 2) | Any mobile screen-lock / tab switch |
-| Main-thread contention (inference + React + clock) | `setInterval` drift, dropped frames | Clock as a `Date.now()` delta (repaint-only interval); inference in workers | Every game once inference runs |
-| Harness games/hour too low | Grid takes days | Measure Node inference latency in the spike; cap grid coarseness; parallelize anchor matches | Fine grid × slow Node ONNX |
+|------|----------|------------|-----------------|
+| Session-composition query re-joins `game_flaws` + `game_positions` + `game_best_moves` + winnability floor from scratch on every session load with no index-aware filtering | Slow `/train` session start for users with large histories | Reuse the existing `ix_game_flaws_user_severity` index pattern and EXISTS-based composition already established in `library_repository.py`/`query_utils.py`, rather than a fresh full-scan query | Users with several thousand imported games and a large flaw count |
+| Recreating a fresh Stockfish `Worker` per puzzle instead of one session-scoped worker | Every non-exact-match answer pays a full WASM cold-start (compile + `uci`/`uciok`/`isready`/`readyok` round trip) on top of the search itself | Instantiate one grading worker when the session starts (or on `/train` mount) and reuse it across all puzzles in that session, mirroring the sibling hook's single-instance-per-mount lifecycle | Any session with more than one non-exact-match puzzle — i.e. almost every real session |
 
 ## Security Mistakes
 
+This feature has low adversarial stakes (single-user WDL/blunder data, no leaderboard in v1),
+so the notable item is forward-looking rather than urgent.
+
 | Mistake | Risk | Prevention |
 |---------|------|------------|
-| Trusting the client-submitted result/rating blindly | A crafted POST stores fabricated wins / inflated ratings, poisoning calibration and stats | Server-side sanity-check the PGN (replay with python-chess; claimed result must match the terminal position/termination); derive/clamp the player rating server-side; keep bot games `is_computer_game=True` so they can't masquerade as rated human games |
-| Unbounded store endpoint | Spam rows / storage abuse (esp. guests) | Rate-limit the store endpoint per user (reuse existing guest IP rate-limit patterns); idempotent on `platform_game_id` |
-| Exposing internal hashes in the store response | Violates the app invariant (API returns FEN, never Zobrist) | Return FEN/game metadata only, per CLAUDE.md |
+| Treating the structural answer-key leak (Pitfall 9) as acceptable forever rather than as a v1-scoped tradeoff | Fine today (no competitive integrity at stake — the v2 leaderboard is explicitly deferred behind a ≥10–15 weekly-active-trainer trigger); becomes a real integrity problem the moment any point-comparison-across-users feature ships, since scores are trivially game-able client-side | Document the tradeoff explicitly now so it's revisited (not rediscovered) if/when the leaderboard is built — a server-side grading endpoint would need to be added at that point, which the seed already flags as the rejected-for-v1 alternative |
 
 ## UX Pitfalls
 
 | Pitfall | User Impact | Better Approach |
-|---------|-------------|-----------------|
-| Instant bot replies | Feels robotic; never burns the bot's clock; unrealistic | Pace move delay from the bot's remaining clock (SEED-091 flagged default) |
-| Guest bot game shows 0% analyzed, no explanation | User thinks the feature is broken | Coverage caveat + promote-to-analyze affordance (Pitfall 11) |
-| Bot games contaminating "real" rating/analytics views | Endgame-ELO timeline / opening stats skewed by practice games | Default analytics exclude bots; Bots page + Library Games opt them in (the "uncontaminated by construction" design) |
-| Missing draw-offer / resign / flag affordances | Game feels unfinished | Ship game-end detection + resign + flag + draw offers + move sounds (v1 IN); premove/takeback explicitly OUT |
-| Clock reads non-zero at the moment of a flag | Confusing/incorrect result | Flag off the `Date.now()`-delta model, not the last painted value (Pitfall 1) |
+|---------|-------------|-------------------|
+| Conflating "no analyzed games yet" with "games exist but blob/answer-key coverage hasn't caught up" (Pitfall 5) in the empty state | A user with real, fresh blunders sees a generic "import more games" message that doesn't match their actual situation, or gets a confusingly thin first session | Give the "still analyzing / catching up" state its own honest copy, distinct from the true zero-games cold state |
+| Parked count styled/positioned as a failure metric | Undermines the design's explicit "never a failure state" intent | Use a neutral/muted color (not the WDL-loss red) and place it descriptively, not as a warning badge |
+| Grading latency (potentially several seconds on the WASM cold path, per Pitfall 8/10) with no loading affordance | Reads as the app freezing on mobile, especially on the session's first non-exact-match answer | Show explicit "checking your move…" feedback tied to the actual `isGrading` state (the sibling hook already exposes this), and warm the engine before it's needed |
+| First-session-back after a gap rated the same as any other session (Pitfall 6) | Compounds streak loss with a red/low score right when a lapsed user most needs encouragement to continue | Not a scoring-mechanic change — just don't let the streak-reset and the session color-rating land in the same visual beat without separation |
+| Reveal's "open analysis board" deep link not landing on the exact flaw position/orientation | User loses context switching from the puzzle to the analysis board, undermining "see what actually happened" | Deep-link with the specific FEN/ply/orientation already used to render the puzzle, not a generic game-open |
 
 ## "Looks Done But Isn't" Checklist
 
-- [ ] **Move selection:** Full-human position yields a *distribution* over many samples, not one repeated move (Pitfall 3); illegal-UCI injection dropped, empty policy falls back to a legal move (Pitfall 5).
-- [ ] **Clock:** Correct after a 5-min game vs wall clock; pauses on `visibilitychange`; flags at displayed 0 (Pitfalls 1–2).
-- [ ] **Backgrounded bot:** Hide the tab while the bot is thinking — no self-flag, resumes on return (Pitfall 2).
-- [ ] **`[%clk]`:** Stored PGN has per-move clock comments; flawchess normalization populates clock columns; game appears in Time Management stats (Pitfall 7).
-- [ ] **Storage:** `platform="flawchess"` compiles (Literal widened); positions hashed via `_flush_batch`; unique `platform_game_id` per game; store endpoint idempotent (Pitfalls 6, 8).
-- [ ] **Player rating:** Non-NULL when the user has imported games; bot nominal ELO in opponent column; bot settings persisted (Pitfall 9).
-- [ ] **Analytics posture:** Bot games excluded from opening/endgame/global defaults, included in Bots + Library Games (contamination check).
-- [ ] **Guest:** Guest can play + save; Library shows an honest analyzed-coverage caveat, not a bare empty chart (Pitfall 11).
-- [ ] **Resume:** Clock persists as *paused remaining*, not a running anchor; localStorage cleared only after 2xx store; no resume for terminal states (Pitfall 12).
-- [ ] **Harness:** Maia runs under `onnxruntime-node` at measured games/hour; results anchored to raw-Maia/Stockfish, never pure self-play; grid cells evenly sampled (Pitfalls 13–14).
+- [ ] **Pool-entry / red-herring query:** Uses `player_only_gate`/`is_opponent_expr` from
+  `query_utils.py` — verify by grepping the new query code for a raw `ply % 2`, which should
+  not exist anywhere in Train's backend.
+- [ ] **Winnability floor:** Reads the eval of the position *before* the flaw move, not the
+  flaw row's own (post-move-shifted) `eval_cp` — verify against the `/analysis` board for a
+  handful of sampled drill items.
+- [ ] **Answer-key freshness policy:** A drill item's relationship to live `game_flaws` data
+  (snapshot vs. live join) is an explicit, documented decision — not whatever a straightforward
+  query happened to produce.
+- [ ] **Game-deletion behavior:** What happens to drill items when their source game is deleted
+  (guest prune or user re-import) is a deliberate, tested decision, not an unexamined CASCADE.
+- [ ] **Grading worker lifecycle:** One Worker instance persists for the whole Train session
+  (not recreated per puzzle) — verify by watching the Network/Performance panel for repeated
+  WASM module loads within a single session.
+- [ ] **Schedule day-boundary convention:** Explicitly chosen (UTC-approximation-and-documented,
+  or a real offset field) — not left as "whatever `datetime.now(timezone.utc)` naturally
+  produces," since there is no existing per-user timezone precedent anywhere in this codebase.
+- [ ] **Pre-attempt payload:** The network response fetched before the user's guess/move does
+  not already contain `missed_pv_lines`'s `s`/`sm`/`su` fields or the full reveal `pv` —
+  verify via the Network tab on a fresh session load.
 
 ## Recovery Strategies
 
 | Pitfall | Recovery Cost | Recovery Steps |
-|---------|---------------|----------------|
-| `[%clk]` omitted (games already stored) | MEDIUM | Clocks aren't recoverable post-hoc (they only existed client-side); fix emission going forward; affected rows stay excluded from time stats permanently. This is why the client-side gate matters most. |
-| Deterministic argmax shipped | LOW | Swap the move-selection function to the sampler; no data migration (past games are just repetitive, not corrupt) |
-| NULL player ratings stored | MEDIUM | Backfill is lossy (no save-time snapshot); best-effort re-derive from the user's rating history at `played_at`; prevention (compute at save) is far cheaper |
-| `platform_game_id` collisions / dupes | MEDIUM | Enforce the unique constraint + idempotency; dedupe existing dupes by `(user, platform, id)` keeping the completest row |
-| Node-ONNX infeasible | HIGH (late) / LOW (if spiked early) | Pivot to Playwright headless-browser harness driving the real worker; cheap only if discovered in the spike |
-| Guest exclusion "fixed" by dropping the filter | MEDIUM | Revert; re-instate `is_guest=false` + tier-1 carve-out and use UI copy instead |
+|---------|-----------------|------------------|
+| Answer-key drift discovered post-launch (Pitfall 3) | LOW–MEDIUM | If snapshotted: add a re-validation pass on session load that re-checks the snapshot against current `game_flaws` and re-syncs or flags a diff. If live-joined: no recovery needed, but audit historical solve-log entries for consistency before trusting aggregate stats. |
+| Mastery progress lost to game deletion (Pitfall 4) | HIGH (data is genuinely gone) | No automatic recovery once games are deleted — communicate honestly in the UI going forward; this mirrors the guest-cleanup job's own "no un-delete" philosophy, so treat it as an accepted, documented product tradeoff rather than a bug to patch retroactively. |
+| Timezone mismatch causing incorrect due dates/streak resets (Pitfall 7) | MEDIUM | Add the deferred offset field, backfill a best-guess (e.g. from `last_activity` clustering or a one-time prompt), and run a one-time streak/due-date repair pass; communicate the fix ("we recalculated your schedule") rather than silently shifting dates. |
+| WASM grading false-reject/false-accept clustering near MISTAKE_DROP (Pitfall 8) | LOW | Widen the grading movetime budget (mirroring the sibling hook's 4000ms cap) and/or add a small documented tolerance band around the threshold; re-run a headless measurement pass (per the project's existing WASM-verification precedent) before retuning. |
 
 ## Pitfall-to-Phase Mapping
 
 | Pitfall | Prevention Phase | Verification |
-|---------|------------------|--------------|
-| 1 Timer drift | Clocked-board/Lifecycle | 5-min game clock matches wall clock within ~50 ms |
-| 2 Background throttle / hidden-while-thinking | Clocked-board/Lifecycle | Hide-tab test: no self-flag, resumes on focus |
-| 3 Deterministic argmax | Setup/Engine-wiring | Sampled-move distribution test at full-human |
-| 4 Full MCTS at human end | Setup/Engine-wiring | Profiler: one `policy()`, no `grade()` at full-human; blitz <2 s on mid phone |
-| 5 Sample/argmax blend correctness | Setup/Engine-wiring | Illegal-UCI drop + empty-fallback + temperature-monotonicity tests |
-| 6 No PGN normalizer | Store-endpoint/Normalization | `normalize_flawchess_game` unit test → valid `NormalizedGame`; positions hashed |
-| 7 Missing `[%clk]` | Store-endpoint/Normalization + Clocked-board | Stored PGN has `[%clk]`; game appears in Time Management |
-| 8 Synthetic id collisions | Store-endpoint/Normalization | Double-submit returns 200, one row; UUID per game |
-| 9 NULL player rating | Store-endpoint + Setup/Engine-wiring | Row rating non-NULL when user has games; bot settings present |
-| 10 Bot adaptation | Setup/Engine-wiring | No code path reads score to mutate `budget.elo`; symmetric |
-| 11 Guest eval exclusion | Store-endpoint + Library UI | Guest game shows analyzed-coverage caveat, not empty chart |
-| 12 Resume clock/dupe | Resume | Resume starts paused; localStorage cleared post-2xx; no terminal-state resume |
-| 13 Node ONNX feasibility | Calibration-harness (spike first) | Spike measures inference latency + games/hour under `onnxruntime-node` |
-| 14 Unanchored / biased self-play | Calibration-harness | Strength fit references raw-Maia/Stockfish anchors; grid cells evenly sampled |
+|---------|-------------------|----------------|
+| 1. Ply-parity ownership reuse | Phase 1 | Grep for raw `ply % 2` in Train backend code; unit test with both a white-playing and black-playing fixture user |
+| 2. Post-move eval shift on winnability floor | Phase 1 | Cross-check sampled drill items' winnability against the `/analysis` board's pre-move eval |
+| 3. Answer-key drift mid-ladder | Phase 1 | Explicit schema-design decision documented in the plan; test a flaw whose blob is re-written between two sessions |
+| 4. Source-game deletion orphans progress | Phase 1 (schema) / Phase 3 (messaging) | Test both the guest-prune path and the user "delete all games + re-import" path against an in-progress drill item |
+| 5. Tier-4 blob backfill starves session composition | Phase 1 (composition logic) / Phase 3 (cold-state copy) | Simulate a user with flaws but no blob coverage; verify session doesn't come up empty/degenerate without explanation |
+| 6. Returning-user re-entry shock | Phase 3 | UAT a "lapsed for 3+ weeks" persona through their comeback session and streak-reset messaging |
+| 7. Missing timezone infra | Phase 1 (ladder) / Phase 3 (schedule UI) | QA a non-UTC persona's weekday picker and weekly-streak boundary |
+| 8. WASM grading vs. server answer key near threshold | Phase 2 | Headless WASM measurement pass on a curated near-threshold position set before ship |
+| 9. Structural answer-key leak in the pre-attempt payload | Phase 1 (payload shape) / Phase 2 (UI) | Inspect Network tab response before first attempt in a session; confirm reveal-only fields are absent |
+| Reimplementing the grading worker from scratch | Phase 2 | Code review: grading path extends `useStockfishGradingEngine.ts`, not a new Worker wrapper |
+| Session-composition N-query performance | Phase 1 | Load-test session-fetch against a large-history fixture user |
+| Per-puzzle Worker recreation | Phase 2 | Performance-panel check: one WASM module load per session, not per puzzle |
+| Parked-count shame | Phase 3 | Visual review against theme.ts semantic color usage (no danger/red band on parked count) |
 
 ## Sources
 
-- SEED-091 (`.planning/seeds/SEED-091-flawchess-bot-play-milestone.md`) — locked decisions + "Defaults flagged during the session" (HIGH: the author's own risk enumeration)
-- `.planning/PROJECT.md` "Current Milestone: v2.3 Bot Play" (HIGH)
-- Codebase (HIGH): `frontend/src/lib/engine/mctsSearch.ts` (determinism per concurrency, WR-04/WR-07 illegal/degenerate handling, temperature reshape gating), `app/services/normalization.py` + `app/schemas/normalization.py` (platform Literal, no PGN path, `NormalizedGame`), `app/repositories/query_utils.py` (opponent_type/platform filters), `app/services/eval_queue_service.py` (guest exclusion + tier-1 carve-out), `frontend/src/hooks/useMaiaEngine.ts` (onnxruntime-web webgpu/wasm + Worker path)
-- CLAUDE.md Critical Constraints (HIGH): `[%clk]`/clock handling, `board.board_fen()`, Standard-only, API never exposes hashes, DB FK/unique/enum rules
-- Project memory (MEDIUM): `project_headless_stockfish_wasm_verification` (Stockfish-WASM-in-Node verified), Maia repro needs `onnxruntime==1.20.1`; `project_frontend_beta_gating_source` (guest/profile gating)
-- Browser platform behavior (HIGH, well-established): Page Visibility API, background timer clamping, Web Worker throttling on hidden/mobile tabs
+- `app/models/game_flaw.py` — ownership convention, `missed_pv_lines`/`allowed_pv_lines`
+  deferred JSONB columns, tactic-family comments.
+- `app/services/eval_apply.py` — post-move eval shift (SEED-044), `best_move` overwrite
+  behavior, `_classify_and_fill_oracle` diff/upsert history.
+- `app/services/forcing_line_gate.py` — `missed_pv_lines`/`allowed_pv_lines` node-0 shape,
+  POV/indexing asymmetry between the two orientations.
+- `app/services/best_move_candidates.py` — gem/great classification, `mover_color_for_ply`,
+  the shared expected-score sigmoid helper.
+- `app/repositories/query_utils.py` — `player_only_gate`/`is_opponent_expr`, with an explicit
+  comment referencing a prior ownership bug in this exact area.
+- `app/repositories/library_repository.py` — `is_decided_lost`/`decided_lost_sql` (an
+  adjacent-but-distinct "already lost" concept, not to be confused with Train's winnability
+  floor), `player_only_gate` usage precedent.
+- `app/services/guest_cleanup_service.py` — 30-day guest-inactivity prune, cascade scope,
+  `User` row survival vs. game/data deletion.
+- `app/repositories/game_repository.py` — `delete_all_games_for_user` (real DELETE, not
+  soft-delete), `bulk_insert_games`'s `ON CONFLICT DO NOTHING` (confirms normal incremental
+  sync preserves `Game.id`, only the explicit delete-then-reimport path breaks it).
+- `frontend/src/hooks/useStockfishGradingEngine.ts` — the existing single-move-grading-capable
+  Stockfish Worker hook, its documented UCI bugs/fixes, and its measured movetime cap.
+- `frontend/src/lib/confetti.ts` — existing `canvas-confetti` wrapper and
+  `prefers-reduced-motion` handling, available for reuse.
+- `frontend/src/App.tsx` — `IMPORT_EXEMPT_ROUTES`/`isNavLocked` nav-gating pattern Train must
+  follow (not itself a pitfall, but confirms the gating mechanism this feature depends on).
+- Project memory notes: `project_eval_nondeterminism.md` (eval_cp not reproducible across
+  machines), `project_tier4_blob_backfill_measurement.md` and
+  `project_bestmove_backfill_two_populations.md` (blob/best-move backfill is opportunistic,
+  two separate populations, no ETA), `project_atomic_eval_submit_incremental_lease.md` (dedup
+  transplants and tier-4 `[]`-sentinels affecting blob permanence), `project_gem_great_user_scoping.md`
+  (ply-parity ownership convention confirmed elsewhere in the app).
+- `.planning/seeds/SEED-037-train-spaced-repetition-blunder-drills.md` — the settled design
+  itself (source of the Phase Decomposition and Data Dependencies this document maps against).
 
 ---
-*Pitfalls research for: client-side clocked bot-play + synthetic-game storage + headless calibration harness (FlawChess v2.3)*
-*Researched: 2026-07-11*
+*Pitfalls research for: v2.9 Train — spaced-repetition blunder drills*
+*Researched: 2026-07-25*

@@ -58,7 +58,7 @@ import { useBotPersonaWins, BOT_PERSONA_WINS_QUERY_KEY } from '@/hooks/useBotPer
 import { useDrainPendingStore, useStoreBotGame, toStoreRequest } from '@/hooks/useStoreBotGame';
 import { useTier1EnqueueForGame } from '@/hooks/useEnqueueGame';
 import { readSnapshot, clearSnapshot, type BotGameSnapshot } from '@/lib/botGameSnapshot';
-import { useMarkBotPlayActive } from '@/lib/botPlayActive';
+import { useMarkPlayActive } from '@/lib/playActive';
 import { removePendingStore } from '@/lib/botPendingStore';
 import { resolvePlayerName } from '@/lib/playerName';
 import { setMuted, unlockAudio, useMuted } from '@/lib/sounds';
@@ -217,7 +217,7 @@ function BotsGame({
   const muted = useMuted();
   // Suppress the mobile app header while the game board is on screen — the
   // board + clocks need the vertical space (ProtectedLayout reads this flag).
-  useMarkBotPlayActive();
+  useMarkPlayActive();
   // D-11: `game.newGame` (a public hook API) is intentionally left UNCALLED
   // from this UI — both result surfaces below use `onNewGame` (returns to the
   // setup screen) instead.

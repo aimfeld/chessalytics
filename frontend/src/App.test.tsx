@@ -234,7 +234,7 @@ describe('control assertion: existing lock behavior is genuinely exercised', () 
 });
 
 describe('V-04: Bots renders in all three surfaces, second position (D-16)', () => {
-  it('desktop NavHeader: Bots sits between Library and Openings', () => {
+  it('desktop NavHeader: order is Library, Train, Bots, Openings, Endgames', () => {
     profileState = {
       email: 'zero@example.com',
       is_superuser: false,
@@ -249,10 +249,10 @@ describe('V-04: Bots renders in all three surfaces, second position (D-16)', () 
     const nav = screen.getByRole('navigation', { name: 'Main navigation' });
     const links = within(nav).getAllByTestId(/^nav-/);
     const order = links.map((el) => el.getAttribute('data-testid'));
-    expect(order).toEqual(['nav-library', 'nav-bots', 'nav-openings', 'nav-endgames']);
+    expect(order).toEqual(['nav-library', 'nav-train', 'nav-bots', 'nav-openings', 'nav-endgames']);
   });
 
-  it('mobile bottom bar: Bots sits between Library and Openings', () => {
+  it('mobile bottom bar: order is Library, Train, Bots, Openings, Endgames', () => {
     profileState = {
       email: 'zero@example.com',
       is_superuser: false,
@@ -267,10 +267,16 @@ describe('V-04: Bots renders in all three surfaces, second position (D-16)', () 
     const nav = screen.getByRole('navigation', { name: 'Mobile navigation' });
     const links = within(nav).getAllByTestId(/^mobile-nav-(?!more)/);
     const order = links.map((el) => el.getAttribute('data-testid'));
-    expect(order).toEqual(['mobile-nav-library', 'mobile-nav-bots', 'mobile-nav-openings', 'mobile-nav-endgames']);
+    expect(order).toEqual([
+      'mobile-nav-library',
+      'mobile-nav-train',
+      'mobile-nav-bots',
+      'mobile-nav-openings',
+      'mobile-nav-endgames',
+    ]);
   });
 
-  it('more drawer: Bots sits between Library and Openings', () => {
+  it('more drawer: order is Library, Train, Bots, Openings, Endgames', () => {
     profileState = {
       email: 'zero@example.com',
       is_superuser: false,
@@ -284,7 +290,373 @@ describe('V-04: Bots renders in all three surfaces, second position (D-16)', () 
     renderMobileMoreDrawer();
     const links = screen.getAllByTestId(/^drawer-nav-/);
     const order = links.map((el) => el.getAttribute('data-testid'));
-    expect(order).toEqual(['drawer-nav-library', 'drawer-nav-bots', 'drawer-nav-openings', 'drawer-nav-endgames']);
+    expect(order).toEqual([
+      'drawer-nav-library',
+      'drawer-nav-train',
+      'drawer-nav-bots',
+      'drawer-nav-openings',
+      'drawer-nav-endgames',
+    ]);
+  });
+});
+
+describe('190-03: Train renders in all three surfaces, correctly placed (NAV-01)', () => {
+  it('desktop NavHeader: nav test-id sequence places Train between Library and Bots', () => {
+    profileState = {
+      email: 'zero@example.com',
+      is_superuser: false,
+      is_guest: false,
+      chess_com_game_count: 0,
+      lichess_game_count: 0,
+      impersonation: null,
+    } as Partial<UserProfile>;
+    tier1State = false;
+
+    renderNavHeader();
+    const nav = screen.getByRole('navigation', { name: 'Main navigation' });
+    const links = within(nav).getAllByTestId(/^nav-/);
+    const order = links.map((el) => el.getAttribute('data-testid'));
+    expect(order).toEqual(['nav-library', 'nav-train', 'nav-bots', 'nav-openings', 'nav-endgames']);
+  });
+
+  it('mobile bottom bar: nav test-id sequence places Train between Library and Bots', () => {
+    profileState = {
+      email: 'zero@example.com',
+      is_superuser: false,
+      is_guest: false,
+      chess_com_game_count: 0,
+      lichess_game_count: 0,
+      impersonation: null,
+    } as Partial<UserProfile>;
+    tier1State = false;
+
+    renderMobileBottomBar();
+    const nav = screen.getByRole('navigation', { name: 'Mobile navigation' });
+    const links = within(nav).getAllByTestId(/^mobile-nav-(?!more)/);
+    const order = links.map((el) => el.getAttribute('data-testid'));
+    expect(order).toEqual([
+      'mobile-nav-library',
+      'mobile-nav-train',
+      'mobile-nav-bots',
+      'mobile-nav-openings',
+      'mobile-nav-endgames',
+    ]);
+  });
+
+  it('more drawer: nav test-id sequence places Train between Library and Bots', () => {
+    profileState = {
+      email: 'zero@example.com',
+      is_superuser: false,
+      is_guest: false,
+      chess_com_game_count: 0,
+      lichess_game_count: 0,
+      impersonation: null,
+    } as Partial<UserProfile>;
+    tier1State = false;
+
+    renderMobileMoreDrawer();
+    const links = screen.getAllByTestId(/^drawer-nav-/);
+    const order = links.map((el) => el.getAttribute('data-testid'));
+    expect(order).toEqual([
+      'drawer-nav-library',
+      'drawer-nav-train',
+      'drawer-nav-bots',
+      'drawer-nav-openings',
+      'drawer-nav-endgames',
+    ]);
+  });
+
+  it('desktop and bottom-bar nav test-id sequences are equal to each other', () => {
+    profileState = {
+      email: 'zero@example.com',
+      is_superuser: false,
+      is_guest: false,
+      chess_com_game_count: 0,
+      lichess_game_count: 0,
+      impersonation: null,
+    } as Partial<UserProfile>;
+    tier1State = false;
+
+    const { unmount: unmountDesktop } = renderNavHeader();
+    const desktopNav = screen.getByRole('navigation', { name: 'Main navigation' });
+    const desktopOrder = within(desktopNav)
+      .getAllByTestId(/^nav-/)
+      .map((el) => el.getAttribute('data-testid')?.replace(/^nav-/, ''));
+    unmountDesktop();
+
+    renderMobileBottomBar();
+    const mobileNav = screen.getByRole('navigation', { name: 'Mobile navigation' });
+    const mobileOrder = within(mobileNav)
+      .getAllByTestId(/^mobile-nav-(?!more)/)
+      .map((el) => el.getAttribute('data-testid')?.replace(/^mobile-nav-/, ''));
+
+    expect(desktopOrder).toEqual(mobileOrder);
+  });
+});
+
+describe('190-03: Train gating (NAV-02)', () => {
+  it('locked state: Train is aria-disabled with the import-required title on all three surfaces; Library/Bots stay reachable', () => {
+    profileState = {
+      email: 'zero@example.com',
+      is_superuser: false,
+      is_guest: false,
+      chess_com_game_count: 0,
+      lichess_game_count: 0,
+      impersonation: null,
+    } as Partial<UserProfile>;
+    tier1State = false;
+
+    const { unmount: unmountHeader } = renderNavHeader();
+    const desktopLink = screen.getByTestId('nav-train');
+    expect(desktopLink.getAttribute('aria-disabled')).toBe('true');
+    expect(desktopLink.getAttribute('title')).toBe('Import your games first to unlock this feature.');
+    expect(screen.getByTestId('nav-library').getAttribute('aria-disabled')).toBeNull();
+    expect(screen.getByTestId('nav-bots').getAttribute('aria-disabled')).toBeNull();
+    unmountHeader();
+
+    const { unmount: unmountBar } = renderMobileBottomBar();
+    const mobileLink = screen.getByTestId('mobile-nav-train');
+    expect(mobileLink.getAttribute('aria-disabled')).toBe('true');
+    expect(screen.getByTestId('mobile-nav-library').getAttribute('aria-disabled')).toBeNull();
+    expect(screen.getByTestId('mobile-nav-bots').getAttribute('aria-disabled')).toBeNull();
+    unmountBar();
+
+    renderMobileMoreDrawer();
+    const drawerLink = screen.getByTestId('drawer-nav-train');
+    expect(drawerLink.getAttribute('aria-disabled')).toBe('true');
+    expect(screen.getByTestId('drawer-nav-library').getAttribute('aria-disabled')).toBeNull();
+    expect(screen.getByTestId('drawer-nav-bots').getAttribute('aria-disabled')).toBeNull();
+  });
+
+  it('unlocked state: Train is NOT aria-disabled on all three surfaces', () => {
+    profileState = {
+      email: 'full@example.com',
+      is_superuser: false,
+      is_guest: false,
+      chess_com_game_count: 50,
+      lichess_game_count: 0,
+      impersonation: null,
+    } as Partial<UserProfile>;
+    tier1State = true;
+
+    const { unmount: unmountHeader } = renderNavHeader();
+    expect(screen.getByTestId('nav-train').getAttribute('aria-disabled')).toBeNull();
+    unmountHeader();
+
+    const { unmount: unmountBar } = renderMobileBottomBar();
+    expect(screen.getByTestId('mobile-nav-train').getAttribute('aria-disabled')).toBeNull();
+    unmountBar();
+
+    renderMobileMoreDrawer();
+    expect(screen.getByTestId('drawer-nav-train').getAttribute('aria-disabled')).toBeNull();
+  });
+});
+
+describe('190-03: empty profile does not crash and renders Train locked', () => {
+  it('all three surfaces render without throwing, Train locked, with a null profile', () => {
+    profileState = null;
+    tier1State = false;
+
+    expect(() => {
+      const { unmount } = renderNavHeader();
+      expect(screen.getByTestId('nav-train').getAttribute('aria-disabled')).toBe('true');
+      unmount();
+    }).not.toThrow();
+
+    expect(() => {
+      const { unmount } = renderMobileBottomBar();
+      expect(screen.getByTestId('mobile-nav-train').getAttribute('aria-disabled')).toBe('true');
+      unmount();
+    }).not.toThrow();
+
+    expect(() => {
+      renderMobileMoreDrawer();
+      expect(screen.getByTestId('drawer-nav-train').getAttribute('aria-disabled')).toBe('true');
+    }).not.toThrow();
+  });
+});
+
+describe('190-03: Train active state (adjacency)', () => {
+  it('rendered at /train, exactly one nav link is active and it is Train', () => {
+    profileState = {
+      email: 'full@example.com',
+      is_superuser: false,
+      is_guest: false,
+      chess_com_game_count: 50,
+      lichess_game_count: 0,
+      impersonation: null,
+    } as Partial<UserProfile>;
+    tier1State = true;
+
+    renderNavHeader('/train');
+    const nav = screen.getByRole('navigation', { name: 'Main navigation' });
+    const links = within(nav).getAllByTestId(/^nav-/);
+    const activeLinks = links.filter((el) => /bg-white\/10/.test(el.className));
+    expect(activeLinks).toHaveLength(1);
+    expect(activeLinks[0]?.getAttribute('data-testid')).toBe('nav-train');
+  });
+
+  it('rendered at /train/anything, Train is active on the sub-route', () => {
+    profileState = {
+      email: 'full@example.com',
+      is_superuser: false,
+      is_guest: false,
+      chess_com_game_count: 50,
+      lichess_game_count: 0,
+      impersonation: null,
+    } as Partial<UserProfile>;
+    tier1State = true;
+
+    renderNavHeader('/train/anything');
+    expect(screen.getByTestId('nav-train').className).toMatch(/bg-white\/10/);
+  });
+
+  it('rendered at /library, exactly one nav link is active and it is NOT Train', () => {
+    profileState = {
+      email: 'full@example.com',
+      is_superuser: false,
+      is_guest: false,
+      chess_com_game_count: 50,
+      lichess_game_count: 0,
+      impersonation: null,
+    } as Partial<UserProfile>;
+    tier1State = true;
+
+    renderNavHeader('/library');
+    const nav = screen.getByRole('navigation', { name: 'Main navigation' });
+    const links = within(nav).getAllByTestId(/^nav-/);
+    const activeLinks = links.filter((el) => /bg-white\/10/.test(el.className));
+    expect(activeLinks).toHaveLength(1);
+    expect(activeLinks[0]?.getAttribute('data-testid')).not.toBe('nav-train');
+  });
+});
+
+describe('190-03: mobile bottom-bar target count', () => {
+  it('renders six nav links plus the More button, each with visible label text', () => {
+    profileState = {
+      email: 'full@example.com',
+      is_superuser: false,
+      is_guest: false,
+      chess_com_game_count: 50,
+      lichess_game_count: 0,
+      impersonation: null,
+    } as Partial<UserProfile>;
+    tier1State = true;
+
+    renderMobileBottomBar();
+    const nav = screen.getByRole('navigation', { name: 'Mobile navigation' });
+    const navLinks = within(nav).getAllByTestId(/^mobile-nav-(?!more)/);
+    expect(navLinks).toHaveLength(5);
+    for (const link of navLinks) {
+      expect(link.textContent?.trim().length).toBeGreaterThan(0);
+    }
+    const moreButton = within(nav).getByTestId('mobile-nav-more');
+    expect(moreButton.textContent?.trim().length).toBeGreaterThan(0);
+  });
+});
+
+describe('190-03: Train dot chain (D-16)', () => {
+  const EMAIL = 'chain@example.com';
+
+  function setFlag(name: string, value: boolean) {
+    const key = `user_flag:${name}:${EMAIL}`;
+    if (value) {
+      localStorage.setItem(key, '1');
+    } else {
+      localStorage.removeItem(key);
+    }
+  }
+
+  afterEach(() => {
+    localStorage.clear();
+  });
+
+  it('unlocked, neither Openings nor Endgames visited: no Train dot', () => {
+    profileState = {
+      email: EMAIL,
+      is_superuser: false,
+      is_guest: false,
+      chess_com_game_count: 50,
+      lichess_game_count: 0,
+      impersonation: null,
+    } as Partial<UserProfile>;
+    tier1State = true;
+    setFlag('openings_visited', false);
+    setFlag('endgames_visited', false);
+    setFlag('train_visited', false);
+
+    const { unmount } = renderNavHeader();
+    expect(screen.queryByTestId('train-notification-dot')).toBeNull();
+    unmount();
+
+    renderMobileBottomBar();
+    expect(screen.queryByTestId('train-notification-dot-mobile')).toBeNull();
+  });
+
+  it('unlocked, Openings visited but not Endgames: no Train dot', () => {
+    profileState = {
+      email: EMAIL,
+      is_superuser: false,
+      is_guest: false,
+      chess_com_game_count: 50,
+      lichess_game_count: 0,
+      impersonation: null,
+    } as Partial<UserProfile>;
+    tier1State = true;
+    setFlag('openings_visited', true);
+    setFlag('endgames_visited', false);
+    setFlag('train_visited', false);
+
+    const { unmount } = renderNavHeader();
+    expect(screen.queryByTestId('train-notification-dot')).toBeNull();
+    unmount();
+
+    renderMobileBottomBar();
+    expect(screen.queryByTestId('train-notification-dot-mobile')).toBeNull();
+  });
+
+  it('unlocked, both Openings and Endgames visited: Train dot shows on desktop and bottom bar', () => {
+    profileState = {
+      email: EMAIL,
+      is_superuser: false,
+      is_guest: false,
+      chess_com_game_count: 50,
+      lichess_game_count: 0,
+      impersonation: null,
+    } as Partial<UserProfile>;
+    tier1State = true;
+    setFlag('openings_visited', true);
+    setFlag('endgames_visited', true);
+    setFlag('train_visited', false);
+
+    const { unmount } = renderNavHeader();
+    expect(screen.getByTestId('train-notification-dot')).toBeTruthy();
+    unmount();
+
+    renderMobileBottomBar();
+    expect(screen.getByTestId('train-notification-dot-mobile')).toBeTruthy();
+  });
+
+  it('Train already visited: no Train dot even with both prior flags set', () => {
+    profileState = {
+      email: EMAIL,
+      is_superuser: false,
+      is_guest: false,
+      chess_com_game_count: 50,
+      lichess_game_count: 0,
+      impersonation: null,
+    } as Partial<UserProfile>;
+    tier1State = true;
+    setFlag('openings_visited', true);
+    setFlag('endgames_visited', true);
+    setFlag('train_visited', true);
+
+    const { unmount } = renderNavHeader();
+    expect(screen.queryByTestId('train-notification-dot')).toBeNull();
+    unmount();
+
+    renderMobileBottomBar();
+    expect(screen.queryByTestId('train-notification-dot-mobile')).toBeNull();
   });
 });
 

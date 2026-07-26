@@ -104,6 +104,17 @@ async def _purge_guest(guest_id: int) -> int:
             delete(UserBenchmarkPercentile).where(UserBenchmarkPercentile.user_id == guest_id)
         )
         await session.execute(delete(UserRatingAnchor).where(UserRatingAnchor.user_id == guest_id))
+        # Phase 189 Plan 02 (POOL-09, D-04/D-05): the Train tables need NO
+        # handling here either. `drill_items`/`drill_solves` ride the same
+        # `games` cascade `delete_all_games_for_user` already triggered above
+        # (D-02). `drill_sessions`/`train_settings` are preserved by design
+        # (D-04, session history is user progress, not game-derived data) --
+        # do NOT add a delete for them. And in practice a guest never
+        # accumulates Train rows in the first place: `_reject_guest` (Phase
+        # 189's D-05) rejects every /train/* request with 403 before any pool
+        # query runs, so this purge never needs to reason about a guest's
+        # drill state. See tests/test_guest_cleanup_service.py::
+        # test_purge_guest_cascades_drill_rows.
         # Pitfall 1 (187-RESEARCH.md): deleting import_jobs alone does NOT
         # reset the backward-walk backlog cursor (chesscom_backfill_oldest_year
         # /_month, lichess_backfill_oldest_ms) — those live on

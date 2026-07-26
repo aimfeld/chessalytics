@@ -1,0 +1,1 @@
+No external API integration: this phase adds internal FastAPI endpoints and PostgreSQL tables over existing in-house data (game_flaws/game_positions/game_best_moves); zero new external services or SDKs.

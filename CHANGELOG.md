@@ -8,13 +8,24 @@ in `YYYY-MM-DD` (Europe/Zurich).
 
 ## [Unreleased]
 
+### Added
+
+- The Train page is live: a new import-gated `/train` tab (desktop header, mobile bottom bar, and More drawer) drills your own blunders as puzzles. Each puzzle asks a quick read of the position (one critical move vs. several fine moves), takes a single move attempt graded right in the browser, then reveals both verdicts with a steppable best line, an optional tactic line, and the source game with an Analyze deep link. Sessions resume where you left off and end on a score screen. (Phase 190)
+- Backend groundwork for Train, the upcoming spaced-repetition drill mode: your own blunders that carry a full stored answer key become drill puzzles on a per-user schedule, mixed with red herrings drawn from positions where your move was already fine. Sessions compose, resume, expire, and record results with the interval ladder advancing, retiring mastered puzzles and parking ones you keep missing. (Phase 189)
+
 ### Changed
+
+- Redesigned the Train reveal into a self-contained study surface. The board now draws what mattered: green arrows for the moves that were actually good (one on a sharp puzzle, up to three on a quieter one), a distinct arrow for the move you played, and a thin white arrow for the move played in the game. The verdicts spell out the answers you gave rather than showing bare marks, and the game card is replaced by three steppable engine lines — your move, the best move, and the move played in the game — each with its own evaluation, all from the same search so the numbers can never contradict the verdict or each other. A small footer names the opponent and date, Solution / Analyze / Next sit on one row below the board (Analyze opens the analysis board on the exact position the puzzle showed), stepping a line plays move sounds with the same mute toggle as bot games, and your running session score rides along on the progress bar and survives a reload. (Phase 190.1)
 
 - Reworked the bot roster's Grinder and Wall ladders. The Grinder line now runs Ant → Mole → Otter → Nell the Penguin → Tank the Ox → Gus the Gorilla, and the Wall line ends Rocco the Armadillo → Hilda the Hippo, retiring Bo the Buffalo, Yara the Yak, and Dana the Beaver. Grinder portraits also read grittier and more dogged than the previous placid look.
 
 ### Fixed
 
 - A slow analysis worker no longer restarts its engine when a search times out, which was turning one slow position into a block of missing evaluations for the rest of the game.
+
+- Finishing a training session no longer lets a fresh session be composed the same day, which was quietly defeating the spaced-repetition pacing and could leave a Resume button that did nothing. (Phase 190.1)
+
+- Pressing Analyze from a solved Train puzzle and then going back now returns you to that puzzle's reveal instead of the start screen. (Phase 190.1)
 
 ## [v2.8] Import Filters and Guest Data Cleanup — 2026-07-24
 

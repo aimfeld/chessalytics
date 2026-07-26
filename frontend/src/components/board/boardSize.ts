@@ -10,7 +10,10 @@
 
 /** D-08 floor — the board never shrinks below this even on a very short viewport. */
 export const BOARD_MIN_WIDTH = 420;
-/** D-08 ceiling — the board never grows past this max size. */
+/** D-08 ceiling for the /analysis board — Analysis.tsx passes this as its
+ * `maxWidth` prop (and derives layout widths from it). Since Phase 190 UAT
+ * (600px Train board) the ceiling inside `computeBoardSize` is the caller's
+ * own `maxWidth`, not this constant. */
 export const BOARD_MAX_WIDTH = 540;
 
 /**
@@ -32,7 +35,10 @@ export function computeBoardSize(widthBudget: number, heightBudget: number, maxW
   // existed. Applying Math.max across the whole min() pinned every width-driven,
   // heightBudget=Infinity caller to a fixed 420px and overflowed those containers
   // (Phase 161 code review CR-01).
-  const ceiling = Math.min(maxWidth, BOARD_MAX_WIDTH);
+  // The ceiling is caller-controlled: every ChessBoard caller passes an explicit
+  // maxWidth (default 400, Bots 400, Analysis BOARD_MAX_WIDTH=540, Train 600).
+  // The old extra Math.min(maxWidth, BOARD_MAX_WIDTH) clamp silently capped the
+  // Phase 190 Train board's 600px request at 540 — removed (UAT feedback).
   const heightFloored = Math.max(BOARD_MIN_WIDTH, heightBudget);
-  return Math.min(widthBudget, ceiling, heightFloored);
+  return Math.min(widthBudget, maxWidth, heightFloored);
 }

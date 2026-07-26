@@ -44,6 +44,9 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 import app.services.guest_cleanup_service as guest_cleanup_service
 from app.models.bot_game_settings import BotGameSettings
+from app.models.drill_item import DrillItem
+from app.models.drill_session import DrillSession
+from app.models.drill_solve import DrillSolve
 from app.models.eval_jobs import TIER_IDLE_BACKLOG, EvalJob
 from app.models.game import Game
 from app.models.game_best_move import GameBestMove
@@ -364,6 +367,92 @@ class TestPurgeGuestEndToEnd:
                 )
             ).scalar_one()
         assert surviving_games == 1, "a reactivated guest's game must survive"
+
+
+# ---------------------------------------------------------------------------
+# TestPurgeGuestDrillCascade (Phase 189 Plan 02, POOL-09, D-02/D-04/D-05)
+# ---------------------------------------------------------------------------
+
+
+class TestPurgeGuestDrillCascade:
+    @pytest.mark.asyncio
+    async def test_purge_guest_cascades_drill_rows(
+        self, real_session_maker: async_sessionmaker[AsyncSession]
+    ) -> None:
+        """The 30-day guest purge cascades drill_items/drill_solves away via
+        the games FK (D-02), while the guest's drill_sessions row survives (D-04).
+
+        Guest-owned rows are cleaned up by the module's autouse
+        `_cleanup_leaked_guest_rows` fixture (deletes the guest User row,
+        cascading every FK'd child including drill_sessions) -- no separate
+        finally block is needed since this test creates no non-guest rows.
+        """
+        async with real_session_maker() as seed_session:
+            guest_id, game_id = await _seed_eligible_guest_with_game(seed_session)
+
+            drill_session = DrillSession(
+                user_id=guest_id,
+                session_date=date(2026, 7, 25),
+                puzzle_count=1,
+                expires_on=date(2026, 8, 1),
+            )
+            seed_session.add(drill_session)
+            await seed_session.flush()
+
+            seed_session.add(
+                DrillItem(
+                    user_id=guest_id,
+                    game_id=game_id,
+                    ply=6,
+                    due_date=date(2026, 7, 26),
+                )
+            )
+            seed_session.add(
+                DrillSolve(
+                    session_id=drill_session.id,
+                    position=0,
+                    user_id=guest_id,
+                    game_id=game_id,
+                    ply=6,
+                    source=0,
+                )
+            )
+            await seed_session.commit()
+            drill_session_id = drill_session.id
+
+        async def _count(model, *predicates) -> int:
+            async with real_session_maker() as s:
+                result = await s.execute(select(func.count()).select_from(model).where(*predicates))
+                return result.scalar_one()
+
+        assert await _count(DrillItem, DrillItem.user_id == guest_id) == 1, (
+            "seed setup must produce a non-zero drill_items count before the purge"
+        )
+        assert await _count(DrillSolve, DrillSolve.user_id == guest_id) == 1, (
+            "seed setup must produce a non-zero drill_solves count before the purge"
+        )
+
+        deleted_count = await _purge_guest(guest_id)
+        assert deleted_count == 1
+
+        assert await _count(DrillItem, DrillItem.user_id == guest_id) == 0
+        assert await _count(DrillSolve, DrillSolve.user_id == guest_id) == 0
+        assert await _count(DrillSession, DrillSession.id == drill_session_id) == 1, (
+            "drill_sessions must survive the guest purge (D-04)"
+        )
+
+    @pytest.mark.asyncio
+    async def test_purge_guest_without_drill_rows_is_noop(
+        self, real_session_maker: async_sessionmaker[AsyncSession]
+    ) -> None:
+        """An eligible guest with games but no train rows purges cleanly and
+        returns the expected deleted-game count."""
+        async with real_session_maker() as seed_session:
+            guest_id, _game_id = await _seed_eligible_guest_with_game(seed_session)
+            await seed_session.commit()
+
+        deleted_count = await _purge_guest(guest_id)
+        assert deleted_count == 1
 
 
 # ---------------------------------------------------------------------------
