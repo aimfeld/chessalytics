@@ -36,17 +36,17 @@
 
 ### Schedule & Reminders
 
-- [ ] **SCHD-01**: User configures a weekly training schedule: weekday picker + N puzzles per session
-- [ ] **SCHD-02**: On session days, an in-app nav badge and/or dashboard card surfaces the waiting session ("12 puzzles waiting"); no push, no email
-- [ ] **SCHD-03**: An ad-hoc "train now" session on an off day is allowed and draws the same queue
+- [x] **SCHD-01**: User configures a weekly training schedule: weekday picker + N puzzles per session
+- [x] **SCHD-02**: On session days, an in-app nav badge and/or dashboard card surfaces the waiting session ("12 puzzles waiting"); no push, no email
+- [x] **SCHD-03**: An ad-hoc "train now" session on an off day is allowed and draws the same queue
 
 ### Progress & Gamification
 
-- [ ] **PROG-01**: A weekly streak counts consecutive weeks with every scheduled session completed (no freeze mechanics; competence feedback, no behavior control)
-- [ ] **PROG-02**: A green-rated session ends with a confetti burst (`prefers-reduced-motion` safe, reusing the existing confetti helper)
-- [ ] **PROG-03**: When an item hits 3/3 and retires, a distinct "Flaw fixed!" celebration shows with the position thumbnail
-- [ ] **PROG-04**: A progress surface shows mastered and parked counts honestly ("3 parked — too hard for now", never framed as failure)
-- [ ] **PROG-05**: Cold/empty states: no analyzed games → point to import/analysis; pool exhausted → celebrate, never a dead screen
+- [x] **PROG-01**: A weekly streak counts consecutive weeks with every scheduled session completed (no freeze mechanics; competence feedback, no behavior control)
+- [x] **PROG-02**: A green-rated session ends with a confetti burst (`prefers-reduced-motion` safe, reusing the existing confetti helper)
+- [x] **PROG-03**: When an item hits 3/3 and retires, a distinct "Flaw fixed!" celebration shows with the position thumbnail
+- [x] **PROG-04**: A progress surface shows mastered and parked counts honestly ("3 parked — too hard for now", never framed as failure)
+- [x] **PROG-05**: Cold/empty states: no analyzed games → point to import/analysis; pool exhausted → celebrate, never a dead screen
 
 ## v2 Requirements
 
@@ -114,14 +114,14 @@ Which phases cover which requirements. Updated during roadmap creation.
 | SOLV-07 | Phase 190 | Complete |
 | NAV-01 | Phase 190 | Complete |
 | NAV-02 | Phase 190 | Complete |
-| SCHD-01 | Phase 191 | Pending |
-| SCHD-02 | Phase 191 | Pending |
-| SCHD-03 | Phase 191 | Pending |
-| PROG-01 | Phase 191 | Pending |
-| PROG-02 | Phase 191 | Pending |
-| PROG-03 | Phase 191 | Pending |
-| PROG-04 | Phase 191 | Pending |
-| PROG-05 | Phase 191 | Pending |
+| SCHD-01 | Phase 191 | Complete |
+| SCHD-02 | Phase 191 | Complete |
+| SCHD-03 | Phase 191 | Complete |
+| PROG-01 | Phase 191 | Complete |
+| PROG-02 | Phase 191 | Complete |
+| PROG-03 | Phase 191 | Complete |
+| PROG-04 | Phase 191 | Complete |
+| PROG-05 | Phase 191 | Complete |
 
 **Coverage:**
 

@@ -10,6 +10,8 @@ in `YYYY-MM-DD` (Europe/Zurich).
 
 ### Added
 
+- Train is now a habit, not just a page: pick which weekdays you train and how many puzzles a session (saved as you toggle, no Save button), and the Train tab carries a count of the puzzles waiting for you. The start screen leads with your progress — a weekly streak flame, how many flaws you've fixed, how many are parked, and how this week is going. Finishing a clean session sets off confetti (respecting reduced-motion), and getting a puzzle right three times shows a "Flaw fixed!" celebration with the position. Nothing to train yet points you at import; everything mastered gets an "All caught up!" screen with the date of your next review. (Phase 191)
+
 - The Train page is live: a new import-gated `/train` tab (desktop header, mobile bottom bar, and More drawer) drills your own blunders as puzzles. Each puzzle asks a quick read of the position (one critical move vs. several fine moves), takes a single move attempt graded right in the browser, then reveals both verdicts with a steppable best line, an optional tactic line, and the source game with an Analyze deep link. Sessions resume where you left off and end on a score screen. (Phase 190)
 - Backend groundwork for Train, the upcoming spaced-repetition drill mode: your own blunders that carry a full stored answer key become drill puzzles on a per-user schedule, mixed with red herrings drawn from positions where your move was already fine. Sessions compose, resume, expire, and record results with the interval ladder advancing, retiring mastered puzzles and parking ones you keep missing. (Phase 189)
 
@@ -18,6 +20,10 @@ in `YYYY-MM-DD` (Europe/Zurich).
 - Redesigned the Train reveal into a self-contained study surface. The board now draws what mattered: green arrows for the moves that were actually good (one on a sharp puzzle, up to three on a quieter one), a distinct arrow for the move you played, and a thin white arrow for the move played in the game. The verdicts spell out the answers you gave rather than showing bare marks, and the game card is replaced by three steppable engine lines — your move, the best move, and the move played in the game — each with its own evaluation, all from the same search so the numbers can never contradict the verdict or each other. A small footer names the opponent and date, Solution / Analyze / Next sit on one row below the board (Analyze opens the analysis board on the exact position the puzzle showed), stepping a line plays move sounds with the same mute toggle as bot games, and your running session score rides along on the progress bar and survives a reload. (Phase 190.1)
 
 - Reworked the bot roster's Grinder and Wall ladders. The Grinder line now runs Ant → Mole → Otter → Nell the Penguin → Tank the Ox → Gus the Gorilla, and the Wall line ends Rocco the Armadillo → Hilda the Hippo, retiring Bo the Buffalo, Yara the Yak, and Dana the Beaver. Grinder portraits also read grittier and more dogged than the previous placid look.
+
+- Train reads better on a phone: the puzzle board is measured against the actual window so it fits without scrolling on short screens, the buttons are thumb-sized, and the page shares the Import tab's width and padding. (Phase 191)
+
+- Train puzzles are now scored out of three instead of two. The position read is still worth one point, and the move is worth two for a clean move, one for a slightly imprecise one, and none for a mistake or blunder, so settling for a second-rate move no longer scores a perfect session. The per-puzzle points badge is now colour-coded by score. Already-recorded sessions keep their original scores. (SEED-119)
 
 ### Fixed
 

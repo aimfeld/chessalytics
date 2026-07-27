@@ -5,22 +5,59 @@
  * TrainScoreScreen.tsx is the only consumer that touches React.
  */
 
+import type { FlawSeverity } from '@/lib/liveFlaw';
+
 export type TrainRatingBand = 'green' | 'yellow' | 'red';
+
+/**
+ * The three-way move-quality tier (SEED-119). Deliberately named
+ * `TrainMoveTier` — NOT `TrainMoveQuality` — even though the wire/DB field
+ * spelling is `move_quality`: `trainArrows.ts` already exports a DIFFERENT
+ * 5-value `TrainMoveQuality` taxonomy (`'best' | 'good' | FlawSeverity`),
+ * and both types are imported into `TrainSolveScreen.tsx` — reusing the
+ * name there would be a live collision.
+ */
+export type TrainMoveTier = 'good' | 'inaccuracy' | 'wrong';
+
+/** Move points awarded per tier (SEED-119: good=2, inaccuracy=1, wrong=0). */
+export const MOVE_TIER_POINTS: Record<TrainMoveTier, number> = {
+  good: 2,
+  inaccuracy: 1,
+  wrong: 0,
+};
+
+/**
+ * Translates the project's existing severity classifier into a score tier —
+ * the ONLY such translation anywhere. `null` (no flaw at all) and
+ * `'inaccuracy'` both still score move points (good/inaccuracy respectively);
+ * `'mistake'`/`'blunder'` score zero. No new threshold is introduced here:
+ * the actual severity cutoffs live in `liveFlaw.ts`'s `classifyLiveSeverity`,
+ * which is CI-drift-checked against `app/services/flaws_service.py`.
+ */
+export function moveTierFromSeverity(severity: FlawSeverity | null): TrainMoveTier {
+  if (severity === null) return 'good';
+  if (severity === 'inaccuracy') return 'inaccuracy';
+  return 'wrong';
+}
 
 /** Ratio (score/max) at or above which a session rates green (UI-SPEC). */
 export const TRAIN_RATING_GREEN_MIN = 0.75;
 /** Ratio at or above which a session rates yellow; below this rates red (UI-SPEC). */
 export const TRAIN_RATING_YELLOW_MIN = 0.5;
 
-/** Max points a single puzzle can award — guess and move points are independent. */
-export const TRAIN_POINTS_PER_PUZZLE = 2;
+/**
+ * Max points a single puzzle can award (SEED-119): 1 for the guess plus 0-2
+ * for the tiered move (good=2 / inaccuracy=1 / wrong=0) — guess and move
+ * points are independent.
+ */
+export const TRAIN_POINTS_PER_PUZZLE = 3;
 
 /** Multiplier converting a 0..1 ratio into a whole percentage. */
 export const TRAIN_PERCENTAGE_MULTIPLIER = 100;
 
-/** Per-puzzle score: 0, 1, or 2 — guess and move points are independent. */
-export function scorePuzzle(correctGuess: boolean, correctMove: boolean): number {
-  return (correctGuess ? 1 : 0) + (correctMove ? 1 : 0);
+/** Per-puzzle score: 1 for the guess (0 otherwise) plus the tiered move points. */
+export function scorePuzzle(correctGuess: boolean, moveTier: TrainMoveTier): number {
+  return (correctGuess ? 1 : 0) + MOVE_TIER_POINTS[moveTier];
 }
 
 /** Session aggregation over per-puzzle scores. */
@@ -66,7 +103,11 @@ export function resolveRatingBand(ratio: number): TrainRatingBand {
  * break that agreement (e.g. a ratio of 0.749 rounds to "75%" while
  * `resolveRatingBand` still — correctly — rates it yellow, showing a
  * green-looking number for a yellow band). Do not change this without
- * re-deriving that proof (SOLV-07 edge probe: precision).
+ * re-deriving that proof (SOLV-07 edge probe: precision). The proof holds
+ * regardless of denominator — SEED-119 made the per-puzzle max 3 (a
+ * multiple of three, not two), and the flooring agreement above is
+ * independent of `TRAIN_POINTS_PER_PUZZLE`'s value; do not assume the
+ * former max-2 era was load-bearing to this argument.
  */
 export function displaySessionPercentage(score: TrainSessionScore): number | null {
   if (score.max === 0) return null;

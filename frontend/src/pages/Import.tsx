@@ -536,7 +536,8 @@ export function ImportPage({ onImportStarted, activeJobIds, onJobDismissed }: Im
           <DialogHeader>
             <DialogTitle>Delete All Games</DialogTitle>
             <DialogDescription>
-              This will delete all your imported games. You can import them again anytime.
+              This will delete all your imported games. You can import them again anytime. This
+              also resets your Train progress.
             </DialogDescription>
           </DialogHeader>
           <DialogFooter>

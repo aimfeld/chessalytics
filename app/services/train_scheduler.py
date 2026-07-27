@@ -20,7 +20,10 @@ never re-derives `.date()` from a naive UTC datetime elsewhere.
 from __future__ import annotations
 
 import datetime
+from collections import Counter
+from collections.abc import Sequence
 from dataclasses import dataclass
+from enum import StrEnum
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from app.models.drill_item import DrillStatus
@@ -44,11 +47,27 @@ PARK_FAIL_THRESHOLD: int = 3
 # D-06 default timezone for a brand-new train_settings row.
 DEFAULT_TIMEZONE: str = "UTC"
 
-# D-07: empty weekday set = "train anytime" (every day is a session day).
-DEFAULT_WEEKDAY_MASK: int = 0
+# All 7 weekday bits set (Monday=0..Sunday=6) — the complementary "every day
+# scheduled" representation to the D-07 empty mask (see DEFAULT_WEEKDAY_MASK
+# below and required_sessions_per_week's special-casing of both).
+ALL_WEEKDAYS_MASK: int = 0b1111111
 
-# D-08: default puzzles per session (9 SR + 3 herrings at the 75/25 split).
-DEFAULT_PUZZLES_PER_SESSION: int = 12
+# 191-06 UAT bug fix (SCHD-01): the D-07 empty mask (`0`, "train anytime")
+# rendered the weekday picker with every chip UNCHECKED, which read as "no
+# schedule configured" rather than its actual meaning ("any day works").
+# Defaulting brand-new rows to ALL_WEEKDAYS_MASK instead shows every chip
+# CHECKED out of the box — the same "any day works" meaning, spelled out
+# explicitly rather than via the empty-set identity case.
+# required_sessions_per_week treats `0` and `ALL_WEEKDAYS_MASK` identically
+# (both still require only 1 session/week, never 7) so this is a pure
+# display-default change: no session/streak behavior differs from before.
+DEFAULT_WEEKDAY_MASK: int = ALL_WEEKDAYS_MASK
+
+# D-08: default puzzles per session. 191-06 UAT: changed from 12 to the
+# middle of the new 3/6/9/12/15 preset ladder (was 6/12/18/24) — 6 is a
+# gentler first-touch default than 12 (5 SR + 1 herring per compose_slots'
+# 75/25 split at n=6).
+DEFAULT_PUZZLES_PER_SESSION: int = 6
 
 # Number of days in a week — the search bound for next_scheduled_day's
 # forward scan (a full week always contains a scheduled day when the mask is
@@ -219,9 +238,10 @@ def session_window(session_date: datetime.date, weekday_mask: int) -> datetime.d
         The first scheduled day strictly after `session_date` — the moment
         the session expires.
 
-    With the D-07 default mask of 0 (every day scheduled), the window
-    collapses to "end of the same local day": `session_date + 1 day`, NOT a
-    multi-day grace window like the Tue/Fri example in 189-CONTEXT.md.
+    With every day scheduled (either the D-07 empty mask `0`, or the 191-06
+    default `ALL_WEEKDAYS_MASK`), the window collapses to "end of the same
+    local day": `session_date + 1 day`, NOT a multi-day grace window like the
+    Tue/Fri example in 189-CONTEXT.md.
     Cross-reference: shares its forward-scan logic with `next_scheduled_day`,
     which this function calls directly rather than re-implementing the scan.
     """
@@ -248,17 +268,263 @@ def is_session_expired(expires_on: datetime.date, today: datetime.date) -> bool:
     return today >= expires_on
 
 
+# ---------------------------------------------------------------------------
+# Phase 191 Plan 01 (PROG-01, D-18): the settled-streak snapshot machine.
+#
+# A settled week is frozen FOREVER once judged: settle_weeks only ever walks
+# weeks strictly after `snapshot.settled_through`, so a later weekday_mask or
+# timezone change can never re-judge a week that already settled (D-18). The
+# CURRENT week alone is judged live against the current mask every call — a
+# mid-week schedule change prospectively re-judges only that in-progress
+# week (accepted D-18 semantics).
+# ---------------------------------------------------------------------------
+
+
+def week_start(d: datetime.date) -> datetime.date:
+    """Return the Monday of the Mon-Sun week containing `d`.
+
+    Uses `date.weekday()` (Monday=0..Sunday=6) — the IDENTICAL convention
+    `next_scheduled_day` uses for `weekday_mask` bits, so week boundaries and
+    the schedule bitmask never disagree.
+    """
+    return d - datetime.timedelta(days=d.weekday())
+
+
+class FlameState(StrEnum):
+    """The D-02 three-state flame ladder.
+
+    A `StrEnum` so the in-memory value, the `train_settings.flame_state` TEXT
+    column value, and the wire literal are byte-identical — no mapping table
+    needed in either direction.
+    """
+
+    MINIMUM = "minimum"
+    MEDIUM = "medium"
+    MAXIMUM = "maximum"
+
+
+# The explicit ordered ladder the D-02 notch arithmetic reads off — never
+# integer adjacency. Index 0 is the lowest lit state (lighting up from None
+# always lands here); the last index is the cap.
+FLAME_LADDER: tuple[FlameState, ...] = (FlameState.MINIMUM, FlameState.MEDIUM, FlameState.MAXIMUM)
+
+
+def _flame_up(flame: FlameState | None) -> FlameState:
+    """Step the flame UP one FLAME_LADDER notch (D-02 fulfilled-week rule).
+
+    An unlit (`None`) flame lights at the ladder's first (lowest) rung;
+    `FLAME_LADDER[-1]` (maximum) is the cap.
+    """
+    if flame is None:
+        return FLAME_LADDER[0]
+    index = FLAME_LADDER.index(flame)
+    return FLAME_LADDER[min(index + 1, len(FLAME_LADDER) - 1)]
+
+
+def _flame_down(flame: FlameState) -> FlameState | None:
+    """Step the flame DOWN one FLAME_LADDER notch (D-02 missed-week rule).
+
+    Only called when `flame` is not `None` — the missed-week branch in
+    `settle_weeks` handles the `None` (nothing running) and the
+    `FLAME_LADDER[0]` (lose the streak) cases itself before ever calling this.
+    """
+    index = FLAME_LADDER.index(flame)
+    if index == 0:
+        return None
+    return FLAME_LADDER[index - 1]
+
+
+def required_sessions_per_week(weekday_mask: int) -> int:
+    """D-01: the count of scheduled days a week must clear to be fulfilled.
+
+    Both "day-agnostic" masks require exactly 1 completed session, not the
+    general popcount expression:
+    - `weekday_mask == 0` (D-07 "train anytime", reachable by explicitly
+      deselecting every chip): `popcount(0) == 0` would demand nothing, so
+      this is a deliberate override making the empty schedule still count as
+      "showed up".
+    - `weekday_mask == ALL_WEEKDAYS_MASK` (191-06: the new brand-new-row
+      default, every chip checked): `popcount(127) == 7` would demand a
+      session every single day, which is far too strict a requirement to
+      spring on a user who never touched the picker. Since every day is
+      already schedulable either way, "all 7 checked" and "0 checked" are the
+      two ends of the same "no specific-day preference" spectrum and must
+      resolve to the same requirement — otherwise flipping the very LAST
+      remaining chip off (127 -> a 6-bit mask -> 0) would make the
+      requirement jump 1 -> 6 -> 1, an incoherent non-monotonic cliff for a
+      user who is only trying to say "I don't care which days".
+    Any OTHER mask requires the number of scheduled days
+    (`bin(weekday_mask).count("1")`), never WHICH specific days a session
+    landed on (D-01's "regardless of which days they happened on") — a user
+    who deliberately narrows to a proper subset of days IS making a real
+    day-count commitment.
+    """
+    if weekday_mask in (0, ALL_WEEKDAYS_MASK):
+        return 1
+    return bin(weekday_mask).count("1")
+
+
+@dataclass(frozen=True)
+class SettledStreak:
+    """The D-18 settled-streak snapshot — exactly what persists on
+    `train_settings` (`streak_count`, `flame_state`, `streak_settled_through`).
+    """
+
+    streak_count: int
+    flame_state: FlameState | None
+    settled_through: datetime.date | None
+
+
+@dataclass(frozen=True)
+class StreakView:
+    """The full result of one `settle_weeks` call.
+
+    `settled` is the (possibly advanced) snapshot to persist when `changed`
+    is True. `display_flame` is the D-03 presentation-only overlay — it is
+    NEVER persisted, so an unsettled in-progress week can never corrupt the
+    frozen snapshot. `streak_lost_last_week` is derived from the resulting
+    state (not from "did this call settle the reset"), so it survives a page
+    reload within the same week.
+    """
+
+    settled: SettledStreak
+    display_flame: FlameState | None
+    current_week_completed: int
+    streak_lost_last_week: bool
+    changed: bool
+
+
+def _settle_one_week(
+    snapshot: SettledStreak, *, fulfilled: bool, week: datetime.date
+) -> SettledStreak:
+    """Apply the D-02 fulfilled/missed transition for exactly one settled week."""
+    if fulfilled:
+        return SettledStreak(
+            streak_count=snapshot.streak_count + 1,
+            flame_state=_flame_up(snapshot.flame_state),
+            settled_through=week,
+        )
+    # Missed week.
+    if snapshot.flame_state is None:
+        # No streak running — a missed week changes nothing.
+        return SettledStreak(
+            streak_count=snapshot.streak_count,
+            flame_state=None,
+            settled_through=week,
+        )
+    if snapshot.flame_state == FLAME_LADDER[0]:
+        # At the lowest rung: the streak is lost, reset to 0.
+        return SettledStreak(streak_count=0, flame_state=None, settled_through=week)
+    # Absorbed: flame drops one notch, streak_count is frozen (not reset).
+    return SettledStreak(
+        streak_count=snapshot.streak_count,
+        flame_state=_flame_down(snapshot.flame_state),
+        settled_through=week,
+    )
+
+
+def settle_weeks(
+    snapshot: SettledStreak,
+    completed_session_dates: Sequence[datetime.date],
+    *,
+    weekday_mask: int,
+    today: datetime.date,
+) -> StreakView:
+    """Advance the D-18 settled-streak snapshot over every fully-elapsed week.
+
+    Args:
+        snapshot: The persisted `SettledStreak` before this call (the
+            all-null `SettledStreak(0, None, None)` for a brand-new row —
+            this is what triggers the D-05 full-history replay on first
+            settlement).
+        completed_session_dates: Every `drill_sessions.session_date` with
+            `status='completed'` for this user (D-06/D-07/D-08 tz already
+            resolved — plain local dates, never re-converted). Order-
+            insensitive by construction (bucketed, not scanned) — no sort
+            assumption beyond `min()`.
+        weekday_mask: The user's CURRENT scheduled-day bitmask. Only ever
+            applied to weeks strictly after `snapshot.settled_through` (a
+            settled week is frozen forever, D-18) and to the live current
+            week.
+        today: The local calendar day (from `local_today`).
+
+    Returns:
+        A `StreakView` with the advanced (or unchanged) snapshot, the D-03
+        display overlay, this week's raw count, and the streak-lost notice.
+
+    A settled week is frozen forever (D-18): a later `weekday_mask` or
+    timezone change cannot re-judge it, because settlement only ever walks
+    weeks strictly after `settled_through`. The current week alone is judged
+    live against the current mask every call, so a mid-week schedule change
+    prospectively re-judges only the in-progress week — accepted D-18
+    semantics.
+    """
+    week_counts: Counter[datetime.date] = Counter(week_start(d) for d in completed_session_dates)
+    current_start = week_start(today)
+    current_week_completed = week_counts.get(current_start, 0)
+
+    if snapshot.settled_through is None:
+        # First settlement: replay the ENTIRE pre-existing history so prior
+        # (Phase-190) sessions still count with no backfill migration (D-05).
+        past_weeks = [w for w in week_counts if w < current_start]
+        first_week = min(past_weeks) if past_weeks else None
+    else:
+        first_week = snapshot.settled_through + datetime.timedelta(days=7)
+
+    settled = snapshot
+    if first_week is not None:
+        required = required_sessions_per_week(weekday_mask)
+        week = first_week
+        while week < current_start:
+            fulfilled = week_counts.get(week, 0) >= required
+            settled = _settle_one_week(settled, fulfilled=fulfilled, week=week)
+            week += datetime.timedelta(days=7)
+
+    changed = settled != snapshot
+
+    display_flame = settled.flame_state
+    if display_flame is None and current_week_completed > 0:
+        # D-03: the minimum flame lights immediately after the very first
+        # completed session, while the persisted snapshot stays None until
+        # that week actually settles.
+        display_flame = FLAME_LADDER[0]
+
+    streak_lost_last_week = (
+        settled.settled_through == current_start - datetime.timedelta(days=7)
+        and settled.streak_count == 0
+        and settled.flame_state is None
+        and current_week_completed == 0
+        and any(d < current_start for d in completed_session_dates)
+    )
+
+    return StreakView(
+        settled=settled,
+        display_flame=display_flame,
+        current_week_completed=current_week_completed,
+        streak_lost_last_week=streak_lost_last_week,
+        changed=changed,
+    )
+
+
 __all__ = [
+    "ALL_WEEKDAYS_MASK",
     "DEFAULT_PUZZLES_PER_SESSION",
     "DEFAULT_TIMEZONE",
     "DEFAULT_WEEKDAY_MASK",
+    "FLAME_LADDER",
     "LADDER_DAYS",
     "MASTERY_STREAK_THRESHOLD",
     "PARK_FAIL_THRESHOLD",
+    "FlameState",
     "ItemState",
+    "SettledStreak",
+    "StreakView",
     "apply_result",
     "is_session_expired",
     "local_today",
     "next_scheduled_day",
+    "required_sessions_per_week",
     "session_window",
+    "settle_weeks",
+    "week_start",
 ]

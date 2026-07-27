@@ -25,6 +25,19 @@ import { saveTrainRevealCache } from '@/lib/trainRevealCache';
 import type { CachedTrainReveal } from '@/lib/trainRevealCache';
 import type { TrainSessionResponse, SolveResponse } from '@/types/train';
 
+// ─── ResizeObserver stub ────────────────────────────────────────────────────
+// jsdom has no ResizeObserver; TrainSolveScreen's useFitBoardToViewport
+// observes its board column with one (same per-file stub precedent as
+// Bots.test.tsx / Analysis.test.tsx).
+
+class ResizeObserverStub {
+  observe() {}
+  unobserve() {}
+  disconnect() {}
+}
+(globalThis as unknown as { ResizeObserver: typeof ResizeObserverStub }).ResizeObserver =
+  ResizeObserverStub;
+
 // ─── ChessBoard mock ────────────────────────────────────────────────────────
 
 vi.mock('@/components/board/ChessBoard', () => ({
@@ -63,6 +76,7 @@ const SESSION_RESPONSE: TrainSessionResponse = {
 const SOLVE_RESPONSE: SolveResponse = {
   correct_guess: true,
   correct_move: true,
+  move_quality: 'good',
   puzzle_type: 'sharp',
   item_status: 'active',
   streak: 1,
@@ -236,7 +250,7 @@ describe('Train solve loop (end-to-end tracer)', () => {
     expect(solvePuzzle).toHaveBeenCalledTimes(1);
     const [sessionId, body] = solvePuzzle.mock.calls[0] as [number, Record<string, unknown>];
     expect(sessionId).toBe(1);
-    expect(body).toMatchObject({ position: 1, guess: 'critical', played_move: 'e2e4', correct_move: true });
+    expect(body).toMatchObject({ position: 1, guess: 'critical', played_move: 'e2e4', move_quality: 'good' });
 
     // 190-05/SOLV-05: the reveal's own best-line fetch DOES fire once the
     // verdict has landed — gated on the solve response being present, never
@@ -286,8 +300,8 @@ describe('Train solve loop (end-to-end tracer)', () => {
     // Seed the localStorage-backed tally (useTrainSession.ts's persistScore
     // key format) as if 10 points were already accumulated on this device
     // before the reload — the resumed sessionSolvedCount denominator (7 x
-    // TRAIN_POINTS_PER_PUZZLE = 14) must combine with this stored score,
-    // never restart from 0.
+    // TRAIN_POINTS_PER_PUZZLE = 21, SEED-119) must combine with this stored
+    // score, never restart from 0.
     localStorage.setItem(`train_score:${RESUMED_SESSION_ID}`, '10');
     composeOrResumeSession.mockResolvedValueOnce({
       session_id: RESUMED_SESSION_ID,
@@ -310,7 +324,7 @@ describe('Train solve loop (end-to-end tracer)', () => {
     await waitFor(() => expect(screen.getByTestId('train-session-score')).not.toBeNull());
     const text = screen.getByTestId('train-session-score').textContent ?? '';
     expect(text).toContain('10');
-    expect(text).toContain('14'); // 7 already-solved x TRAIN_POINTS_PER_PUZZLE (2)
+    expect(text).toContain('21'); // 7 already-solved x TRAIN_POINTS_PER_PUZZLE (3, SEED-119)
 
     localStorage.removeItem(`train_score:${RESUMED_SESSION_ID}`);
   });
@@ -335,6 +349,7 @@ describe('Train solve loop (end-to-end tracer)', () => {
       verdict: {
         correct_guess: true,
         correct_move: false,
+        move_quality: 'wrong',
         puzzle_type: 'sharp',
         item_status: 'active',
         streak: 0,
@@ -344,7 +359,7 @@ describe('Train solve loop (end-to-end tracer)', () => {
       guess: 'critical',
       playedMoveUci: 'g1f3',
       gradeResult: {
-        correctMove: false,
+        moveTier: 'wrong',
         bestMoveUci: 'e2e4',
         esBefore: 0.55,
         esAfter: 0.48,

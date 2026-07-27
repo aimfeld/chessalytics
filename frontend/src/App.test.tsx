@@ -50,6 +50,24 @@ vi.mock('@/hooks/useAuth', () => ({
   useAuth: () => ({ logout: vi.fn() }),
 }));
 
+// 191-05: mock useTrainProgress so tests control the badge's resolved data
+// without a real API or QueryClientProvider. trainProgressData undefined
+// stands in for BOTH the pending and errored states — App.tsx derives the
+// badge count from `.data?.waiting_count ?? 0` only, so both states collapse
+// to "no resolved data" from the component's point of view.
+let trainProgressData: { waiting_count: number } | undefined;
+const useTrainProgressSpy = vi.fn();
+
+vi.mock('@/hooks/useTrainProgress', () => ({
+  useTrainProgress: (options?: { enabled?: boolean }) => {
+    useTrainProgressSpy(options);
+    // Mirrors real TanStack Query `enabled: false` semantics: the query never
+    // fetches, so `.data` stays undefined regardless of what the test primed.
+    if (options?.enabled === false) return { data: undefined };
+    return { data: trainProgressData };
+  },
+}));
+
 // jsdom shims required by vaul's Drawer (MobileMoreDrawer).
 Object.defineProperty(window, 'matchMedia', {
   writable: true,
@@ -81,6 +99,8 @@ afterEach(() => {
   cleanup();
   profileState = null;
   tier1State = false;
+  trainProgressData = undefined;
+  useTrainProgressSpy.mockClear();
 });
 
 import { NavHeader, MobileBottomBar, MobileMoreDrawer, MobileHeader } from './App';
@@ -555,35 +575,116 @@ describe('190-03: mobile bottom-bar target count', () => {
   });
 });
 
-describe('190-03: Train dot chain (D-16)', () => {
-  const EMAIL = 'chain@example.com';
+describe('191-05: Train waiting badge (SCHD-02/D-06..D-08)', () => {
+  const UNLOCKED_PROFILE: Partial<UserProfile> = {
+    email: 'badge@example.com',
+    is_superuser: false,
+    is_guest: false,
+    chess_com_game_count: 50,
+    lichess_game_count: 0,
+    impersonation: null,
+  };
 
-  function setFlag(name: string, value: boolean) {
-    const key = `user_flag:${name}:${EMAIL}`;
-    if (value) {
-      localStorage.setItem(key, '1');
-    } else {
-      localStorage.removeItem(key);
-    }
-  }
+  const ZERO_GAME_PROFILE: Partial<UserProfile> = {
+    email: 'zero-badge@example.com',
+    is_superuser: false,
+    is_guest: false,
+    chess_com_game_count: 0,
+    lichess_game_count: 0,
+    impersonation: null,
+  };
+
+  const GUEST_PROFILE: Partial<UserProfile> = {
+    email: 'guest-badge@example.com',
+    is_superuser: false,
+    is_guest: true,
+    chess_com_game_count: 50,
+    lichess_game_count: 0,
+    impersonation: null,
+  };
 
   afterEach(() => {
     localStorage.clear();
   });
 
-  it('unlocked, neither Openings nor Endgames visited: no Train dot', () => {
-    profileState = {
-      email: EMAIL,
-      is_superuser: false,
-      is_guest: false,
-      chess_com_game_count: 50,
-      lichess_game_count: 0,
-      impersonation: null,
-    } as Partial<UserProfile>;
+  it('unlocked profile with waiting_count: 12 -> badge reads 12 on desktop and mobile', () => {
+    profileState = UNLOCKED_PROFILE;
     tier1State = true;
-    setFlag('openings_visited', false);
-    setFlag('endgames_visited', false);
-    setFlag('train_visited', false);
+    trainProgressData = { waiting_count: 12 };
+
+    const { unmount } = renderNavHeader();
+    expect(screen.getByTestId('train-notification-badge').textContent).toBe('12');
+    unmount();
+
+    renderMobileBottomBar();
+    expect(screen.getByTestId('train-notification-badge-mobile').textContent).toBe('12');
+  });
+
+  it('waiting_count: 0 -> badge absent on both surfaces', () => {
+    profileState = UNLOCKED_PROFILE;
+    tier1State = true;
+    trainProgressData = { waiting_count: 0 };
+
+    const { unmount } = renderNavHeader();
+    expect(screen.queryByTestId('train-notification-badge')).toBeNull();
+    unmount();
+
+    renderMobileBottomBar();
+    expect(screen.queryByTestId('train-notification-badge-mobile')).toBeNull();
+  });
+
+  it('progress query pending (no resolved data yet) -> badge absent on both surfaces', () => {
+    profileState = UNLOCKED_PROFILE;
+    tier1State = true;
+    trainProgressData = undefined;
+
+    const { unmount } = renderNavHeader();
+    expect(screen.queryByTestId('train-notification-badge')).toBeNull();
+    unmount();
+
+    renderMobileBottomBar();
+    expect(screen.queryByTestId('train-notification-badge-mobile')).toBeNull();
+  });
+
+  it('progress query errored (no resolved data) -> badge absent, no nav error text', () => {
+    profileState = UNLOCKED_PROFILE;
+    tier1State = true;
+    trainProgressData = undefined;
+
+    const { unmount } = renderNavHeader();
+    expect(screen.queryByTestId('train-notification-badge')).toBeNull();
+    expect(screen.queryByText(/failed to load/i)).toBeNull();
+    unmount();
+
+    renderMobileBottomBar();
+    expect(screen.queryByTestId('train-notification-badge-mobile')).toBeNull();
+    expect(screen.queryByText(/failed to load/i)).toBeNull();
+  });
+
+  it('waiting_count: 150 -> badge reads 99+ on both surfaces, growing to fit', () => {
+    profileState = UNLOCKED_PROFILE;
+    tier1State = true;
+    trainProgressData = { waiting_count: 150 };
+
+    const { unmount } = renderNavHeader();
+    const desktopBadge = screen.getByTestId('train-notification-badge');
+    expect(desktopBadge.textContent).toBe('99+');
+    // 191-06 UAT bug fix: shrunk from min-w-4 to min-w-3.5 (desktop-only,
+    // reduces the badge's protrusion past the header's overflow-hidden
+    // clip boundary — see App.tsx's badge className comment).
+    expect(desktopBadge.className).toMatch(/min-w-3\.5/);
+    unmount();
+
+    renderMobileBottomBar();
+    expect(screen.getByTestId('train-notification-badge-mobile').textContent).toBe('99+');
+  });
+
+  it('the old Train dot is gone regardless of visited flags, even with waiting_count: 12', () => {
+    profileState = UNLOCKED_PROFILE;
+    tier1State = true;
+    trainProgressData = { waiting_count: 12 };
+    localStorage.setItem(`user_flag:openings_visited:${UNLOCKED_PROFILE.email}`, '1');
+    localStorage.setItem(`user_flag:endgames_visited:${UNLOCKED_PROFILE.email}`, '1');
 
     const { unmount } = renderNavHeader();
     expect(screen.queryByTestId('train-notification-dot')).toBeNull();
@@ -593,70 +694,36 @@ describe('190-03: Train dot chain (D-16)', () => {
     expect(screen.queryByTestId('train-notification-dot-mobile')).toBeNull();
   });
 
-  it('unlocked, Openings visited but not Endgames: no Train dot', () => {
-    profileState = {
-      email: EMAIL,
-      is_superuser: false,
-      is_guest: false,
-      chess_com_game_count: 50,
-      lichess_game_count: 0,
-      impersonation: null,
-    } as Partial<UserProfile>;
-    tier1State = true;
-    setFlag('openings_visited', true);
-    setFlag('endgames_visited', false);
-    setFlag('train_visited', false);
+  it('zero-game locked profile: useTrainProgress called with enabled: false, no badge renders', () => {
+    profileState = ZERO_GAME_PROFILE;
+    tier1State = false;
+    trainProgressData = { waiting_count: 12 };
 
-    const { unmount } = renderNavHeader();
-    expect(screen.queryByTestId('train-notification-dot')).toBeNull();
-    unmount();
-
-    renderMobileBottomBar();
-    expect(screen.queryByTestId('train-notification-dot-mobile')).toBeNull();
+    renderNavHeader();
+    expect(useTrainProgressSpy).toHaveBeenCalledWith({ enabled: false });
+    expect(screen.queryByTestId('train-notification-badge')).toBeNull();
   });
 
-  it('unlocked, both Openings and Endgames visited: Train dot shows on desktop and bottom bar', () => {
-    profileState = {
-      email: EMAIL,
-      is_superuser: false,
-      is_guest: false,
-      chess_com_game_count: 50,
-      lichess_game_count: 0,
-      impersonation: null,
-    } as Partial<UserProfile>;
+  it('guest profile: useTrainProgress called with enabled: false', () => {
+    profileState = GUEST_PROFILE;
     tier1State = true;
-    setFlag('openings_visited', true);
-    setFlag('endgames_visited', true);
-    setFlag('train_visited', false);
+    trainProgressData = { waiting_count: 12 };
 
-    const { unmount } = renderNavHeader();
-    expect(screen.getByTestId('train-notification-dot')).toBeTruthy();
-    unmount();
-
-    renderMobileBottomBar();
-    expect(screen.getByTestId('train-notification-dot-mobile')).toBeTruthy();
+    renderNavHeader();
+    expect(useTrainProgressSpy).toHaveBeenCalledWith({ enabled: false });
   });
 
-  it('Train already visited: no Train dot even with both prior flags set', () => {
-    profileState = {
-      email: EMAIL,
-      is_superuser: false,
-      is_guest: false,
-      chess_com_game_count: 50,
-      lichess_game_count: 0,
-      impersonation: null,
-    } as Partial<UserProfile>;
-    tier1State = true;
-    setFlag('openings_visited', true);
-    setFlag('endgames_visited', true);
-    setFlag('train_visited', true);
+  it('control: zero-game profile with waiting_count: 12 still shows library-notification-dot on both surfaces', () => {
+    profileState = ZERO_GAME_PROFILE;
+    tier1State = false;
+    trainProgressData = { waiting_count: 12 };
 
     const { unmount } = renderNavHeader();
-    expect(screen.queryByTestId('train-notification-dot')).toBeNull();
+    expect(screen.getByTestId('library-notification-dot')).toBeTruthy();
     unmount();
 
     renderMobileBottomBar();
-    expect(screen.queryByTestId('train-notification-dot-mobile')).toBeNull();
+    expect(screen.getByTestId('library-notification-dot-mobile')).toBeTruthy();
   });
 });
 

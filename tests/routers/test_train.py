@@ -17,6 +17,12 @@ Coverage:
 - test_concurrent_compose_yields_one_open_session : uq_drill_sessions_user_open holds
                                              under two simultaneous requests (T-189-14)
 
+Dev clock override (app/core/dev_clock.py) — unit coverage in tests/test_dev_clock.py:
+- test_dev_clock_header_shifts_composition_in_development : the shifted instant reaches
+                                             composition's expiry/session_date logic
+- test_dev_clock_header_ignored_outside_development : the fail-closed gate — a forged
+                                             header cannot shift a real deployment's calendar
+
 Plan 02 (190-02, SOLV-02/SOLV-05 payload additions):
 - test_last_move_uci_matches_pgn_at_ply_minus_one : last_move_uci is the game's own
                                              PGN half-move at ply-1
@@ -47,6 +53,11 @@ Plan 05 (POOL-08/POOL-10, solve/reveal/settings):
   test_put_settings_persists_and_round_trips / test_put_settings_rejects_bad_timezone_422 /
   test_put_settings_rejects_out_of_range_mask_422 / test_settings_403_guest /
   test_session_size_follows_settings : the D-06/D-07/D-08 settings surface
+
+Phase 191 Plan 01 (PROG-01/PROG-04, D-18) — GET /train/progress:
+- test_progress_returns_200_with_all_seven_fields : an authenticated non-guest
+                                                     account gets a full payload
+- test_progress_403_guest                         : the D-05 guest gate applies here too
 """
 
 from __future__ import annotations
@@ -60,6 +71,8 @@ import pytest
 from sqlalchemy import delete, func, select, text, update
 from sqlalchemy.ext.asyncio import async_sessionmaker
 
+from app.core.config import settings as config_settings
+from app.core.dev_clock import DEV_CLOCK_OFFSET_HEADER
 from app.main import app
 from app.models.drill_item import DrillItem, DrillStatus
 from app.models.drill_session import DrillSession
@@ -315,12 +328,26 @@ async def _seed_drill_item(
             )
 
 
-async def _seed_session(test_engine, user_id: int, entries: list[tuple[int, int, int]]) -> int:
+async def _seed_session(
+    test_engine,
+    user_id: int,
+    entries: list[tuple[int, int, int]],
+    *,
+    requested_count: int | None = None,
+) -> int:
     """Seed one open drill_sessions row plus one unsolved drill_solves row per entry.
 
     `entries` is a list of `(game_id, ply, source)` tuples, one per frozen
     position (0-based, in list order) — mirrors exactly what
     `compose_and_materialize_session` would have pre-inserted.
+
+    `requested_count` defaults to `None` (the "pre-migration row / direct
+    test fixture" shape — see `DrillSession.requested_count`'s docstring),
+    matching every pre-existing caller of this helper, which never seeded a
+    session that should be eligible for `_discard_if_untouched_and_resized`'s
+    resize check. Pass it explicitly to simulate a session that a real
+    composition call would have produced under a specific
+    `puzzles_per_session`.
     """
     session_maker = async_sessionmaker(test_engine, expire_on_commit=False)
     today = datetime.datetime.now(datetime.timezone.utc).date()
@@ -331,6 +358,7 @@ async def _seed_session(test_engine, user_id: int, entries: list[tuple[int, int,
                 session_date=today,
                 status="open",
                 puzzle_count=len(entries),
+                requested_count=requested_count,
                 expires_on=today + datetime.timedelta(days=7),
             )
             session.add(drill_session)
@@ -423,7 +451,7 @@ async def _solve(
     *,
     guess: str = "several",
     played_move: str = "e2e4",
-    correct_move: bool = True,
+    move_quality: str = "good",
 ) -> httpx.Response:
     async with httpx.AsyncClient(
         transport=httpx.ASGITransport(app=app), base_url="http://test"
@@ -435,7 +463,7 @@ async def _solve(
                 "position": position,
                 "guess": guess,
                 "played_move": played_move,
-                "correct_move": correct_move,
+                "move_quality": move_quality,
             },
         )
 
@@ -455,6 +483,36 @@ async def _get_settings(token: str) -> httpx.Response:
         transport=httpx.ASGITransport(app=app), base_url="http://test"
     ) as client:
         return await client.get("/api/train/settings", headers={"Authorization": f"Bearer {token}"})
+
+
+async def _get_progress(token: str) -> httpx.Response:
+    async with httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=app), base_url="http://test"
+    ) as client:
+        return await client.get("/api/train/progress", headers={"Authorization": f"Bearer {token}"})
+
+
+async def _seed_completed_session_router(
+    test_engine, user_id: int, session_date: datetime.date
+) -> None:
+    """Seed a bare status='completed' drill_sessions row via test_engine
+    (mirrors the repository test suite's _seed_completed_session, but for
+    the router test file's HTTP-registered users)."""
+    session_maker = async_sessionmaker(test_engine, expire_on_commit=False)
+    async with session_maker() as session:
+        async with session.begin():
+            session.add(
+                DrillSession(
+                    user_id=user_id,
+                    session_date=session_date,
+                    status="completed",
+                    puzzle_count=1,
+                    expires_on=session_date + datetime.timedelta(days=1),
+                    completed_at=datetime.datetime.combine(
+                        session_date, datetime.time(12, 0), tzinfo=datetime.timezone.utc
+                    ),
+                )
+            )
 
 
 async def _put_settings(
@@ -754,6 +812,75 @@ async def test_compose_twice_returns_same_session_id(test_engine) -> None:
 
 
 @pytest.mark.asyncio
+async def test_dev_clock_header_shifts_composition_in_development(test_engine, monkeypatch) -> None:
+    """The dev clock header moves the Train calendar forward end-to-end.
+
+    Guards the wiring, not just `dev_now_utc` in isolation: a session composed
+    "today" must be replaced by a NEW one dated a week later once the request
+    carries `X-Dev-Clock-Offset-Minutes`, proving the shifted instant reaches
+    `compose_and_materialize_session`'s expiry/`session_date` logic rather than
+    being dropped somewhere in the router.
+    """
+    monkeypatch.setattr(config_settings, "ENVIRONMENT", "development")
+    email = f"train-devclock-dev-{uuid.uuid4().hex[:8]}@example.com"
+    user_id, token = await _register_and_login(email)
+    game_id = await _seed_game_with_blunder(test_engine, user_id)
+    auth = {"Authorization": f"Bearer {token}"}
+
+    try:
+        async with httpx.AsyncClient(
+            transport=httpx.ASGITransport(app=app), base_url="http://test"
+        ) as client:
+            today_resp = await client.post(ENDPOINT, headers=auth)
+            shifted_resp = await client.post(
+                ENDPOINT,
+                headers={**auth, DEV_CLOCK_OFFSET_HEADER: str(7 * 24 * 60)},
+            )
+
+        assert today_resp.status_code == 200
+        assert shifted_resp.status_code == 200
+        today_date = datetime.date.fromisoformat(today_resp.json()["session_date"])
+        shifted_date = datetime.date.fromisoformat(shifted_resp.json()["session_date"])
+        assert shifted_date - today_date == datetime.timedelta(days=7)
+        assert shifted_resp.json()["session_id"] != today_resp.json()["session_id"]
+    finally:
+        await _delete_games(test_engine, [game_id])
+
+
+@pytest.mark.asyncio
+async def test_dev_clock_header_ignored_outside_development(test_engine, monkeypatch) -> None:
+    """A forged offset header cannot shift the calendar in a real deployment.
+
+    The fail-closed gate matters here specifically: an honoured header would
+    let a client fabricate streak weeks and due-date advances at will. With
+    ENVIRONMENT != "development" the second POST must simply resume the same
+    open session (D-12), exactly as an unshifted request would.
+    """
+    monkeypatch.setattr(config_settings, "ENVIRONMENT", "production")
+    email = f"train-devclock-prod-{uuid.uuid4().hex[:8]}@example.com"
+    user_id, token = await _register_and_login(email)
+    game_id = await _seed_game_with_blunder(test_engine, user_id)
+    auth = {"Authorization": f"Bearer {token}"}
+
+    try:
+        async with httpx.AsyncClient(
+            transport=httpx.ASGITransport(app=app), base_url="http://test"
+        ) as client:
+            first = await client.post(ENDPOINT, headers=auth)
+            forged = await client.post(
+                ENDPOINT,
+                headers={**auth, DEV_CLOCK_OFFSET_HEADER: str(7 * 24 * 60)},
+            )
+
+        assert first.status_code == 200
+        assert forged.status_code == 200
+        assert forged.json()["session_id"] == first.json()["session_id"]
+        assert forged.json()["session_date"] == first.json()["session_date"]
+    finally:
+        await _delete_games(test_engine, [game_id])
+
+
+@pytest.mark.asyncio
 async def test_concurrent_compose_yields_one_open_session(test_engine) -> None:
     """T-189-14: two simultaneous POSTs leave exactly one open drill_sessions row.
 
@@ -815,7 +942,7 @@ async def test_solve_records_and_advances_streak(test_engine) -> None:
     )
 
     try:
-        resp = await _solve(token, session_id, 0, guess="critical", correct_move=True)
+        resp = await _solve(token, session_id, 0, guess="critical", move_quality="good")
         assert resp.status_code == 200, resp.text
         body = resp.json()
         assert body["item_status"] == "active"
@@ -827,6 +954,57 @@ async def test_solve_records_and_advances_streak(test_engine) -> None:
         assert item is not None
         assert item.streak == 1
         assert item.status == DrillStatus.ACTIVE
+    finally:
+        await _delete_games(test_engine, [game_id])
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "move_quality,expected_correct_move",
+    [
+        ("good", True),
+        ("inaccuracy", True),
+        ("wrong", False),
+    ],
+)
+async def test_solve_move_quality_round_trips_with_derived_correct_move(
+    test_engine, move_quality: str, expected_correct_move: bool
+) -> None:
+    """SEED-119: each of the three tiers round-trips in the response, with
+    correct_move derived as move_quality != "wrong" (good/inaccuracy both
+    pass the SR ladder, only wrong fails it)."""
+    email = f"train-tier-{move_quality}-{uuid.uuid4().hex[:8]}@example.com"
+    user_id, token = await _register_and_login(email)
+    game_id = await _seed_game_with_blunder(test_engine, user_id)
+    await _seed_drill_item(test_engine, user_id, game_id, _FLAW_PLY_WHITE, streak=0)
+    session_id = await _seed_session(
+        test_engine, user_id, [(game_id, _FLAW_PLY_WHITE, int(DrillSource.SR_ITEM))]
+    )
+
+    try:
+        resp = await _solve(token, session_id, 0, move_quality=move_quality)
+        assert resp.status_code == 200, resp.text
+        body = resp.json()
+        assert body["move_quality"] == move_quality
+        assert body["correct_move"] is expected_correct_move
+    finally:
+        await _delete_games(test_engine, [game_id])
+
+
+@pytest.mark.asyncio
+async def test_solve_rejects_unrecognised_move_quality(test_engine) -> None:
+    """An unrecognised move_quality string is rejected 422 (Pydantic Literal)."""
+    email = f"train-tier-bad-{uuid.uuid4().hex[:8]}@example.com"
+    user_id, token = await _register_and_login(email)
+    game_id = await _seed_game_with_blunder(test_engine, user_id)
+    await _seed_drill_item(test_engine, user_id, game_id, _FLAW_PLY_WHITE, streak=0)
+    session_id = await _seed_session(
+        test_engine, user_id, [(game_id, _FLAW_PLY_WHITE, int(DrillSource.SR_ITEM))]
+    )
+
+    try:
+        resp = await _solve(token, session_id, 0, move_quality="excellent")
+        assert resp.status_code == 422
     finally:
         await _delete_games(test_engine, [game_id])
 
@@ -845,7 +1023,7 @@ async def test_solve_masters_item_at_three(test_engine) -> None:
     )
 
     try:
-        resp = await _solve(token, session_id, 0, correct_move=True)
+        resp = await _solve(token, session_id, 0, move_quality="good")
         assert resp.status_code == 200
         body = resp.json()
         assert body["item_status"] == "mastered"
@@ -872,7 +1050,7 @@ async def test_solve_wrong_resets_streak_and_counts_fail(test_engine) -> None:
     )
 
     try:
-        resp = await _solve(token, session_id, 0, correct_move=False)
+        resp = await _solve(token, session_id, 0, move_quality="wrong")
         assert resp.status_code == 200
         body = resp.json()
         assert body["item_status"] == "active"
@@ -902,7 +1080,7 @@ async def test_solve_parks_item_at_three_never_correct(test_engine) -> None:
     )
 
     try:
-        resp = await _solve(token, session_id, 0, correct_move=False)
+        resp = await _solve(token, session_id, 0, move_quality="wrong")
         assert resp.status_code == 200
         body = resp.json()
         assert body["item_status"] == "parked"
@@ -927,7 +1105,7 @@ async def test_solve_herring_touches_no_drill_item(test_engine) -> None:
 
     try:
         before = await _count_drill_items(test_engine, user_id)
-        resp = await _solve(token, session_id, 0, guess="several", correct_move=True)
+        resp = await _solve(token, session_id, 0, guess="several", move_quality="good")
         assert resp.status_code == 200
         body = resp.json()
         assert body["item_status"] is None
@@ -969,7 +1147,7 @@ async def test_correct_guess_computed_server_side(
     )
 
     try:
-        resp = await _solve(token, session_id, 0, guess=guess, correct_move=True)
+        resp = await _solve(token, session_id, 0, guess=guess, move_quality="good")
         assert resp.status_code == 200
         body = resp.json()
         assert body["puzzle_type"] == expected_puzzle_type
@@ -991,11 +1169,11 @@ async def test_solve_is_idempotent_per_position(test_engine) -> None:
 
     try:
         first = await _solve(
-            token, session_id, 0, guess="critical", played_move="e2e4", correct_move=True
+            token, session_id, 0, guess="critical", played_move="e2e4", move_quality="good"
         )
         assert first.status_code == 200
         second = await _solve(
-            token, session_id, 0, guess="several", played_move="d2d4", correct_move=False
+            token, session_id, 0, guess="several", played_move="d2d4", move_quality="wrong"
         )
         assert second.status_code == 200
 
@@ -1026,7 +1204,7 @@ async def test_concurrent_solve_advances_streak_once(test_engine) -> None:
             "position": 0,
             "guess": "critical",
             "played_move": "e2e4",
-            "correct_move": True,
+            "move_quality": "good",
         }
         async with (
             httpx.AsyncClient(
@@ -1073,7 +1251,7 @@ async def test_solve_foreign_session_404(test_engine) -> None:
     )
 
     try:
-        resp = await _solve(token_b, session_id, 0, correct_move=True)
+        resp = await _solve(token_b, session_id, 0, move_quality="good")
         assert resp.status_code == 404
         body = resp.json()
         assert "correct_guess" not in body
@@ -1094,7 +1272,7 @@ async def test_solve_unknown_position_404(test_engine) -> None:
     )
 
     try:
-        resp = await _solve(token, session_id, 5, correct_move=True)
+        resp = await _solve(token, session_id, 5, move_quality="good")
         assert resp.status_code == 404
     finally:
         await _delete_games(test_engine, [game_id])
@@ -1118,12 +1296,12 @@ async def test_last_solve_completes_session(test_engine) -> None:
     )
 
     try:
-        first = await _solve(token, session_id, 0, correct_move=True)
+        first = await _solve(token, session_id, 0, move_quality="good")
         assert first.status_code == 200
         assert first.json()["session_complete"] is False
         assert await _get_session_status(test_engine, session_id) == "open"
 
-        second = await _solve(token, session_id, 1, guess="several", correct_move=True)
+        second = await _solve(token, session_id, 1, guess="several", move_quality="good")
         assert second.status_code == 200
         assert second.json()["session_complete"] is True
         assert await _get_session_status(test_engine, session_id) == "completed"
@@ -1174,7 +1352,7 @@ async def test_session_completes_when_sr_item_flaw_row_vanishes_under_reclassifi
         # Only the herring (position 1) is servable now — solving it must
         # complete the session, not leave it "open" forever waiting on the
         # now-unreachable SR item.
-        resp = await _solve(token, session_id, 1, guess="several", correct_move=True)
+        resp = await _solve(token, session_id, 1, guess="several", move_quality="good")
         assert resp.status_code == 200
         assert resp.json()["session_complete"] is True
         assert await _get_session_status(test_engine, session_id) == "completed"
@@ -1226,7 +1404,7 @@ async def test_reveal_played_in_game_move_uci_normal_move(test_engine) -> None:
     )
 
     try:
-        solved = await _solve(token, session_id, 0, guess="critical", correct_move=True)
+        solved = await _solve(token, session_id, 0, guess="critical", move_quality="good")
         assert solved.status_code == 200
 
         resp = await _reveal(token, session_id, 0)
@@ -1260,7 +1438,7 @@ async def test_reveal_played_in_game_move_uci_promotion(test_engine) -> None:
     )
 
     try:
-        solved = await _solve(token, session_id, 0, guess="several", correct_move=True)
+        solved = await _solve(token, session_id, 0, guess="several", move_quality="good")
         assert solved.status_code == 200
 
         resp = await _reveal(token, session_id, 0)
@@ -1292,7 +1470,7 @@ async def test_reveal_200_after_attempt(test_engine) -> None:
     )
 
     try:
-        solved = await _solve(token, session_id, 0, guess="critical", correct_move=True)
+        solved = await _solve(token, session_id, 0, guess="critical", move_quality="good")
         assert solved.status_code == 200
 
         resp = await _reveal(token, session_id, 0)
@@ -1322,7 +1500,7 @@ async def test_reveal_key_set_excludes_stored_answer_key_fields(test_engine) -> 
     )
 
     try:
-        solved = await _solve(token, session_id, 0, guess="critical", correct_move=True)
+        solved = await _solve(token, session_id, 0, guess="critical", move_quality="good")
         assert solved.status_code == 200
 
         resp = await _reveal(token, session_id, 0)
@@ -1352,7 +1530,7 @@ async def test_reveal_herring_reports_herring_type(test_engine) -> None:
     )
 
     try:
-        solved = await _solve(token, session_id, 0, guess="several", correct_move=True)
+        solved = await _solve(token, session_id, 0, guess="several", move_quality="good")
         assert solved.status_code == 200
 
         resp = await _reveal(token, session_id, 0)
@@ -1379,7 +1557,7 @@ async def test_reveal_foreign_session_404(test_engine) -> None:
     )
 
     try:
-        solved = await _solve(token_a, session_id, 0, correct_move=True)
+        solved = await _solve(token_a, session_id, 0, move_quality="good")
         assert solved.status_code == 200
 
         resp = await _reveal(token_b, session_id, 0)
@@ -1417,7 +1595,7 @@ async def test_reveal_has_tactic_lines_flag(test_engine) -> None:
     session_tagged = await _seed_session(
         test_engine, user_id, [(tagged_game_id, _FLAW_PLY_WHITE, int(DrillSource.SR_ITEM))]
     )
-    solved_tagged = await _solve(token, session_tagged, 0, correct_move=True)
+    solved_tagged = await _solve(token, session_tagged, 0, move_quality="good")
     assert solved_tagged.status_code == 200
     # Single-puzzle session -> immediately completed, freeing the D-12
     # at-most-one-open-session slot before the second session is seeded.
@@ -1428,7 +1606,7 @@ async def test_reveal_has_tactic_lines_flag(test_engine) -> None:
     session_untagged = await _seed_session(
         test_engine, user_id, [(untagged_game_id, _FLAW_PLY_WHITE, int(DrillSource.SR_ITEM))]
     )
-    solved_untagged = await _solve(token, session_untagged, 0, correct_move=True)
+    solved_untagged = await _solve(token, session_untagged, 0, move_quality="good")
     assert solved_untagged.status_code == 200
 
     try:
@@ -1456,7 +1634,9 @@ async def test_get_settings_creates_defaults_on_first_touch(test_engine) -> None
 
     resp = await _get_settings(token)
     assert resp.status_code == 200
-    assert resp.json() == {"timezone": "UTC", "weekday_mask": 0, "puzzles_per_session": 12}
+    # 191-06: defaults changed from (weekday_mask=0, puzzles_per_session=12)
+    # to (127, 6) — see app.services.train_scheduler.DEFAULT_WEEKDAY_MASK.
+    assert resp.json() == {"timezone": "UTC", "weekday_mask": 127, "puzzles_per_session": 6}
 
 
 @pytest.mark.asyncio
@@ -1572,3 +1752,146 @@ async def test_session_size_follows_settings(test_engine) -> None:
         assert len(body["puzzles"]) <= 4
     finally:
         await _delete_games(test_engine, game_ids)
+
+
+@pytest.mark.asyncio
+async def test_untouched_open_session_recomposes_after_size_change(test_engine) -> None:
+    """UAT bug fix (191-06 checkpoint round): `Train.tsx` auto-fires
+    `POST /train/sessions` as a status read on page MOUNT (see
+    `useTrainSession.ts`'s module docstring) — BEFORE the user has a chance
+    to edit `TrainScheduleSettings` on the same visit. Pressing Start/Resume
+    never calls the endpoint again, so a session materialized under the OLD
+    `puzzles_per_session` stayed frozen at its original size even after the
+    setting changed, as long as nothing had been solved yet.
+
+    This seeds a fake open session directly (bypassing composition, mirroring
+    what an earlier mount-time compose call under a stale setting would have
+    produced), changes the setting, then calls the endpoint again exactly as
+    a second real page load / "Start session" click would. An untouched
+    (zero solved) session whose puzzle_count no longer matches the CURRENT
+    setting must be discarded and recomposed — not resumed verbatim.
+    """
+    email = f"train-settings-recompose-{uuid.uuid4().hex[:8]}@example.com"
+    user_id, token = await _register_and_login(email)
+
+    # Ten distinct qualifying blunders — enough pool material for either a
+    # 10-puzzle or a 6-puzzle composition, with no herring rows seeded (cross-
+    # backfill pulls the shortfall from the SR side, precedent:
+    # test_session_size_follows_settings).
+    game_ids = [
+        await _seed_game_with_blunder(test_engine, user_id, ply=_FLAW_PLY_WHITE) for _ in range(10)
+    ]
+
+    try:
+        # Fake the "already composed at mount, under a size-10 setting"
+        # session: an open drill_sessions row with 10 unsolved drill_solves,
+        # entirely untouched (no solve has ever been recorded), with
+        # requested_count=10 set explicitly (mirrors exactly what a real
+        # `compose_and_materialize_session` call under puzzles_per_session=10
+        # would have persisted).
+        stale_entries = [(gid, _FLAW_PLY_WHITE, int(DrillSource.SR_ITEM)) for gid in game_ids]
+        await _seed_session(test_engine, user_id, stale_entries, requested_count=10)
+
+        # The user now edits TrainScheduleSettings on the same visit, AFTER
+        # the stale session above was already materialized.
+        put_resp = await _put_settings(token, timezone="UTC", weekday_mask=0, puzzles_per_session=6)
+        assert put_resp.status_code == 200
+
+        async with httpx.AsyncClient(
+            transport=httpx.ASGITransport(app=app), base_url="http://test"
+        ) as client:
+            resp = await client.post(ENDPOINT, headers={"Authorization": f"Bearer {token}"})
+        assert resp.status_code == 200
+        body = resp.json()
+        assert body["requested_count"] == 6
+        assert body["puzzle_count"] == 6
+        assert len(body["puzzles"]) == 6
+    finally:
+        await _delete_games(test_engine, game_ids)
+
+
+# ---------------------------------------------------------------------------
+# Phase 191 Plan 01 (PROG-01/PROG-04, D-18) — GET /train/progress
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_progress_returns_200_with_all_seven_fields(test_engine) -> None:
+    """An authenticated non-guest account gets 200 with every response field
+    (Phase 191 Plan 02 adds waiting_count/pool_state/next_due_date)."""
+    email = f"train-progress-ok-{uuid.uuid4().hex[:8]}@example.com"
+    _user_id, token = await _register_and_login(email)
+
+    resp = await _get_progress(token)
+    assert resp.status_code == 200
+    body = resp.json()
+    assert set(body.keys()) == {
+        "settled_streak_weeks",
+        "flame_state",
+        "current_week_completed",
+        "current_week_required",
+        "streak_lost_last_week",
+        "mastered_count",
+        "parked_count",
+        "waiting_count",
+        "pool_state",
+        "next_due_date",
+    }
+    assert body["pool_state"] in ("no_material", "exhausted", "available")
+    # A brand-new account: never lit, nothing settled, no counts yet, and no
+    # material at all -> the cold-start empty state.
+    assert body["settled_streak_weeks"] == 0
+    assert body["flame_state"] is None
+    assert body["mastered_count"] == 0
+    assert body["parked_count"] == 0
+    assert body["waiting_count"] == 0
+    assert body["pool_state"] == "no_material"
+    assert body["next_due_date"] is None
+
+
+@pytest.mark.asyncio
+async def test_put_settings_settles_elapsed_weeks_with_old_mask_before_get(test_engine) -> None:
+    """End-to-end D-18: an elapsed week judged under the OLD weekday_mask=0
+    (1 session required) settles into the streak BEFORE a PUT installs a
+    stricter 3-scheduled-day mask, and a subsequent GET /train/progress
+    reports that OLD-mask judgment (Phase 191 Plan 02, Task 3)."""
+    email = f"train-settle-mutate-{uuid.uuid4().hex[:8]}@example.com"
+    user_id, token = await _register_and_login(email)
+
+    # Exactly ONE fully-elapsed week (the Monday immediately before the
+    # current week, computed relative to real wall-clock "now" — settle_weeks
+    # replays EVERY elapsed week since the epoch of no settlement, so an
+    # arbitrarily old date would settle-then-immediately-lose the streak
+    # across the many empty weeks since). One completed session in that week
+    # is fulfilled under the OLD 1-session-per-week requirement
+    # (weekday_mask=0, the D-07 default).
+    now_for_seed = datetime.datetime.now(datetime.timezone.utc)
+    current_week_monday = now_for_seed.date() - datetime.timedelta(
+        days=now_for_seed.date().weekday()
+    )
+    elapsed_week_monday = current_week_monday - datetime.timedelta(days=7)
+    await _seed_completed_session_router(test_engine, user_id, elapsed_week_monday)
+
+    put_resp = await _put_settings(
+        token,
+        timezone="UTC",
+        weekday_mask=(1 << 0) | (1 << 2) | (1 << 4),  # 3 scheduled days
+        puzzles_per_session=12,
+    )
+    assert put_resp.status_code == 200
+
+    progress_resp = await _get_progress(token)
+    assert progress_resp.status_code == 200
+    assert progress_resp.json()["settled_streak_weeks"] == 1
+
+
+@pytest.mark.asyncio
+async def test_progress_403_guest(test_engine) -> None:
+    """A guest account is rejected 403 before any progress query runs (D-05)."""
+    email = f"train-progress-guest-{uuid.uuid4().hex[:8]}@example.com"
+    user_id, token = await _register_and_login(email)
+    await _set_guest(test_engine, user_id)
+
+    resp = await _get_progress(token)
+    assert resp.status_code == 403
+    assert resp.json()["detail"] == "Train requires a full account"

@@ -52,6 +52,22 @@ class DrillGuess(IntEnum):
     CRITICAL = 1
 
 
+class DrillMoveQuality(IntEnum):
+    """Tiered move-quality grade for the played move (SEED-119).
+
+    Members are ordered so the member value equals the move points awarded
+    (0/1/2 of the 2 move points in the 1-guess + 2-move = 3 total scoring
+    scheme). This is a readability convenience only — the actual scoring
+    formula lives client-side in `frontend/src/lib/trainScore.ts`, which is
+    the single source of truth; nothing here should be used to compute a
+    score directly.
+    """
+
+    WRONG = 0
+    INACCURACY = 1
+    GOOD = 2
+
+
 class DrillSolve(Base):
     """One row per puzzle in a frozen session, pre-inserted at composition time."""
 
@@ -59,6 +75,10 @@ class DrillSolve(Base):
     __table_args__ = (
         CheckConstraint("source IN (0, 1)", name="ck_drill_solves_source"),
         CheckConstraint("guess IS NULL OR guess IN (0, 1)", name="ck_drill_solves_guess"),
+        CheckConstraint(
+            "move_quality IS NULL OR move_quality IN (0, 1, 2)",
+            name="ck_drill_solves_move_quality",
+        ),
         UniqueConstraint("session_id", "game_id", "ply", name="uq_drill_solves_session_puzzle"),
     )
 
@@ -79,6 +99,11 @@ class DrillSolve(Base):
     guess: Mapped[int | None] = mapped_column(SmallInteger, nullable=True)
     correct_guess: Mapped[bool | None] = mapped_column(Boolean, nullable=True)
     correct_move: Mapped[bool | None] = mapped_column(Boolean, nullable=True)
+    # Tiered move-quality grade (SEED-119): 0=wrong, 1=inaccuracy, 2=good, per
+    # DrillMoveQuality. NULL means this row was recorded before SEED-119
+    # shipped (go-forward only, no backfill) — `correct_move` above still
+    # carries that legacy row's boolean outcome.
+    move_quality: Mapped[int | None] = mapped_column(SmallInteger, nullable=True)
     played_move: Mapped[str | None] = mapped_column(String(5), nullable=True)
     # NULL = not yet attempted (P-07). Non-NULL = this puzzle's recorded outcome.
     solved_at: Mapped[datetime.datetime | None] = mapped_column(
@@ -86,4 +111,4 @@ class DrillSolve(Base):
     )
 
 
-__all__ = ["DrillGuess", "DrillSolve", "DrillSource"]
+__all__ = ["DrillGuess", "DrillMoveQuality", "DrillSolve", "DrillSource"]

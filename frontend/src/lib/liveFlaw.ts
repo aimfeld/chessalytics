@@ -24,6 +24,10 @@ import {
 } from '@/generated/flawThresholds';
 
 export type MoverColor = 'white' | 'black';
+// Re-exported so consumers of the severity classifier (e.g. trainScore.ts's
+// moveTierFromSeverity) can import the type from this module rather than
+// reaching into @/types/library directly.
+export type { FlawSeverity };
 
 /** White-POV mate magnitude for a *delivered* checkmate (sign encodes the winner). */
 const TERMINAL_MATE = 1;

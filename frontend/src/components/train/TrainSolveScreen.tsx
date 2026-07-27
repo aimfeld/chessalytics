@@ -38,13 +38,16 @@ import { Chess, type Move } from 'chess.js';
 import { Loader2, Search, Volume2, VolumeX } from 'lucide-react';
 import { Link } from 'react-router-dom';
 import { buildGameAnalysisUrl } from '@/lib/analysisUrl';
+import { cn } from '@/lib/utils';
 import { ChessBoard } from '@/components/board/ChessBoard';
 import { Button } from '@/components/ui/button';
 import { LoadError } from '@/components/ui/load-error';
+import { TRAIN_BUTTON_CLASS } from '@/components/train/buttonStyles';
 import { TrainReveal } from '@/components/train/TrainReveal';
 import type { TrainRevealStep } from '@/components/train/TrainReveal';
 import type { SolveResponse, TrainPuzzle } from '@/types/train';
 import type { UseTrainSessionResult } from '@/hooks/useTrainSession';
+import { useFitBoardToViewport } from '@/hooks/useFitBoardToViewport';
 import type { GradeResult, TrainEngineLine, TrainGradingEngine } from '@/hooks/useTrainGradingEngine';
 import { evalToExpectedScore, sideToMoveFromFen } from '@/lib/liveFlaw';
 import { useMarkPlayActive } from '@/lib/playActive';
@@ -62,7 +65,14 @@ import {
 } from '@/lib/trainArrows';
 import type { TrainMoveQuality, TrainOverlayMove } from '@/lib/trainArrows';
 import { scorePuzzle, TRAIN_POINTS_PER_PUZZLE } from '@/lib/trainScore';
-import { SEV_MISTAKE, ZONE_DANGER, ZONE_SUCCESS } from '@/lib/theme';
+import {
+  SEV_INACCURACY,
+  SEV_MISTAKE,
+  ZONE_DANGER,
+  ZONE_SUCCESS,
+  TRAIN_POINTS_FG_ON_DARK,
+  TRAIN_POINTS_FG_ON_LIGHT,
+} from '@/lib/theme';
 
 export interface TrainSolveScreenProps {
   puzzle: TrainPuzzle;
@@ -106,31 +116,34 @@ const TRAIN_BOARD_MAX_WIDTH_PX = 600;
 
 /**
  * 190.1 UAT round 4: on a short browser window the board shrinks with the
- * viewport height, down to at most 50% of TRAIN_BOARD_MAX_WIDTH_PX. Applied
- * as a CSS max-width on the board COLUMN (min/max/calc against 100dvh), so
- * the progress bar and button row keep spanning exactly the board's width
- * and ChessBoard's own ResizeObserver picks the change up for free.
+ * viewport height. Floor for that shrink — below it the page scrolls instead,
+ * rather than shrinking the board into unusability. Well under the old
+ * `TRAIN_BOARD_MAX_WIDTH_PX / 2` (191 UAT: that floor bound before the
+ * measured fit ran out of room, which is what pinned the button row to the
+ * bottom edge on a short window); 240px is still ~30px squares.
  */
-const TRAIN_BOARD_MIN_WIDTH_PX = TRAIN_BOARD_MAX_WIDTH_PX / 2;
+const TRAIN_BOARD_MIN_WIDTH_PX = 240;
 /**
- * Approximate vertical chrome around the board on desktop: nav header
- * (~48px) + page padding (2×24px) + progress block and gap (46px) + button
- * row and gap (~56px) + breathing room. Deliberately a rough single number —
- * it only decides WHEN the shrink kicks in, not any exact alignment.
+ * Space kept free below the board column — the page container's own `py-6`
+ * bottom padding (24px) plus visual breathing room, so the
+ * Solution/Analyze/Next row is never flush against the viewport edge.
  */
-const TRAIN_BOARD_VIEWPORT_RESERVED_PX = 220;
-
-const TRAIN_BOARD_COLUMN_MAX_WIDTH = `min(${TRAIN_BOARD_MAX_WIDTH_PX}px, max(${TRAIN_BOARD_MIN_WIDTH_PX}px, calc(100dvh - ${TRAIN_BOARD_VIEWPORT_RESERVED_PX}px)))`;
+const TRAIN_BOARD_BOTTOM_GUTTER_PX = 40;
 
 /**
- * 190.1 UAT round 7: pill background for the "Points: +N" reveal flash —
- * green for a perfect 2, orange for a partial 1, red for 0, tracking the
- * same win/partial/loss semantics as the per-score result sound.
+ * 190.1 UAT round 7 / SEED-119: pill background+foreground for the
+ * "Points: +N" reveal flash — dark green for a perfect 3, yellow for 2
+ * (an inaccuracy still earned the guess point plus one move point), orange
+ * for 1, red for 0. Yellow needs its own near-black foreground
+ * (`TRAIN_POINTS_FG_ON_LIGHT`) — `SEV_INACCURACY` is a light amber that
+ * near-white text cannot clear — while the three dark tiers share
+ * `TRAIN_POINTS_FG_ON_DARK`.
  */
-const TRAIN_POINTS_FLASH_COLORS: Record<number, string> = {
-  0: ZONE_DANGER,
-  1: SEV_MISTAKE,
-  2: ZONE_SUCCESS,
+const TRAIN_POINTS_FLASH_COLORS: Record<number, { bg: string; fg: string }> = {
+  0: { bg: ZONE_DANGER, fg: TRAIN_POINTS_FG_ON_DARK },
+  1: { bg: SEV_MISTAKE, fg: TRAIN_POINTS_FG_ON_DARK },
+  2: { bg: SEV_INACCURACY, fg: TRAIN_POINTS_FG_ON_LIGHT },
+  3: { bg: ZONE_SUCCESS, fg: TRAIN_POINTS_FG_ON_DARK },
 };
 
 export function TrainSolveScreen({
@@ -193,6 +206,19 @@ export function TrainSolveScreen({
   // cleared on puzzle transition. The element's CSS animation ends at
   // opacity 0 with fill-mode forwards, so no unmount timer is needed.
   const [pointsFlash, setPointsFlash] = useState<number | null>(null);
+  // 191 UAT: the board column shrinks to whatever vertical room the viewport
+  // actually leaves (see useFitBoardToViewport) — measured, not a hard-coded
+  // chrome estimate, so the button row below the board always keeps its
+  // gutter no matter what else the page renders above the column.
+  const columnRef = useRef<HTMLDivElement>(null);
+  const boardRef = useRef<HTMLDivElement>(null);
+  const boardMaxWidthPx = useFitBoardToViewport({
+    columnRef,
+    boardRef,
+    maxPx: TRAIN_BOARD_MAX_WIDTH_PX,
+    minPx: TRAIN_BOARD_MIN_WIDTH_PX,
+    gutterPx: TRAIN_BOARD_BOTTOM_GUTTER_PX,
+  });
   const [engineTimedOut, setEngineTimedOut] = useState(false);
   // Bumped by a manual engine retry so the readiness-timeout effect below
   // re-arms its window even when `isReady` itself hasn't changed value yet.
@@ -283,7 +309,7 @@ export function TrainSolveScreen({
         position: puzzle.position,
         guess: playedGuess,
         played_move: playedUci,
-        correct_move: grade.correctMove,
+        move_quality: grade.moveTier,
       });
       // correct_guess is read ONLY from the server response (POOL-10) — never
       // recomputed client-side. The verdict itself renders from
@@ -466,21 +492,22 @@ export function TrainSolveScreen({
   const boardLastMoveColor =
     lineStep !== null && lineStep.quality !== null ? TRAIN_STEP_HIGHLIGHT[lineStep.quality] : undefined;
 
-  // 190.1 UAT rounds 6+7: the reveal plays a per-score result sound AND pops
-  // the "Points: +N" flash over the board the moment a LIVE solve response
-  // lands — never for a restored reveal (its solve happened on a prior page
-  // visit). 2 points (guess AND move correct) plays WinChime (round 7: the
-  // Victory fanfare read too aggressive here, same verdict as bot games),
-  // 1 point plays LowTime, 0 points plays Defeat. The ref keeps StrictMode's
-  // dev-only double effect invocation (and any later re-render with the same
-  // response object) from playing it twice; playSound itself honors the
-  // shared mute preference.
+  // 190.1 UAT rounds 6+7 / SEED-119: the reveal plays a per-score result
+  // sound AND pops the "Points: +N" flash over the board the moment a LIVE
+  // solve response lands — never for a restored reveal (its solve happened
+  // on a prior page visit). The full per-puzzle max (3, guess + a good move)
+  // plays WinChime (round 7: the Victory fanfare read too aggressive here,
+  // same verdict as bot games); any lesser positive score (e.g. guess-only,
+  // or guess plus an inaccuracy) plays LowTime; 0 points plays Defeat. The
+  // ref keeps StrictMode's dev-only double effect invocation (and any later
+  // re-render with the same response object) from playing it twice;
+  // playSound itself honors the shared mute preference.
   const liveSolveResponse = trainSession.lastSolveResponse;
   const soundedSolveRef = useRef<SolveResponse | null>(null);
   useEffect(() => {
     if (liveSolveResponse === null || soundedSolveRef.current === liveSolveResponse) return;
     soundedSolveRef.current = liveSolveResponse;
-    const points = scorePuzzle(liveSolveResponse.correct_guess, liveSolveResponse.correct_move);
+    const points = scorePuzzle(liveSolveResponse.correct_guess, liveSolveResponse.move_quality);
     playSound(points === TRAIN_POINTS_PER_PUZZLE ? 'game-win' : points > 0 ? 'low-time' : 'game-loss');
     setPointsFlash(points);
   }, [liveSolveResponse]);
@@ -496,6 +523,15 @@ export function TrainSolveScreen({
   }, [verdict, puzzle.fen]);
 
   const handleNext = onNext ?? trainSession.advance;
+
+  // SEED-119: the badge's color pair for the current pointsFlash tier,
+  // falling back to the 0-point entry (never an unreadable bg/fg pair) when
+  // pointsFlash holds a value outside the known 0-3 range. The `!` is safe:
+  // key 0 is always present in TRAIN_POINTS_FLASH_COLORS by construction.
+  const pointsFlashColors =
+    pointsFlash !== null
+      ? (TRAIN_POINTS_FLASH_COLORS[pointsFlash] ?? TRAIN_POINTS_FLASH_COLORS[0]!)
+      : undefined;
 
   function handleShowSolution(): void {
     setSolutionNonce((n) => n + 1);
@@ -534,8 +570,9 @@ export function TrainSolveScreen({
       data-testid="train-solve-screen"
     >
       <div
+        ref={columnRef}
         className="flex w-full flex-col items-center gap-4"
-        style={{ maxWidth: TRAIN_BOARD_COLUMN_MAX_WIDTH }}
+        style={{ maxWidth: boardMaxWidthPx }}
       >
       <div className="flex w-full flex-col gap-1">
         <div className="flex w-full items-center justify-between">
@@ -558,7 +595,7 @@ export function TrainSolveScreen({
           />
         </div>
       </div>
-      <div className="relative w-full">
+      <div ref={boardRef} className="relative w-full">
         <ChessBoard
           position={boardFen}
           flipped={puzzle.side_to_move === 'black'}
@@ -567,7 +604,7 @@ export function TrainSolveScreen({
           onPieceDrop={handlePieceDrop}
           arrows={boardArrows}
           squareMarkers={boardMarkers}
-          maxWidth={TRAIN_BOARD_MAX_WIDTH_PX}
+          maxWidth={boardMaxWidthPx}
           id="chessboard"
         />
         {/* 190.1 UAT round 7: short "Points: +N" pop over the board as the
@@ -578,8 +615,8 @@ export function TrainSolveScreen({
             pointer-events-none) until the next puzzle clears the state. */}
         {pointsFlash !== null && (
           <div
-            className="animate-train-points-pop pointer-events-none absolute left-1/2 top-1/2 z-10 select-none whitespace-nowrap rounded-full px-6 py-2 text-2xl font-bold text-white shadow-lg"
-            style={{ backgroundColor: TRAIN_POINTS_FLASH_COLORS[pointsFlash] ?? ZONE_DANGER }}
+            className="animate-train-points-pop pointer-events-none absolute left-1/2 top-1/2 z-10 select-none whitespace-nowrap rounded-full px-6 py-2 text-2xl font-bold shadow-lg"
+            style={{ backgroundColor: pointsFlashColors?.bg, color: pointsFlashColors?.fg }}
             data-testid="train-points-flash"
           >
             Points: +{pointsFlash}
@@ -597,13 +634,13 @@ export function TrainSolveScreen({
         <div className="flex w-full items-center gap-2">
           <Button
             variant="brand-outline"
-            className="flex-1"
+            className={cn('flex-1', TRAIN_BUTTON_CLASS)}
             data-testid="btn-train-solution"
             onClick={handleShowSolution}
           >
             Solution
           </Button>
-          <Button asChild variant="brand-outline" className="flex-1">
+          <Button asChild variant="brand-outline" className={cn('flex-1', TRAIN_BUTTON_CLASS)}>
             <Link
               to={buildGameAnalysisUrl(puzzle.game_id, puzzle.ply > 0 ? puzzle.ply - 1 : null)}
               data-testid="btn-train-analyze"
@@ -614,7 +651,12 @@ export function TrainSolveScreen({
               Analyze
             </Link>
           </Button>
-          <Button variant="default" className="flex-1" data-testid="btn-train-next" onClick={handleNext}>
+          <Button
+            variant="default"
+            className={cn('flex-1', TRAIN_BUTTON_CLASS)}
+            data-testid="btn-train-next"
+            onClick={handleNext}
+          >
             Next
           </Button>
           {/* 190.1 UAT round 4: stepping plays move sounds — same mute
@@ -633,7 +675,12 @@ export function TrainSolveScreen({
       {engineFailed ? (
         <div className="flex flex-col items-center gap-2" data-testid="train-engine-error">
           <LoadError resource="the grading engine" />
-          <Button variant="brand-outline" data-testid="btn-train-engine-retry" onClick={handleRetryEngine}>
+          <Button
+            variant="brand-outline"
+            className={TRAIN_BUTTON_CLASS}
+            data-testid="btn-train-engine-retry"
+            onClick={handleRetryEngine}
+          >
             Retry
           </Button>
         </div>
@@ -661,6 +708,7 @@ export function TrainSolveScreen({
               <div className="flex gap-2">
                 <Button
                   variant="brand-outline"
+                  className={TRAIN_BUTTON_CLASS}
                   data-testid="btn-train-guess-critical"
                   onClick={() => setGuess('critical')}
                 >
@@ -668,6 +716,7 @@ export function TrainSolveScreen({
                 </Button>
                 <Button
                   variant="brand-outline"
+                  className={TRAIN_BUTTON_CLASS}
                   data-testid="btn-train-guess-several"
                   onClick={() => setGuess('several')}
                 >
@@ -692,7 +741,12 @@ export function TrainSolveScreen({
           {gradingError && (
             <div className="flex flex-col items-center gap-2" data-testid="train-grading-error">
               <LoadError resource="your move grading" />
-              <Button variant="brand-outline" data-testid="btn-train-retry-grading" onClick={retryGrading}>
+              <Button
+                variant="brand-outline"
+                className={TRAIN_BUTTON_CLASS}
+                data-testid="btn-train-retry-grading"
+                onClick={retryGrading}
+              >
                 Retry
               </Button>
             </div>

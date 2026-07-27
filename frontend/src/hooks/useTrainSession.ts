@@ -38,6 +38,16 @@
  * UI, not about avoiding this read. Pressing Start/Resume only flips local
  * loop-entry state — it does not call this again.
  *
+ * UAT bug fix (191-06): `startSession()` IS re-fired once more, from
+ * `TrainScheduleSettings`'s `onSaved` callback (threaded through
+ * `TrainStartScreen`'s `onSettingsSaved` prop to `Train.tsx`'s own
+ * `startSession`) after a schedule-settings save actually persists. Without
+ * this, an untouched session composed at mount under the OLD
+ * `puzzles_per_session` stayed frozen at the stale size for the rest of the
+ * visit even after the setting changed — the backend's own resize-discard
+ * (`_discard_if_untouched_and_resized`) only runs on the NEXT compose call,
+ * and nothing else on this page ever makes one.
+ *
  * `sessionScore` (190-04 D-03) is a client-accumulated, localStorage-backed
  * tally keyed by `session_id`: `TrainSessionResponse` carries no server-side
  * aggregate score field, so the 'completed' landing state's recap line
@@ -62,6 +72,7 @@
 import { useCallback, useState } from 'react';
 import { useMutation } from '@tanstack/react-query';
 import { trainApi } from '@/api/client';
+import { scorePuzzle } from '@/lib/trainScore';
 import type { SolveRequest, SolveResponse, TrainPuzzle, TrainSessionResponse } from '@/types/train';
 
 const SCORE_STORAGE_PREFIX = 'train_score:';
@@ -175,7 +186,8 @@ export function useTrainSession(): UseTrainSessionResult {
     mutationFn: ({ sessionId, body }: { sessionId: number; body: SolveRequest }) =>
       trainApi.solvePuzzle(sessionId, body),
     onSuccess: (data, variables) => {
-      const points = (data.correct_guess ? 1 : 0) + (data.correct_move ? 1 : 0);
+      // SEED-119: the single scorePuzzle formula, never re-derived here.
+      const points = scorePuzzle(data.correct_guess, data.move_quality);
       setSessionScore((prev) => {
         const next = prev + points;
         persistScore(variables.sessionId, next);

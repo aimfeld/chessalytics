@@ -2,34 +2,64 @@
 gsd_state_version: 1.0
 milestone: v2.9
 milestone_name: Train — Spaced-Repetition Blunder Drills
-current_phase: 190.1
-current_phase_name: train-reveal-redesign
+current_phase: 191
+current_phase_name: schedule-progress-surface
 status: complete
-stopped_at: ""
-last_updated: "2026-07-26T16:20:00.000Z"
-last_activity: 2026-07-26
-last_activity_desc: Phase 190.1 shipped — squash-merged to main
+stopped_at: Completed 191-06-PLAN.md — phase verified and squash-merged to main
+last_updated: "2026-07-27T20:30:00.000Z"
+last_activity: 2026-07-27
+last_activity_desc: Phase 191 verified (5/5 criteria) and integrated into main — milestone v2.9 phases all complete
 progress:
   total_phases: 4
-  completed_phases: 3
-  total_plans: 17
-  completed_plans: 17
-  percent: 75
+  completed_phases: 4
+  total_plans: 23
+  completed_plans: 23
+  percent: 100
 ---
 
 # Project State: FlawChess
 
 ## Current Position
 
-Phase: 190.1 (train-reveal-redesign) — COMPLETE (verified, shipped to `main`)
-Plan: 5 of 5
-Status: Phases 190 + 190.1 squash-merged to `main` 2026-07-26. Next: Phase 191 (Schedule + Progress Surface).
-Last activity: 2026-07-26 — Phase 190.1 shipped
+Phase: 191 (schedule-progress-surface) — COMPLETE (verified 2026-07-27, 5/5 criteria)
+Plan: 6 of 6
+Status: Squash-merged to `main`. All v2.9 phases (189, 190, 190.1, 191) are done — next is
+`/gsd-complete-milestone` and a `main → production` release PR.
+Last activity: 2026-07-27 — Phase 191 verified and integrated
 
-The 190.1-05 blocking checkpoint was discharged through nine live UAT fix rounds
-(`7550424e` … `57a1ff1f`); the verdict is recorded per numbered item in
-`190.1-05-SUMMARY.md`, and `190.1-VERIFICATION.md` passes 5/5 success criteria. Not yet
-deployed — the v2.9 release to `production` is a separate `main → production` PR.
+The blocking human gate on plan 06 returned five real defects (nav-badge clipping,
+inconsistent schedule pickers, wrong Train defaults, centered start-screen text, and a
+session that kept its old size after `puzzles_per_session` changed). All were fixed in-branch,
+two of them needing backend changes plus additive migrations (`train_settings` new defaults,
+`drill_sessions.requested_count`). One deliberate copy deviation: the parked chip shipped as
+`{N} parked`, dropping the UI-SPEC's `— too hard for now` suffix (`191-UI-SPEC.md:106`/`:135`
+are now stale on that string). Dev-clock tooling (`app/core/dev_clock.py`, `TrainDevClock`,
+`scripts/reset_train_state.py`) was built during the gate to make the calendar-shaped
+behavior testable in one sitting; it is inert outside `ENVIRONMENT == "development"`.
+
+Phase 191 turns the Phase 189/190 mechanics into a habit loop: weekly schedule config,
+nav badge / dashboard surfacing, ad-hoc "train now", weekly streak, honest mastered/parked
+counts, celebrations, and cold/empty states. Mastered/parked/waiting counts and `pool_state`
+compute at request time from existing tables; the streak/flame uses a persisted settled
+snapshot per **D-18** (one additive Alembic migration: `streak_count`, `flame_state`,
+`streak_settled_through` on `train_settings`).
+
+Notes carried into execution:
+
+- **A1 RESOLVED by D-18** (user decision 2026-07-27): settled weeks are frozen forever —
+  lazy settlement on `GET /train/progress`, settle-before-mutate on `PUT /train/settings`
+  (old mask/timezone judges elapsed weeks). Only the in-progress week is judged live.
+
+- `streak_lost_last_week` derives from the snapshot state, so the reset notice survives a
+  reload and self-clears once the user trains again (planner choice, accepted).
+
+- The folded delete-all copy ("also resets your Train progress") is true for mastered/parked
+  (they cascade from `games`) but NOT for the weekly streak — `drill_sessions` FKs only to
+  `users` per locked Phase 189 D-04, and the D-18 snapshot on `train_settings` also survives.
+  Plan 04 forbids "fixing" this with a cascade.
+
+Phase 190.1 remains COMPLETE (verified, squash-merged to `main` 2026-07-26); the v2.9
+release to `production` is still a separate `main → production` PR.
 
 ## Project Reference
 
@@ -473,6 +503,16 @@ v1.29 Live-Engine Analysis Page shipped 2026-06-29 — 5 phases (136–140), 14 
 - [Phase ?]: [Phase 190.1-04]: TRAIN_PLAYED_MOVE_ARROW_WIDTH kept as its own named constant despite sharing TRAIN_GOOD_MOVE_ARROW_WIDTH's value (0.5), per the plan's explicit three-arrow-widths requirement
 - [Phase ?]: [Phase 190.1-04]: buildTrainRevealArrows takes an explicit verdictLanded flag (from verdict !== null) rather than inferring landed-ness from goodMoveUcis non-emptiness
 - [Phase ?]: [Phase 190.1-04]: TrainReveal reports gameMoveUci to TrainSolveScreen via onGameMoveUciChange rather than lifting the reveal query itself, preserving single ownership of the reveal GET
+- [Phase ?]: 191-01: settled-streak snapshot (D-18) implemented via settle_weeks pure replay + compare-and-set persist; tracer feedback gate treated as autonomous-run given yolo mode + fully-automated verify
+- [Phase ?]: 191-02: get_waiting_puzzle_count mirrors composition's own eligibility predicates in COUNT-only form, never materializing a session
+- [Phase ?]: 191-02: _pool_state (no_material/exhausted/available) is the single server-side discriminant the two PROG-05 empty states branch on
+- [Phase ?]: 191-02: settle-before-mutate on PUT /train/settings closes D-18 -- elapsed weeks are judged by the OLD schedule before the new one persists
+- [Phase ?]: 191-03: TrainFlawFixedBanner imports MiniBoard directly (not LazyMiniBoard) since the reveal panel is never off-screen when the banner fires
+- [Phase ?]: 191-03: FEN validation for the mastery banner reuses TrainReveal.tsx's existing defensive Chess() try/catch shape rather than a new validation helper
+- [Phase ?]: 191-03: Deleted comebackHint/train-comeback-hint outright (D-14 fully supersedes the D-12 plain-text comeback hint) rather than keeping it alongside the new banner
+- [Phase ?]: 191-04: useTrainSettings.save is the raw mutate ref; indicator state driven by per-call onSuccess/onError callbacks, not the hook's own isSaveSuccess/isSaveError
+- [Phase ?]: 191-04: TrainScheduleSettings.test.tsx uses real timers (not vi.useFakeTimers()) for the debounce window -- this project's vitest has no global jest alias so waitFor can't self-advance a fake clock
+- [Phase ?]: 191-05: useTrainProgress gains options.enabled to gate the nav badge query off for guests/locked-nav accounts, preventing expected 403s from reaching Sentry
 
 ### Pending Todos
 
@@ -520,6 +560,7 @@ None active.
 | 260723-tqn | Bot-win celebration: on a human win vs a bot, play the vendored Victory clip and (unless prefers-reduced-motion) fire a canvas-confetti burst, holding the result modal closed ~1.3s so the confetti plays over the board first; loss/draw now play the previously-unused Defeat/Draw clips instead of the single Checkmate clip and open the modal immediately. Single firing site in finalizeGame; new testable useWinCelebrationHold hook gates GameResultDialog's open prop; all sounds stay mute-gated; confetti accents added to theme.ts. Frontend gate green (2538 tests, tsc, lint, knip) | 2026-07-23 | 7a489371 | [260723-tqn-add-bot-win-celebration-confetti-victory](./quick/260723-tqn-add-bot-win-celebration-confetti-victory/) |
 | 260725-da3 | FLAWCHESS-8B worker attribution + hole amplification. Prod re-measurement disproved the "1-2 terminal-only holes/game" triage: 2351 engine games carry genuine mid-game holes, median 25/game, max 111, with zero worker attribution available (tier-3 idle-lottery claims have no `eval_jobs` row, so `leased_by` is empty for the whole population). Three fixes: (1) per-worker `holes_submitted`/`plies_leased` accumulators on `worker_heartbeats` (migration `dbf963851fe0`, wired inside `apply_full_eval`'s existing write session — a second router-level upsert would have double-counted `submit_count`), fed on EVERY holed submit not just the Path-C cap so a slow worker is visible before it burns all 3 attempts; (2) `asyncio.TimeoutError` split out of the restart-triggering except tuple in `EnginePool._acquire_and_analyse` — a timeout means "this box is slow", not "the engine is broken", and restarting Stockfish on an already-slow box amplified one slow position into a block of holes (cancellation safety verified at source level against python-chess 1.11.2 AND empirically against the real binary over a 12-cycle 1-101ms sweep); (3) `worker_id`/`last_ip` bound onto the Path-C Sentry event via `functools.partial` without widening the shared callback signature, message string asserted byte-identical so the 1602 existing events keep grouping. All 5 gap fixes mutation-proven by revert-and-observe; backend suite 3626 passed | 2026-07-25 | 3568111a | [260725-da3-flawchess-8b-worker-hole-telemetry-no-en](./quick/260725-da3-flawchess-8b-worker-hole-telemetry-no-en/) |
 | 260726-fma | Train reveal now shows inaccuracy-level fine-move alternatives (yellow arrow + inaccuracy badge) — deriveFineMoves predicate aligned with the verdict's correctMove rule and the backend's soft gap (drop < MISTAKE_DROP), fixing soft puzzles that drew only the blue best arrow (34% of soft blobs sat in the excluded [0.05, 0.10) band) | 2026-07-26 | 982326aa | [260726-fma-train-reveal-inaccuracy-alternative-arrows](./quick/260726-fma-train-reveal-inaccuracy-alternative-arrows/) |
+| 260727-qai | SEED-119 tiered Train puzzle scoring: guess 1 point + tiered move points (good 2 / inaccuracy 1 / mistake-blunder 0), max 3 per puzzle, bands unchanged at 75/50. New `move_quality` wire+DB field (nullable SMALLINT + `DrillMoveQuality` IntEnum + CHECK, migration `ed0735f3d998`) replaces the client's boolean `correct_move` assertion; the server DERIVES `correct_move = move_quality != 'wrong'` so the SR ladder's pass/fail semantics and `apply_result`'s signature are provably untouched. `classifyLiveSeverity` stays the sole threshold source (no new cutoff); `scorePuzzle` is now the single scoring formula (useTrainSession no longer re-derives it). Go-forward only — historical rows keep NULL `move_quality` and their stored scores. Points-flash badge recoloured per tier (3 dark green / 2 yellow / 1 orange / 0 red) with per-tier foreground constants in theme.ts, since white text cannot clear the light-amber tier. Backend 166 Train tests + full frontend suite (2778) green, ty/tsc/lint/knip clean | 2026-07-27 | 546ab48d | [260727-qai-tiered-train-puzzle-scoring-seed-119-plu](./quick/260727-qai-tiered-train-puzzle-scoring-seed-119-plu/) |
 
 ## Deferred Items
 
@@ -572,13 +613,13 @@ Items acknowledged and deferred at **v1.29 milestone close on 2026-06-29** (user
 
 ## Session Continuity
 
-**Stopped at:** 190.1-05 Task 1 (full gate) green; blocked at Task 2 (checkpoint:human-verify, gate=blocking) awaiting operator UAT on desktop+mobile
+**Stopped at:** Completed 191-05-PLAN.md
 
-**Last session:** 2026-07-26T13:22:14.252Z
+**Last session:** 2026-07-27T13:27:22.093Z
 
 **Resume file:**
 
-.planning/phases/190.1-train-reveal-redesign/190.1-05-PLAN.md
+None
 
 ## Performance Metrics
 
@@ -652,6 +693,11 @@ Items acknowledged and deferred at **v1.29 milestone close on 2026-06-29** (user
 | Phase 190.1 P02 | 55min | 2 tasks | 5 files |
 | Phase 190.1 P03 | 55min | 3 tasks | 11 files |
 | Phase 190.1 P04 | 50min | 2 tasks | 11 files |
+| Phase 191 P01 | 25min | 2 tasks | 20 files |
+| Phase 191 P02 | 55min | 3 tasks | 6 files |
+| Phase 191 P03 | 20min | 2 tasks | 6 files |
+| Phase 191 P04 | 20min | 2 tasks | 8 files |
+| Phase 191 P05 | 20min | 1 tasks | 3 files |
 
 ## Performance Metrics
 

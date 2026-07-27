@@ -66,6 +66,7 @@ function makeVerdict(overrides: Partial<SolveResponse> = {}): SolveResponse {
   return {
     correct_guess: true,
     correct_move: true,
+    move_quality: 'good',
     puzzle_type: 'sharp',
     item_status: 'active',
     streak: 1,
@@ -298,23 +299,56 @@ describe('TrainReveal', () => {
     expect(screen.queryByTestId('train-outcome-copy')).toBeNull();
   });
 
-  // ─── Comeback hint (D-12, countdown removed per UAT round 3) ──────────────
+  // ─── Flaw fixed banner (PROG-03/D-14, Phase 191 Plan 03 — supersedes the
+  // D-12 plain "Mastered — retired." comeback hint) ─────────────────────────
 
-  it('an active spaced-repetition item renders NO comeback countdown (removed in UAT round 3)', () => {
+  it('item_status "mastered" renders the flaw-fixed banner', () => {
+    renderReveal({ verdict: makeVerdict({ item_status: 'mastered', due_date: null }) });
+    expect(screen.getByTestId('train-flaw-fixed-banner')).not.toBeNull();
+  });
+
+  it('item_status "active" renders neither the banner nor a comeback line', () => {
     renderReveal({ verdict: makeVerdict({ item_status: 'active', due_date: '2026-07-28' }) });
+    expect(screen.queryByTestId('train-flaw-fixed-banner')).toBeNull();
     expect(screen.queryByTestId('train-comeback-hint')).toBeNull();
   });
 
-  it('a mastered item renders the plain retired text, not a celebration', () => {
-    renderReveal({ verdict: makeVerdict({ item_status: 'mastered', due_date: null }) });
-    expect(screen.getByTestId('train-comeback-hint').textContent).toBe('Mastered — retired.');
+  it('item_status "parked" renders neither the banner nor a comeback line', () => {
+    renderReveal({ verdict: makeVerdict({ item_status: 'parked', due_date: '2026-07-28' }) });
+    expect(screen.queryByTestId('train-flaw-fixed-banner')).toBeNull();
+    expect(screen.queryByTestId('train-comeback-hint')).toBeNull();
   });
 
-  it('a herring renders no comeback line at all', () => {
+  it('a herring (item_status null) renders neither the banner nor a comeback line', () => {
     renderReveal({
       verdict: makeVerdict({ puzzle_type: 'herring', item_status: null, due_date: null, streak: null }),
     });
+    expect(screen.queryByTestId('train-flaw-fixed-banner')).toBeNull();
     expect(screen.queryByTestId('train-comeback-hint')).toBeNull();
+  });
+
+  it('two mastered reveals in sequence (a new puzzle each time) each render their own single, un-pluralized banner', () => {
+    const { rerender, client, props } = renderReveal({
+      verdict: makeVerdict({ item_status: 'mastered', due_date: null }),
+    });
+    expect(screen.getAllByTestId('train-flaw-fixed-banner')).toHaveLength(1);
+    expect(screen.getByText('Flaw fixed!')).not.toBeNull();
+
+    rerender(
+      <MemoryRouter>
+        <QueryClientProvider client={client}>
+          <TrainReveal
+            {...props}
+            puzzle={makePuzzle({ position: 6 })}
+            verdict={makeVerdict({ item_status: 'mastered', due_date: null })}
+          />
+        </QueryClientProvider>
+      </MemoryRouter>,
+    );
+    // Still exactly one banner with the same singular heading — a second
+    // mastery in the SAME session never batches into a "2 fixed" count.
+    expect(screen.getAllByTestId('train-flaw-fixed-banner')).toHaveLength(1);
+    expect(screen.getByText('Flaw fixed!')).not.toBeNull();
   });
 
   // ─── Steppable engine-line boxes (190.1-03 D-03) ──────────────────────────

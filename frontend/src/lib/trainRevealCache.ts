@@ -61,12 +61,20 @@ export function clearTrainRevealCache(): void {
 }
 
 /** Shallow shape check — enough to reject corrupt/foreign payloads without
- * re-validating every nested field the compiler already typed at write time. */
+ * re-validating every nested field the compiler already typed at write time.
+ *
+ * SEED-119: `verdict.move_quality` (a string on every post-tiering entry) is
+ * checked specifically to reject a pre-SEED-119 cache entry, whose `verdict`
+ * has no `move_quality` field at all — such an entry lands the back button
+ * on the start screen, the module's already-documented best-effort fallback.
+ * This nested check exists ONLY to catch that one shape drift; it is not a
+ * license to deep-validate every field of `verdict`/`gradeResult`. */
 function isCachedTrainReveal(value: unknown): value is CachedTrainReveal {
   if (typeof value !== 'object' || value === null) return false;
   const v = value as Record<string, unknown>;
   const puzzle = v.puzzle as Record<string, unknown> | null | undefined;
   const gradeResult = v.gradeResult as Record<string, unknown> | null | undefined;
+  const verdict = v.verdict as Record<string, unknown> | null | undefined;
   return (
     typeof v.sessionId === 'number' &&
     (v.guess === 'critical' || v.guess === 'several') &&
@@ -75,8 +83,9 @@ function isCachedTrainReveal(value: unknown): value is CachedTrainReveal {
     puzzle !== null &&
     typeof puzzle.fen === 'string' &&
     typeof puzzle.position === 'number' &&
-    typeof v.verdict === 'object' &&
-    v.verdict !== null &&
+    typeof verdict === 'object' &&
+    verdict !== null &&
+    typeof verdict.move_quality === 'string' &&
     typeof gradeResult === 'object' &&
     gradeResult !== null &&
     typeof gradeResult.bestLine === 'object'

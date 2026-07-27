@@ -44,6 +44,10 @@ class DrillSession(Base):
         CheckConstraint(
             "status IN ('open', 'completed', 'expired')", name="ck_drill_sessions_status"
         ),
+        CheckConstraint(
+            "requested_count IS NULL OR requested_count BETWEEN 1 AND 50",
+            name="ck_drill_sessions_requested_count",
+        ),
         # D-12: at most one OPEN session per user — enforced as a partial unique
         # index rather than a plain UniqueConstraint(user_id) so completed/expired
         # history rows are unrestricted.
@@ -63,6 +67,18 @@ class DrillSession(Base):
     # high-cardinality enum) — no native ENUM.
     status: Mapped[str] = mapped_column(Text, nullable=False, server_default="open")
     puzzle_count: Mapped[int] = mapped_column(SmallInteger, nullable=False)
+    # Phase 191 Plan 06 (191-06 UAT bug fix): the `puzzles_per_session` value
+    # ACTUALLY in force at composition time — bounds mirror
+    # `train_settings.puzzles_per_session`'s own CHECK (D-08). NULL for rows
+    # from before this column existed (and for any direct test fixture that
+    # doesn't set it) — `app.repositories.train_repository
+    # ._discard_if_untouched_and_resized` treats NULL as "never eligible for
+    # a resize-discard", the conservative (resume-as-is) default. This is
+    # DELIBERATELY separate from `puzzle_count`: a session can legitimately
+    # serve FEWER puzzles than requested when the pool is short on material
+    # (the D-14 "short session" state) — that must never be mistaken for a
+    # stale `puzzles_per_session` that needs recomposing.
+    requested_count: Mapped[int | None] = mapped_column(SmallInteger, nullable=True)
     expires_on: Mapped[datetime.date] = mapped_column(Date, nullable=False)
     started_at: Mapped[datetime.datetime] = mapped_column(
         DateTime(timezone=True), nullable=False, server_default=func.now()

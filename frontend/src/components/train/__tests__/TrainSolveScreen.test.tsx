@@ -26,6 +26,19 @@ import { useTrainSession } from '@/hooks/useTrainSession';
 import { useTrainGradingEngine } from '@/hooks/useTrainGradingEngine';
 import type { SolveRequest, SolveResponse, TrainPuzzle, TrainSessionResponse } from '@/types/train';
 
+// ─── ResizeObserver stub ────────────────────────────────────────────────────
+// jsdom has no ResizeObserver; TrainSolveScreen's useFitBoardToViewport
+// observes its board column with one (same per-file stub precedent as
+// Bots.test.tsx / Analysis.test.tsx).
+
+class ResizeObserverStub {
+  observe() {}
+  unobserve() {}
+  disconnect() {}
+}
+(globalThis as unknown as { ResizeObserver: typeof ResizeObserverStub }).ResizeObserver =
+  ResizeObserverStub;
+
 // ─── ChessBoard mock ────────────────────────────────────────────────────────
 
 vi.mock('@/components/board/ChessBoard', () => ({
@@ -214,6 +227,7 @@ function makePuzzle(overrides: Partial<TrainPuzzle> = {}): TrainPuzzle {
 const SOLVE_RESPONSE: SolveResponse = {
   correct_guess: true,
   correct_move: true,
+  move_quality: 'good',
   puzzle_type: 'sharp',
   item_status: 'active',
   streak: 1,
@@ -595,17 +609,17 @@ describe('TrainSolveScreen — progress, last move, grading state, engine failur
     expect(mockSetMuted).toHaveBeenCalledWith(true);
   });
 
-  it('a live 2-point solve plays the WinChime (game-win) sound and pops the "Points: +2" flash over the board (190.1 UAT round 7)', async () => {
+  it('a live 3-point solve plays the WinChime (game-win) sound and pops the "Points: +3" flash over the board (190.1 UAT round 7, SEED-119 max)', async () => {
     const { playSound } = await import('@/lib/sounds');
     vi.mocked(playSound).mockClear();
     await renderScreen(makePuzzle());
     expect(screen.queryByTestId('train-points-flash')).toBeNull();
     fireEvent.click(screen.getByTestId('btn-train-guess-critical'));
     await act(async () => {
-      fireEvent.click(screen.getByTestId('drop-e2e4')); // matches bestmove -> 2 points
+      fireEvent.click(screen.getByTestId('drop-e2e4')); // matches bestmove -> good tier, 2 move points
     });
     await waitFor(() => expect(screen.getByTestId('train-points-flash')).not.toBeNull());
-    expect(screen.getByTestId('train-points-flash').textContent).toBe('Points: +2');
+    expect(screen.getByTestId('train-points-flash').textContent).toBe('Points: +3');
     // Round 7: the perfect-score sound is the gentle WinChime, not the
     // Victory fanfare (that SoundEvent no longer exists).
     expect(playSound).toHaveBeenCalledWith('game-win');
@@ -650,16 +664,16 @@ describe('TrainSolveScreen — progress, last move, grading state, engine failur
     expect(screen.queryByTestId('train-session-score')).toBeNull();
   });
 
-  it('driving one puzzle to a correct-guess correct-move verdict shows the accumulated score and a max of one times TRAIN_POINTS_PER_PUZZLE', async () => {
+  it('driving one puzzle to a correct-guess good-move verdict shows the accumulated score and a max of one times TRAIN_POINTS_PER_PUZZLE (SEED-119: 3)', async () => {
     await renderScreen(makePuzzle(), makeSession({ solved_count: 0 }));
     fireEvent.click(screen.getByTestId('btn-train-guess-critical'));
     await act(async () => {
-      fireEvent.click(screen.getByTestId('drop-e2e4')); // exact match -> both correct
+      fireEvent.click(screen.getByTestId('drop-e2e4')); // exact match -> guess + good move
     });
     await waitFor(() => expect(screen.getByTestId('train-session-score')).not.toBeNull());
     const text = screen.getByTestId('train-session-score').textContent ?? '';
-    expect(text).toContain('2'); // score: correct_guess + correct_move = 2 points
-    expect(text).toContain('2'); // max: 1 puzzle x TRAIN_POINTS_PER_PUZZLE (2) = 2
+    expect(text).toContain('3'); // score: correct_guess (1) + good move (2) = 3 points
+    expect(text).toContain('3'); // max: 1 puzzle x TRAIN_POINTS_PER_PUZZLE (3) = 3
   });
 
   it('train-session-score and train-progress are siblings in the same row, with train-progress-bar below them', async () => {

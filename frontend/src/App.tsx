@@ -34,6 +34,7 @@ import { WelcomePage } from '@/pages/Welcome';
 import { useImportPolling, useActiveJobs } from '@/hooks/useImport';
 import { useUserFlag, setUserFlag } from '@/hooks/useUserFlag';
 import { useReadiness } from '@/hooks/useReadiness';
+import { useTrainProgress } from '@/hooks/useTrainProgress';
 
 // First React.lazy boundary in the app — keeps the Stockfish JS/WASM bundle off
 // every other route (ROUTE-01 / D-07). Analysis.tsx uses export default (Pitfall 1).
@@ -47,8 +48,10 @@ const TrainPage = lazy(() => import('./pages/Train'));
 
 const FLAG_OPENINGS_VISITED = 'openings_visited';
 const FLAG_ENDGAMES_VISITED = 'endgames_visited';
-const FLAG_TRAIN_VISITED = 'train_visited';
 const IMPORT_REQUIRED_MESSAGE = 'Import your games first to unlock this feature.';
+// SCHD-02/D-06/D-07: waiting-count badge display cap — anything above this
+// renders as `${NAV_BADGE_MAX_DISPLAY}+` rather than the exact count.
+const NAV_BADGE_MAX_DISPLAY = 99;
 
 // ─── Non-visual job completion watcher ────────────────────────────────────────
 
@@ -147,13 +150,16 @@ export function NavHeader() {
   const navUnlocked = totalGames > 0 && tier1;
   const openingsVisited = useUserFlag(FLAG_OPENINGS_VISITED, profile?.email);
   const endgamesVisited = useUserFlag(FLAG_ENDGAMES_VISITED, profile?.email);
-  const trainVisited = useUserFlag(FLAG_TRAIN_VISITED, profile?.email);
   const showOpeningsDot = navUnlocked && !openingsVisited;
   // Endgames dot is gated behind the Openings dot — we want users to discover
   // Openings first, then Endgames after that dot is cleared.
   const showEndgamesDot = navUnlocked && openingsVisited && !endgamesVisited;
-  // Train dot chained after Endgames (D-16): Openings -> Endgames -> Train.
-  const showTrainDot = navUnlocked && openingsVisited && endgamesVisited && !trainVisited;
+  // SCHD-02/D-06/D-07/D-08: numeric waiting-puzzles badge replaces the old
+  // first-visit Train dot. Gated off for guests and locked-nav accounts so the
+  // global QueryCache.onError Sentry reporter never sees an expected 403
+  // (T-191-21) — a guest or zero-game account never issues this request.
+  const trainProgressQuery = useTrainProgress({ enabled: navUnlocked && profile != null && !profile.is_guest });
+  const trainWaitingCount = trainProgressQuery.data?.waiting_count ?? 0;
   // D-16: Admin tab rightmost for superusers, absent otherwise.
   const navItems = profile?.is_superuser ? [...NAV_ITEMS, ADMIN_NAV_ITEM] : NAV_ITEMS;
 
@@ -214,13 +220,23 @@ export function NavHeader() {
                     <span className="relative inline-flex h-2.5 w-2.5 rounded-full bg-red-500" />
                   </span>
                 )}
-                {to === '/train' && showTrainDot && (
+                {to === '/train' && trainWaitingCount > 0 && (
                   <span
-                    className="absolute top-0.5 right-0.5 flex h-2.5 w-2.5"
-                    data-testid="train-notification-dot"
+                    // UAT bug fix (191-06): the desktop `<header>` has
+                    // `overflow-hidden` (line ~167); the old `-top-1` offset
+                    // pushed the badge above the stretched Link's top edge —
+                    // i.e. above the header's own content box — where it got
+                    // clipped. `top-0` keeps it inside those bounds ("a bit
+                    // lower"); the smaller h-3.5/min-w-3.5/px-0.5 footprint
+                    // ("a bit smaller") is a size-only reduction — `text-sm`
+                    // is unchanged (CLAUDE.md's font-size floor). Mobile's
+                    // badge (MobileBottomBar below) is unaffected: it was
+                    // reported fine and sits inside a differently-shaped
+                    // column item with no clipping ancestor.
+                    className="absolute top-0 -right-1 flex h-3.5 min-w-3.5 items-center justify-center rounded-full bg-red-500 px-0.5 text-sm font-semibold text-white"
+                    data-testid="train-notification-badge"
                   >
-                    <span className="absolute inline-flex h-full w-full animate-ping rounded-full bg-red-500 opacity-75" />
-                    <span className="relative inline-flex h-2.5 w-2.5 rounded-full bg-red-500" />
+                    {trainWaitingCount > NAV_BADGE_MAX_DISPLAY ? `${NAV_BADGE_MAX_DISPLAY}+` : trainWaitingCount}
                   </span>
                 )}
               </Link>
@@ -331,11 +347,11 @@ export function MobileBottomBar({ onMoreClick }: { onMoreClick: () => void }) {
   const navUnlocked = totalGames > 0 && tier1;
   const openingsVisited = useUserFlag(FLAG_OPENINGS_VISITED, profile?.email);
   const endgamesVisited = useUserFlag(FLAG_ENDGAMES_VISITED, profile?.email);
-  const trainVisited = useUserFlag(FLAG_TRAIN_VISITED, profile?.email);
   const showOpeningsDot = navUnlocked && !openingsVisited;
   const showEndgamesDot = navUnlocked && openingsVisited && !endgamesVisited;
-  // Train dot chained after Endgames (D-16): Openings -> Endgames -> Train.
-  const showTrainDot = navUnlocked && openingsVisited && endgamesVisited && !trainVisited;
+  // SCHD-02/D-06/D-07/D-08 — see NavHeader for the gating rationale.
+  const trainProgressQuery = useTrainProgress({ enabled: navUnlocked && profile != null && !profile.is_guest });
+  const trainWaitingCount = trainProgressQuery.data?.waiting_count ?? 0;
 
   return (
     <nav
@@ -389,13 +405,12 @@ export function MobileBottomBar({ onMoreClick }: { onMoreClick: () => void }) {
               <span className="relative inline-flex h-2 w-2 rounded-full bg-red-500" />
             </span>
           )}
-          {to === '/train' && showTrainDot && (
+          {to === '/train' && trainWaitingCount > 0 && (
             <span
-              className="absolute top-1.5 right-[30%] flex h-2 w-2"
-              data-testid="train-notification-dot-mobile"
+              className="absolute top-1.5 right-[30%] flex h-4 min-w-4 items-center justify-center rounded-full bg-red-500 px-1 text-sm font-semibold text-white"
+              data-testid="train-notification-badge-mobile"
             >
-              <span className="absolute inline-flex h-full w-full animate-ping rounded-full bg-red-500 opacity-75" />
-              <span className="relative inline-flex h-2 w-2 rounded-full bg-red-500" />
+              {trainWaitingCount > NAV_BADGE_MAX_DISPLAY ? `${NAV_BADGE_MAX_DISPLAY}+` : trainWaitingCount}
             </span>
           )}
         </Link>
@@ -496,7 +511,6 @@ function ProtectedLayout() {
   const [moreOpen, setMoreOpen] = useState(false);
   const isOpeningsRoute = location.pathname.startsWith('/openings');
   const isEndgamesRoute = location.pathname.startsWith('/endgames');
-  const isTrainRoute = location.pathname.startsWith('/train');
   // The analysis page takes over the mobile shell (back-button header + board-controls
   // footer owned by the page), so it gets a full-height flex chain on mobile and the
   // standard mobile header / bottom nav are suppressed. Desktop (sm+) is unaffected.
@@ -519,12 +533,6 @@ function ProtectedLayout() {
       setUserFlag(FLAG_ENDGAMES_VISITED, profile.email);
     }
   }, [isEndgamesRoute, profile?.email]);
-
-  useEffect(() => {
-    if (isTrainRoute && profile?.email) {
-      setUserFlag(FLAG_TRAIN_VISITED, profile.email);
-    }
-  }, [isTrainRoute, profile?.email]);
 
   // Show deferred toast from OAuth callback — checked here because ProtectedLayout
   // is the stable destination after the redirect chain (callback → / → /openings).

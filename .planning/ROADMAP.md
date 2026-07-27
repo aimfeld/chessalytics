@@ -148,7 +148,7 @@
 | 189. Pool + Scheduler Backend (SEED-037, v2.9) | 6/6 | Complete | 2026-07-25 |
 | 190. Train Page + Solve Loop (SEED-037, v2.9) | 6/6 | In progress (UAT) | — |
 | 190.1. Train Reveal Redesign (INSERTED, 190 UAT feedback) | 5/5 | Complete | 2026-07-26 |
-| 191. Schedule + Progress Surface (SEED-037, v2.9) | 0/? | Not started | — |
+| 191. Schedule + Progress Surface (SEED-037, v2.9) | 6/6 | Complete | 2026-07-27 |
 
 ## v2.9 Train — Spaced-Repetition Blunder Drills (In Progress)
 
@@ -298,7 +298,27 @@ Plans:
   4. The progress surface shows mastered and parked counts honestly (e.g. "3 parked — too hard for now"), never framed as failure.
   5. Cold/empty states never show a dead screen: no analyzed games points to import/analysis, and an exhausted pool (everything mastered, nothing due) shows a celebratory state.
 
-**Plans**: TBD
+**Plans**: 6 plans
+
+Plans:
+**Wave 1**
+
+- [x] 191-01-PLAN.md — Progress read-model tracer: weekly streak/flame replay through to the start-screen stats row
+
+**Wave 2** *(blocked on Wave 1 completion)*
+
+- [x] 191-02-PLAN.md — Read-only waiting count, pool-state discriminant and next-due date on the progress response
+- [x] 191-03-PLAN.md — Celebrations: green-session confetti and the "Flaw fixed!" mastery banner
+
+**Wave 3** *(blocked on Wave 2 completion)*
+
+- [x] 191-04-PLAN.md — Inline auto-saving schedule settings, ad-hoc off-day regression test, delete-all warning copy
+- [x] 191-05-PLAN.md — Numeric waiting-count nav badge replacing the Train first-visit dot
+
+**Wave 4** *(blocked on Wave 3 completion)*
+
+- [x] 191-06-PLAN.md — Two tailored cold/exhausted empty states plus the blocking phase gate
+
 **UI hint**: yes
 
 ## Backlog

@@ -67,18 +67,21 @@ class TrainSessionResponse(BaseModel):
 class SolveRequest(BaseModel):
     """Body for POST /train/sessions/{session_id}/solve.
 
-    P-02 (LOCKED): the client asserts `correct_move` (the backend never
-    grades the move — see the module/plan docstrings) but NEVER
-    `correct_guess` or `puzzle_type` — those are computed server-side from
-    the live `game_flaws` blob so the sharp/soft ground truth is never
-    handed to the client before the attempt (T-189-18/T-189-11).
+    P-02 (LOCKED) / SEED-119: the client asserts a three-way `move_quality`
+    tier (the backend never grades the move — grading is still entirely
+    client-side, see the module/plan docstrings) but NEVER `correct_guess`
+    or `puzzle_type` — those are computed server-side from the live
+    `game_flaws` blob so the sharp/soft ground truth is never handed to the
+    client before the attempt (T-189-18/T-189-11). The server derives the
+    spaced-repetition ladder's pass/fail boolean from `move_quality`
+    (`!= "wrong"`) — see `app.repositories.train_repository.record_solve`.
     """
 
     position: int
     guess: Literal["critical", "several"]
     # UCI move string: 4 chars normal (e.g. "e2e4"), 5 chars promotion (e.g. "e7e8q").
     played_move: str = Field(min_length=4, max_length=5)
-    correct_move: bool
+    move_quality: Literal["good", "inaccuracy", "wrong"]
 
 
 class SolveResponse(BaseModel):
@@ -87,10 +90,17 @@ class SolveResponse(BaseModel):
     `item_status`/`streak`/`due_date` are None for a red-herring puzzle,
     which carries no SR bookkeeping (POOL-08). `correct_guess` is always the
     server-computed verdict, never an echo of the client's own guess.
+
+    SEED-119: `correct_move` retains its exact prior meaning — the
+    spaced-repetition ladder's pass/fail verdict, which is also what the
+    reveal's check/cross mark reads. `move_quality` is the new three-way
+    scoring tier the client's points formula consumes; it is NOT a synonym
+    for `correct_move` (an "inaccuracy" tier still means `correct_move=True`).
     """
 
     correct_guess: bool
     correct_move: bool
+    move_quality: Literal["good", "inaccuracy", "wrong"]
     puzzle_type: Literal["sharp", "soft", "herring"]
     item_status: Literal["active", "mastered", "parked"] | None
     streak: int | None
@@ -173,10 +183,52 @@ class TrainSettingsUpdate(BaseModel):
         return value
 
 
+class TrainProgressResponse(BaseModel):
+    """Response for GET /train/progress (PROG-01/PROG-04, Phase 191 Plan 01).
+
+    `settled_streak_weeks` / `flame_state` come from the D-18 settled-streak
+    snapshot on `train_settings`, lazily advanced by this same request
+    (`app.repositories.train_repository.settle_streak_snapshot`).
+    `flame_state` is the D-03 DISPLAY overlay (never the raw persisted
+    value) — None means never lit. `current_week_required` is None when
+    `weekday_mask == 0` ("train anytime" has no denominator to show);
+    otherwise it is the popcount of the scheduled-day mask.
+    `mastered_count`/`parked_count` are computed on the fly from `drill_items`
+    (D-05, unaffected by D-18 — only the streak/flame portion is snapshotted).
+
+    `waiting_count`/`pool_state`/`next_due_date` (Phase 191 Plan 02) are the
+    server-side signals the nav badge and the two PROG-05 empty states need:
+    `waiting_count` is an upper-bound estimate of puzzles waiting right now
+    (never a promise of exact session size — see
+    `app.repositories.train_repository.get_waiting_puzzle_count`).
+    `pool_state` is the single discriminant the client branches on for the
+    empty states: `"no_material"` means the user has never had any
+    qualifying material (cold start); `"exhausted"` means material existed
+    but nothing is waiting and nothing is still analyzing; `"available"`
+    covers every other case, including a zero-`drill_items` user whose own
+    blunders are still being analyzed (that is "catching up", not a cold
+    start). `next_due_date` is the earliest date an ACTIVE item will next
+    resurface, or null when nothing will (the "All caught up!" empty state's
+    date).
+    """
+
+    settled_streak_weeks: int
+    flame_state: Literal["minimum", "medium", "maximum"] | None
+    current_week_completed: int
+    current_week_required: int | None
+    streak_lost_last_week: bool
+    mastered_count: int
+    parked_count: int
+    waiting_count: int
+    pool_state: Literal["no_material", "exhausted", "available"]
+    next_due_date: date | None
+
+
 __all__ = [
     "PuzzleRevealResponse",
     "SolveRequest",
     "SolveResponse",
+    "TrainProgressResponse",
     "TrainPuzzle",
     "TrainSessionResponse",
     "TrainSettingsResponse",

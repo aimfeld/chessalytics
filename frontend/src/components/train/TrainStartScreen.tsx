@@ -11,10 +11,15 @@
 
 import type { ReactElement } from 'react';
 import { format, parseISO } from 'date-fns';
+import { Link } from 'react-router-dom';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { EmptyState } from '@/components/ui/empty-state';
 import { LoadError } from '@/components/ui/load-error';
+import { TRAIN_CTA_BUTTON_CLASS } from '@/components/train/buttonStyles';
+import { TrainProgressRow } from '@/components/train/TrainProgressRow';
+import { TrainScheduleSettings } from '@/components/train/TrainScheduleSettings';
+import { useTrainProgress } from '@/hooks/useTrainProgress';
 import type { TrainSessionResponse } from '@/types/train';
 
 export interface TrainStartScreenProps {
@@ -31,7 +36,29 @@ export interface TrainStartScreenProps {
   /** Enter the solve loop at the already-seeded resume index. Does not
    * re-fetch — the session/puzzles were already loaded by the status fetch. */
   onEnterLoop: () => void;
+  /**
+   * UAT bug fix (191-06): re-fires the session status fetch after a
+   * `TrainScheduleSettings` save actually persists, so an untouched session
+   * composed under a now-stale `puzzles_per_session` (or `weekday_mask`) is
+   * corrected on THIS visit rather than staying frozen until the next page
+   * load — see `TrainScheduleSettings`'s `onSaved` prop docstring.
+   */
+  onSettingsSaved: () => void;
 }
+
+/**
+ * 191.1 UAT: the landing ("title") page is the same content column as the
+ * Import page — `mx-auto w-full max-w-2xl` on top of the page-level
+ * `px-4 py-6 md:px-6` (see Import.tsx's `<main>` and Train.tsx). Without the
+ * max-width the settings chips stretched edge-to-edge on a wide window while
+ * the text sat flush against the left gutter. Text stays left-aligned inside
+ * the column (earlier 191-06 UAT round).
+ *
+ * Only the landing states use this — `TrainSolveScreen` is a two-column lg
+ * layout that must keep the full page width.
+ */
+const LANDING_CONTAINER_CLASS =
+  'mx-auto flex w-full max-w-2xl flex-col items-start gap-4 py-12 text-left';
 
 type LandingState =
   | { kind: 'loading' }
@@ -103,14 +130,78 @@ function TrainTitle(): ReactElement {
   );
 }
 
+/**
+ * PROG-05/D-16: the two tailored empty-state bodies (cold-start / exhausted)
+ * plus the Phase-190 generic fallback — chosen purely from the server-computed
+ * `pool_state` discriminant (T-191-24). The client performs no arithmetic over
+ * `mastered_count`/`waiting_count`/`blob_pending_count` to pick between them;
+ * a pending or errored progress query falls back to the generic copy rather
+ * than guessing.
+ */
+function TrainEmptyBody({
+  progress,
+}: {
+  progress: ReturnType<typeof useTrainProgress>;
+}): ReactElement {
+  const poolState = progress.isPending || progress.isError ? undefined : progress.data?.pool_state;
+
+  if (poolState === 'no_material') {
+    return (
+      <div data-testid="train-empty-no-material">
+        <EmptyState
+          layout="page"
+          title="Import & analyze your games to start training"
+          subtitle="Train drills your own blunders once they're analyzed."
+          action={
+            <Button variant="brand-outline" asChild className={TRAIN_CTA_BUTTON_CLASS}>
+              <Link to="/library/import" data-testid="btn-train-import-games">
+                Import games
+              </Link>
+            </Button>
+          }
+        />
+      </div>
+    );
+  }
+
+  if (poolState === 'exhausted' && progress.data) {
+    const { mastered_count, next_due_date } = progress.data;
+    const nextDueCopy =
+      next_due_date !== null
+        ? `Next review: ${format(parseISO(next_due_date), 'MMM d, yyyy')}.`
+        : 'Nothing due right now — nice work.';
+    return (
+      <>
+        <TrainProgressRow />
+        <div data-testid="train-empty-exhausted">
+          <EmptyState layout="page" title="All caught up!" subtitle={`${mastered_count} mastered. ${nextDueCopy}`} />
+        </div>
+      </>
+    );
+  }
+
+  // Fallback (available / pending / errored): guessing between the two
+  // tailored states without a resolved discriminant is the failure this
+  // fallback exists to prevent.
+  return (
+    <EmptyState
+      layout="page"
+      title="No puzzles available yet"
+      subtitle="Analyze more games to build your training pool."
+    />
+  );
+}
+
 export function TrainStartScreen({
   session,
   isLoading,
   isError,
   sessionScore,
   onEnterLoop,
+  onSettingsSaved,
 }: TrainStartScreenProps): ReactElement {
   const state = resolveLandingState(session, isLoading, isError, sessionScore);
+  const progress = useTrainProgress();
 
   // Matches the existing muted text-only route-loading pattern
   // (`import-required-loading` / `bots-loading`) rather than a new skeleton.
@@ -133,28 +224,29 @@ export function TrainStartScreen({
   if (state.kind === 'empty') {
     return (
       <div data-testid="train-start-screen">
-        <EmptyState
-          layout="page"
-          title="No puzzles available yet"
-          subtitle="Analyze more games to build your training pool."
-        />
+        <TrainEmptyBody progress={progress} />
       </div>
     );
   }
 
   if (state.kind === 'completed') {
     return (
-      <div className="flex flex-col items-center gap-4 py-12 text-center" data-testid="train-start-screen">
+      <div className={LANDING_CONTAINER_CLASS} data-testid="train-start-screen">
         <TrainTitle />
+        {/* 191.1 UAT: the tagline sits directly under the "Train Beta" title in
+            EVERY landing state — the completed state used to push it below the
+            progress row. */}
         <p className="text-sm text-muted-foreground" data-testid="train-tagline">
-          Learn from your mistakes with personalized puzzles.
+          Learn from the mistakes in your games with personalized puzzles.
         </p>
+        <TrainProgressRow />
         <p className="text-sm font-semibold">
           You scored {state.score}/{state.totalPoints} today.
         </p>
         <p className="text-sm font-semibold text-muted-foreground">
           Next session: {format(parseISO(state.nextSessionDate), 'MMM d, yyyy')}
         </p>
+        <TrainScheduleSettings onSaved={onSettingsSaved} />
       </div>
     );
   }
@@ -163,10 +255,10 @@ export function TrainStartScreen({
     state.kind === 'resume' ? `Resume session — ${state.solved} of ${state.total} done` : 'Start session';
 
   return (
-    <div className="flex flex-col items-center gap-4 py-12 text-center" data-testid="train-start-screen">
+    <div className="flex flex-col items-start gap-4 py-12 text-left" data-testid="train-start-screen">
       <TrainTitle />
       <p className="text-sm text-muted-foreground" data-testid="train-tagline">
-        Learn from your mistakes with personalized puzzles.
+        Learn from the mistakes in your games with personalized puzzles.
       </p>
       {state.kind === 'fresh' && <p className="text-sm font-semibold">{state.puzzleCount} puzzles waiting</p>}
       {state.kind === 'short' && (
@@ -177,13 +269,16 @@ export function TrainStartScreen({
           </p>
         </>
       )}
+      <TrainProgressRow />
       <Button
         variant="default"
+        className={TRAIN_CTA_BUTTON_CLASS}
         data-testid={state.kind === 'resume' ? 'btn-train-resume' : 'btn-train-start'}
         onClick={onEnterLoop}
       >
         {buttonLabel}
       </Button>
+      <TrainScheduleSettings onSaved={onSettingsSaved} />
     </div>
   );
 }

@@ -538,6 +538,16 @@ export const TRAIN_RATING_GREEN = WDL_WIN;
 export const TRAIN_RATING_YELLOW = 'oklch(0.75 0.15 85)'; // amber
 export const TRAIN_RATING_RED = WDL_LOSS;
 
+// Train "Points: +N" flash badge foregrounds (SEED-119). The badge now
+// covers 4 background tiers (ZONE_DANGER/SEV_MISTAKE/SEV_INACCURACY/
+// ZONE_SUCCESS) instead of the old fixed white-text pill — 3 of those
+// backgrounds are dark enough for near-white text, but SEV_INACCURACY sits
+// at oklch lightness 0.82 (a light amber), which white text cannot clear
+// for legible contrast. Two named foregrounds, not one, so each tier picks
+// the correct-contrast text explicitly rather than a single compromise gray.
+export const TRAIN_POINTS_FG_ON_DARK = 'oklch(0.98 0 0)'; // near-white, for the 3 dark tiers
+export const TRAIN_POINTS_FG_ON_LIGHT = 'oklch(0.20 0 0)'; // near-black, for the light yellow tier
+
 // Train reveal-board best-move arrow (Phase 190.1, D-02; recolored per 190.1
 // UAT) — blue marks the engine's BEST move (matching what blue means
 // everywhere else in the app: an engine/analysis pointer), never the user's
@@ -547,3 +557,11 @@ export const TRAIN_RATING_RED = WDL_LOSS;
 // TRAIN_RATING_GREEN above); the two never coexist on one board (that token
 // is only used on Library miniboards).
 export const TRAIN_BEST_MOVE_ARROW = BEST_MOVE_ARROW;
+
+// Streak flame colors (Phase 191 Plan 01, D-02/UI-SPEC Color) — the three
+// D-02 flame states, brightening and warming as the streak climbs.
+// MEDIUM aliases the existing amber TRAIN_RATING_YELLOW (same amber family,
+// same reuse pattern as the aliases above); MINIMUM/MAXIMUM are new values.
+export const TRAIN_STREAK_FLAME_MINIMUM = 'oklch(0.55 0.03 85)'; // barely-lit ember
+export const TRAIN_STREAK_FLAME_MEDIUM = TRAIN_RATING_YELLOW;
+export const TRAIN_STREAK_FLAME_MAXIMUM = 'oklch(0.62 0.20 40)'; // hot orange-red

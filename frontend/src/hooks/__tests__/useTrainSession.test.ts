@@ -59,6 +59,7 @@ function makeSession(overrides: Partial<TrainSessionResponse> = {}): TrainSessio
 const SOLVE_RESPONSE: SolveResponse = {
   correct_guess: true,
   correct_move: true,
+  move_quality: 'good',
   puzzle_type: 'sharp',
   item_status: 'active',
   streak: 1,
@@ -99,14 +100,15 @@ describe('useTrainSession — sessionSolvedCount (190.1-04 D-04)', () => {
     await waitFor(() => expect(result.current.session).not.toBeNull());
     expect(result.current.sessionSolvedCount).toBe(0);
 
-    const body: SolveRequest = { position: 1, guess: 'critical', played_move: 'e2e4', correct_move: true };
+    const body: SolveRequest = { position: 1, guess: 'critical', played_move: 'e2e4', move_quality: 'good' };
     await act(async () => {
       await result.current.solvePuzzle(body);
     });
     expect(result.current.sessionSolvedCount).toBe(1);
     // Updates on the SAME tick as sessionScore (both in the solve mutation's
-    // success path), never derived from currentIndex.
-    expect(result.current.sessionScore).toBe(2);
+    // success path), never derived from currentIndex. SEED-119: correct
+    // guess (1) + good move (2) = 3.
+    expect(result.current.sessionScore).toBe(3);
   });
 
   it('a failed solve mutation does not increase sessionSolvedCount', async () => {
@@ -116,7 +118,7 @@ describe('useTrainSession — sessionSolvedCount (190.1-04 D-04)', () => {
     act(() => result.current.startSession());
     await waitFor(() => expect(result.current.session).not.toBeNull());
 
-    const body: SolveRequest = { position: 1, guess: 'critical', played_move: 'e2e4', correct_move: true };
+    const body: SolveRequest = { position: 1, guess: 'critical', played_move: 'e2e4', move_quality: 'good' };
     await act(async () => {
       await expect(result.current.solvePuzzle(body)).rejects.toThrow();
     });

@@ -21,7 +21,7 @@ from dataclasses import dataclass
 from typing import Literal
 
 import chess
-from sqlalchemy import and_, func, or_, select, update
+from sqlalchemy import and_, delete, exists, func, or_, select, update
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -29,7 +29,7 @@ from sqlalchemy.orm import undefer
 
 from app.models.drill_item import DrillItem, DrillStatus
 from app.models.drill_session import DrillSession
-from app.models.drill_solve import DrillGuess, DrillSolve, DrillSource
+from app.models.drill_solve import DrillGuess, DrillMoveQuality, DrillSolve, DrillSource
 from app.models.game import Game
 from app.models.game_flaw import GameFlaw
 from app.models.game_position import GamePosition
@@ -49,10 +49,16 @@ from app.services.train_scheduler import (
     DEFAULT_PUZZLES_PER_SESSION,
     DEFAULT_TIMEZONE,
     DEFAULT_WEEKDAY_MASK,
+    FlameState,
     ItemState,
+    SettledStreak,
+    StreakView,
     apply_result,
+    is_session_expired,
     local_today,
+    required_sessions_per_week,
     session_window,
+    settle_weeks,
 )
 
 # item_status wire literal <-> DrillStatus enum. Single mapping so the
@@ -63,6 +69,17 @@ _STATUS_LITERAL: dict[DrillStatus, Literal["active", "mastered", "parked"]] = {
     DrillStatus.PARKED: "parked",
 }
 
+# move_quality wire literal <-> DrillMoveQuality enum (SEED-119). Bidirectional
+# so the repository never re-derives either direction independently.
+_MOVE_QUALITY_LITERAL: dict[DrillMoveQuality, Literal["good", "inaccuracy", "wrong"]] = {
+    DrillMoveQuality.GOOD: "good",
+    DrillMoveQuality.INACCURACY: "inaccuracy",
+    DrillMoveQuality.WRONG: "wrong",
+}
+_MOVE_QUALITY_ENUM: dict[Literal["good", "inaccuracy", "wrong"], DrillMoveQuality] = {
+    literal: enum_member for enum_member, literal in _MOVE_QUALITY_LITERAL.items()
+}
+
 
 @dataclass(frozen=True)
 class TrainSettingsRow:
@@ -70,11 +87,18 @@ class TrainSettingsRow:
 
     Frozen (immutable) per CLAUDE.md internal-structured-data rule. Mirrors
     `app.repositories.user_import_settings_repository.ImportSettingsRow`.
+
+    `streak_count`/`flame_state`/`streak_settled_through` are the Phase 191
+    D-18 settled-streak snapshot fields (added alongside the original D-06/
+    D-07/D-08 fields, not a separate row type).
     """
 
     timezone: str
     weekday_mask: int
     puzzles_per_session: int
+    streak_count: int
+    flame_state: FlameState | None
+    streak_settled_through: datetime.date | None
 
 
 @dataclass(frozen=True)
@@ -132,6 +156,9 @@ async def get_settings(session: AsyncSession, *, user_id: int) -> TrainSettingsR
         timezone=row.timezone,
         weekday_mask=row.weekday_mask,
         puzzles_per_session=row.puzzles_per_session,
+        streak_count=row.streak_count,
+        flame_state=FlameState(row.flame_state) if row.flame_state is not None else None,
+        streak_settled_through=row.streak_settled_through,
     )
 
 
@@ -154,6 +181,12 @@ async def get_or_create_settings(session: AsyncSession, *, user_id: int) -> Trai
         timezone=DEFAULT_TIMEZONE,
         weekday_mask=DEFAULT_WEEKDAY_MASK,
         puzzles_per_session=DEFAULT_PUZZLES_PER_SESSION,
+        # D-18: a brand-new row's settled-streak snapshot is all-null —
+        # exactly the state that triggers a full-history replay on first
+        # settlement (D-05 retroactivity).
+        streak_count=0,
+        flame_state=None,
+        streak_settled_through=None,
     )
     # ON CONFLICT DO NOTHING: a concurrent first-touch may have already
     # inserted the row between the get_settings check above and this insert;
@@ -164,6 +197,9 @@ async def get_or_create_settings(session: AsyncSession, *, user_id: int) -> Trai
         timezone=DEFAULT_TIMEZONE,
         weekday_mask=DEFAULT_WEEKDAY_MASK,
         puzzles_per_session=DEFAULT_PUZZLES_PER_SESSION,
+        streak_count=0,
+        flame_state=None,
+        streak_settled_through=None,
     )
 
 
@@ -174,6 +210,7 @@ async def upsert_settings(
     timezone: str,
     weekday_mask: int,
     puzzles_per_session: int,
+    now_utc: datetime.datetime,
 ) -> TrainSettingsRow:
     """Insert or update one user's `train_settings` row (PUT /train/settings).
 
@@ -184,13 +221,51 @@ async def upsert_settings(
     `puzzles_per_session` are within the table's CHECK bounds — this function
     trusts that and does no re-validation.
 
+    D-18 settle-before-mutate (Phase 191 Plan 02, Task 3): settlement runs
+    STRICTLY BEFORE any new value is applied, judged against the OLD mask and
+    OLD timezone:
+
+    1. `old_row = await get_or_create_settings(...)` — reading this BEFORE
+       applying any new value is load-bearing. Reading it AFTER would settle
+       every fully-elapsed unsettled week against the NEW schedule instead of
+       the one that was actually in force, silently reintroducing the
+       retroactive re-judging D-18 forbids. A user who was inactive for
+       several elapsed weeks and then reschedules must have those weeks
+       judged by the OLD schedule.
+    2. `today = local_today(old_row.timezone, now_utc)` — resolved from the
+       OLD timezone, because a timezone change moves Mon-Sun week
+       boundaries, and the elapsed weeks being settled belong to the old
+       frame, not the new one.
+    3. `await settle_streak_snapshot(..., settings_row=old_row, today=today)`
+       — Plan 01's single settlement entry point, reused verbatim; no second
+       settlement implementation exists here.
+    4. Only then is the `INSERT ... ON CONFLICT DO UPDATE` applying the new
+       `timezone`/`weekday_mask`/`puzzles_per_session` issued.
+
+    Both the settlement UPDATE (if any) and this settings UPSERT run
+    sequentially on the same `AsyncSession`, inside the caller's one
+    transaction — never `asyncio.gather` (CLAUDE.md) — so a failure in
+    either rolls back both, and the snapshot can never advance against a
+    schedule that was never persisted.
+
+    Deliberately does NOT re-snap existing `drill_items.due_date` values when
+    `weekday_mask` changes (unchanged from the router's prior documented
+    behaviour).
+
     Args:
         session: AsyncSession. Caller commits.
         user_id: Authenticated user's internal PK (V4: never client-supplied).
         timezone: A validated IANA timezone string.
         weekday_mask: 7-bit scheduled-day mask, 0-127.
         puzzles_per_session: Requested session size, 1-50.
+        now_utc: The current UTC instant. Used ONLY to resolve `today` from
+            the OLD (pre-mutation) timezone for the settle-before-mutate
+            step — never converted against the NEW timezone being applied.
     """
+    old_row = await get_or_create_settings(session, user_id=user_id)
+    today = local_today(old_row.timezone, now_utc)
+    await settle_streak_snapshot(session, user_id=user_id, settings_row=old_row, today=today)
+
     stmt = pg_insert(TrainSettings).values(
         user_id=user_id,
         timezone=timezone,
@@ -205,9 +280,217 @@ async def upsert_settings(
             "puzzles_per_session": stmt.excluded.puzzles_per_session,
         },
     )
-    await session.execute(stmt)
+    # RETURNING: this UPDATE never touches streak_count/flame_state/
+    # streak_settled_through — the settle-before-mutate step above is the
+    # only writer of those three columns in this function — so read back
+    # whatever the row holds after that settlement (either the brand-new
+    # insert's server defaults or an existing row's just-settled snapshot)
+    # rather than fabricating a value here.
+    stmt = stmt.returning(
+        TrainSettings.streak_count, TrainSettings.flame_state, TrainSettings.streak_settled_through
+    )
+    result = await session.execute(stmt)
+    streak_count, flame_state, streak_settled_through = result.one()
     return TrainSettingsRow(
-        timezone=timezone, weekday_mask=weekday_mask, puzzles_per_session=puzzles_per_session
+        timezone=timezone,
+        weekday_mask=weekday_mask,
+        puzzles_per_session=puzzles_per_session,
+        streak_count=streak_count,
+        flame_state=FlameState(flame_state) if flame_state is not None else None,
+        streak_settled_through=streak_settled_through,
+    )
+
+
+# ---------------------------------------------------------------------------
+# Progress (PROG-01/PROG-04, Phase 191 Plan 01, D-18)
+# ---------------------------------------------------------------------------
+
+
+async def _count_drill_items_by_status(
+    session: AsyncSession, *, user_id: int, status: DrillStatus
+) -> int:
+    """Count a user's `drill_items` rows in a given status (mastered/parked counts).
+
+    Args:
+        session: AsyncSession.
+        user_id: Authenticated user's internal PK (V4: never client-supplied).
+        status: The `DrillStatus` to count.
+    """
+    stmt = (
+        select(func.count())
+        .select_from(DrillItem)
+        .where(DrillItem.user_id == user_id, DrillItem.status == status)
+    )
+    return (await session.execute(stmt)).scalar_one()
+
+
+@dataclass(frozen=True)
+class ProgressSnapshot:
+    """Internal dataclass mirroring `app.schemas.train.TrainProgressResponse`.
+
+    No enum-to-wire mapping table is needed: `FlameState` is a `StrEnum`
+    whose members already equal the TEXT column values and the wire
+    literals.
+    """
+
+    settled_streak_weeks: int
+    flame_state: FlameState | None
+    current_week_completed: int
+    current_week_required: int | None
+    streak_lost_last_week: bool
+    mastered_count: int
+    parked_count: int
+    waiting_count: int
+    pool_state: Literal["no_material", "exhausted", "available"]
+    next_due_date: datetime.date | None
+
+
+async def settle_streak_snapshot(
+    session: AsyncSession, *, user_id: int, settings_row: TrainSettingsRow, today: datetime.date
+) -> StreakView:
+    """Settle any fully-elapsed unsettled weeks and persist the advance (D-18).
+
+    THE SINGLE settlement entry point, shared by `GET /train/progress` (here)
+    and `PUT /train/settings` (Plan 04's settle-before-mutate). Reads the
+    user's `status='completed'` `drill_sessions.session_date` values (no
+    ordering needed — `settle_weeks` buckets internally), builds the input
+    `SettledStreak` from `settings_row`'s three snapshot fields, calls
+    `settle_weeks`, and persists the advanced snapshot IF AND ONLY IF
+    `view.changed` is True.
+
+    This is a read endpoint that writes, so it is documented plainly here:
+    the write is a **compare-and-set UPDATE** guarded on the settlement
+    boundary strictly advancing (`streak_settled_through IS NULL OR <
+    new_settled_through`). Two concurrent callers that both settle the same
+    weeks compute identical results from the same input snapshot, so a
+    duplicate write is harmless — the guard exists only to stop a slower
+    request from writing an OLDER boundary over a newer one.
+    `streak_settled_through` therefore only ever moves forward, and a call
+    with `changed=False` issues no statement at all.
+
+    Args:
+        session: AsyncSession. Caller commits.
+        user_id: Authenticated user's internal PK (V4: never client-supplied).
+        settings_row: The user's current `TrainSettingsRow` (already
+            resolved via `get_or_create_settings`).
+        today: The local calendar day (from `local_today`).
+    """
+    dates_result = await session.execute(
+        select(DrillSession.session_date).where(
+            DrillSession.user_id == user_id, DrillSession.status == "completed"
+        )
+    )
+    completed_session_dates = [row[0] for row in dates_result.all()]
+
+    snapshot = SettledStreak(
+        streak_count=settings_row.streak_count,
+        flame_state=settings_row.flame_state,
+        settled_through=settings_row.streak_settled_through,
+    )
+    view = settle_weeks(
+        snapshot,
+        completed_session_dates,
+        weekday_mask=settings_row.weekday_mask,
+        today=today,
+    )
+
+    if view.changed:
+        new_settled_through = view.settled.settled_through
+        await session.execute(
+            update(TrainSettings)
+            .where(
+                TrainSettings.user_id == user_id,
+                or_(
+                    TrainSettings.streak_settled_through.is_(None),
+                    TrainSettings.streak_settled_through < new_settled_through,
+                ),
+            )
+            .values(
+                streak_count=view.settled.streak_count,
+                flame_state=(
+                    view.settled.flame_state.value if view.settled.flame_state is not None else None
+                ),
+                streak_settled_through=new_settled_through,
+            )
+        )
+
+    return view
+
+
+async def get_progress(
+    session: AsyncSession, *, user_id: int, now_utc: datetime.datetime
+) -> ProgressSnapshot:
+    """Return the full Train progress read-model (PROG-01/PROG-04).
+
+    Sequential awaits only — never `asyncio.gather` on this `AsyncSession`
+    (CLAUDE.md). Steps: `get_or_create_settings`, resolve today's local date,
+    `settle_streak_snapshot` (the only write this function can reach besides
+    the settings create-on-first-touch), then two `_count_drill_items_by_status`
+    calls for mastered/parked. `current_week_required` is `None` when
+    `weekday_mask == 0` ("train anytime" has no denominator to show), else
+    `required_sessions_per_week(weekday_mask)`.
+
+    `flame_state` in the returned snapshot is `view.display_flame` (the D-03
+    overlay) — NOT `view.settled.flame_state`. The persisted value and the
+    displayed value differ by design during an unsettled first week (D-03:
+    the minimum flame lights immediately after the first completed session,
+    while the count and the stored snapshot stay at their pre-settlement
+    values).
+
+    `waiting_count`/`pool_state`/`next_due_date` (Phase 191 Plan 02) reuse
+    the same already-resolved `settings_row`/`today` — `get_waiting_puzzle_count`
+    is never called with a freshly re-fetched settings row or a re-derived
+    date within this function.
+
+    Args:
+        session: AsyncSession. Caller commits.
+        user_id: Authenticated user's internal PK (V4: never client-supplied).
+        now_utc: The current UTC instant (converted to a local date via
+            `local_today` — called exactly ONCE in this path).
+    """
+    settings_row = await get_or_create_settings(session, user_id=user_id)
+    today = local_today(settings_row.timezone, now_utc)
+
+    view = await settle_streak_snapshot(
+        session, user_id=user_id, settings_row=settings_row, today=today
+    )
+
+    mastered_count = await _count_drill_items_by_status(
+        session, user_id=user_id, status=DrillStatus.MASTERED
+    )
+    parked_count = await _count_drill_items_by_status(
+        session, user_id=user_id, status=DrillStatus.PARKED
+    )
+
+    current_week_required = (
+        None
+        if settings_row.weekday_mask == 0
+        else required_sessions_per_week(settings_row.weekday_mask)
+    )
+
+    blob_pending_count = (await session.execute(blob_pending_stmt(user_id))).scalar_one()
+    waiting_count = await get_waiting_puzzle_count(
+        session, user_id=user_id, settings_row=settings_row, today=today
+    )
+    pool_state = await _pool_state(
+        session,
+        user_id=user_id,
+        waiting_count=waiting_count,
+        blob_pending_count=blob_pending_count,
+    )
+    next_due_date = await _next_due_date(session, user_id=user_id, today=today)
+
+    return ProgressSnapshot(
+        settled_streak_weeks=view.settled.streak_count,
+        flame_state=view.display_flame,
+        current_week_completed=view.current_week_completed,
+        current_week_required=current_week_required,
+        streak_lost_last_week=view.streak_lost_last_week,
+        mastered_count=mastered_count,
+        parked_count=parked_count,
+        waiting_count=waiting_count,
+        pool_state=pool_state,
+        next_due_date=next_due_date,
     )
 
 
@@ -297,6 +580,185 @@ async def completed_session_in_window(
         .limit(1)
     )
     return result.scalar_one_or_none()
+
+
+async def get_waiting_puzzle_count(
+    session: AsyncSession, *, user_id: int, settings_row: TrainSettingsRow, today: datetime.date
+) -> int:
+    """Read-only estimate of puzzles waiting for the nav badge (SCHD-02/D-07).
+
+    NEVER calls `compose_and_materialize_session` and NEVER calls
+    `expire_stale_sessions` — this whole function is a read. Takes
+    `settings_row`/`today` as parameters rather than re-resolving them, so a
+    caller resolves `get_or_create_settings`/`local_today` exactly once per
+    request (191-RESEARCH.md Pitfall 2).
+
+    Branch order, all sequential awaits (never `asyncio.gather` on this
+    `AsyncSession`, CLAUDE.md):
+
+    1. An open session that is NOT expired -> its `puzzle_count` minus its
+       solved `drill_solves` count (floored at 0, mirroring `_resume_session`'s
+       solved-count predicate). An expired-but-still-`open` row is skipped in
+       Python here, never flipped to `'expired'` — that write belongs solely
+       to `expire_stale_sessions`, never to this read path.
+    2. Otherwise a completed session still inside its D-10 window -> 0 (D-07:
+       the badge hides once today's session is done).
+    3. Otherwise an estimate of available fresh material, capped at
+       `settings_row.puzzles_per_session`: due `drill_items` (mirroring
+       `compose_and_materialize_session`'s `due_stmt` eligibility predicates
+       exactly, in COUNT-only form) + untracked `pool_entry_stmt` candidates
+       (excluding already-tracked `(game_id, ply)` pairs via a SQL `NOT
+       EXISTS` against `drill_items`, never materializing the pair set in
+       Python) + `herring_stmt(..., exclude_served=False)` candidates.
+
+    Never imports `classify_puzzle_type`, a `missed_pv_lines` reader,
+    `fen_and_last_move_at_ply`, or any other answer-key/classification
+    helper — this function needs counts and dates only (191-RESEARCH.md
+    Pitfall 5). Never issues `session.add`/`session.flush`/INSERT/UPDATE/
+    DELETE.
+
+    The returned number is an UPPER BOUND, never a promise of exact session
+    size: it applies composition's own eligibility predicates and the
+    `puzzles_per_session` cap, but skips per-puzzle FEN reconstruction — a
+    puzzle composition would later drop as unreconstructable can still be
+    counted here. That is acceptable for an attention signal.
+
+    Args:
+        session: AsyncSession.
+        user_id: Authenticated user's internal PK (V4: never client-supplied).
+        settings_row: The caller's already-resolved `TrainSettingsRow`.
+        today: The local calendar day (from `local_today`, resolved once per
+            request by the caller).
+    """
+    open_session = await open_session_for_user(session, user_id=user_id)
+    if open_session is not None and not is_session_expired(open_session.expires_on, today):
+        solved_stmt = (
+            select(func.count())
+            .select_from(DrillSolve)
+            .where(DrillSolve.session_id == open_session.id, DrillSolve.solved_at.isnot(None))
+        )
+        solved_count = (await session.execute(solved_stmt)).scalar_one()
+        return max(0, open_session.puzzle_count - solved_count)
+
+    completed = await completed_session_in_window(session, user_id=user_id, today=today)
+    if completed is not None:
+        return 0
+
+    # Due drill_items — mirrors compose_and_materialize_session's due_stmt
+    # eligibility exactly (status/due_date/flaw-row-presence/answer-key),
+    # minus the Game join (not needed for a count).
+    due_count_stmt = (
+        select(func.count())
+        .select_from(DrillItem)
+        .outerjoin(
+            GameFlaw,
+            and_(
+                GameFlaw.user_id == DrillItem.user_id,
+                GameFlaw.game_id == DrillItem.game_id,
+                GameFlaw.ply == DrillItem.ply,
+            ),
+        )
+        .where(
+            DrillItem.user_id == user_id,
+            DrillItem.status == DrillStatus.ACTIVE,
+            DrillItem.due_date <= today,
+            GameFlaw.ply.isnot(None),
+            answer_key_present(GameFlaw.missed_pv_lines),
+        )
+    )
+    due_count = (await session.execute(due_count_stmt)).scalar_one()
+
+    # Untracked pool_entry_stmt candidates — a NOT EXISTS against drill_items
+    # expressed in SQL, never materializing the pair set in Python.
+    pool_subq = pool_entry_stmt(user_id).subquery()
+    untracked_pool_stmt = (
+        select(func.count())
+        .select_from(pool_subq)
+        .where(
+            ~exists(
+                select(DrillItem.game_id).where(
+                    DrillItem.user_id == user_id,
+                    DrillItem.game_id == pool_subq.c.game_id,
+                    DrillItem.ply == pool_subq.c.ply,
+                )
+            )
+        )
+    )
+    untracked_pool_count = (await session.execute(untracked_pool_stmt)).scalar_one()
+
+    herring_count_stmt = select(func.count()).select_from(
+        herring_stmt(user_id, exclude_served=False).subquery()
+    )
+    herring_count = (await session.execute(herring_count_stmt)).scalar_one()
+
+    return min(settings_row.puzzles_per_session, due_count + untracked_pool_count + herring_count)
+
+
+async def _next_due_date(
+    session: AsyncSession, *, user_id: int, today: datetime.date
+) -> datetime.date | None:
+    """PROG-05: the earliest due date among the user's still-ACTIVE items due
+    strictly in the future — the "All caught up!" empty state's date.
+
+    Args:
+        session: AsyncSession.
+        user_id: Authenticated user's internal PK (V4: never client-supplied).
+        today: The local calendar day (from `local_today`).
+
+    Returns:
+        The minimum `drill_items.due_date` among ACTIVE items with
+        `due_date > today`, or None when nothing will resurface (`func.min`
+        over zero rows is already NULL/None — no special-casing needed).
+    """
+    stmt = select(func.min(DrillItem.due_date)).where(
+        DrillItem.user_id == user_id,
+        DrillItem.status == DrillStatus.ACTIVE,
+        DrillItem.due_date > today,
+    )
+    return (await session.execute(stmt)).scalar_one_or_none()
+
+
+async def _pool_state(
+    session: AsyncSession, *, user_id: int, waiting_count: int, blob_pending_count: int
+) -> Literal["no_material", "exhausted", "available"]:
+    """PROG-05/D-16: discriminate cold-start ("never had material") from a
+    genuinely exhausted pool from an available one — the single server-side
+    discriminant the two empty-state surfaces branch on (no client-side
+    arithmetic).
+
+    Resolution order:
+    1. `"no_material"` — the user has zero `drill_items` rows AND zero
+       `pool_entry_stmt` candidates AND `blob_pending_count == 0`: never had
+       any qualifying material, not even material still being analyzed.
+    2. `"exhausted"` — `waiting_count == 0` AND `blob_pending_count == 0`:
+       had (or has) material, but nothing is waiting right now and nothing
+       is still analyzing.
+    3. `"available"` — every other case, including a zero-`drill_items` user
+       whose blunders are still being analyzed (`blob_pending_count > 0`):
+       that is "catching up", not a cold start.
+
+    Args:
+        session: AsyncSession.
+        user_id: Authenticated user's internal PK (V4: never client-supplied).
+        waiting_count: The result of `get_waiting_puzzle_count` for this
+            request (resolved once by the caller, never re-derived here).
+        blob_pending_count: The result of `blob_pending_stmt` for this
+            request (resolved once by the caller, never re-derived here).
+    """
+    has_drill_items = (
+        await session.execute(
+            select(select(DrillItem.user_id).where(DrillItem.user_id == user_id).exists())
+        )
+    ).scalar_one()
+    has_pool_candidates = (
+        await session.execute(select(pool_entry_stmt(user_id).exists()))
+    ).scalar_one()
+
+    if not has_drill_items and not has_pool_candidates and blob_pending_count == 0:
+        return "no_material"
+    if waiting_count == 0 and blob_pending_count == 0:
+        return "exhausted"
+    return "available"
 
 
 async def load_session_puzzles(
@@ -407,6 +869,55 @@ async def _resume_session(
     )
 
 
+async def _discard_if_untouched_and_resized(
+    session: AsyncSession, *, drill_session: DrillSession, requested_count: int
+) -> bool:
+    """Discard `drill_session` iff it is untouched AND its frozen size has
+    drifted from `requested_count`. Returns True if the row was deleted
+    (caller must fall through to fresh composition), False if it should be
+    resumed exactly as-is.
+
+    Bug fix (191-06 UAT checkpoint round, SCHD-01): `Train.tsx` auto-fires
+    `POST /train/sessions` as a status read on page MOUNT (see
+    `useTrainSession.ts`'s module docstring), which can happen BEFORE the
+    user has a chance to edit `TrainScheduleSettings` on the same visit.
+    Pressing Start/Resume never calls this endpoint again, so a session
+    materialized under a stale `puzzles_per_session` stayed frozen at the
+    old size for the rest of the day even after the user changed the
+    setting — "starting a session" kept showing the old requested count.
+
+    Only a session with ZERO recorded solves is eligible: once any puzzle
+    has been solved, `puzzle_count`/`session_id` are load-bearing for the
+    SOLV-04/D-13 frozen progress denominator and must never move out from
+    under an in-progress solve loop. Deleting an untouched
+    `drill_sessions` row cascades its placeholder `drill_solves` rows
+    (`ondelete="CASCADE"`); any `drill_items` padding rows created during the
+    original composition are left alone — they are real, valid ACTIVE items
+    and the fresh composition below will naturally pick them back up as due.
+
+    Compares against the session's OWN `requested_count` snapshot, NEVER its
+    `puzzle_count` — a session can legitimately serve fewer puzzles than
+    requested when the pool is short on material (the D-14 "short session"
+    state), and re-checking that same shortfall on every subsequent call
+    would churn the session_id for no reason. `requested_count is None`
+    (pre-migration rows, or a test fixture that seeds a session directly
+    without going through composition) is always treated as "not resized" —
+    the conservative default of resuming as-is.
+    """
+    if drill_session.requested_count is None or drill_session.requested_count == requested_count:
+        return False
+    solved_count_stmt = (
+        select(func.count())
+        .select_from(DrillSolve)
+        .where(DrillSolve.session_id == drill_session.id, DrillSolve.solved_at.isnot(None))
+    )
+    solved_so_far = (await session.execute(solved_count_stmt)).scalar_one()
+    if solved_so_far > 0:
+        return False
+    await session.execute(delete(DrillSession).where(DrillSession.id == drill_session.id))
+    return True
+
+
 async def compose_and_materialize_session(
     session: AsyncSession, *, user_id: int, now_utc: datetime.datetime
 ) -> ComposedSession:
@@ -420,7 +931,12 @@ async def compose_and_materialize_session(
        (`load_session_puzzles`) rather than composing a new one — this is the
        only path taken on a second call inside an open session's window,
        including an ad-hoc "train now" request from a future phase that hits
-       this same endpoint.
+       this same endpoint. EXCEPTION (191-06 UAT bug fix,
+       `_discard_if_untouched_and_resized`): an open session with ZERO
+       recorded solves whose frozen `puzzle_count` no longer matches the
+       CURRENT `puzzles_per_session` is discarded instead, falling through to
+       fresh composition below — this is what lets a same-day settings edit
+       actually take effect before the first puzzle is solved.
     3b. D-10 guard (190.1 bug fix): if a COMPLETED session's window still
        covers today (`completed_session_in_window`), return it instead of
        composing fresh — completing a session must not unlock an immediate
@@ -469,13 +985,18 @@ async def compose_and_materialize_session(
 
     open_session = await open_session_for_user(session, user_id=user_id)
     if open_session is not None:
-        return await _resume_session(
-            session,
-            user_id=user_id,
-            drill_session=open_session,
-            requested_count=n,
-            blob_pending_count=blob_pending_count,
-        )
+        if await _discard_if_untouched_and_resized(
+            session, drill_session=open_session, requested_count=n
+        ):
+            open_session = None
+        else:
+            return await _resume_session(
+                session,
+                user_id=user_id,
+                drill_session=open_session,
+                requested_count=n,
+                blob_pending_count=blob_pending_count,
+            )
 
     # Step 3b (190.1 bug fix): a completed session still inside its D-10
     # window blocks fresh composition — without this, a reload right after
@@ -665,6 +1186,7 @@ async def compose_and_materialize_session(
                 session_date=today,
                 status="open",
                 puzzle_count=len(reconstructed),
+                requested_count=n,
                 expires_on=session_window(today, settings_row.weekday_mask),
             )
             session.add(drill_session)
@@ -736,10 +1258,17 @@ async def compose_and_materialize_session(
 
 @dataclass(frozen=True)
 class RecordedSolve:
-    """Internal dataclass returned by `record_solve`."""
+    """Internal dataclass returned by `record_solve`.
+
+    `move_quality` (SEED-119) is the three-way scoring tier; `correct_move`
+    keeps its exact prior meaning (the SR ladder verdict, `move_quality !=
+    "wrong"`). Both are always populated with the FIRST recorded outcome,
+    even on a re-submit with a different tier.
+    """
 
     correct_guess: bool
     correct_move: bool
+    move_quality: Literal["good", "inaccuracy", "wrong"]
     puzzle_type: Literal["sharp", "soft", "herring"]
     item_status: Literal["active", "mastered", "parked"] | None
     streak: int | None
@@ -923,7 +1452,7 @@ async def record_solve(
     position: int,
     guess: Literal["critical", "several"],
     played_move: str,
-    correct_move: bool,
+    move_quality: Literal["good", "inaccuracy", "wrong"],
     now_utc: datetime.datetime,
 ) -> RecordedSolve | None:
     """Record one puzzle's outcome and advance the interval ladder (POOL-08).
@@ -961,8 +1490,12 @@ async def record_solve(
         position: The puzzle's frozen 0-based order within the session.
         guess: The user's pre-attempt "critical vs several fine" guess.
         played_move: The move the user actually played (UCI).
-        correct_move: Whether the played move matched the puzzle's answer —
-            asserted by the client (T-189-18, accepted per SEED-037).
+        move_quality: The three-way move-quality tier asserted by the client
+            (T-189-18, accepted per SEED-037; SEED-119 widened the boolean to
+            a tier). `correct_move` — what feeds `apply_result` and the SR
+            ladder — is derived here as `move_quality != "wrong"`, keeping
+            the ladder's pass/fail semantics byte-identical to pre-SEED-119
+            (an inaccuracy passed then and passes now).
         now_utc: The current UTC instant.
 
     Returns:
@@ -984,6 +1517,11 @@ async def record_solve(
     puzzle_type = await _classify_solve_puzzle_type(session, solve=solve_row)
     correct_guess = _compute_correct_guess(guess, puzzle_type)
     guess_int = int(DrillGuess.CRITICAL if guess == "critical" else DrillGuess.SEVERAL)
+    # SEED-119: correct_move is DERIVED from move_quality — this is what
+    # keeps the SR ladder's semantics identical to pre-SEED-119 (an
+    # inaccuracy passed then and passes now, since it derives to True here).
+    correct_move = move_quality != "wrong"
+    move_quality_int = int(_MOVE_QUALITY_ENUM[move_quality])
 
     claim_result = await session.execute(
         update(DrillSolve)
@@ -997,6 +1535,7 @@ async def record_solve(
             guess=guess_int,
             played_move=played_move,
             correct_move=correct_move,
+            move_quality=move_quality_int,
             correct_guess=correct_guess,
             solved_at=now_utc,
         )
@@ -1009,7 +1548,11 @@ async def record_solve(
     is_sr = solve_row.source == DrillSource.SR_ITEM
 
     if claimed:
-        stored_correct_guess, stored_correct_move = correct_guess, correct_move
+        stored_correct_guess, stored_correct_move, stored_move_quality = (
+            correct_guess,
+            correct_move,
+            move_quality,
+        )
         if is_sr:
             item_status, streak, due_date = await _advance_drill_item(
                 session,
@@ -1022,10 +1565,12 @@ async def record_solve(
     else:
         # Lost the claim race (or this is a plain re-submit): the FIRST
         # recorded outcome wins — re-read it rather than trusting this call's
-        # (possibly different) guess/correct_move arguments.
+        # (possibly different) guess/correct_move/move_quality arguments.
         stored = (
             await session.execute(
-                select(DrillSolve.correct_guess, DrillSolve.correct_move).where(
+                select(
+                    DrillSolve.correct_guess, DrillSolve.correct_move, DrillSolve.move_quality
+                ).where(
                     DrillSolve.session_id == session_id,
                     DrillSolve.position == position,
                     DrillSolve.user_id == user_id,
@@ -1034,6 +1579,14 @@ async def record_solve(
         ).one()
         stored_correct_guess = bool(stored.correct_guess)
         stored_correct_move = bool(stored.correct_move)
+        if stored.move_quality is not None:
+            stored_move_quality = _MOVE_QUALITY_LITERAL[DrillMoveQuality(stored.move_quality)]
+        else:
+            # Legacy row recorded before SEED-119: no stored tier exists, so
+            # degrade from the stored boolean — True maps to the good tier
+            # (the pre-tiering era only ever recorded a full move point),
+            # False maps to the wrong tier.
+            stored_move_quality = "good" if stored_correct_move else "wrong"
         if is_sr:
             item_state = await _read_drill_item_state(
                 session, user_id=user_id, game_id=solve_row.game_id, ply=solve_row.ply
@@ -1048,6 +1601,7 @@ async def record_solve(
     return RecordedSolve(
         correct_guess=stored_correct_guess,
         correct_move=stored_correct_move,
+        move_quality=stored_move_quality,
         puzzle_type=puzzle_type,
         item_status=item_status,
         streak=streak,
@@ -1194,6 +1748,7 @@ async def reveal_for_puzzle(
 __all__ = [
     "ComposedPuzzle",
     "ComposedSession",
+    "ProgressSnapshot",
     "RecordedSolve",
     "RevealedPuzzle",
     "TrainSettingsRow",
@@ -1201,10 +1756,13 @@ __all__ = [
     "compose_and_materialize_session",
     "expire_stale_sessions",
     "get_or_create_settings",
+    "get_progress",
     "get_settings",
+    "get_waiting_puzzle_count",
     "load_session_puzzles",
     "open_session_for_user",
     "record_solve",
     "reveal_for_puzzle",
+    "settle_streak_snapshot",
     "upsert_settings",
 ]
