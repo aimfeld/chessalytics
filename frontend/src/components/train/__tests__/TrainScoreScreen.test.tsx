@@ -9,7 +9,7 @@
  * the badge's reduced-motion animation opt-out.
  */
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { cleanup, render, screen } from '@testing-library/react';
+import { cleanup, fireEvent, render, screen } from '@testing-library/react';
 import { TrainScoreScreen } from '@/components/train/TrainScoreScreen';
 import type { TrainSessionScore } from '@/lib/trainScore';
 
@@ -30,8 +30,12 @@ vi.mock('@/lib/sounds', () => ({
 
 const NEXT_SESSION_DATE = '2026-08-01';
 
+const onDone = vi.fn();
+
 function renderScoreScreen(score: TrainSessionScore) {
-  return render(<TrainScoreScreen score={score} nextSessionDate={NEXT_SESSION_DATE} />);
+  return render(
+    <TrainScoreScreen score={score} nextSessionDate={NEXT_SESSION_DATE} onDone={onDone} />,
+  );
 }
 
 describe('TrainScoreScreen', () => {
@@ -41,6 +45,7 @@ describe('TrainScoreScreen', () => {
     playSound.mockReset();
     prefersReducedMotion.mockReset();
     prefersReducedMotion.mockReturnValue(false);
+    onDone.mockReset();
   });
 
   afterEach(() => {
@@ -62,10 +67,18 @@ describe('TrainScoreScreen', () => {
 
   // SEED-122: the permanently-disabled "Train again" CTA was removed — it could
   // never enable (no same-day resume path), so it read as broken rather than as
-  // a completed session. The next-session date line is the terminal statement.
+  // a completed session. A pressable "Done" back to the landing replaced it.
   it('renders no Train-again CTA', () => {
     renderScoreScreen({ total: 20, max: 20 });
     expect(screen.queryByTestId('btn-train-again')).toBeNull();
+  });
+
+  it('the Done button is enabled and calls onDone once when pressed', () => {
+    renderScoreScreen({ total: 20, max: 20 });
+    const done = screen.getByTestId('btn-train-done');
+    expect((done as HTMLButtonElement).disabled).toBe(false);
+    fireEvent.click(done);
+    expect(onDone).toHaveBeenCalledTimes(1);
   });
 
   it('a yellow-band score fires only the smaller partial burst', () => {

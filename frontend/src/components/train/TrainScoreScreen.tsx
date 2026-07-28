@@ -20,10 +20,19 @@
  * sounds like a louder version of the per-puzzle verdicts rather than a new
  * vocabulary. Yellow additionally gets the smaller `firePartialConfetti`
  * burst — acknowledged, not celebrated.
+ *
+ * SEED-122 settles how the screen ends. It used to end on a permanently-
+ * disabled "Train again" CTA (nothing could enable it — sessions are
+ * once-per-day and there is no same-day resume path), which read as a broken
+ * feature. That button is gone; the next-session date states when training
+ * resumes, and a secondary "Done" returns to the landing so the session
+ * finishes on the streak card showing the tick it just earned.
  */
 
 import { useEffect, type ReactElement } from 'react';
 import { format, parseISO } from 'date-fns';
+import { Button } from '@/components/ui/button';
+import { TRAIN_CTA_BUTTON_CLASS } from '@/components/train/buttonStyles';
 import { fireWinConfetti, firePartialConfetti, prefersReducedMotion } from '@/lib/confetti';
 import { playSound, type SoundEvent } from '@/lib/sounds';
 import {
@@ -62,17 +71,27 @@ export interface TrainScoreScreenProps {
   score: TrainSessionScore;
   /**
    * ISO date string for the next available session (`TrainSessionResponse.
-   * expires_on`) — the screen's terminal statement. Sessions are once-per-day
-   * (Phase 189) and Phase 190 has no same-day resume path, so this line is
-   * deliberately the last thing on the screen: SEED-122 removed the
-   * permanently-disabled "Train again" CTA that used to sit above it, because
-   * a primary button that can never enable reads as broken rather than as
-   * "you're done for today".
+   * expires_on`). Sessions are once-per-day (Phase 189) and Phase 190 has no
+   * same-day resume path, so this states when the user can train again —
+   * SEED-122 removed the permanently-disabled "Train again" CTA that used to
+   * sit above it, because a primary button that can never enable reads as
+   * broken rather than as "you're done for today".
    */
   nextSessionDate: string;
+  /**
+   * Leaves the score screen for the Train landing (SEED-122). The landing is
+   * where the streak card lives, so the session ends on the tick it just
+   * earned rather than on a screen with no way forward. Secondary emphasis
+   * (`brand-outline`): it is an exit, not a call to action.
+   */
+  onDone: () => void;
 }
 
-export function TrainScoreScreen({ score, nextSessionDate }: TrainScoreScreenProps): ReactElement {
+export function TrainScoreScreen({
+  score,
+  nextSessionDate,
+  onDone,
+}: TrainScoreScreenProps): ReactElement {
   const percentage = displaySessionPercentage(score);
   const band = score.max > 0 ? resolveRatingBand(score.total / score.max) : null;
   const bandColor = band !== null ? RATING_BAND_COLOR[band] : null;
@@ -123,6 +142,14 @@ export function TrainScoreScreen({ score, nextSessionDate }: TrainScoreScreenPro
       <p className="text-sm font-semibold text-muted-foreground">
         Next session: {format(parseISO(nextSessionDate), 'MMM d, yyyy')}
       </p>
+      <Button
+        variant="brand-outline"
+        className={TRAIN_CTA_BUTTON_CLASS}
+        onClick={onDone}
+        data-testid="btn-train-done"
+      >
+        Done
+      </Button>
     </div>
   );
 }

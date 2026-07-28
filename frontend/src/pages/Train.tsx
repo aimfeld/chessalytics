@@ -26,7 +26,10 @@
  * automatically). `showScoreScreen` is local view state, not the accurate
  * source of truth on a later day's revisit — that's `TrainStartScreen`'s
  * pre-existing 'completed' landing state (190-04), which reads real session
- * data on a fresh mount instead of this transient in-session flag.
+ * data on a fresh mount instead of this transient in-session flag. The score
+ * screen's "Done" (SEED-122) routes into exactly that state via
+ * `returnToLanding`, which re-reads session status rather than merely
+ * flipping the flag back.
  *
  * 190.1 UAT round 5: leaving a reveal via its Analyze deep link and pressing
  * the browser back button restores that puzzle's SOLVED reveal (not the
@@ -105,15 +108,25 @@ export default function TrainPage(): ReactElement {
     if (wasComplete) setShowScoreScreen(true);
   }
 
-  // Dev-only time travel: a shifted clock can compose a DIFFERENT session (or
-  // none at all), so drop back to the landing screen and re-read status
-  // instead of leaving the loop parked on puzzles from the previous "now".
-  function handleDevClockChange(): void {
+  // Leave whatever in-loop view is showing and re-read session status, exactly
+  // as a fresh page mount would. The re-read is load-bearing, not a refresh
+  // nicety: `TrainStartScreen`'s landing state is resolved from
+  // `session.solved_count`, which is still the compose-time value in local
+  // state, so skipping it would render a "Start session" landing on a day the
+  // user has already finished.
+  function returnToLanding(): void {
     clearTrainRevealCache();
     setRestoredReveal(null);
     setHasEnteredLoop(false);
     setShowScoreScreen(false);
     startSession();
+  }
+
+  // Dev-only time travel: a shifted clock can compose a DIFFERENT session (or
+  // none at all), so drop back to the landing screen instead of leaving the
+  // loop parked on puzzles from the previous "now".
+  function handleDevClockChange(): void {
+    returnToLanding();
   }
 
   return (
@@ -155,6 +168,7 @@ export default function TrainPage(): ReactElement {
             max: trainSession.session.puzzle_count * TRAIN_POINTS_PER_PUZZLE,
           }}
           nextSessionDate={trainSession.session.expires_on}
+          onDone={returnToLanding}
         />
       )}
     </div>
