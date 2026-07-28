@@ -5,10 +5,10 @@ milestone_name: Train — Spaced-Repetition Blunder Drills
 current_phase: 193
 current_phase_name: session-tick-streak-shield
 status: verifying
-stopped_at: Completed 193-03-PLAN.md
-last_updated: "2026-07-28T07:18:21.518Z"
+stopped_at: "Completed quick 260728-pgp: cap Train drill items at 1 per game per session"
+last_updated: "2026-07-28T16:56:37.276Z"
 last_activity: 2026-07-28
-last_activity_desc: Phase 193 execution started
+last_activity_desc: "Completed quick task 260728-pgp: cap Train drill items at 1 per game per session"
 progress:
   total_phases: 6
   completed_phases: 6
@@ -27,7 +27,7 @@ Status: Phase complete — ready for verification
 passed with 2 warnings, both closed at plan time. Two blocking gates are built in: a
 `checkpoint:decision` on the `herring_pool` surrogate PK (192-01) and a second on the
 `drill_solves.game_id` nullability migration (192-02, one-way door).
-Last activity: 2026-07-28 — Completed quick task 260728-kmu: SEED-123 unresolvable herring pins a Train session open
+Last activity: 2026-07-28 — Completed quick task 260728-pgp: cap Train drill items at 1 per game per session
 
 Phase 192 fixes a correctness defect in Phase 189's red herrings: they were sourced from
 non-gem `game_best_moves` rows, which does not actually mean "several fine moves". It replaces
@@ -568,6 +568,7 @@ v1.29 Live-Engine Analysis Page shipped 2026-06-29 — 5 phases (136–140), 14 
 - [Phase ?]: 193-02: Eager-tick call site gated on claimed AND session_complete (not session_complete alone) — required by the plan's own resubmit acceptance criterion and threat register T-193-06's 'runs at most once per session' claim
 - [Phase ?]: 193-02: Settle-first mutation check confirmed load-bearing by manual revert-and-rerun (skip-guard test failed without the settle_streak_snapshot call, passed with it restored)
 - [Phase ?]: Phase 193 SCHD-02 window-expiry ruling (user, not executor): an open unfinished session's badge does NOT survive its window expiring — no code change; accepted trade-off is that record_solve has no expiry check so a late completion can still net a shield pip against the miss, and the user will never be cued toward that recovery path
+- [Phase ?]: quick 260728-pgp: capped Train session composition at 1 puzzle/game/session (shared per_game_counts Counter over due + fresh pool), uniform-random within-game pool pick via pick_one_per_game
 
 ### Pending Todos
 
@@ -617,6 +618,7 @@ None active.
 | 260726-fma | Train reveal now shows inaccuracy-level fine-move alternatives (yellow arrow + inaccuracy badge) — deriveFineMoves predicate aligned with the verdict's correctMove rule and the backend's soft gap (drop < MISTAKE_DROP), fixing soft puzzles that drew only the blue best arrow (34% of soft blobs sat in the excluded [0.05, 0.10) band) | 2026-07-26 | 982326aa | [260726-fma-train-reveal-inaccuracy-alternative-arrows](./quick/260726-fma-train-reveal-inaccuracy-alternative-arrows/) |
 | 260727-qai | SEED-119 tiered Train puzzle scoring: guess 1 point + tiered move points (good 2 / inaccuracy 1 / mistake-blunder 0), max 3 per puzzle, bands unchanged at 75/50. New `move_quality` wire+DB field (nullable SMALLINT + `DrillMoveQuality` IntEnum + CHECK, migration `ed0735f3d998`) replaces the client's boolean `correct_move` assertion; the server DERIVES `correct_move = move_quality != 'wrong'` so the SR ladder's pass/fail semantics and `apply_result`'s signature are provably untouched. `classifyLiveSeverity` stays the sole threshold source (no new cutoff); `scorePuzzle` is now the single scoring formula (useTrainSession no longer re-derives it). Go-forward only — historical rows keep NULL `move_quality` and their stored scores. Points-flash badge recoloured per tier (3 dark green / 2 yellow / 1 orange / 0 red) with per-tier foreground constants in theme.ts, since white text cannot clear the light-amber tier. Backend 166 Train tests + full frontend suite (2778) green, ty/tsc/lint/knip clean | 2026-07-27 | 546ab48d | [260727-qai-tiered-train-puzzle-scoring-seed-119-plu](./quick/260727-qai-tiered-train-puzzle-scoring-seed-119-plu/) |
 | 260728-kmu | SEED-123: an unresolvable red herring no longer pins a Train session open forever. `_mark_session_complete_if_done` never excluded `RED_HERRING` rows from `remaining` while `load_session_puzzles` has always skipped a herring whose `herring_pool` row does not resolve — the row was unservable AND unsatisfiable, so `remaining` never reached 0 and the session stuck on "resume" until `expires_on` passed (the same shape as WR-02 and D-05, which both got a leniency clause the herring branch never got). Fix adds `.outerjoin(HerringPool)` + a third `or_` clause keyed on the JOINED ROW (`HerringPool.id.isnot(None)`), not `DrillSolve.herring_pool_id`, so a stale non-NULL id pointing at a deleted pool row is caught too; the orphaned-GAME case is deliberately unchanged (live pool row + dead game link is still servable per D-03 and still blocks). Observed in prod 2026-07-28 — 14 sessions unfinishable after the v2.9 deploy because every pre-Phase-192 herring had no pool row — and reachable outside migration since `drill_solves.herring_pool_id` is `ON DELETE SET NULL`, making this a prerequisite for ever pruning `herring_pool`. Gap mutation-proven by reverting the guard (`assert False is True`) with the sibling orphaned-game test staying green. Two router fixtures that seeded pool-less herrings now seed real pool rows so each stays pinned to its own path. Backend 3900 passed, ruff/ty clean | 2026-07-28 | d2d1f09d | [260728-kmu-fix-seed-123-herring-orphan-stuck-sessio](./quick/260728-kmu-fix-seed-123-herring-orphan-stuck-sessio/) |
+| 260728-pgp | A Train session now draws at most one puzzle per `game_id`, counted SESSION-WIDE across both SR sources via a single shared `per_game_counts` Counter threaded through the due loop, the fresh-pool padding loop, and the herring-shortfall cross-backfill. Motivated by measurement, not hunch: dev own qualifying blunders average 2.41/game (32% of games have 3+, max 12) and 21.7% of consecutive same-game blunder pairs sit exactly 2 plies apart, so a hanging piece left en prise produced near-identical puzzles in one sitting; prod already had 40 `(game_id, due_date)` groups with 2+ active items, worst case 6 from one game on one day. The within-game pick is UNIFORM RANDOM via the new pure `pick_one_per_game` helper, deliberately NOT earliest-ply — earliest-ply skews the phase mix from a measured 16.2/57.6/26.2 (opening/middlegame/endgame) to 32.2/59.6/8.2, doubling the opening and cutting the endgame to a third. Seed is `train-pool-pick:{user_id}:{session_date}:{game_id}`, namespaced apart from the D-09 composition shuffle and carrying `game_id` so a game's chosen ply is independent of pool size and ordering; verified empirically uniform (earliest ply 17/200 vs 20 expected, late plies 59/200 vs 60 expected) and reproducible. Due side stays deterministic most-overdue-first and is NOT shuffled — a deferred due item is skipped for that session only and left completely untouched (status stays ACTIVE, `due_date` unmodified), so it resurfaces first next session and the game self-drains at 1/game/session. `due_stmt` over-fetches at `sr_slots * _DUE_OVERFETCH_FACTOR` (8, anchored on prod's worst 6-item cluster) so the Python-side cap cannot silently shrink the SR side; cap-induced shortfall routes through the existing herring cross-backfill without ever relaxing the cap. Cap-1 viability confirmed on prod: 154/156 non-guest users with any qualifying blunder have >= 5 distinct games carrying one (median 1069). Gap mutation-proven by reverting the guards — tests (a)/(b)/(d) failed 3==1, 5==1, 2==1, then passed restored. Red-herring sampling untouched (SEED-124). Backend 3916 passed, ruff/ty clean | 2026-07-28 | 467500ba | [260728-pgp-cap-train-drill-items-at-1-per-game-per-](./quick/260728-pgp-cap-train-drill-items-at-1-per-game-per-/) |
 
 ## Deferred Items
 
@@ -669,9 +671,9 @@ Items acknowledged and deferred at **v1.29 milestone close on 2026-06-29** (user
 
 ## Session Continuity
 
-**Stopped at:** Completed 193-03-PLAN.md
+**Stopped at:** Completed quick 260728-pgp: cap Train drill items at 1 per game per session
 
-**Last session:** 2026-07-28T07:18:21.478Z
+**Last session:** 2026-07-28T16:56:37.250Z
 
 **Resume file:**
 
@@ -762,6 +764,7 @@ None
 | Phase 193 P01 | 18min | 3 tasks | 15 files |
 | Phase 193 P02 | ~30min | 2 tasks | 8 files |
 | Phase 193 P03 | ~15min | 3 tasks | 5 files |
+| Phase quick-260728-pgp P01 | 50min | 3 tasks | 5 files |
 
 ## Performance Metrics
 
