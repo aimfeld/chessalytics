@@ -107,6 +107,7 @@ def _resolve_move_quality_tier(
         return _MOVE_QUALITY_LITERAL[DrillMoveQuality(move_quality)]
     return "good" if correct_move else "wrong"
 
+
 # Quick task 260728-pgp: due_stmt over-fetches by this factor before the
 # session-wide per-game cap is applied in Python (it must span both SR
 # sources — due drill_items AND fresh pool picks — so it cannot be a bare
