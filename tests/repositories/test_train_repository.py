@@ -59,7 +59,7 @@ from app.models.game_position import GamePosition
 from app.models.herring_pool import HerringPool
 from app.models.train_settings import TrainSettings
 from app.repositories import train_repository
-from app.services.train_pool import compose_slots
+from app.services.train_pool import MAX_ITEMS_PER_GAME_PER_SESSION, compose_slots, pick_one_per_game
 from app.services.train_scheduler import ALL_WEEKDAYS_MASK, SHIELD_CAP
 from tests.conftest import ensure_test_user
 
@@ -102,30 +102,41 @@ async def _seed_flaw_game(
     missed_pv_lines: list | None = _MISSED_PV_LINES,
     prior_eval_cp: int | None = _WINNABLE_CP,
     played_at: datetime.datetime | None = None,
+    existing_game_id: int | None = None,
 ) -> int:
-    """Seed one game + one qualifying (or blob-pending) blunder flaw row + prior eval."""
-    game = Game(
-        user_id=user_id,
-        platform="lichess",
-        platform_game_id=f"{label}-{uuid.uuid4().hex[:8]}",
-        platform_url="https://lichess.org/test",
-        pgn=_PGN,
-        result="1-0",
-        user_color=user_color,
-        time_control_str="600+0",
-        time_control_bucket="blitz",
-        time_control_seconds=600,
-        base_time_seconds=600,
-        increment_seconds=0.0,
-        rated=True,
-        is_computer_game=False,
-        ply_count=20,
-        full_evals_completed_at=datetime.datetime(2026, 1, 1, tzinfo=datetime.timezone.utc),
-        played_at=played_at,
-    )
-    db_session.add(game)
-    await db_session.flush()
-    game_id: int = game.id
+    """Seed one qualifying (or blob-pending) blunder flaw row + prior eval.
+
+    Attaches to `existing_game_id` when given (mirroring
+    `_seed_herring_pool_row`'s parameter of the same name) — for seeding
+    several blunders on ONE game at different plies (quick task
+    260728-pgp's same-game cap tests) — else creates a fresh `Game` row as
+    before.
+    """
+    if existing_game_id is not None:
+        game_id = existing_game_id
+    else:
+        game = Game(
+            user_id=user_id,
+            platform="lichess",
+            platform_game_id=f"{label}-{uuid.uuid4().hex[:8]}",
+            platform_url="https://lichess.org/test",
+            pgn=_PGN,
+            result="1-0",
+            user_color=user_color,
+            time_control_str="600+0",
+            time_control_bucket="blitz",
+            time_control_seconds=600,
+            base_time_seconds=600,
+            increment_seconds=0.0,
+            rated=True,
+            is_computer_game=False,
+            ply_count=20,
+            full_evals_completed_at=datetime.datetime(2026, 1, 1, tzinfo=datetime.timezone.utc),
+            played_at=played_at,
+        )
+        db_session.add(game)
+        await db_session.flush()
+        game_id = game.id
 
     flaw_kwargs: dict[str, object] = dict(
         user_id=user_id,
@@ -559,6 +570,256 @@ async def test_padding_introduces_new_drill_items_recency_first(db_session: Asyn
 
     assert tracked_game_ids == expected_tracked
     assert tracked_game_ids.isdisjoint(excluded)
+
+
+@pytest.mark.asyncio
+async def test_blunder_heavy_game_contributes_exactly_one_pool_pick(
+    db_session: AsyncSession,
+) -> None:
+    """Quick task 260728-pgp Task 1 (b): a fresh blunder-heavy game (6
+    qualifying blunders, none yet tracked as a drill_items row) contributes
+    EXACTLY ONE new drill_items row and exactly one SR_ITEM drill_solves row
+    to the composed session — never one per qualifying blunder — and the
+    served ply is exactly `pick_one_per_game`'s own prediction for
+    `(user_id, today, game_id)` over that game's deduped candidate list.
+
+    Uses the DEFAULT puzzles_per_session=6 (no upsert_settings override):
+    compose_slots(6) = (sr_slots=5, herring_slots=1). With only one capped
+    SR candidate, the SR side is short by construction, so plenty of
+    herring material is seeded to prove the cap doesn't relax under
+    cross-backfill (Task 2 territory, but this test must not accidentally
+    depend on an unbacked cross-backfill assumption).
+    """
+    await ensure_test_user(db_session, _USER_ID)
+    plies = [2, 4, 6, 8, 10, 12]
+    game_id = await _seed_flaw_game(db_session, _USER_ID, "blunderheavy-0", ply=plies[0])
+    for ply in plies[1:]:
+        await _seed_flaw_game(
+            db_session, _USER_ID, "blunderheavy-n", ply=ply, existing_game_id=game_id
+        )
+    for i in range(6):
+        await _seed_herring_pool_row(db_session, _USER_ID, f"blunderheavy-herring-{i}")
+
+    composed = await train_repository.compose_and_materialize_session(
+        db_session, user_id=_USER_ID, now_utc=_NOW
+    )
+    assert composed.session_id is not None
+    assert composed.puzzle_count == 6
+
+    tracked_items = (
+        (
+            await db_session.execute(
+                select(DrillItem).where(DrillItem.user_id == _USER_ID, DrillItem.game_id == game_id)
+            )
+        )
+        .scalars()
+        .all()
+    )
+    assert len(tracked_items) == 1
+
+    sr_solves = (
+        (
+            await db_session.execute(
+                select(DrillSolve).where(
+                    DrillSolve.session_id == composed.session_id,
+                    DrillSolve.source == DrillSource.SR_ITEM,
+                    DrillSolve.game_id == game_id,
+                )
+            )
+        )
+        .scalars()
+        .all()
+    )
+    assert len(sr_solves) == 1
+
+    # deduped_pool's order for a single game_id is GameFlaw.ply ASC (the
+    # query's tertiary ORDER BY key, game_id/played_at both constant here)
+    # — matches the ascending `plies` list built above.
+    candidates = [(game_id, ply, None) for ply in plies]
+    predicted = pick_one_per_game(candidates, user_id=_USER_ID, session_date=_TODAY)
+    assert len(predicted) == MAX_ITEMS_PER_GAME_PER_SESSION
+    assert sr_solves[0].ply == predicted[0][1]
+    assert tracked_items[0].ply == predicted[0][1]
+
+
+@pytest.mark.asyncio
+async def test_multiple_due_items_same_game_serves_only_one(db_session: AsyncSession) -> None:
+    """Quick task 260728-pgp Task 2 (a): three ACTIVE due drill_items from ONE
+    game, all due today -> exactly one is served; the other two stay
+    status == ACTIVE with a due_date byte-identical to what was seeded (the
+    cap's skip-but-leave-untouched contract, mirroring the pre-existing
+    lazy-eviction pattern a few lines above it in the source)."""
+    await ensure_test_user(db_session, _USER_ID)
+    plies = [2, 4, 6]
+    game_id = await _seed_flaw_game(db_session, _USER_ID, "duecap-0", ply=plies[0])
+    for ply in plies[1:]:
+        await _seed_flaw_game(db_session, _USER_ID, "duecap-n", ply=ply, existing_game_id=game_id)
+    for ply in plies:
+        db_session.add(
+            DrillItem(
+                user_id=_USER_ID,
+                game_id=game_id,
+                ply=ply,
+                status=DrillStatus.ACTIVE,
+                streak=0,
+                due_date=_TODAY,
+                fail_count=0,
+                ever_correct=False,
+            )
+        )
+    await db_session.flush()
+    for i in range(6):
+        await _seed_herring_pool_row(db_session, _USER_ID, f"duecap-herring-{i}")
+
+    composed = await train_repository.compose_and_materialize_session(
+        db_session, user_id=_USER_ID, now_utc=_NOW
+    )
+    assert composed.session_id is not None
+
+    sr_solves = (
+        (
+            await db_session.execute(
+                select(DrillSolve).where(
+                    DrillSolve.session_id == composed.session_id,
+                    DrillSolve.source == DrillSource.SR_ITEM,
+                    DrillSolve.game_id == game_id,
+                )
+            )
+        )
+        .scalars()
+        .all()
+    )
+    assert len(sr_solves) == 1
+    served_ply = sr_solves[0].ply
+
+    remaining_items = (
+        (
+            await db_session.execute(
+                select(DrillItem).where(DrillItem.user_id == _USER_ID, DrillItem.game_id == game_id)
+            )
+        )
+        .scalars()
+        .all()
+    )
+    assert len(remaining_items) == 3  # skip-and-leave: no deletion, all three rows survive
+    for item in remaining_items:
+        if item.ply == served_ply:
+            continue
+        assert item.status == DrillStatus.ACTIVE
+        assert item.due_date == _TODAY
+
+
+@pytest.mark.asyncio
+async def test_due_and_untracked_pool_same_game_never_both_appear(
+    db_session: AsyncSession,
+) -> None:
+    """Quick task 260728-pgp Task 2 (d): a due drill_items row from game G plus
+    an untracked fresh-pool blunder from the SAME game G -> only ONE puzzle
+    from G appears in the session, and no second drill_items row is created
+    for G. This is the session-wide half of the requirement — Task 1's
+    pool-side pick_one_per_game alone cannot prevent this collision, since
+    the due item and the pool candidate are resolved by two independent
+    code paths; only the shared per_game_counts guard does."""
+    await ensure_test_user(db_session, _USER_ID)
+    game_id = await _seed_flaw_game(db_session, _USER_ID, "colliding-due", ply=2)
+    await _seed_flaw_game(db_session, _USER_ID, "colliding-pool", ply=4, existing_game_id=game_id)
+    db_session.add(
+        DrillItem(
+            user_id=_USER_ID,
+            game_id=game_id,
+            ply=2,
+            status=DrillStatus.ACTIVE,
+            streak=0,
+            due_date=_TODAY,
+            fail_count=0,
+            ever_correct=False,
+        )
+    )
+    await db_session.flush()
+    for i in range(6):
+        await _seed_herring_pool_row(db_session, _USER_ID, f"colliding-herring-{i}")
+
+    composed = await train_repository.compose_and_materialize_session(
+        db_session, user_id=_USER_ID, now_utc=_NOW
+    )
+    assert composed.session_id is not None
+
+    sr_solves = (
+        (
+            await db_session.execute(
+                select(DrillSolve).where(
+                    DrillSolve.session_id == composed.session_id,
+                    DrillSolve.source == DrillSource.SR_ITEM,
+                    DrillSolve.game_id == game_id,
+                )
+            )
+        )
+        .scalars()
+        .all()
+    )
+    assert len(sr_solves) == 1
+    assert sr_solves[0].ply == 2  # the already-due item wins, never the untracked pool ply
+
+    tracked_items = (
+        (
+            await db_session.execute(
+                select(DrillItem).where(DrillItem.user_id == _USER_ID, DrillItem.game_id == game_id)
+            )
+        )
+        .scalars()
+        .all()
+    )
+    assert len(tracked_items) == 1  # no new drill_items row created for the untracked ply=4
+
+
+@pytest.mark.asyncio
+async def test_cap_shortened_sr_side_fills_via_herring_backfill(db_session: AsyncSession) -> None:
+    """Quick task 260728-pgp Task 2 (c) + step 5 confirmation: two
+    blunder-heavy games (5 qualifying blunders each, all untracked) at
+    puzzles_per_session=12 with plenty of herring material -> the session
+    still has 12 puzzles: 2 SR (one per game, the cap) + 10 red herrings.
+    Proves the cap-induced SR shortfall (2 candidates found vs sr_slots=9)
+    routes through the EXISTING cross-backfill (`len(sr_candidates) <
+    sr_slots` is exactly true here) without ever relaxing the cap."""
+    await ensure_test_user(db_session, _USER_ID)
+    await train_repository.upsert_settings(
+        db_session,
+        user_id=_USER_ID,
+        timezone="UTC",
+        weekday_mask=0,
+        puzzles_per_session=12,
+        now_utc=_NOW,
+    )
+    game_ids: list[int] = []
+    for g in range(2):
+        plies = [2, 4, 6, 8, 10]
+        game_id = await _seed_flaw_game(db_session, _USER_ID, f"capshort-{g}-0", ply=plies[0])
+        for ply in plies[1:]:
+            await _seed_flaw_game(
+                db_session, _USER_ID, f"capshort-{g}-n", ply=ply, existing_game_id=game_id
+            )
+        game_ids.append(game_id)
+    for i in range(15):
+        await _seed_herring_pool_row(db_session, _USER_ID, f"capshort-herring-{i}")
+
+    composed = await train_repository.compose_and_materialize_session(
+        db_session, user_id=_USER_ID, now_utc=_NOW
+    )
+    assert composed.session_id is not None
+    assert composed.puzzle_count == 12
+
+    rows = (
+        await db_session.execute(
+            select(DrillSolve.source, DrillSolve.game_id).where(
+                DrillSolve.session_id == composed.session_id
+            )
+        )
+    ).all()
+    sr_rows = [(source, gid) for source, gid in rows if source == DrillSource.SR_ITEM]
+    herring_rows = [row for row in rows if row[0] == DrillSource.RED_HERRING]
+    assert len(sr_rows) == 2
+    assert len(herring_rows) == 10
+    assert {gid for _source, gid in sr_rows} == set(game_ids)  # exactly one SR puzzle per game
 
 
 @pytest.mark.asyncio

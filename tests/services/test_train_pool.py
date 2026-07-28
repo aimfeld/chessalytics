@@ -53,6 +53,7 @@ from app.services.train_pool import (
     HERRING_LOOSE_BAND_ES,
     HERRING_MIN_QUALIFYING_MOVES,
     HERRING_PREFERRED_QUALIFYING_MOVES,
+    MAX_ITEMS_PER_GAME_PER_SESSION,
     SHARP_GAP_ES,
     blob_pending_stmt,
     classify_puzzle_type,
@@ -60,6 +61,7 @@ from app.services.train_pool import (
     fen_and_last_move_at_ply,
     full_fen_at_ply,
     herring_stmt,
+    pick_one_per_game,
     pool_entry_stmt,
 )
 
@@ -236,6 +238,72 @@ class TestFenAndLastMoveAtPly:
             assert result is not None
             fen, _last_move_uci = result
             assert fen == full_fen_at_ply(_PGN, ply)
+
+
+# ---------------------------------------------------------------------------
+# TestPickOnePerGame (quick task 260728-pgp) — pure, no DB.
+# ---------------------------------------------------------------------------
+
+
+class TestPickOnePerGame:
+    """pick_one_per_game — uniform-random per-game cap, deterministic seeding."""
+
+    def test_empty_input_yields_empty_list(self) -> None:
+        assert pick_one_per_game([], user_id=1, session_date=datetime.date(2026, 1, 1)) == []
+
+    def test_single_candidate_game_always_picked(self) -> None:
+        candidates = [(1, 4, "payload")]
+        result = pick_one_per_game(candidates, user_id=1, session_date=datetime.date(2026, 1, 1))
+        assert result == [(1, 4, "payload")]
+
+    def test_caps_at_max_items_per_game(self) -> None:
+        candidates = [(1, ply, None) for ply in range(0, 20, 2)]  # 10 candidates, one game
+        result = pick_one_per_game(candidates, user_id=1, session_date=datetime.date(2026, 1, 1))
+        assert len(result) == MAX_ITEMS_PER_GAME_PER_SESSION
+
+    def test_deterministic_across_repeated_calls(self) -> None:
+        candidates = [(1, ply, None) for ply in range(0, 20, 2)] + [
+            (2, ply, None) for ply in range(0, 10, 2)
+        ]
+        first = pick_one_per_game(candidates, user_id=42, session_date=datetime.date(2026, 3, 1))
+        second = pick_one_per_game(candidates, user_id=42, session_date=datetime.date(2026, 3, 1))
+        assert first == second
+
+    def test_pick_independent_of_other_games_in_pool(self) -> None:
+        """A game's chosen ply does not change when OTHER games are added to
+        or removed from the candidate pool — the seed carries game_id."""
+        game_one = [(1, ply, None) for ply in range(0, 20, 2)]
+        with_extra_games = game_one + [(2, 4, None), (3, 6, None), (3, 8, None)]
+        result_alone = pick_one_per_game(
+            game_one, user_id=7, session_date=datetime.date(2026, 5, 1)
+        )
+        result_with_others = pick_one_per_game(
+            with_extra_games, user_id=7, session_date=datetime.date(2026, 5, 1)
+        )
+        game_one_pick_alone = [entry for entry in result_alone if entry[0] == 1]
+        game_one_pick_with_others = [entry for entry in result_with_others if entry[0] == 1]
+        assert game_one_pick_alone == game_one_pick_with_others
+
+    def test_preserves_first_appearance_game_order(self) -> None:
+        candidates = [(3, 2, None), (1, 4, None), (2, 6, None)]
+        result = pick_one_per_game(candidates, user_id=1, session_date=datetime.date(2026, 1, 1))
+        assert [game_id for game_id, _ply, _payload in result] == [3, 1, 2]
+
+    def test_not_earliest_ply_across_session_dates(self) -> None:
+        """Across a spread of session dates for one 10-candidate game, the
+        chosen ply is NOT pinned to the earliest ply — several distinct
+        plies are selected and at least one is in the back half of the
+        candidate list (the earliest-ply skew this helper deliberately
+        avoids — see the module docstring measurement)."""
+        candidates = [(1, ply, None) for ply in range(0, 20, 2)]  # 10 candidates, plies 0..18
+        plies = {
+            pick_one_per_game(candidates, user_id=99, session_date=datetime.date(2026, 1, day))[0][
+                1
+            ]
+            for day in range(1, 29)
+        }
+        assert len(plies) > 1  # several distinct plies chosen, not always the same one
+        assert any(ply >= 10 for ply in plies)  # at least one in the back half
 
 
 # ---------------------------------------------------------------------------

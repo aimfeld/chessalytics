@@ -40,6 +40,30 @@ the frame each time instead of always re-scanning (and re-rejecting) the
 same low-user_id positions first, which is what a plain ascending scan from
 the beginning would do on every invocation.
 
+Diversity caps (SEED-124): the randomized start spreads WHICH user a run
+lands on but nothing about the walk spreads coverage WITHIN a run — the scan
+proceeds in PK order and would never leave the first user it lands on until
+that user's positions were exhausted. The first production run (2026-07-28)
+filled all three buckets from 4 users out of 175, across 444 games, with
+single games contributing up to 59 near-duplicate consecutive plies. The
+cause was the accept rate landing at 85% rather than the ~1:1-with-headroom
+the Plan 01 tracer assumed: at 85% a bucket hits target after ~1900
+candidates, far inside one prolific user's position count. So every bucket
+now enforces two caps, both checked BEFORE the Stockfish call so a skip
+costs nothing:
+
+  - `max_rows_per_user` — derived from the bucket target so at least
+    `HERRING_TARGET_USERS_PER_BUCKET` users must contribute. On hitting it
+    the scan does not walk the rest of that user's rows; it seeks the keyset
+    cursor straight past them (`(user_id, MAX, MAX)`), which is what keeps
+    the cap from burning the whole scan budget on one user.
+  - `HERRING_MAX_ROWS_PER_GAME` — consecutive plies of one game are near
+    duplicate positions, so a game contributes at most a couple of rows.
+
+Both counters are seeded from the rows ALREADY in the pool for that phase,
+so a top-up run respects the caps across runs rather than re-concentrating
+on whoever the previous run happened to draw from.
+
 Resumable top-up (D-14, ROADMAP SC2): before scanning a phase bucket, this
 script counts existing `herring_pool` rows for that phase and targets only
 the shortfall (`target - existing`, floored at 0). Combined with
@@ -86,12 +110,18 @@ Usage:
     # per phase bucket (or one bucket with --phase), log PV0-PV1/PV0-PV4
     # expected-score gap histograms, write NOTHING to the database.
     uv run python scripts/gen_red_herring_pool.py --db dev --n-positions 300 --measure
+
+    # DESTRUCTIVE: wipe the targeted phase(s) and regenerate from scratch —
+    # for when the existing rows are known-bad rather than merely short (the
+    # 2026-07-28 SEED-124 concentration regeneration used exactly this).
+    uv run python scripts/gen_red_herring_pool.py --db prod --n-positions 5000 --reset
 """
 
 from __future__ import annotations
 
 import argparse
 import asyncio
+import math
 import random
 import sys
 from collections import Counter
@@ -103,7 +133,7 @@ from typing import Any, Literal
 import chess
 import chess.engine
 import sentry_sdk
-from sqlalchemy import ColumnElement, func, select, tuple_
+from sqlalchemy import ColumnElement, delete, func, select, tuple_
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 
@@ -160,6 +190,37 @@ _PHASE_THIRDS_ORDER: tuple[PhaseName, ...] = ("opening", "middlegame", "endgame"
 # headroom for the stricter oversample needed once ply-mismatch/dup rejects
 # are accounted for at scale.
 HERRING_OVERSAMPLE_FACTOR: int = 20
+
+# SEED-124 diversity caps. The oversample budget above bounds ENGINE work
+# (candidates actually searched); these bound CONCENTRATION.
+#
+# A bucket must draw from at least this many distinct users — the per-user cap
+# is `ceil(target / HERRING_TARGET_USERS_PER_BUCKET)`, so it scales with the
+# bucket target instead of being a magic row count. 50 against a ~1666-row
+# bucket gives 34 rows/user, and prod comfortably supports it: 145 of 175
+# non-guest users have 50+ games, 109 have 500+.
+HERRING_TARGET_USERS_PER_BUCKET: int = 50
+
+# Consecutive plies of one game are near-duplicate positions (the first prod
+# run stored up to 59 rows from a single game, e.g. game 892243 plies
+# 43/45/47/48/... accepted back to back). Two per game keeps a session from
+# serving the same middlegame twice with two moves' difference.
+HERRING_MAX_ROWS_PER_GAME: int = 2
+
+# Cap-skipped rows cost no engine time, so they must NOT consume the
+# oversample budget — otherwise the caps would starve the scan (walking ~680
+# rows per user to collect 34 of them exhausts a 20x budget after ~49 users,
+# exactly the point where a bucket fills). Rows merely WALKED get their own,
+# much looser bound so a pathological frame still terminates.
+HERRING_WALK_FACTOR: int = 200
+
+# Keyset sentinels for "seek past this user" (SEED-124): a tuple comparison
+# against them excludes every remaining row of that user in one jump. These
+# must match the COLUMN types, not Python's int range — `games.id` is INTEGER
+# and `game_positions.ply` is SMALLINT, so a 2**63-1 sentinel is rejected by
+# asyncpg ("value out of int32 range") before Postgres ever sees it.
+_KEYSET_MAX_GAME_ID: int = (1 << 31) - 1  # INTEGER max
+_KEYSET_MAX_PLY: int = (1 << 15) - 1  # SMALLINT max
 
 # Commit every N processed candidates — OOM-safe batching (CLAUDE.md import
 # memory-pressure history), independent of how many of those candidates
@@ -223,6 +284,15 @@ def _parse_args() -> argparse.Namespace:
         action="store_true",
         help="Measurement mode (Task 2): scan up to --n-positions SEARCHED candidates per "
         "phase bucket, log PV0-PV1/PV0-PV4 expected-score gap histograms, write nothing.",
+    )
+    parser.add_argument(
+        "--reset",
+        action="store_true",
+        help="DESTRUCTIVE: delete existing herring_pool rows for the targeted phase(s) before "
+        "generating, so the run regenerates from scratch instead of topping up. Safe by design "
+        "(drill_solves.herring_pool_id is ON DELETE SET NULL and unservable herrings are lazily "
+        "evicted), but it discards real MultiPV-5 search work — only use it when the existing "
+        "rows are known-bad. Ignored in --measure mode.",
     )
     return parser.parse_args()
 
@@ -413,6 +483,59 @@ class _Tally:
     rejected_band: int = 0
     duplicate_skipped: int = 0
     stored: int = 0
+    skipped_user_cap: int = 0
+    skipped_game_cap: int = 0
+
+
+@dataclass
+class _DiversityCaps:
+    """Per-bucket concentration caps and their live counters (SEED-124).
+
+    Counts STORED rows, not attempts — a candidate rejected by the engine
+    gate must not consume a user's or a game's allowance. Both counters are
+    seeded from the pool's existing rows for the phase (see
+    `_load_existing_caps`) so caps hold ACROSS runs, not just within one.
+    """
+
+    max_rows_per_user: int
+    max_rows_per_game: int
+    user_rows: Counter[int] = field(default_factory=Counter)
+    game_rows: Counter[int] = field(default_factory=Counter)
+
+    def user_is_full(self, user_id: int) -> bool:
+        return self.user_rows[user_id] >= self.max_rows_per_user
+
+    def game_is_full(self, game_id: int) -> bool:
+        return self.game_rows[game_id] >= self.max_rows_per_game
+
+    def record(self, user_id: int, game_id: int) -> None:
+        self.user_rows[user_id] += 1
+        self.game_rows[game_id] += 1
+
+
+async def _load_existing_caps(
+    session: AsyncSession, phase_code: int, *, target: int
+) -> _DiversityCaps:
+    """Build a bucket's caps, pre-loaded with what the pool already holds.
+
+    Without this seeding a top-up would re-concentrate: the caps would start
+    empty and happily add another full allowance for a user who already
+    dominates the phase.
+    """
+    caps = _DiversityCaps(
+        max_rows_per_user=max(1, math.ceil(target / HERRING_TARGET_USERS_PER_BUCKET)),
+        max_rows_per_game=HERRING_MAX_ROWS_PER_GAME,
+    )
+    stmt = (
+        select(HerringPool.user_id, HerringPool.game_id, func.count())
+        .where(HerringPool.phase == phase_code)
+        .group_by(HerringPool.user_id, HerringPool.game_id)
+    )
+    for user_id, game_id, count in (await session.execute(stmt)).all():
+        caps.user_rows[user_id] += count
+        if game_id is not None:  # D-01: the source-game link nulls, it does not cascade
+            caps.game_rows[game_id] += count
+    return caps
 
 
 async def _write_candidate(
@@ -505,35 +628,70 @@ async def _scan_pass(
     phase_code: int,
     target: int,
     budget_remaining: int,
+    walk_remaining: int,
     dry_run: bool,
     tally: _Tally,
     stored_at_pass_start: int,
-) -> int:
+    caps: _DiversityCaps,
+) -> tuple[int, int]:
     """Keyset-walk one pass of the frame (see module docstring's two-pass
-    random-start scan). Returns the number of candidates examined."""
+    random-start scan), enforcing the SEED-124 diversity caps.
+
+    Returns `(searched, walked)` — candidates actually handed to the engine,
+    and rows pulled from the DB. They are budgeted separately because a
+    cap-skipped row costs no engine time (see `HERRING_WALK_FACTOR`).
+    """
     after: tuple[int, int, int] | None = None
-    examined = 0
-    while examined < budget_remaining and (tally.stored - stored_at_pass_start) < target:
-        page_limit = min(HERRING_SCAN_PAGE_SIZE, budget_remaining - examined)
+    searched = 0
+    walked = 0
+    while (
+        searched < budget_remaining
+        and walked < walk_remaining
+        and (tally.stored - stored_at_pass_start) < target
+    ):
         stmt = _candidate_frame_stmt(
-            phase_code=phase_code, extra_where=base_predicate, after=after, limit=page_limit
+            phase_code=phase_code,
+            extra_where=base_predicate,
+            after=after,
+            limit=HERRING_SCAN_PAGE_SIZE,
         )
         page = (await session.execute(stmt)).all()
         if not page:
             break
+        jump_to: tuple[int, int, int] | None = None
         for position, game in page:
-            examined += 1
+            walked += 1
+            if caps.user_is_full(position.user_id):
+                # Seek past this user rather than walking their remaining
+                # (possibly six-figure) row count — see module docstring.
+                tally.skipped_user_cap += 1
+                jump_to = (position.user_id, _KEYSET_MAX_GAME_ID, _KEYSET_MAX_PLY)
+                break
+            if caps.game_is_full(game.id):
+                tally.skipped_game_cap += 1
+                continue
+            searched += 1
             tally.scanned += 1
+            stored_before = tally.stored
             await _process_candidate(
                 session, pool, position, game, phase_code=phase_code, dry_run=dry_run, tally=tally
             )
-            if (tally.stored - stored_at_pass_start) >= target or examined >= budget_remaining:
+            if tally.stored > stored_before:
+                caps.record(position.user_id, game.id)
+            if (
+                (tally.stored - stored_at_pass_start) >= target
+                or searched >= budget_remaining
+                or walked >= walk_remaining
+            ):
                 break
             if not dry_run and tally.stored > 0 and tally.stored % HERRING_COMMIT_EVERY == 0:
                 await session.commit()
-        last_position, _ = page[-1]
-        after = (last_position.user_id, last_position.game_id, last_position.ply)
-    return examined
+        if jump_to is not None:
+            after = jump_to
+        else:
+            last_position, _ = page[-1]
+            after = (last_position.user_id, last_position.game_id, last_position.ply)
+    return searched, walked
 
 
 async def _scan_bucket(
@@ -548,32 +706,47 @@ async def _scan_bucket(
 ) -> None:
     """Fill up to `target` new rows for one phase bucket via the two-pass
     random-start keyset scan, bounded by HERRING_OVERSAMPLE_FACTOR * target
-    candidates examined."""
+    candidates searched (and HERRING_WALK_FACTOR * target rows walked), under
+    the SEED-124 per-user / per-game diversity caps."""
     frame_limit = target * HERRING_OVERSAMPLE_FACTOR
+    walk_limit = target * HERRING_WALK_FACTOR
     bounds = await _user_id_bounds(session)
     if bounds is None:
         _log(f"  No candidates for phase={phase} (no users in this database)")
         return
+    caps = await _load_existing_caps(session, phase_code, target=target)
     stored_before = tally.stored
-    examined = 0
+    searched = 0
+    walked = 0
     for base_predicate in _random_start_passes(*bounds):
-        if (tally.stored - stored_before) >= target or examined >= frame_limit:
+        if (
+            (tally.stored - stored_before) >= target
+            or searched >= frame_limit
+            or walked >= walk_limit
+        ):
             break
-        examined += await _scan_pass(
+        pass_searched, pass_walked = await _scan_pass(
             session,
             pool,
             base_predicate=base_predicate,
             phase_code=phase_code,
             target=target,
-            budget_remaining=frame_limit - examined,
+            budget_remaining=frame_limit - searched,
+            walk_remaining=walk_limit - walked,
             dry_run=dry_run,
             tally=tally,
             stored_at_pass_start=stored_before,
+            caps=caps,
         )
+        searched += pass_searched
+        walked += pass_walked
     stored_this_bucket = tally.stored - stored_before
-    gave_up = " (gave up: oversample budget exhausted)" if stored_this_bucket < target else ""
+    gave_up = " (gave up: scan budget exhausted)" if stored_this_bucket < target else ""
+    contributing_users = sum(1 for n in caps.user_rows.values() if n > 0)
     _log(
-        f"  Bucket {phase}: target={target} stored={stored_this_bucket} examined={examined}{gave_up}"
+        f"  Bucket {phase}: target={target} stored={stored_this_bucket} "
+        f"searched={searched} walked={walked} users={contributing_users} "
+        f"(cap {caps.max_rows_per_user}/user, {caps.max_rows_per_game}/game){gave_up}"
     )
 
 
@@ -581,6 +754,21 @@ async def _existing_count(session: AsyncSession, phase_code: int) -> int:
     """Current `herring_pool` row count for one phase — the resumable top-up base."""
     stmt = select(func.count()).select_from(HerringPool).where(HerringPool.phase == phase_code)
     return (await session.execute(stmt)).scalar_one()
+
+
+async def _reset_phase(session: AsyncSession, phase_code: int) -> int:
+    """Delete every `herring_pool` row for one phase (`--reset`). Returns the
+    number deleted.
+
+    Deliberately scoped per phase, matching the per-bucket target/shortfall
+    model, so `--phase endgame --reset` cannot wipe the other two buckets.
+    In-flight sessions holding a deleted herring are safe: the FK is
+    ON DELETE SET NULL and `get_remaining_session_puzzles` lazily evicts a
+    herring whose pool row is gone, with `_mark_session_complete_if_done`
+    carrying the matching exclusion (SEED-123) so the session still closes.
+    """
+    result = await session.execute(delete(HerringPool).where(HerringPool.phase == phase_code))
+    return result.rowcount or 0  # ty: ignore[unresolved-attribute]  # DML result carries rowcount
 
 
 def _log_generation_summary(tally: _Tally, dry_run: bool) -> None:
@@ -595,6 +783,8 @@ def _log_generation_summary(tally: _Tally, dry_run: bool) -> None:
     _log(f"  Rejected (FEN unreconstructable): {tally.rejected_unreconstructable}")
     _log(f"  Rejected (below loose qualifying-moves band): {tally.rejected_band}")
     _log(f"  Duplicate (already in pool, ON CONFLICT skipped): {tally.duplicate_skipped}")
+    _log(f"  Skipped before search (per-user cap, SEED-124): {tally.skipped_user_cap}")
+    _log(f"  Skipped before search (per-game cap, SEED-124): {tally.skipped_game_cap}")
     _log(f"  Stored {'(dry-run, not written)' if dry_run else 'and written'}: {tally.stored}")
 
 
@@ -604,6 +794,7 @@ async def run_generation(
     n_positions: int,
     phase: PhaseName | None,
     dry_run: bool,
+    reset: bool = False,
     session_maker: async_sessionmaker[AsyncSession] | None = None,
     pool: EnginePool | None = None,
 ) -> None:
@@ -615,6 +806,9 @@ async def run_generation(
             phase-balanced thirds when `phase` is None, D-19).
         phase: Sample only this game phase, or None for the thirds split.
         dry_run: If True, scan and tally without writing.
+        reset: If True, delete the targeted phase(s)' existing rows first, so
+            the run regenerates from scratch rather than topping up. Never
+            deletes under `dry_run`.
         session_maker: Injectable session factory for testing. When None, a
             real engine is created from db_url_for_target(db).
         pool: Injectable EnginePool for testing. When None, a real pool of
@@ -645,6 +839,10 @@ async def run_generation(
         async with session_maker() as session:
             for phase_name, target in targets.items():
                 phase_code = PHASE_CODES[phase_name]
+                if reset and not dry_run:
+                    deleted = await _reset_phase(session, phase_code)
+                    await session.commit()
+                    _log(f"Phase {phase_name}: --reset deleted {deleted} existing row(s)")
                 existing = await _existing_count(session, phase_code)
                 shortfall = max(0, target - existing)
                 _log(
@@ -849,6 +1047,10 @@ if __name__ == "__main__":
     else:
         asyncio.run(
             run_generation(
-                db=args.db, n_positions=args.n_positions, phase=args.phase, dry_run=args.dry_run
+                db=args.db,
+                n_positions=args.n_positions,
+                phase=args.phase,
+                dry_run=args.dry_run,
+                reset=args.reset,
             )
         )

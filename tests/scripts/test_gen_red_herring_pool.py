@@ -24,6 +24,16 @@ Coverage:
   join keeps guest-sourced candidates out of the sampling frame entirely.
 - test_generator_dry_run_writes_nothing : --dry-run performs the full scan
   and tally without writing any row.
+- test_generator_caps_rows_per_game : SEED-124's per-game cap holds, and the
+  skip happens BEFORE the engine call.
+- test_generator_caps_rows_per_user_and_moves_on : SEED-124's per-user cap
+  holds AND the scan reaches a second user (the concentration bug itself).
+- test_generator_caps_carry_across_runs : the caps are seeded from rows
+  already in the pool, so a top-up cannot re-concentrate.
+- test_generator_reset_clears_phase_before_regenerating : --reset wipes and
+  refills only the targeted phase.
+- test_generator_reset_is_inert_under_dry_run : --reset --dry-run deletes
+  nothing.
 """
 
 from __future__ import annotations
@@ -106,6 +116,29 @@ def _patch_fen_lookup(
 
 def _session_maker(test_engine: AsyncEngine) -> async_sessionmaker[AsyncSession]:
     return async_sessionmaker(test_engine, expire_on_commit=False)
+
+
+def _lift_diversity_caps(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Neutralize the SEED-124 per-user/per-game caps for tests about OTHER gates.
+
+    Those tests deliberately seed many plies of a single game (the cheapest way
+    to produce N qualifying candidates), which the real caps would now reject
+    long before the gate under test is reached. Lifting the caps here keeps each
+    test measuring the one thing it was written to measure; the caps themselves
+    are covered by the dedicated tests below, at their real values.
+
+    Replaces the cap BUILDER rather than the two constants: the per-user cap is
+    derived from the bucket shortfall (`ceil(target / N)`), so no setting of N
+    is unconditionally permissive — and the builder also seeds its counters from
+    rows already in the pool, which would still cap a multi-run test.
+    """
+
+    async def _uncapped(
+        session: AsyncSession, phase_code: int, *, target: int
+    ) -> gen_module._DiversityCaps:
+        return gen_module._DiversityCaps(max_rows_per_user=10_000, max_rows_per_game=10_000)
+
+    monkeypatch.setattr(gen_module, "_load_existing_caps", _uncapped)
 
 
 async def _ensure_user(session: AsyncSession, *, is_guest: bool = False) -> int:
@@ -251,6 +284,7 @@ async def test_generator_rejects_fewer_than_five_legal_moves(
 async def test_generator_loose_gate_boundary(
     test_engine: AsyncEngine, monkeypatch: pytest.MonkeyPatch
 ) -> None:
+    _lift_diversity_caps(monkeypatch)
     ply_at_boundary = 20
     ply_beyond_boundary = 22
     phase_code = 1  # middlegame
@@ -344,6 +378,7 @@ async def test_generator_loose_gate_boundary(
 async def test_generator_rerun_tops_up_without_duplicates(
     test_engine: AsyncEngine, monkeypatch: pytest.MonkeyPatch
 ) -> None:
+    _lift_diversity_caps(monkeypatch)
     phase_code = 1  # middlegame
     plies = [30, 32, 34, 36, 38]  # 5 qualifying candidates, one game
 
@@ -409,6 +444,7 @@ async def test_generator_rerun_tops_up_without_duplicates(
 async def test_generator_splits_n_into_phase_thirds(
     test_engine: AsyncEngine, monkeypatch: pytest.MonkeyPatch
 ) -> None:
+    _lift_diversity_caps(monkeypatch)
     # Two qualifying candidates per phase (opening=0, middlegame=1, endgame=2),
     # all sharing one game so the FEN-lookup monkeypatch is keyed on ply alone.
     # All-even plies: mover_color_for_ply(even) == "white", matching the
@@ -559,5 +595,282 @@ async def test_generator_dry_run_writes_nothing(
         assert fake_pool.evaluated_fens == [_FEN_5_LEGAL_MOVES]
         assert not await _pool_row_exists(test_engine, user_id=user_id, game_id=game_id, ply=ply)
         assert await _current_existing(test_engine, phase_code) == existing_before
+    finally:
+        await _cleanup(test_engine, user_ids=[user_id])
+
+
+# ---------------------------------------------------------------------------
+# SEED-124 diversity caps
+# ---------------------------------------------------------------------------
+
+
+async def _rows_for_game(test_engine: AsyncEngine, game_id: int) -> int:
+    async with _session_maker(test_engine)() as session:
+        stmt = select(func.count()).select_from(HerringPool).where(HerringPool.game_id == game_id)
+        return (await session.execute(stmt)).scalar_one()
+
+
+async def _rows_for_user(test_engine: AsyncEngine, user_id: int) -> int:
+    async with _session_maker(test_engine)() as session:
+        stmt = select(func.count()).select_from(HerringPool).where(HerringPool.user_id == user_id)
+        return (await session.execute(stmt)).scalar_one()
+
+
+async def test_generator_caps_rows_per_game(
+    test_engine: AsyncEngine, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """SEED-124: consecutive plies of one game are near-duplicate positions, so
+    a single game contributes at most HERRING_MAX_ROWS_PER_GAME rows even when
+    every one of its plies would otherwise qualify."""
+    phase_code = 1  # middlegame
+    plies = [30, 32, 34, 36, 38, 40, 42, 44]  # 8 qualifying candidates, ONE game
+
+    # Isolate the per-GAME cap: with one user supplying everything, the per-user
+    # cap (ceil(target / N)) would otherwise bind first and mask it.
+    monkeypatch.setattr(gen_module, "HERRING_TARGET_USERS_PER_BUCKET", 1)
+
+    async with _session_maker(test_engine)() as session:
+        async with session.begin():
+            user_id = await _ensure_user(session)
+            game_id = await _seed_game(session, user_id=user_id)
+            for ply in plies:
+                await _seed_position(
+                    session, user_id=user_id, game_id=game_id, ply=ply, phase=phase_code
+                )
+
+    _patch_fen_lookup(monkeypatch, {ply: (_FEN_5_LEGAL_MOVES, None) for ply in plies})
+    fake_pool = _FakePool({_FEN_5_LEGAL_MOVES: _UNIFORM_QUALIFYING_LADDER})
+
+    try:
+        existing = await _current_existing(test_engine, phase_code)
+        # Ask for far more than the cap allows from this game.
+        await run_generation(
+            db="dev",
+            n_positions=existing + len(plies),
+            phase="middlegame",
+            dry_run=False,
+            session_maker=_session_maker(test_engine),
+            pool=fake_pool,  # ty: ignore[invalid-argument-type]  # test stub duck-types EnginePool
+        )
+
+        assert await _rows_for_game(test_engine, game_id) == gen_module.HERRING_MAX_ROWS_PER_GAME
+        # The capped plies must be skipped BEFORE the engine call — that is what
+        # keeps a cap from costing Stockfish time (module docstring).
+        assert len(fake_pool.evaluated_fens) == gen_module.HERRING_MAX_ROWS_PER_GAME
+    finally:
+        await _cleanup(test_engine, user_ids=[user_id])
+
+
+async def test_generator_caps_rows_per_user_and_moves_on(
+    test_engine: AsyncEngine, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """SEED-124: one user cannot fill a whole bucket. With a per-user cap of 2,
+    a prolific user contributes 2 rows and the scan JUMPS past their remaining
+    positions to reach a second user — the concentration bug in one assertion.
+    """
+    phase_code = 1  # middlegame
+    plies = [30, 32, 34, 36]
+
+    # Per-user cap = ceil(target / HERRING_TARGET_USERS_PER_BUCKET). With a
+    # shortfall of 4 and 2 target users, that is 2 rows per user.
+    monkeypatch.setattr(gen_module, "HERRING_TARGET_USERS_PER_BUCKET", 2)
+    monkeypatch.setattr(gen_module, "HERRING_MAX_ROWS_PER_GAME", 10_000)
+
+    async with _session_maker(test_engine)() as session:
+        async with session.begin():
+            hog_id = await _ensure_user(session)
+            hog_game = await _seed_game(session, user_id=hog_id)
+            for ply in plies:
+                await _seed_position(
+                    session, user_id=hog_id, game_id=hog_game, ply=ply, phase=phase_code
+                )
+            other_id = await _ensure_user(session)
+            other_game = await _seed_game(session, user_id=other_id)
+            for ply in plies:
+                await _seed_position(
+                    session, user_id=other_id, game_id=other_game, ply=ply, phase=phase_code
+                )
+
+    _patch_fen_lookup(monkeypatch, {ply: (_FEN_5_LEGAL_MOVES, None) for ply in plies})
+    fake_pool = _FakePool({_FEN_5_LEGAL_MOVES: _UNIFORM_QUALIFYING_LADDER})
+
+    try:
+        existing = await _current_existing(test_engine, phase_code)
+        await run_generation(
+            db="dev",
+            n_positions=existing + 4,
+            phase="middlegame",
+            dry_run=False,
+            session_maker=_session_maker(test_engine),
+            pool=fake_pool,  # ty: ignore[invalid-argument-type]  # test stub duck-types EnginePool
+        )
+
+        # Neither user may exceed the cap, and BOTH must have contributed —
+        # pre-fix, whichever user the scan landed on first took all 4.
+        assert await _rows_for_user(test_engine, hog_id) == 2
+        assert await _rows_for_user(test_engine, other_id) == 2
+    finally:
+        await _cleanup(test_engine, user_ids=[hog_id, other_id])
+
+
+async def test_generator_caps_carry_across_runs(
+    test_engine: AsyncEngine, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """SEED-124: a top-up must not re-concentrate. The caps are seeded from the
+    rows already in the pool, so a user who is already at their cap gets nothing
+    more from a later run even though that run has its own fresh shortfall."""
+    phase_code = 1  # middlegame
+    plies = [30, 32, 34, 36]
+
+    monkeypatch.setattr(gen_module, "HERRING_MAX_ROWS_PER_GAME", 10_000)
+
+    async with _session_maker(test_engine)() as session:
+        async with session.begin():
+            user_id = await _ensure_user(session)
+            game_id = await _seed_game(session, user_id=user_id)
+            for ply in plies:
+                await _seed_position(
+                    session, user_id=user_id, game_id=game_id, ply=ply, phase=phase_code
+                )
+
+    _patch_fen_lookup(monkeypatch, {ply: (_FEN_5_LEGAL_MOVES, None) for ply in plies})
+    fake_pool = _FakePool({_FEN_5_LEGAL_MOVES: _UNIFORM_QUALIFYING_LADDER})
+
+    try:
+        existing = await _current_existing(test_engine, phase_code)
+
+        # Run 1: shortfall 2, 2 target users -> cap 1/user, so 1 row lands.
+        monkeypatch.setattr(gen_module, "HERRING_TARGET_USERS_PER_BUCKET", 2)
+        await run_generation(
+            db="dev",
+            n_positions=existing + 2,
+            phase="middlegame",
+            dry_run=False,
+            session_maker=_session_maker(test_engine),
+            pool=fake_pool,  # ty: ignore[invalid-argument-type]  # test stub duck-types EnginePool
+        )
+        assert await _rows_for_user(test_engine, user_id) == 1
+
+        # Run 2: a fresh shortfall of 2 -> the SAME cap of 1/user. Seeding the
+        # counters from the pool is what stops this run handing the user a
+        # second allowance on top of the row run 1 already gave them.
+        await run_generation(
+            db="dev",
+            n_positions=existing + 3,
+            phase="middlegame",
+            dry_run=False,
+            session_maker=_session_maker(test_engine),
+            pool=fake_pool,  # ty: ignore[invalid-argument-type]  # test stub duck-types EnginePool
+        )
+        assert await _rows_for_user(test_engine, user_id) == 1
+    finally:
+        await _cleanup(test_engine, user_ids=[user_id])
+
+
+async def test_generator_reset_clears_phase_before_regenerating(
+    test_engine: AsyncEngine, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """`--reset` regenerates from scratch instead of topping up, and is scoped
+    to the targeted phase so the other buckets survive."""
+    _lift_diversity_caps(monkeypatch)
+    target_phase = 1  # middlegame
+    other_phase = 2  # endgame
+    plies = [30, 32]
+
+    async with _session_maker(test_engine)() as session:
+        async with session.begin():
+            user_id = await _ensure_user(session)
+            game_id = await _seed_game(session, user_id=user_id)
+            for ply in plies:
+                await _seed_position(
+                    session, user_id=user_id, game_id=game_id, ply=ply, phase=target_phase
+                )
+            await _seed_position(
+                session, user_id=user_id, game_id=game_id, ply=50, phase=other_phase
+            )
+
+    _patch_fen_lookup(monkeypatch, {ply: (_FEN_5_LEGAL_MOVES, None) for ply in [*plies, 50]})
+    fake_pool = _FakePool({_FEN_5_LEGAL_MOVES: _UNIFORM_QUALIFYING_LADDER})
+    run_kwargs = {
+        "db": "dev",
+        "dry_run": False,
+        "session_maker": _session_maker(test_engine),
+        "pool": fake_pool,
+    }
+
+    try:
+        # Seed both buckets.
+        middlegame_before = await _current_existing(test_engine, target_phase)
+        await run_generation(
+            n_positions=middlegame_before + 2,
+            phase="middlegame",
+            **run_kwargs,  # ty: ignore[invalid-argument-type]  # test stub duck-types EnginePool
+        )
+        endgame_before = await _current_existing(test_engine, other_phase)
+        await run_generation(
+            n_positions=endgame_before + 1,
+            phase="endgame",
+            **run_kwargs,  # ty: ignore[invalid-argument-type]  # test stub duck-types EnginePool
+        )
+        assert await _current_existing(test_engine, target_phase) == middlegame_before + 2
+        endgame_after_seed = await _current_existing(test_engine, other_phase)
+
+        # Reset middlegame only: it is wiped and refilled to the new target,
+        # while endgame is untouched.
+        await run_generation(
+            n_positions=1,
+            phase="middlegame",
+            reset=True,
+            **run_kwargs,  # ty: ignore[invalid-argument-type]  # test stub duck-types EnginePool
+        )
+        assert await _current_existing(test_engine, target_phase) == 1
+        assert await _current_existing(test_engine, other_phase) == endgame_after_seed
+    finally:
+        await _cleanup(test_engine, user_ids=[user_id])
+
+
+async def test_generator_reset_is_inert_under_dry_run(
+    test_engine: AsyncEngine, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """`--reset --dry-run` must not delete: a dry run is for inspecting what a
+    real run WOULD do, so it may never be the thing that empties the pool."""
+    _lift_diversity_caps(monkeypatch)
+    phase_code = 1  # middlegame
+    ply = 30
+
+    async with _session_maker(test_engine)() as session:
+        async with session.begin():
+            user_id = await _ensure_user(session)
+            game_id = await _seed_game(session, user_id=user_id)
+            await _seed_position(
+                session, user_id=user_id, game_id=game_id, ply=ply, phase=phase_code
+            )
+
+    _patch_fen_lookup(monkeypatch, {ply: (_FEN_5_LEGAL_MOVES, None)})
+    fake_pool = _FakePool({_FEN_5_LEGAL_MOVES: _UNIFORM_QUALIFYING_LADDER})
+
+    try:
+        existing = await _current_existing(test_engine, phase_code)
+        await run_generation(
+            db="dev",
+            n_positions=existing + 1,
+            phase="middlegame",
+            dry_run=False,
+            session_maker=_session_maker(test_engine),
+            pool=fake_pool,  # ty: ignore[invalid-argument-type]  # test stub duck-types EnginePool
+        )
+        seeded = await _current_existing(test_engine, phase_code)
+        assert seeded == existing + 1
+
+        await run_generation(
+            db="dev",
+            n_positions=existing + 1,
+            phase="middlegame",
+            dry_run=True,
+            reset=True,
+            session_maker=_session_maker(test_engine),
+            pool=fake_pool,  # ty: ignore[invalid-argument-type]  # test stub duck-types EnginePool
+        )
+        assert await _current_existing(test_engine, phase_code) == seeded
     finally:
         await _cleanup(test_engine, user_ids=[user_id])

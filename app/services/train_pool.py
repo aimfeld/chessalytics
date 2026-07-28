@@ -23,9 +23,12 @@ floor (Pitfall 6).
 
 from __future__ import annotations
 
+import datetime
 import io
 import math
-from typing import Any, Literal
+import random
+from collections.abc import Sequence
+from typing import Any, Literal, TypeVar
 
 import chess.pgn
 from sqlalchemy import (
@@ -72,6 +75,20 @@ _SEVERITY_BLUNDER: int = 2
 # POOL-03: red herrings make up 25% of every session mix. Planner discretion
 # per the seed's stated ratio (CONTEXT.md "Claude's Discretion").
 HERRING_SHARE: float = 0.25
+
+# Quick task 260728-pgp: a composed Train session draws at most this many
+# puzzles from any single game, SESSION-WIDE across both SR sources (due
+# drill_items and fresh pool_entry_stmt picks combined via a shared
+# per-game count). Several blunders from one game a few plies apart (a
+# hanging piece not captured for several moves) produce near-identical
+# puzzles in the same sitting. MEASURED (dev, 2026-07-28): own qualifying
+# blunders average 2.41/game, 32% of games have 3+, max 12; prod's worst
+# (game_id, due_date) drill_items cluster is 6. Cap-1 is viable: 154/156
+# non-guest prod users with any qualifying blunder have >=5 DISTINCT games
+# carrying one (median 1069) — the 2-user starvation edge case is already
+# covered by the existing herring cross-backfill, so the cap never needs
+# relaxing.
+MAX_ITEMS_PER_GAME_PER_SESSION: int = 1
 
 # Phase 192 (POOL-03 amended, D-15): the herring_pool generation-time loose
 # band. A candidate qualifies when at least HERRING_MIN_QUALIFYING_MOVES of
@@ -664,6 +681,72 @@ def compose_slots(n: int) -> tuple[int, int]:
     return sr_slots, herring_slots
 
 
+_T = TypeVar("_T")
+
+
+def pick_one_per_game(
+    candidates: Sequence[tuple[int, int, _T]],
+    *,
+    user_id: int,
+    session_date: datetime.date,
+) -> list[tuple[int, int, _T]]:
+    """Cap `candidates` at `MAX_ITEMS_PER_GAME_PER_SESSION` per `game_id` (quick
+    task 260728-pgp), picking UNIFORM RANDOM among each game's entries —
+    deliberately NOT earliest-ply. Earliest-ply skews the phase mix from a
+    measured 16.2/57.6/26.2 (opening/middlegame/endgame) to 32.2/59.6/8.2 —
+    doubling the opening share and cutting the endgame share to a third — so
+    a uniform pick is what actually reproduces the user's natural blunder
+    distribution across a game's candidate plies.
+
+    The seed is namespaced `train-pool-pick:` so this stream is NEVER the
+    same sequence as the D-09 composition shuffle in `train_repository.py`
+    (which seeds `f"{user_id}:{today.isoformat()}"` with no such prefix) —
+    two independently-seeded RNG streams, deliberately kept apart.
+    `game_id` is baked INTO the seed (not just `user_id`/`session_date`), so
+    a given game's chosen ply is a pure function of user + date + game and
+    is independent of how many OTHER games are in the pool or of the pool's
+    ordering — adding/removing an unrelated game never reshuffles this
+    game's pick. `random.Random` seeded with a `str` is stable across
+    processes (CPython hashes `str` seeds with sha512, not the
+    `PYTHONHASHSEED`-randomized `hash()`) — the same property the existing
+    D-09 shuffle already relies on. This is intentionally NOT pushed into
+    SQL: `pool_rows` is already materialized in Python by the time a caller
+    has a `candidates` sequence to pass here.
+
+    Groups by `game_id` in FIRST-APPEARANCE order (a plain `dict` preserves
+    insertion order), so the caller's own across-games ordering (e.g.
+    `Game.played_at DESC`) survives unchanged in the concatenated output —
+    only the WITHIN-game choice is randomized. Each game's drawn entries are
+    sorted by ply ascending before concatenation (a no-op at cap 1,
+    deterministic if the cap is ever raised above 1).
+
+    Args:
+        candidates: `(game_id, ply, payload)` tuples — `payload` is
+            caller-defined (the ORM `Game` in production, `None` in tests).
+        user_id: Authenticated user's internal PK (V4: never client-supplied
+            — callers must source this from `current_active_user.id`).
+        session_date: The composition's local calendar day (`today`).
+
+    Returns:
+        At most `MAX_ITEMS_PER_GAME_PER_SESSION` entries per `game_id`,
+        concatenated in first-appearance game order. Empty input yields an
+        empty list; a game with exactly one candidate always yields that
+        candidate.
+    """
+    grouped: dict[int, list[tuple[int, int, _T]]] = {}
+    for game_id, ply, payload in candidates:
+        grouped.setdefault(game_id, []).append((game_id, ply, payload))
+
+    picked: list[tuple[int, int, _T]] = []
+    for game_id, group in grouped.items():
+        rng = random.Random(f"train-pool-pick:{user_id}:{session_date.isoformat()}:{game_id}")
+        take = min(len(group), MAX_ITEMS_PER_GAME_PER_SESSION)
+        sampled = rng.sample(group, take)
+        sampled.sort(key=lambda entry: entry[1])
+        picked.extend(sampled)
+    return picked
+
+
 def blob_pending_stmt(user_id: int) -> Select[tuple[int]]:
     """Count of the user's own qualifying blunders still waiting on an answer-key blob.
 
@@ -783,6 +866,7 @@ def full_fen_at_ply(pgn: str, ply: int) -> str | None:
 
 __all__ = [
     "HERRING_SHARE",
+    "MAX_ITEMS_PER_GAME_PER_SESSION",
     "SHARP_GAP_ES",
     "WINNABILITY_FLOOR_ES",
     "PuzzleType",
@@ -796,5 +880,6 @@ __all__ = [
     "fen_and_last_move_at_ply",
     "full_fen_at_ply",
     "herring_stmt",
+    "pick_one_per_game",
     "pool_entry_stmt",
 ]

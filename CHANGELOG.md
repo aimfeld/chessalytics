@@ -17,6 +17,8 @@ in `YYYY-MM-DD` (Europe/Zurich).
 
 ### Changed
 
+- A Train session now draws at most one puzzle from any single game, so several blunders in the same game no longer produce near-identical puzzles in one sitting. (quick 260728-pgp)
+
 - Train's streak now counts sessions rather than weeks, and is protected by a buffer of up to seven flames that absorbs missed days instead of resetting on the spot; the Train nav badge is quiet on days that aren't scheduled. The flames heat up from yellow through orange to red as the buffer fills, with unearned ones shown as grey outlines, the streak count itself sits in a trophy badge, and the card explains all three rules (a scheduled day counts, an off-day session doesn't, and the streak only resets once the flames run out). The Train landing is now organised into Streak, Statistics, and Schedule cards. The Train tab's waiting-puzzle counter now ticks down as you solve rather than sitting frozen until the session ends, and finishing a session clears it right away instead of on the next page load. Changing the puzzles-per-session setting before starting a session now updates the waiting-puzzle count immediately rather than after pressing Start; changing it during a session still leaves that session's length alone. (Phase 193)
 
 - Train's "several fine moves" puzzles now come from a precomputed, shared pool of positions vetted by a deeper engine search, so a quiet puzzle genuinely has several acceptable moves instead of only looking like one, and positions where everything is fine are filtered out. These puzzles also stand on their own: they keep working after the game they came from is deleted, and when there is no game behind one, the reveal leaves out the opponent line and the Analyze link instead of pointing at a dead end. (Phase 192)
@@ -30,6 +32,8 @@ in `YYYY-MM-DD` (Europe/Zurich).
 - Train puzzles are now scored out of three instead of two. The position read is still worth one point, and the move is worth two for a clean move, one for a slightly imprecise one, and none for a mistake or blunder, so settling for a second-rate move no longer scores a perfect session. The per-puzzle points badge is now colour-coded by score. Already-recorded sessions keep their original scores. (SEED-119)
 
 ### Fixed
+
+- Train's "several fine moves" puzzles are drawn from a far wider range of positions. The pool behind them was being filled from only a handful of players' games, with many puzzles sitting a move or two apart in the same game; it now spans hundreds of players and thousands of games, so repeated or near-identical positions are much less likely. (SEED-124)
 
 - A training session can no longer get stuck on Resume forever. If one of its "several fine moves" puzzles could not be served, the session still counted it as outstanding and refused to finish, so it sat there until it expired the next day. Such a puzzle is now skipped for the purpose of finishing, exactly as it already was for the purpose of serving. (quick 260728-kmu)
 

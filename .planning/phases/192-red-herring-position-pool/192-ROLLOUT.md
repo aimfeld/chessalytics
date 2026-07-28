@@ -63,15 +63,71 @@ Observations worth keeping:
   prod; there is no reason to raise it, and lowering it would only matter if a future top-up
   needs to bound cost more tightly.
 - **Zero ply-mover mismatches and zero unreconstructable FENs** across 5876 candidates.
-  SEED-120 Pitfall 1's ply-indexing drift did not materialise in prod data.
+  SEED-120 Pitfall 1's ply-indexing drift did not materialise in prod data. (Superseded by
+  the regeneration below, which DID hit 34 mismatches once it sampled 116 users instead of
+  4 — the drift is real but rare, and confined to games this run never reached.)
 - **Zero duplicates**, as expected on a first run into an empty table. A top-up re-run will
   show a non-zero count here — that is the resumable path working, not a defect.
 - The loose qualifying-moves band (`HERRING_LOOSE_BAND_ES`) rejected 632 (11%), which is the
   gate actually doing the work of keeping degenerate "everything is fine" positions out.
+
+## Regeneration, same day (SEED-124)
+
+Inspecting the pool immediately after the run above showed it was drawn from **4 users out
+of 175**, across 444 games, with single games contributing up to 59 near-duplicate
+consecutive plies. Cause: the keyset scan walks the PK in order from a random start, and at
+the 85% accept rate it actually achieved (vs the ~1:1 the tracer assumed) a bucket hit
+target long before leaving the first user it landed on. The sampler's fairness argument
+rested on an assumed REJECTION rate, so it silently stopped sampling fairly the moment the
+rejection rate improved.
+
+Fixed in `858c656d` (per-user + per-game caps checked before the Stockfish call, cursor
+seeks past a capped user, cap counters seeded from existing rows, `--reset` added), then
+regenerated: `--db prod --n-positions 5000 --reset`, 14:56:01 → 17:07:32 UTC (2h11m).
+
+`--reset` deletes per phase immediately before that phase is generated, so the pool was
+never fully empty — each bucket's old rows stayed servable until its replacement run began.
+**No new D-13 exclusion window applies**: herrings were continuously available.
+
+| Phase | Rows | Users | Games | Rows/game | Searched | Walked | Finished |
+|---|---|---|---|---|---|---|---|
+| opening | 1668 | 51 | 881 | 1.89 | 1878 | 6430 | 15:43:54 |
+| middlegame | 1666 | 51 | 969 | 1.72 | 2072 | 8468 | 16:28:59 |
+| endgame | 1666 | 51 | 906 | 1.84 | 2215 | 14288 | 17:07:32 |
+
+Pool-wide: **5000 rows, 116 distinct users, 2562 distinct games** (was 4 users / 444 games).
+Both caps bind exactly — max 34 rows per user per phase, max 2 per game, no exceptions.
+
+```
+Rejected (fewer than 5 legal moves / engine failure): 240
+Rejected (ply-mover mismatch): 34
+Rejected (FEN unreconstructable): 0
+Rejected (below loose qualifying-moves band): 891
+Skipped before search (per-user cap): 143
+Skipped before search (per-game cap): 22878
+Stored and written: 5000
+```
+
+Observations:
+
+- **22,878 cap skips cost zero engine time.** That is the whole point of checking caps before
+  the search: walked 29,186 rows to search 6,165. Had the caps been applied after the search,
+  this run would have taken roughly five times as long.
+- **The walk budget was the necessary companion to the caps.** Endgame walked 14,288 rows
+  (2.3x opening's) because endgame positions are sparser per game; against the old shared
+  budget that alone would have read as "gave up: oversample budget exhausted".
+- **34 ply-mover mismatches appeared** where the first run saw none — SEED-120's ply-indexing
+  drift is real, rare, and confined to users the concentrated run never sampled. Log-and-skip
+  handled them; no Sentry event, no crash.
+- **Band rejects rose to 891 (14%, from 11%)**, consistent with sampling a broader population
+  rather than one user's game profile.
 
 ## Top-up
 
 D-14 stands: one-shot with manual top-up on demand, no cron, no depletion monitoring. The
 source-game link nulls rather than cascades (D-01), so nothing erodes the pool. To top up,
 re-run the same command with a larger `--n-positions` — it counts existing rows per phase
-and targets only the shortfall.
+and targets only the shortfall. Since SEED-124 the cap counters are seeded from the rows
+already stored, so a top-up spreads across NEW users rather than topping up whoever the
+previous run drew from. Use `--reset` only when existing rows are known-bad; it discards
+real MultiPV-5 search work.

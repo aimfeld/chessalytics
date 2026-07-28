@@ -17,6 +17,7 @@ from __future__ import annotations
 
 import datetime
 import random
+from collections import Counter
 from dataclasses import dataclass
 from typing import Literal, cast
 
@@ -37,6 +38,7 @@ from app.models.herring_pool import HerringPool
 from app.models.train_settings import TrainSettings
 from app.services.best_move_candidates import mover_color_for_ply
 from app.services.train_pool import (
+    MAX_ITEMS_PER_GAME_PER_SESSION,
     answer_key_present,
     blob_pending_stmt,
     classify_puzzle_type,
@@ -44,6 +46,7 @@ from app.services.train_pool import (
     fen_and_last_move_at_ply,
     full_fen_at_ply,
     herring_stmt,
+    pick_one_per_game,
     pool_entry_stmt,
 )
 from app.services.train_scheduler import (
@@ -82,6 +85,16 @@ _MOVE_QUALITY_LITERAL: dict[DrillMoveQuality, Literal["good", "inaccuracy", "wro
 _MOVE_QUALITY_ENUM: dict[Literal["good", "inaccuracy", "wrong"], DrillMoveQuality] = {
     literal: enum_member for enum_member, literal in _MOVE_QUALITY_LITERAL.items()
 }
+
+# Quick task 260728-pgp: due_stmt over-fetches by this factor before the
+# session-wide per-game cap is applied in Python (it must span both SR
+# sources — due drill_items AND fresh pool picks — so it cannot be a bare
+# SQL LIMIT). A plain `.limit(sr_slots)` would under-fill the SR side by
+# exactly the number of same-game duplicates in the fetched window; prod's
+# worst observed same-game (game_id, due_date) drill_items cluster is 6
+# items, so 8x leaves headroom while keeping the query BOUNDED —
+# deliberately not an unbounded scan.
+_DUE_OVERFETCH_FACTOR: int = 8
 
 
 @dataclass(frozen=True)
@@ -1229,6 +1242,20 @@ async def compose_and_materialize_session(
        is exhausted). Cross-backfill (Pitfall 4): if one side comes up short,
        the OTHER side fills the gap up to `n`, so a lopsided pool still
        yields a full session whenever enough total material exists.
+
+       Quick task 260728-pgp: both SR sources are capped at
+       `MAX_ITEMS_PER_GAME_PER_SESSION` per `game_id`, SESSION-WIDE, via one
+       shared `per_game_counts` Counter threaded through the due loop, the
+       `sr_needed` padding loop, and the herring-shortfall cross-backfill
+       loop. A due item deferred by the cap is skipped for THIS session only
+       and left completely untouched (`status` stays `ACTIVE`, `due_date` is
+       not modified, nothing deleted) — it resurfaces `due_date`-first next
+       session. The fresh-pool side's within-game choice is instead a
+       seeded UNIFORM RANDOM pick (`pick_one_per_game`), never earliest-ply
+       — a permanently-tracked `drill_items` row makes an earliest-ply bias
+       there permanent, unlike the due side's transient ordering. A
+       cap-shortened SR side still routes through the existing
+       cross-backfill above rather than relaxing the cap.
     5. Reconstruct each puzzle's full FEN + arriving move via
        `fen_and_last_move_at_ply`; a puzzle whose FEN cannot be
        reconstructed is dropped rather than served broken (never
@@ -1304,6 +1331,13 @@ async def compose_and_materialize_session(
 
     sr_slots, herring_slots = compose_slots(n)
 
+    # Quick task 260728-pgp: the SINGLE session-wide per-game count, threaded
+    # through every SR take-site below (the due loop, the sr_needed padding
+    # loop, and the herring-shortfall cross-backfill loop) — this shared
+    # Counter IS the session-wide 1-per-game guarantee, since due items and
+    # fresh pool picks are otherwise resolved independently.
+    per_game_counts: Counter[int] = Counter()
+
     # --- SR side: due drill_items first, most-overdue-first ---
     due_stmt = (
         select(DrillItem, Game)
@@ -1336,12 +1370,32 @@ async def compose_and_materialize_session(
             answer_key_present(GameFlaw.missed_pv_lines),
         )
         .order_by(DrillItem.due_date.asc(), DrillItem.game_id.asc(), DrillItem.ply.asc())
-        .limit(sr_slots)
+        # Quick task 260728-pgp: over-fetch (bounded by _DUE_OVERFETCH_FACTOR,
+        # never unbounded) because the session-wide per-game cap below is
+        # applied in Python AFTER this fetch — it must span both SR sources,
+        # so a bare .limit(sr_slots) would under-fill the SR side by exactly
+        # the number of same-game duplicates in the fetched window.
+        .limit(sr_slots * _DUE_OVERFETCH_FACTOR)
     )
     due_rows = (await session.execute(due_stmt)).all()
-    sr_candidates: list[tuple[int, int, Game]] = [
-        (drill_item.game_id, drill_item.ply, game) for drill_item, game in due_rows
-    ]
+    sr_candidates: list[tuple[int, int, Game]] = []
+    for drill_item, game in due_rows:
+        if len(sr_candidates) >= sr_slots:
+            break
+        if per_game_counts[drill_item.game_id] >= MAX_ITEMS_PER_GAME_PER_SESSION:
+            # Quick task 260728-pgp: this due item is deferred for THIS
+            # session only, mirroring the lazy-eviction comment above — it
+            # is left completely untouched (status stays ACTIVE, due_date is
+            # not modified, nothing is deleted), so due_date ASC puts it
+            # first next session and the game self-drains at
+            # MAX_ITEMS_PER_GAME_PER_SESSION/session. The due side's order
+            # is TRANSIENT (a deferred item comes back next session), unlike
+            # the fresh pool's PERMANENT drill_items row — that's why this
+            # side stays deterministic most-overdue-first instead of the
+            # pool's seeded uniform pick.
+            continue
+        sr_candidates.append((drill_item.game_id, drill_item.ply, game))
+        per_game_counts[drill_item.game_id] += 1
 
     # --- SR padding pool: fresh qualifying flaws not yet tracked as drill_items ---
     existing_pairs_result = await session.execute(
@@ -1353,13 +1407,19 @@ async def compose_and_materialize_session(
         Game.played_at.desc().nulls_last(), GameFlaw.game_id.desc(), GameFlaw.ply.asc()
     )
     pool_rows = (await session.execute(pool_stmt)).all()
-    sr_pool: list[tuple[int, int, Game]] = []
+    deduped_pool: list[tuple[int, int, Game]] = []
     for flaw, game in pool_rows:
         key = (flaw.game_id, flaw.ply)
         if key in existing_pairs:
             continue
-        sr_pool.append((flaw.game_id, flaw.ply, game))
+        deduped_pool.append((flaw.game_id, flaw.ply, game))
         existing_pairs.add(key)
+    # Quick task 260728-pgp: cap the fresh pool at MAX_ITEMS_PER_GAME_PER_SESSION
+    # per game_id BEFORE it's consumed below. pick_one_per_game groups by
+    # game_id in first-appearance order, so the Game.played_at DESC ordering
+    # across games above is unchanged — only the WITHIN-game choice (which
+    # ply of a blunder-heavy game) is randomized.
+    sr_pool = pick_one_per_game(deduped_pool, user_id=user_id, session_date=today)
 
     # pool-sourced picks that need a brand-new drill_items row (never the
     # already-tracked due items above).
@@ -1369,6 +1429,13 @@ async def compose_and_materialize_session(
     while sr_needed > 0 and pool_idx < len(sr_pool):
         pick = sr_pool[pool_idx]
         pool_idx += 1
+        # Quick task 260728-pgp: session-wide guard — sr_pool already holds
+        # at most one entry per game (Task 1's pick_one_per_game), so this
+        # is what stops a fresh-pool pick from colliding with a game the
+        # DUE side above already claimed.
+        if per_game_counts[pick[0]] >= MAX_ITEMS_PER_GAME_PER_SESSION:
+            continue
+        per_game_counts[pick[0]] += 1
         sr_candidates.append(pick)
         new_sr_items.append(pick)
         sr_needed -= 1
@@ -1402,6 +1469,12 @@ async def compose_and_materialize_session(
             while shortfall > 0 and pool_idx < len(sr_pool):
                 pick = sr_pool[pool_idx]
                 pool_idx += 1
+                # Quick task 260728-pgp: same session-wide guard as the
+                # sr_needed padding loop above — never relax the cap even
+                # when backfilling a herring shortfall.
+                if per_game_counts[pick[0]] >= MAX_ITEMS_PER_GAME_PER_SESSION:
+                    continue
+                per_game_counts[pick[0]] += 1
                 sr_candidates.append(pick)
                 new_sr_items.append(pick)
                 shortfall -= 1
