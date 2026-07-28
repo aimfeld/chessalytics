@@ -160,6 +160,11 @@ export function NavHeader() {
   // (T-191-21) — a guest or zero-game account never issues this request.
   const trainProgressQuery = useTrainProgress({ enabled: navUnlocked && profile != null && !profile.is_guest });
   const trainWaitingCount = trainProgressQuery.data?.waiting_count ?? 0;
+  // Phase 193 D-09/D-10: server-computed badge visibility (scheduled-day gating,
+  // with an open-unfinished-session carve-out) — fails closed (undefined data
+  // while pending/errored, or a payload missing the field) rather than guessing.
+  // No client-side schedule-mask/timezone math is performed here.
+  const trainBadgeVisible = trainProgressQuery.data?.badge_visible ?? false;
   // D-16: Admin tab rightmost for superusers, absent otherwise.
   const navItems = profile?.is_superuser ? [...NAV_ITEMS, ADMIN_NAV_ITEM] : NAV_ITEMS;
 
@@ -220,7 +225,7 @@ export function NavHeader() {
                     <span className="relative inline-flex h-2.5 w-2.5 rounded-full bg-red-500" />
                   </span>
                 )}
-                {to === '/train' && trainWaitingCount > 0 && (
+                {to === '/train' && trainWaitingCount > 0 && trainBadgeVisible && (
                   <span
                     // UAT bug fix (191-06): the desktop `<header>` has
                     // `overflow-hidden` (line ~167); the old `-top-1` offset
@@ -352,6 +357,8 @@ export function MobileBottomBar({ onMoreClick }: { onMoreClick: () => void }) {
   // SCHD-02/D-06/D-07/D-08 — see NavHeader for the gating rationale.
   const trainProgressQuery = useTrainProgress({ enabled: navUnlocked && profile != null && !profile.is_guest });
   const trainWaitingCount = trainProgressQuery.data?.waiting_count ?? 0;
+  // Phase 193 D-09/D-10 — see NavHeader for the fail-closed badge_visible rationale.
+  const trainBadgeVisible = trainProgressQuery.data?.badge_visible ?? false;
 
   return (
     <nav
@@ -405,7 +412,7 @@ export function MobileBottomBar({ onMoreClick }: { onMoreClick: () => void }) {
               <span className="relative inline-flex h-2 w-2 rounded-full bg-red-500" />
             </span>
           )}
-          {to === '/train' && trainWaitingCount > 0 && (
+          {to === '/train' && trainWaitingCount > 0 && trainBadgeVisible && (
             <span
               className="absolute top-1.5 right-[30%] flex h-4 min-w-4 items-center justify-center rounded-full bg-red-500 px-1 text-sm font-semibold text-white"
               data-testid="train-notification-badge-mobile"

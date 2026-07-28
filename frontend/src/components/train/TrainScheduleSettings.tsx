@@ -6,8 +6,12 @@
  * "Saved"/"Couldn't save. Try again." indicator.
  *
  * Renders below the Start/Resume CTA (D-13, UI-SPEC Visual Hierarchy) —
- * deliberately quiet, `text-sm` labels on the page background, no card
- * chrome, no Save button.
+ * deliberately quiet, `text-sm` labels, no Save button. 193 UAT round 2
+ * boxed it in the app's standard `Card`/`CardHeader` ("Train schedule")
+ * alongside `TrainStreakCard`/`TrainStatsCard`, and moved the completed
+ * state's "Next session" line in here — it describes the schedule, so it
+ * belongs with the pickers that determine it rather than floating above
+ * them as loose page text.
  *
  * Restyled (191-06 UAT) to match the game filter panel's own pickers
  * exactly, not just approximate them: "Train on" reuses `ToggleChipButton`
@@ -22,7 +26,9 @@
  */
 import { useEffect, useRef, useState } from 'react';
 import type { ReactElement } from 'react';
+import { format, parseISO } from 'date-fns';
 import { Check } from 'lucide-react';
+import { Card, CardBody, CardHeader } from '@/components/ui/card';
 import { ToggleGroup, ToggleGroupItem } from '@/components/ui/toggle-group';
 import { ToggleChipButton } from '@/components/ui/toggle-chip-button';
 import { LoadError } from '@/components/ui/load-error';
@@ -84,9 +90,65 @@ export interface TrainScheduleSettingsProps {
    * stale session keeps rendering until the next full page load.
    */
   onSaved?: () => void;
+  /**
+   * The next scheduled session day (an ISO date), rendered as the card's
+   * first line. Only the 'completed' landing state passes it — while a
+   * session is still startable, "next session" is today, and stating that
+   * as a future date would be actively misleading.
+   */
+  nextSessionDate?: string;
 }
 
-export function TrainScheduleSettings({ onSaved }: TrainScheduleSettingsProps): ReactElement {
+/**
+ * The card shell, shared by the error and populated bodies so a failed
+ * settings fetch still reads as the same "Train schedule" box.
+ *
+ * 193 UAT round 3: the save indicator moved from the BOTTOM of the card body
+ * into the header's right slot (the `RightControls` composition the `Card`
+ * docstring sanctions). Down there it was a permanently reserved `min-h-5`
+ * slot plus the wrapper's own `gap-4` — ~36px of dead space under the last
+ * picker in the idle state, which is all the user ever sees. In the header it
+ * costs no vertical space at all and still can't shift the layout when it
+ * appears.
+ */
+function ScheduleCardShell({
+  indicator,
+  children,
+}: {
+  indicator: IndicatorState;
+  children: ReactElement;
+}): ReactElement {
+  return (
+    <Card as="section" className="w-full" data-testid="train-schedule-settings">
+      <CardHeader size="compact">
+        Train schedule
+        {indicator === 'saved' && (
+          <span
+            data-testid="train-settings-saved"
+            className="ml-auto flex items-center gap-1 text-sm font-normal text-muted-foreground"
+          >
+            <Check className="size-4" aria-hidden="true" />
+            Saved
+          </span>
+        )}
+        {indicator === 'error' && (
+          <span
+            data-testid="train-settings-save-error"
+            className="ml-auto text-sm font-normal text-muted-foreground"
+          >
+            Couldn&apos;t save. Try again.
+          </span>
+        )}
+      </CardHeader>
+      <CardBody>{children}</CardBody>
+    </Card>
+  );
+}
+
+export function TrainScheduleSettings({
+  onSaved,
+  nextSessionDate,
+}: TrainScheduleSettingsProps): ReactElement {
   const { data, isPending, isError, save } = useTrainSettings();
 
   const [draft, setDraft] = useState<Draft | null>(null);
@@ -139,9 +201,9 @@ export function TrainScheduleSettings({ onSaved }: TrainScheduleSettingsProps): 
 
   if (isError) {
     return (
-      <div data-testid="train-schedule-settings">
+      <ScheduleCardShell indicator="idle">
         <LoadError resource="your training schedule" />
-      </div>
+      </ScheduleCardShell>
     );
   }
 
@@ -149,85 +211,76 @@ export function TrainScheduleSettings({ onSaved }: TrainScheduleSettingsProps): 
   const puzzlesSelected = draft !== null ? String(draft.puzzlesPerSession) : '';
 
   return (
-    <div data-testid="train-schedule-settings" className="flex w-full flex-col gap-4">
-      {/*
-        Restyled (191-06 UAT) to match the game filter panel exactly:
-        - "Train on" mirrors FilterPanel's multi-select "Time control" —
-          the hand-rolled ToggleChipButton grid, not the Radix ToggleGroup.
-        - "Puzzles per session" mirrors FilterPanel's single-select
-          "Played as" — the Radix ToggleGroup, full-width flex-1 items.
-        Both labels use FilterPanel's own `text-sm text-muted-foreground`
-        (not font-semibold) and sit at the top-left of a full-width block.
-      */}
-      <div className="w-full">
-        <p className="mb-1 text-sm text-muted-foreground">Train on</p>
-        <div className="grid grid-cols-7 gap-1">
-          {WEEKDAY_CHIPS.map((chip) => (
-            <ToggleChipButton
-              key={chip.bit}
-              onClick={() => {
-                hasEditedRef.current = true;
-                setDraft((prev) =>
-                  prev ? { ...prev, weekdayMask: prev.weekdayMask ^ (1 << chip.bit) } : prev,
-                );
-              }}
-              testId={chip.testId}
-              ariaLabel={`Train on ${chip.label}`}
-              active={draft !== null && isWeekdayBitSet(draft.weekdayMask, chip.bit)}
-              disabled={disabled}
-            >
-              {chip.label}
-            </ToggleChipButton>
-          ))}
+    <ScheduleCardShell indicator={indicator}>
+      <div className="flex w-full flex-col gap-4">
+        {nextSessionDate !== undefined && (
+          <p className="text-sm" data-testid="train-next-session">
+            Next session: {format(parseISO(nextSessionDate), 'MMM d, yyyy')}
+          </p>
+        )}
+        {/*
+          Restyled (191-06 UAT) to match the game filter panel exactly:
+          - "Train on" mirrors FilterPanel's multi-select "Time control" —
+            the hand-rolled ToggleChipButton grid, not the Radix ToggleGroup.
+          - "Puzzles per session" mirrors FilterPanel's single-select
+            "Played as" — the Radix ToggleGroup, full-width flex-1 items.
+          Both labels use FilterPanel's own `text-sm text-muted-foreground`
+          (not font-semibold) and sit at the top-left of a full-width block.
+        */}
+        <div className="w-full">
+          <p className="mb-1 text-sm text-muted-foreground">Train on</p>
+          <div className="grid grid-cols-7 gap-1">
+            {WEEKDAY_CHIPS.map((chip) => (
+              <ToggleChipButton
+                key={chip.bit}
+                onClick={() => {
+                  hasEditedRef.current = true;
+                  setDraft((prev) =>
+                    prev ? { ...prev, weekdayMask: prev.weekdayMask ^ (1 << chip.bit) } : prev,
+                  );
+                }}
+                testId={chip.testId}
+                ariaLabel={`Train on ${chip.label}`}
+                active={draft !== null && isWeekdayBitSet(draft.weekdayMask, chip.bit)}
+                disabled={disabled}
+              >
+                {chip.label}
+              </ToggleChipButton>
+            ))}
+          </div>
+        </div>
+        <div className="w-full">
+          <p className="mb-1 text-sm text-muted-foreground">Puzzles per session</p>
+          <ToggleGroup
+            type="single"
+            value={puzzlesSelected}
+            onValueChange={(v: string) => {
+              // Radix emits '' when the user taps the already-active item in a
+              // single group — ignore it, keep the current selection (exactly
+              // one preset must always be active, D-12).
+              if (!v) return;
+              hasEditedRef.current = true;
+              const puzzlesPerSession = Number(v);
+              setDraft((prev) => (prev ? { ...prev, puzzlesPerSession } : prev));
+            }}
+            variant="outline"
+            size="sm"
+            className="w-full"
+          >
+            {PUZZLES_PER_SESSION_PRESETS.map((n) => (
+              <ToggleGroupItem
+                key={n}
+                value={String(n)}
+                data-testid={`filter-puzzles-${n}`}
+                disabled={disabled}
+                className="min-h-11 sm:min-h-0 flex-1 text-sm"
+              >
+                {n}
+              </ToggleGroupItem>
+            ))}
+          </ToggleGroup>
         </div>
       </div>
-      <div className="w-full">
-        <p className="mb-1 text-sm text-muted-foreground">Puzzles per session</p>
-        <ToggleGroup
-          type="single"
-          value={puzzlesSelected}
-          onValueChange={(v: string) => {
-            // Radix emits '' when the user taps the already-active item in a
-            // single group — ignore it, keep the current selection (exactly
-            // one preset must always be active, D-12).
-            if (!v) return;
-            hasEditedRef.current = true;
-            const puzzlesPerSession = Number(v);
-            setDraft((prev) => (prev ? { ...prev, puzzlesPerSession } : prev));
-          }}
-          variant="outline"
-          size="sm"
-          className="w-full"
-        >
-          {PUZZLES_PER_SESSION_PRESETS.map((n) => (
-            <ToggleGroupItem
-              key={n}
-              value={String(n)}
-              data-testid={`filter-puzzles-${n}`}
-              disabled={disabled}
-              className="min-h-11 sm:min-h-0 flex-1 text-sm"
-            >
-              {n}
-            </ToggleGroupItem>
-          ))}
-        </ToggleGroup>
-      </div>
-      <div className="min-h-5">
-        {indicator === 'saved' && (
-          <span
-            data-testid="train-settings-saved"
-            className="flex items-center gap-1 text-sm text-muted-foreground"
-          >
-            <Check className="size-4" aria-hidden="true" />
-            Saved
-          </span>
-        )}
-        {indicator === 'error' && (
-          <span data-testid="train-settings-save-error" className="text-sm text-muted-foreground">
-            Couldn&apos;t save. Try again.
-          </span>
-        )}
-      </div>
-    </div>
+    </ScheduleCardShell>
   );
 }

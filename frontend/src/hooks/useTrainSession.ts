@@ -70,8 +70,9 @@
  */
 
 import { useCallback, useState } from 'react';
-import { useMutation } from '@tanstack/react-query';
+import { useMutation, useQueryClient } from '@tanstack/react-query';
 import { trainApi } from '@/api/client';
+import { TRAIN_PROGRESS_QUERY_KEY } from '@/hooks/useTrainProgress';
 import { scorePuzzle } from '@/lib/trainScore';
 import type { SolveRequest, SolveResponse, TrainPuzzle, TrainSessionResponse } from '@/types/train';
 
@@ -160,6 +161,7 @@ export interface UseTrainSessionResult {
 }
 
 export function useTrainSession(): UseTrainSessionResult {
+  const queryClient = useQueryClient();
   const [session, setSession] = useState<TrainSessionResponse | null>(null);
   const [currentIndex, setCurrentIndex] = useState<number | null>(null);
   const [sessionScore, setSessionScore] = useState(0);
@@ -198,6 +200,18 @@ export function useTrainSession(): UseTrainSessionResult {
         next.add(variables.body.position);
         return next;
       });
+      // 193 UAT: invalidate on EVERY solve, not just the last one. The nav
+      // badge's waiting_count is `puzzle_count - solved_count` server-side
+      // (get_waiting_puzzle_count branch 1), so it drops by one on each
+      // solve — gating this on session_complete left the counter frozen at
+      // its start-of-session value until the final puzzle, then jumping
+      // straight to 0. The last solve is still the important one (it flips
+      // the row to 'completed', drops waiting_count to 0 so the dot
+      // disappears, and settles the streak/shield the progress row shows) —
+      // it is now just the last of N rather than a special case. The nav
+      // badge and the progress row both read this SAME cached key, which
+      // nothing else on this page invalidates.
+      void queryClient.invalidateQueries({ queryKey: TRAIN_PROGRESS_QUERY_KEY });
     },
   });
 

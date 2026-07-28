@@ -4,7 +4,8 @@ WHY
     Train's whole value surface is calendar-shaped: `weekday_mask` decides
     which days a session exists, `session_window`/`is_session_expired` decide
     when it lapses, the `drill_items.due_date` ladder spaces repeats out by
-    days, and `settle_weeks` judges Mon-start weeks to move the streak flame.
+    days, and the per-scheduled-day tick machine judges each elapsed
+    scheduled day to move the depletable shield and session streak.
     Verifying any of that by hand would otherwise mean waiting real days.
 
     Every Train handler already takes the current instant as an injected

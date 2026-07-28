@@ -26,6 +26,7 @@ vi.mock('@/api/client', async () => {
 
 import { trainApi } from '@/api/client';
 import { useTrainSession } from '@/hooks/useTrainSession';
+import { TRAIN_PROGRESS_QUERY_KEY } from '@/hooks/useTrainProgress';
 import type { SolveRequest, SolveResponse, TrainPuzzle, TrainSessionResponse } from '@/types/train';
 
 const START_FEN = 'rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1';
@@ -123,5 +124,110 @@ describe('useTrainSession — sessionSolvedCount (190.1-04 D-04)', () => {
       await expect(result.current.solvePuzzle(body)).rejects.toThrow();
     });
     expect(result.current.sessionSolvedCount).toBe(0);
+  });
+});
+
+/**
+ * 193 UAT: every solve moves the nav badge. Server-side `waiting_count` is
+ * `puzzle_count - solved_count` (get_waiting_puzzle_count branch 1), so it
+ * decreases by one per solve and hits 0 on the last one — which is also the
+ * tick that flips the session row to 'completed' and settles the
+ * streak/shield. The nav badge dot and the progress row both read the cached
+ * `TRAIN_PROGRESS_QUERY_KEY`, which nothing else on the Train page
+ * invalidates, so it must be invalidated on EVERY solve. Gating it on
+ * `session_complete` alone froze the counter at its start-of-session value
+ * until the final puzzle, then jumped it straight to 0.
+ */
+describe('useTrainSession — progress invalidation on every solve (193 UAT)', () => {
+  beforeEach(() => {
+    vi.mocked(trainApi.composeOrResumeSession).mockReset();
+    vi.mocked(trainApi.solvePuzzle).mockReset();
+  });
+
+  function makeClientWrapper(): {
+    client: QueryClient;
+    wrapper: ({ children }: { children: ReactNode }) => ReactNode;
+  } {
+    const client = new QueryClient({
+      defaultOptions: { queries: { retry: false }, mutations: { retry: false } },
+    });
+    return {
+      client,
+      wrapper: ({ children }: { children: ReactNode }) =>
+        createElement(QueryClientProvider, { client }, children),
+    };
+  }
+
+  const BODY: SolveRequest = {
+    position: 1,
+    guess: 'critical',
+    played_move: 'e2e4',
+    move_quality: 'good',
+  };
+
+  it('invalidates the train progress query when the solve completes the session', async () => {
+    vi.mocked(trainApi.composeOrResumeSession).mockResolvedValue(makeSession());
+    vi.mocked(trainApi.solvePuzzle).mockResolvedValue({ ...SOLVE_RESPONSE, session_complete: true });
+    const { client, wrapper } = makeClientWrapper();
+    const invalidate = vi.spyOn(client, 'invalidateQueries');
+    const { result } = renderHook(() => useTrainSession(), { wrapper });
+    act(() => result.current.startSession());
+    await waitFor(() => expect(result.current.session).not.toBeNull());
+
+    await act(async () => {
+      await result.current.solvePuzzle(BODY);
+    });
+
+    expect(invalidate).toHaveBeenCalledWith({ queryKey: TRAIN_PROGRESS_QUERY_KEY });
+  });
+
+  it('invalidates the train progress query on a mid-session solve too', async () => {
+    // The badge counter must tick down as the user works through the session,
+    // not sit frozen until the last puzzle. This is the case that regressed
+    // when the invalidation was gated on `session_complete`.
+    vi.mocked(trainApi.composeOrResumeSession).mockResolvedValue(makeSession());
+    vi.mocked(trainApi.solvePuzzle).mockResolvedValue({
+      ...SOLVE_RESPONSE,
+      session_complete: false,
+    });
+    const { client, wrapper } = makeClientWrapper();
+    const invalidate = vi.spyOn(client, 'invalidateQueries');
+    const { result } = renderHook(() => useTrainSession(), { wrapper });
+    act(() => result.current.startSession());
+    await waitFor(() => expect(result.current.session).not.toBeNull());
+
+    await act(async () => {
+      await result.current.solvePuzzle(BODY);
+    });
+
+    expect(invalidate).toHaveBeenCalledWith({ queryKey: TRAIN_PROGRESS_QUERY_KEY });
+  });
+
+  it('invalidates once per solve across a multi-puzzle session', async () => {
+    // Guards the shape of the fix rather than a single call: three
+    // consecutive mid-session solves must each refresh the counter, so a
+    // future "only invalidate sometimes" optimisation cannot silently
+    // re-freeze it.
+    vi.mocked(trainApi.composeOrResumeSession).mockResolvedValue(makeSession());
+    vi.mocked(trainApi.solvePuzzle).mockResolvedValue({
+      ...SOLVE_RESPONSE,
+      session_complete: false,
+    });
+    const { client, wrapper } = makeClientWrapper();
+    const invalidate = vi.spyOn(client, 'invalidateQueries');
+    const { result } = renderHook(() => useTrainSession(), { wrapper });
+    act(() => result.current.startSession());
+    await waitFor(() => expect(result.current.session).not.toBeNull());
+
+    for (const position of [1, 2, 3]) {
+      await act(async () => {
+        await result.current.solvePuzzle({ ...BODY, position });
+      });
+    }
+
+    const progressInvalidations = invalidate.mock.calls.filter(
+      ([arg]) => arg?.queryKey === TRAIN_PROGRESS_QUERY_KEY,
+    );
+    expect(progressInvalidations).toHaveLength(3);
   });
 });

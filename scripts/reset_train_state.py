@@ -17,13 +17,18 @@ WHAT IT DELETES / RESETS (for ONE user)
     - ``drill_items``   — deleted. The pool is re-materialised from the user's
       own qualifying blunders on the next ``POST /train/sessions``, so this
       loses only spaced-repetition progress, never game/flaw data.
-    - ``train_settings`` — the D-18 streak snapshot columns
-      (``streak_count``, ``flame_state``, ``streak_settled_through``) reset to
-      0/NULL/NULL. ``timezone``/``weekday_mask``/``puzzles_per_session`` are
-      DELIBERATELY kept: they are the schedule under test, and re-picking them
-      in the UI after every reset would be pure friction. Pass
-      ``--reset-settings`` to drop the row entirely and get the D-06/D-07/D-08
-      defaults back on next touch.
+    - ``train_settings`` — the per-day tick snapshot columns
+      (``streak_count``, ``shield_level``, ``streak_settled_through``,
+      ``pool_eligible_since``) reset to 0/0/NULL/NULL. The watermark is
+      derived state, not a user setting, so a clean slate must clear it too
+      — leaving a stale ``pool_eligible_since`` behind would let a
+      time-travelled run silently treat "the OLD material-discovery date" as
+      still valid after the drill_items that earned it were just deleted.
+      ``timezone``/``weekday_mask``/``puzzles_per_session`` are DELIBERATELY
+      kept: they are the schedule under test, and re-picking them in the UI
+      after every reset would be pure friction. Pass ``--reset-settings`` to
+      drop the row entirely and get the D-06/D-07/D-08 defaults back on next
+      touch.
 
     Nothing outside these four tables is touched — no games, positions, flaws,
     or evals.
@@ -141,7 +146,12 @@ async def _reset(session: AsyncSession, user_id: int, *, reset_settings: bool) -
         await session.execute(
             update(TrainSettings)
             .where(TrainSettings.user_id == user_id)
-            .values(streak_count=0, flame_state=None, streak_settled_through=None)
+            .values(
+                streak_count=0,
+                shield_level=0,
+                streak_settled_through=None,
+                pool_eligible_since=None,
+            )
         )
 
 

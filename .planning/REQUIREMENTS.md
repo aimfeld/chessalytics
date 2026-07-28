@@ -37,12 +37,12 @@
 ### Schedule & Reminders
 
 - [x] **SCHD-01**: User configures a weekly training schedule: weekday picker + N puzzles per session
-- [x] **SCHD-02**: On session days, an in-app nav badge and/or dashboard card surfaces the waiting session ("12 puzzles waiting"); no push, no email
+- [x] **SCHD-02**: On scheduled session days, an in-app nav badge and/or dashboard card surfaces the waiting session ("12 puzzles waiting"); an already-open unfinished session keeps its badge into an unscheduled day so it isn't stranded with no cue to finish it; no push, no email
 - [x] **SCHD-03**: An ad-hoc "train now" session on an off day is allowed and draws the same queue
 
 ### Progress & Gamification
 
-- [x] **PROG-01**: A weekly streak counts consecutive weeks with every scheduled session completed (no freeze mechanics; competence feedback, no behavior control)
+- [x] **PROG-01**: A session streak counts completed scheduled-day sessions, absorbed by a depletable seven-level shield that gains a level per completed session and loses one per missed scheduled day, resetting the count only when the shield empties — the shield is forgiveness, not behavior control (competence feedback, no behavior control)
 - [x] **PROG-02**: A green-rated session ends with a confetti burst (`prefers-reduced-motion` safe, reusing the existing confetti helper)
 - [x] **PROG-03**: When an item hits 3/3 and retires, a distinct "Flaw fixed!" celebration shows with the position thumbnail
 - [x] **PROG-04**: A progress surface shows mastered and parked counts honestly ("3 parked — too hard for now", never framed as failure)
@@ -115,9 +115,9 @@ Which phases cover which requirements. Updated during roadmap creation.
 | NAV-01 | Phase 190 | Complete |
 | NAV-02 | Phase 190 | Complete |
 | SCHD-01 | Phase 191 | Complete |
-| SCHD-02 | Phase 191 | Complete |
+| SCHD-02 | Phase 191, Phase 193 | Complete |
 | SCHD-03 | Phase 191 | Complete |
-| PROG-01 | Phase 191 | Complete |
+| PROG-01 | Phase 191, Phase 193 | Complete |
 | PROG-02 | Phase 191 | Complete |
 | PROG-03 | Phase 191 | Complete |
 | PROG-04 | Phase 191 | Complete |

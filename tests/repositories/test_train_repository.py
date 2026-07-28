@@ -40,6 +40,7 @@ precedent — no committed rows leak between tests.
 
 from __future__ import annotations
 
+import dataclasses
 import datetime
 import uuid
 
@@ -59,7 +60,7 @@ from app.models.herring_pool import HerringPool
 from app.models.train_settings import TrainSettings
 from app.repositories import train_repository
 from app.services.train_pool import compose_slots
-from app.services.train_scheduler import FlameState
+from app.services.train_scheduler import ALL_WEEKDAYS_MASK, SHIELD_CAP
 from tests.conftest import ensure_test_user
 
 # Unique user ID for this test module (distinct from other repo test modules —
@@ -1341,11 +1342,17 @@ async def _seed_open_session_with_solves(
     puzzle_count: int,
     solved_count: int,
     expires_on: datetime.date,
+    requested_count: int | None = None,
 ) -> DrillSession:
     """Seed one open drill_sessions row + puzzle_count unsolved/solved drill_solves rows.
 
     Backed by a bare game (no flaw row) so this fixture never contributes
     extra `pool_entry_stmt` material of its own.
+
+    `requested_count` defaults to None — the "seeded directly, never went
+    through composition" shape that `_is_untouched_and_resized` deliberately
+    treats as not-resized, so every pre-existing caller keeps its old behaviour.
+    Pass it explicitly to exercise the resize path.
     """
     game_id = await _seed_bare_game(db_session, user_id, label)
     drill_session = DrillSession(
@@ -1353,6 +1360,7 @@ async def _seed_open_session_with_solves(
         session_date=_TODAY,
         status="open",
         puzzle_count=puzzle_count,
+        requested_count=requested_count,
         expires_on=expires_on,
     )
     db_session.add(drill_session)
@@ -1405,6 +1413,99 @@ async def test_waiting_count_open_unexpired_session_subtracts_solved(
         db_session, user_id=_USER_ID, settings_row=settings_row, today=_TODAY
     )
     assert count == 7
+
+
+@pytest.mark.asyncio
+async def test_waiting_count_untouched_session_reflects_resized_setting(
+    db_session: AsyncSession,
+) -> None:
+    """An UNTOUCHED open session whose size drifted must NOT report its frozen count.
+
+    Bug: changing `puzzles_per_session` while a composed-but-unstarted session
+    existed left the nav badge advertising the OLD size until the user pressed
+    Start (which recomposes via `_discard_if_untouched_and_resized`). The badge
+    must predict that discard instead of reporting a count no session will serve.
+
+    Seeded with zero material, so falling through to branch 3 yields 0 — the
+    assertion is specifically "not the stale 12".
+    """
+    await ensure_test_user(db_session, _USER_ID)
+    settings_row = await train_repository.get_or_create_settings(db_session, user_id=_USER_ID)
+    await _seed_open_session_with_solves(
+        db_session,
+        _USER_ID,
+        "waiting-untouched-resized",
+        puzzle_count=12,
+        solved_count=0,
+        requested_count=12,
+        expires_on=_TODAY + datetime.timedelta(days=1),
+    )
+    resized = dataclasses.replace(settings_row, puzzles_per_session=5)
+
+    count = await train_repository.get_waiting_puzzle_count(
+        db_session, user_id=_USER_ID, settings_row=resized, today=_TODAY
+    )
+    assert count != 12, "badge still reporting the stale pre-resize session size"
+    assert count == 0
+
+
+@pytest.mark.asyncio
+async def test_waiting_count_active_session_ignores_resized_setting(
+    db_session: AsyncSession,
+) -> None:
+    """An ACTIVE session (>=1 solve) keeps counting down from its OWN frozen size.
+
+    The user's explicit requirement: changing puzzles-per-session mid-session
+    must not resize the session in flight. `puzzle_count` stays load-bearing as
+    the SOLV-04/D-13 progress denominator, so 12 puzzles with 5 solved reports 7
+    even though the setting now says 5.
+    """
+    await ensure_test_user(db_session, _USER_ID)
+    settings_row = await train_repository.get_or_create_settings(db_session, user_id=_USER_ID)
+    await _seed_open_session_with_solves(
+        db_session,
+        _USER_ID,
+        "waiting-active-resized",
+        puzzle_count=12,
+        solved_count=5,
+        requested_count=12,
+        expires_on=_TODAY + datetime.timedelta(days=1),
+    )
+    resized = dataclasses.replace(settings_row, puzzles_per_session=5)
+
+    count = await train_repository.get_waiting_puzzle_count(
+        db_session, user_id=_USER_ID, settings_row=resized, today=_TODAY
+    )
+    assert count == 7
+
+
+@pytest.mark.asyncio
+async def test_waiting_count_untouched_session_unchanged_size_still_reports_frozen(
+    db_session: AsyncSession,
+) -> None:
+    """Untouched but NOT resized -> still branch 1, not the branch-3 estimate.
+
+    Guards the other side of the predicate: an unstarted session whose size
+    still matches the setting is resumed as-is by composition, so the badge must
+    keep reporting its real remaining count rather than re-estimating material.
+    """
+    await ensure_test_user(db_session, _USER_ID)
+    settings_row = await train_repository.get_or_create_settings(db_session, user_id=_USER_ID)
+    await _seed_open_session_with_solves(
+        db_session,
+        _USER_ID,
+        "waiting-untouched-same-size",
+        puzzle_count=9,
+        solved_count=0,
+        requested_count=9,
+        expires_on=_TODAY + datetime.timedelta(days=1),
+    )
+    same_size = dataclasses.replace(settings_row, puzzles_per_session=9)
+
+    count = await train_repository.get_waiting_puzzle_count(
+        db_session, user_id=_USER_ID, settings_row=same_size, today=_TODAY
+    )
+    assert count == 9
 
 
 @pytest.mark.asyncio
@@ -1567,13 +1668,18 @@ async def test_waiting_count_scoped_to_caller_user(db_session: AsyncSession) -> 
 
 
 # ---------------------------------------------------------------------------
-# get_progress (PROG-01/PROG-04, Phase 191 Plan 01, D-18)
+# get_progress (PROG-01/PROG-04, Phase 193 per-day tick + shield)
 # ---------------------------------------------------------------------------
 
-# 2026-01-15 is a Thursday; its week starts Monday 2026-01-12 ("current
-# week" for these tests). 2026-01-05 (Monday) is a fully-elapsed past week.
+# 2026-01-15 is a Thursday. 2026-01-14 (Wednesday) is "yesterday" — a single
+# day whose window has closed by _PROGRESS_NOW, so a session seeded there
+# walks as exactly ONE judged day under the dense default mask (every day
+# scheduled). 2026-01-05 (Monday) is used by the multi-week settle-before-
+# mutate scenario below, which pins the schedule to a sparse Monday-only
+# mask so consecutive weekly sessions land on scheduled days with no
+# intervening misses.
 _PROGRESS_NOW = datetime.datetime(2026, 1, 15, 12, 0, tzinfo=datetime.timezone.utc)
-_PROGRESS_PAST_WEEK_MONDAY = datetime.date(2026, 1, 5)
+_PROGRESS_YESTERDAY = datetime.date(2026, 1, 14)
 
 
 async def _seed_completed_session(
@@ -1596,6 +1702,27 @@ async def _seed_completed_session(
                 session_date, datetime.time(12, 0), tzinfo=datetime.timezone.utc
             ),
         )
+    )
+    await db_session.flush()
+
+
+async def _seed_pool_eligible_since(
+    db_session: AsyncSession, user_id: int, since: datetime.date
+) -> None:
+    """Directly stamp the D-06 eligibility watermark, bypassing
+    `_stamp_pool_eligibility`'s material-detection path.
+
+    A row's `pool_eligible_since` staying NULL is a first-class, correct
+    state (an all-neutral walk, per D-05/D-06 — see `TestStampPoolEligibility`
+    for the material-detection path itself) — tests that want to exercise
+    `tick_days`' day-walk machinery WITHOUT also constructing real
+    `drill_items`/pool-candidate rows use this helper instead.
+    """
+    await train_repository.get_or_create_settings(db_session, user_id=user_id)
+    await db_session.execute(
+        update(TrainSettings)
+        .where(TrainSettings.user_id == user_id)
+        .values(pool_eligible_since=since)
     )
     await db_session.flush()
 
@@ -1802,62 +1929,67 @@ async def test_next_due_date_is_none_with_no_future_active_item(db_session: Asyn
 
 @pytest.mark.asyncio
 async def test_first_settlement_replays_pre_existing_history(db_session: AsyncSession) -> None:
-    """D-05 retroactivity, preserved under D-18: a brand-new all-null
-    snapshot replays the user's entire pre-existing completed-session
-    history on the very first GET /train/progress."""
+    """A brand-new all-zero snapshot replays the user's pre-existing
+    completed-session history on the very first GET /train/progress, once
+    the D-06 watermark covers it (the mechanism Phase 191 used for
+    retroactivity, now at per-day granularity)."""
     await ensure_test_user(db_session, _USER_ID)
-    await _seed_completed_session(db_session, _USER_ID, _PROGRESS_PAST_WEEK_MONDAY)
+    await _seed_pool_eligible_since(db_session, _USER_ID, _PROGRESS_YESTERDAY)
+    await _seed_completed_session(db_session, _USER_ID, _PROGRESS_YESTERDAY)
 
     progress = await train_repository.get_progress(
         db_session, user_id=_USER_ID, now_utc=_PROGRESS_NOW
     )
 
-    assert progress.settled_streak_weeks == 1
-    assert progress.flame_state == FlameState.MINIMUM.value
+    assert progress.session_streak_count == 1
+    assert progress.shield_level == 1
 
     row = (
         await db_session.execute(select(TrainSettings).where(TrainSettings.user_id == _USER_ID))
     ).scalar_one()
-    assert row.streak_settled_through == _PROGRESS_PAST_WEEK_MONDAY
+    assert row.streak_settled_through == _PROGRESS_YESTERDAY
     assert row.streak_count == 1
 
 
 @pytest.mark.asyncio
 async def test_progress_read_is_idempotent(db_session: AsyncSession) -> None:
-    """D-18 idempotence: two reads with no new sessions leave streak_count,
-    flame_state and streak_settled_through byte-identical on the row."""
+    """Two reads with no new sessions leave streak_count, shield_level and
+    streak_settled_through byte-identical on the row."""
     await ensure_test_user(db_session, _USER_ID)
-    await _seed_completed_session(db_session, _USER_ID, _PROGRESS_PAST_WEEK_MONDAY)
+    await _seed_pool_eligible_since(db_session, _USER_ID, _PROGRESS_YESTERDAY)
+    await _seed_completed_session(db_session, _USER_ID, _PROGRESS_YESTERDAY)
 
     await train_repository.get_progress(db_session, user_id=_USER_ID, now_utc=_PROGRESS_NOW)
     first_row = (
         await db_session.execute(select(TrainSettings).where(TrainSettings.user_id == _USER_ID))
     ).scalar_one()
-    first = (first_row.streak_count, first_row.flame_state, first_row.streak_settled_through)
+    first = (first_row.streak_count, first_row.shield_level, first_row.streak_settled_through)
 
     await train_repository.get_progress(db_session, user_id=_USER_ID, now_utc=_PROGRESS_NOW)
     second_row = (
         await db_session.execute(select(TrainSettings).where(TrainSettings.user_id == _USER_ID))
     ).scalar_one()
-    second = (second_row.streak_count, second_row.flame_state, second_row.streak_settled_through)
+    second = (second_row.streak_count, second_row.shield_level, second_row.streak_settled_through)
 
     assert first == second
 
 
 @pytest.mark.asyncio
-async def test_settled_week_survives_mask_change(db_session: AsyncSession) -> None:
-    """D-18 regression test: a settled week's judgment is unchanged by a
-    later weekday_mask change (via PUT-equivalent direct row update, since
-    Plan 04 wires the actual settle-before-mutate PUT path)."""
+async def test_settled_day_survives_mask_change(db_session: AsyncSession) -> None:
+    """A settled day's judgment is unchanged by a later weekday_mask change
+    (via direct row update, since a later plan wires the actual eager-tick
+    completion path) — the per-day granularity of the frozen-forever
+    guarantee Phase 191 D-18 established at the week level."""
     await ensure_test_user(db_session, _USER_ID)
-    await _seed_completed_session(db_session, _USER_ID, _PROGRESS_PAST_WEEK_MONDAY)
+    await _seed_pool_eligible_since(db_session, _USER_ID, _PROGRESS_YESTERDAY)
+    await _seed_completed_session(db_session, _USER_ID, _PROGRESS_YESTERDAY)
 
     first = await train_repository.get_progress(db_session, user_id=_USER_ID, now_utc=_PROGRESS_NOW)
-    assert first.settled_streak_weeks == 1
-    assert first.flame_state == FlameState.MINIMUM.value
+    assert first.session_streak_count == 1
+    assert first.shield_level == 1
 
-    # Change the mask to one that would have judged the ALREADY-SETTLED week
-    # differently (3 scheduled days, but only 1 session was ever recorded).
+    # Change the mask to one that would have judged the ALREADY-SETTLED day
+    # differently (a sparse mask that would not even schedule yesterday).
     three_bit_mask = (1 << 0) | (1 << 2) | (1 << 4)
     await db_session.execute(
         update(TrainSettings)
@@ -1870,24 +2002,147 @@ async def test_settled_week_survives_mask_change(db_session: AsyncSession) -> No
         db_session, user_id=_USER_ID, now_utc=_PROGRESS_NOW
     )
 
-    assert second.settled_streak_weeks == first.settled_streak_weeks
-    assert second.flame_state == first.flame_state
+    assert second.session_streak_count == first.session_streak_count
+    assert second.shield_level == first.shield_level
 
 
 # ---------------------------------------------------------------------------
-# upsert_settings settle-before-mutate (Phase 191 Plan 02, Task 3, D-18)
+# _stamp_pool_eligibility / D-06 watermark (Phase 193 Plan 01)
+# ---------------------------------------------------------------------------
+
+
+class TestStampPoolEligibility:
+    """D-06: the eligibility watermark is stamped exactly once, from real
+    material, and never overwritten."""
+
+    @pytest.mark.asyncio
+    async def test_null_watermark_with_material_stamps_today_once_and_is_idempotent(
+        self, db_session: AsyncSession
+    ) -> None:
+        await ensure_test_user(db_session, _USER_ID)
+        game_id = await _seed_flaw_game(db_session, _USER_ID, "watermark-material")
+        db_session.add(
+            DrillItem(
+                user_id=_USER_ID,
+                game_id=game_id,
+                ply=2,
+                status=DrillStatus.ACTIVE,
+                streak=0,
+                due_date=_PROGRESS_NOW.date(),
+                fail_count=0,
+                ever_correct=False,
+            )
+        )
+        await db_session.flush()
+
+        await train_repository.get_progress(db_session, user_id=_USER_ID, now_utc=_PROGRESS_NOW)
+        row = (
+            await db_session.execute(select(TrainSettings).where(TrainSettings.user_id == _USER_ID))
+        ).scalar_one()
+        assert row.pool_eligible_since == _PROGRESS_NOW.date()
+
+        # A second read (a day later, material still present) must not move
+        # the watermark — it is stamped ONCE, not re-derived every call.
+        await train_repository.get_progress(
+            db_session, user_id=_USER_ID, now_utc=_PROGRESS_NOW + datetime.timedelta(days=1)
+        )
+        row_after = (
+            await db_session.execute(select(TrainSettings).where(TrainSettings.user_id == _USER_ID))
+        ).scalar_one()
+        assert row_after.pool_eligible_since == _PROGRESS_NOW.date()
+
+    @pytest.mark.asyncio
+    async def test_null_watermark_with_no_material_stays_null(
+        self, db_session: AsyncSession
+    ) -> None:
+        await ensure_test_user(db_session, _USER_ID)
+
+        await train_repository.get_progress(db_session, user_id=_USER_ID, now_utc=_PROGRESS_NOW)
+
+        row = (
+            await db_session.execute(select(TrainSettings).where(TrainSettings.user_id == _USER_ID))
+        ).scalar_one()
+        assert row.pool_eligible_since is None
+
+    @pytest.mark.asyncio
+    async def test_existing_watermark_is_never_overwritten(self, db_session: AsyncSession) -> None:
+        await ensure_test_user(db_session, _USER_ID)
+        earlier = datetime.date(2025, 12, 1)
+        await _seed_pool_eligible_since(db_session, _USER_ID, earlier)
+        game_id = await _seed_flaw_game(db_session, _USER_ID, "watermark-existing")
+        db_session.add(
+            DrillItem(
+                user_id=_USER_ID,
+                game_id=game_id,
+                ply=2,
+                status=DrillStatus.ACTIVE,
+                streak=0,
+                due_date=_PROGRESS_NOW.date(),
+                fail_count=0,
+                ever_correct=False,
+            )
+        )
+        await db_session.flush()
+
+        await train_repository.get_progress(db_session, user_id=_USER_ID, now_utc=_PROGRESS_NOW)
+
+        row = (
+            await db_session.execute(select(TrainSettings).where(TrainSettings.user_id == _USER_ID))
+        ).scalar_one()
+        assert row.pool_eligible_since == earlier
+
+    @pytest.mark.asyncio
+    async def test_null_watermark_produces_no_shield_change_across_elapsed_scheduled_days(
+        self, db_session: AsyncSession
+    ) -> None:
+        """With pool_eligible_since NULL (no material ever observed), the
+        tick machine never starts its clock: even after several scheduled
+        days have elapsed in wall-clock time, the shield never drains and
+        the streak never gets a false start."""
+        await ensure_test_user(db_session, _USER_ID)
+        await train_repository.get_or_create_settings(db_session, user_id=_USER_ID)
+
+        first = await train_repository.get_progress(
+            db_session, user_id=_USER_ID, now_utc=_PROGRESS_NOW
+        )
+        later = await train_repository.get_progress(
+            db_session, user_id=_USER_ID, now_utc=_PROGRESS_NOW + datetime.timedelta(days=5)
+        )
+
+        assert first.shield_level == 0
+        assert later.shield_level == 0
+        assert first.session_streak_count == 0
+        assert later.session_streak_count == 0
+        row = (
+            await db_session.execute(select(TrainSettings).where(TrainSettings.user_id == _USER_ID))
+        ).scalar_one()
+        assert row.pool_eligible_since is None
+
+
+# ---------------------------------------------------------------------------
+# upsert_settings settle-before-mutate (Phase 193, per-day tick)
 # ---------------------------------------------------------------------------
 
 
 @pytest.mark.asyncio
 async def test_settings_update_settles_with_old_mask_first(db_session: AsyncSession) -> None:
-    """D-18: three fully-elapsed weeks, each with exactly one completed
-    session, are settled under the OLD weekday_mask=0 (1 session required
-    each) BEFORE a new 3-bit mask (3 sessions required) is persisted — they
-    must be judged fulfilled under the OLD standard, not missed under the
-    NEW one."""
+    """Three fully-elapsed scheduled Mondays, each with exactly one
+    completed session, are settled under the OLD Monday-only weekday_mask
+    BEFORE a new 3-bit mask is persisted — they must be judged fulfilled
+    under the OLD schedule (no intervening days were ever scheduled), not
+    re-judged as misses under a NEW schedule that would have required
+    activity on days that were never scheduled at the time."""
     await ensure_test_user(db_session, _USER_ID)
-    await train_repository.get_or_create_settings(db_session, user_id=_USER_ID)
+    monday_only_mask = 1 << 0
+    await train_repository.upsert_settings(
+        db_session,
+        user_id=_USER_ID,
+        timezone="UTC",
+        weekday_mask=monday_only_mask,
+        puzzles_per_session=6,
+        now_utc=_PROGRESS_NOW,
+    )
+    await _seed_pool_eligible_since(db_session, _USER_ID, datetime.date(2025, 12, 22))
 
     for week_monday in (
         datetime.date(2025, 12, 22),
@@ -1907,6 +2162,7 @@ async def test_settings_update_settles_with_old_mask_first(db_session: AsyncSess
     )
 
     assert updated.streak_count == 3
+    assert updated.shield_level == 3
     assert updated.weekday_mask == three_bit_mask
 
     row = (
@@ -1921,10 +2177,11 @@ async def test_settings_update_timezone_only_change_still_settles(
     db_session: AsyncSession,
 ) -> None:
     """A timezone-only change still runs settlement (a timezone shift moves
-    Mon-Sun week boundaries, D-18)."""
+    local day boundaries, which the tick machine's elapsed-day judgment
+    depends on)."""
     await ensure_test_user(db_session, _USER_ID)
-    await train_repository.get_or_create_settings(db_session, user_id=_USER_ID)
-    await _seed_completed_session(db_session, _USER_ID, _PROGRESS_PAST_WEEK_MONDAY)
+    await _seed_pool_eligible_since(db_session, _USER_ID, _PROGRESS_YESTERDAY)
+    await _seed_completed_session(db_session, _USER_ID, _PROGRESS_YESTERDAY)
 
     updated = await train_repository.upsert_settings(
         db_session,
@@ -1935,22 +2192,22 @@ async def test_settings_update_timezone_only_change_still_settles(
         now_utc=_PROGRESS_NOW,
     )
 
-    assert updated.streak_settled_through == _PROGRESS_PAST_WEEK_MONDAY
+    assert updated.streak_settled_through == _PROGRESS_YESTERDAY
     assert updated.timezone == "America/New_York"
 
     row = (
         await db_session.execute(select(TrainSettings).where(TrainSettings.user_id == _USER_ID))
     ).scalar_one()
     assert row.timezone == "America/New_York"
-    assert row.streak_settled_through == _PROGRESS_PAST_WEEK_MONDAY
+    assert row.streak_settled_through == _PROGRESS_YESTERDAY
 
 
 @pytest.mark.asyncio
-async def test_settings_update_no_elapsed_weeks_leaves_snapshot_unchanged(
+async def test_settings_update_no_elapsed_days_leaves_snapshot_unchanged(
     db_session: AsyncSession,
 ) -> None:
-    """No elapsed unsettled weeks: upsert_settings leaves streak_count/
-    flame_state/streak_settled_through unchanged and still persists the new
+    """No elapsed unsettled days: upsert_settings leaves streak_count/
+    shield_level/streak_settled_through unchanged and still persists the new
     values."""
     await ensure_test_user(db_session, _USER_ID)
     await train_repository.get_or_create_settings(db_session, user_id=_USER_ID)
@@ -1966,7 +2223,7 @@ async def test_settings_update_no_elapsed_weeks_leaves_snapshot_unchanged(
     )
 
     assert updated.streak_count == 0
-    assert updated.flame_state is None
+    assert updated.shield_level == 0
     assert updated.streak_settled_through is None
     assert updated.weekday_mask == 0b0000101
     assert updated.puzzles_per_session == 8
@@ -1977,7 +2234,7 @@ async def test_settings_update_first_touch_creates_defaults_then_persists(
     db_session: AsyncSession,
 ) -> None:
     """upsert_settings on a user with no train_settings row creates the row
-    with the D-06/D-07/D-08 defaults and an all-null snapshot, then persists
+    with the D-06/D-07/D-08 defaults and an all-zero snapshot, then persists
     the requested values, with no settlement error."""
     await ensure_test_user(db_session, _USER_ID)
     # No get_or_create_settings call beforehand — this IS the first touch.
@@ -1992,7 +2249,7 @@ async def test_settings_update_first_touch_creates_defaults_then_persists(
     )
 
     assert updated.streak_count == 0
-    assert updated.flame_state is None
+    assert updated.shield_level == 0
     assert updated.streak_settled_through is None
     assert updated.timezone == "Europe/Zurich"
     assert updated.weekday_mask == 0b0010101
@@ -2012,12 +2269,13 @@ async def test_settings_update_after_progress_read_does_not_resettle(
     not repeated: calling get_progress then upsert_settings in sequence
     leaves streak_count at the value the read produced."""
     await ensure_test_user(db_session, _USER_ID)
-    await _seed_completed_session(db_session, _USER_ID, _PROGRESS_PAST_WEEK_MONDAY)
+    await _seed_pool_eligible_since(db_session, _USER_ID, _PROGRESS_YESTERDAY)
+    await _seed_completed_session(db_session, _USER_ID, _PROGRESS_YESTERDAY)
 
     progress = await train_repository.get_progress(
         db_session, user_id=_USER_ID, now_utc=_PROGRESS_NOW
     )
-    assert progress.settled_streak_weeks == 1
+    assert progress.session_streak_count == 1
 
     updated = await train_repository.upsert_settings(
         db_session,
@@ -2210,3 +2468,675 @@ async def test_out_of_range_move_quality_violates_check_constraint(
             .values(move_quality=3)
         )
         await db_session.flush()
+
+
+# ---------------------------------------------------------------------------
+# _apply_completion_tick — D-03/D-07/D-08 eager completion tick (Phase 193 Plan 02)
+# ---------------------------------------------------------------------------
+
+_MONDAY_ONLY_MASK = 1 << 0  # weekday_mask bit for Monday, D-06/D-07 convention
+
+# 2026-01-12 (Mon) / 2026-01-13 (Tue) / 2026-01-14 (Wed) / 2026-01-15 (Thu, == _TODAY/_NOW).
+_TICK_MONDAY = datetime.date(2026, 1, 12)
+_TICK_WEDNESDAY = datetime.date(2026, 1, 14)
+
+
+async def _seed_open_session_dated(
+    db_session: AsyncSession,
+    user_id: int,
+    label: str,
+    *,
+    session_date: datetime.date,
+    puzzle_count: int = 1,
+) -> DrillSession:
+    """Seed `puzzle_count` ACTIVE drill_items + one open session on
+    `session_date`, with that many unsolved SR-source drill_solves rows
+    (positions 0..puzzle_count-1), ready for record_solve.
+
+    A dated variant of `_seed_open_session_with_sr_item` (which pins
+    session_date to _TODAY) — the completion-tick tests need to place a
+    session on an arbitrary date relative to a seeded tick snapshot.
+    """
+    drill_session = DrillSession(
+        user_id=user_id,
+        session_date=session_date,
+        status="open",
+        puzzle_count=puzzle_count,
+        expires_on=session_date + datetime.timedelta(days=1),
+    )
+    db_session.add(drill_session)
+    await db_session.flush()
+    for position in range(puzzle_count):
+        game_id = await _seed_flaw_game(db_session, user_id, f"{label}-{position}")
+        db_session.add(
+            DrillItem(
+                user_id=user_id,
+                game_id=game_id,
+                ply=2,
+                status=DrillStatus.ACTIVE,
+                streak=0,
+                due_date=session_date,
+                fail_count=0,
+                ever_correct=False,
+            )
+        )
+        await db_session.flush()
+        db_session.add(
+            DrillSolve(
+                session_id=drill_session.id,
+                position=position,
+                user_id=user_id,
+                game_id=game_id,
+                ply=2,
+                source=DrillSource.SR_ITEM,
+                solved_at=None,
+            )
+        )
+    await db_session.flush()
+    return drill_session
+
+
+async def _seed_tick_state(
+    db_session: AsyncSession,
+    user_id: int,
+    *,
+    streak_count: int = 0,
+    shield_level: int = 0,
+    streak_settled_through: datetime.date | None,
+    pool_eligible_since: datetime.date | None,
+    weekday_mask: int | None = None,
+) -> None:
+    """Directly seed the full persisted tick snapshot (+ optionally the
+    weekday_mask), bypassing tick_days/settle_streak_snapshot's own replay —
+    the completion-tick tests need precise, arbitrary starting states."""
+    await train_repository.get_or_create_settings(db_session, user_id=user_id)
+    values: dict[str, object] = {
+        "streak_count": streak_count,
+        "shield_level": shield_level,
+        "streak_settled_through": streak_settled_through,
+        "pool_eligible_since": pool_eligible_since,
+    }
+    if weekday_mask is not None:
+        values["weekday_mask"] = weekday_mask
+    await db_session.execute(
+        update(TrainSettings).where(TrainSettings.user_id == user_id).values(**values)
+    )
+    await db_session.flush()
+
+
+async def _read_tick_row(db_session: AsyncSession, user_id: int) -> TrainSettings:
+    return (
+        await db_session.execute(select(TrainSettings).where(TrainSettings.user_id == user_id))
+    ).scalar_one()
+
+
+class TestCompletionTick:
+    """D-03 (eager tick on completion), D-07 (off-day credit-only), D-08
+    (abandoned session is a plain lazy miss) and the double-count/skip
+    guards (RESEARCH.md Pitfall 2) that make the eager and lazy paths
+    compose safely."""
+
+    @pytest.mark.asyncio
+    async def test_fulfilled_completion_ticks_count_and_shield_and_advances_settled_through(
+        self, db_session: AsyncSession
+    ) -> None:
+        await ensure_test_user(db_session, _USER_ID)
+        await _seed_tick_state(
+            db_session,
+            _USER_ID,
+            streak_count=2,
+            shield_level=3,
+            streak_settled_through=_TICK_WEDNESDAY,  # yesterday relative to _TODAY
+            pool_eligible_since=datetime.date(2026, 1, 1),
+        )
+        drill_session = await _seed_open_session_dated(
+            db_session, _USER_ID, "fulfilled", session_date=_TODAY
+        )
+
+        recorded = await train_repository.record_solve(
+            db_session,
+            user_id=_USER_ID,
+            session_id=drill_session.id,
+            position=0,
+            guess="critical",
+            played_move="e2e4",
+            move_quality="good",
+            now_utc=_NOW,
+        )
+        assert recorded is not None
+        assert recorded.session_complete is True
+
+        row = await _read_tick_row(db_session, _USER_ID)
+        assert row.streak_count == 3
+        assert row.shield_level == 4
+        assert row.streak_settled_through == _TODAY
+
+    @pytest.mark.asyncio
+    async def test_fulfilled_completion_at_cap_leaves_shield_unchanged(
+        self, db_session: AsyncSession
+    ) -> None:
+        await ensure_test_user(db_session, _USER_ID)
+        await _seed_tick_state(
+            db_session,
+            _USER_ID,
+            streak_count=2,
+            shield_level=SHIELD_CAP,
+            streak_settled_through=_TICK_WEDNESDAY,
+            pool_eligible_since=datetime.date(2026, 1, 1),
+        )
+        drill_session = await _seed_open_session_dated(
+            db_session, _USER_ID, "capfulfilled", session_date=_TODAY
+        )
+
+        await train_repository.record_solve(
+            db_session,
+            user_id=_USER_ID,
+            session_id=drill_session.id,
+            position=0,
+            guess="critical",
+            played_move="e2e4",
+            move_quality="good",
+            now_utc=_NOW,
+        )
+
+        row = await _read_tick_row(db_session, _USER_ID)
+        assert row.shield_level == SHIELD_CAP
+        assert row.streak_count == 3
+
+    @pytest.mark.asyncio
+    async def test_off_day_completion_credits_shield_only(self, db_session: AsyncSession) -> None:
+        """D-07: an off-day (narrowed mask) completion raises shield_level by
+        1 and leaves streak_count and streak_settled_through byte-identical."""
+        await ensure_test_user(db_session, _USER_ID)
+        await _seed_tick_state(
+            db_session,
+            _USER_ID,
+            streak_count=2,
+            shield_level=3,
+            streak_settled_through=_TICK_MONDAY,
+            pool_eligible_since=datetime.date(2026, 1, 1),
+            weekday_mask=_MONDAY_ONLY_MASK,
+        )
+        # _TICK_WEDNESDAY is not scheduled under a Monday-only mask.
+        drill_session = await _seed_open_session_dated(
+            db_session, _USER_ID, "offday", session_date=_TICK_WEDNESDAY
+        )
+
+        recorded = await train_repository.record_solve(
+            db_session,
+            user_id=_USER_ID,
+            session_id=drill_session.id,
+            position=0,
+            guess="critical",
+            played_move="e2e4",
+            move_quality="good",
+            now_utc=datetime.datetime.combine(
+                _TICK_WEDNESDAY, datetime.time(12, 0), tzinfo=datetime.timezone.utc
+            ),
+        )
+        assert recorded is not None
+        assert recorded.session_complete is True
+
+        row = await _read_tick_row(db_session, _USER_ID)
+        assert row.shield_level == 4
+        assert row.streak_count == 2  # unchanged
+        assert row.streak_settled_through == _TICK_MONDAY  # unchanged
+
+    @pytest.mark.asyncio
+    async def test_cap_parity_between_fulfilled_and_off_day_branches(
+        self, db_session: AsyncSession
+    ) -> None:
+        """Divergence gate (behaviour): a scheduled-day completion and an
+        off-day completion clamp IDENTICALLY at SHIELD_CAP, from both a
+        starting shield of SHIELD_CAP (stays put) and SHIELD_CAP - 1
+        (reaches the cap, never overshoots it)."""
+        off_day_now = datetime.datetime.combine(
+            _TICK_WEDNESDAY, datetime.time(12, 0), tzinfo=datetime.timezone.utc
+        )
+        cases = [
+            # (user_id, mask, session_date, now_utc, settled_through, start_shield)
+            (93120, ALL_WEEKDAYS_MASK, _TODAY, _NOW, _TICK_WEDNESDAY, SHIELD_CAP),
+            (93121, _MONDAY_ONLY_MASK, _TICK_WEDNESDAY, off_day_now, _TICK_MONDAY, SHIELD_CAP),
+            (93122, ALL_WEEKDAYS_MASK, _TODAY, _NOW, _TICK_WEDNESDAY, SHIELD_CAP - 1),
+            (93123, _MONDAY_ONLY_MASK, _TICK_WEDNESDAY, off_day_now, _TICK_MONDAY, SHIELD_CAP - 1),
+        ]
+        for user_id, mask, session_date, now_utc, settled_through, start_shield in cases:
+            await ensure_test_user(db_session, user_id)
+            await _seed_tick_state(
+                db_session,
+                user_id,
+                streak_count=1,
+                shield_level=start_shield,
+                streak_settled_through=settled_through,
+                pool_eligible_since=datetime.date(2026, 1, 1),
+                weekday_mask=mask,
+            )
+            drill_session = await _seed_open_session_dated(
+                db_session, user_id, f"cap-{user_id}", session_date=session_date
+            )
+
+            await train_repository.record_solve(
+                db_session,
+                user_id=user_id,
+                session_id=drill_session.id,
+                position=0,
+                guess="critical",
+                played_move="e2e4",
+                move_quality="good",
+                now_utc=now_utc,
+            )
+
+            row = await _read_tick_row(db_session, user_id)
+            assert row.shield_level == SHIELD_CAP, (user_id, row.shield_level)
+
+    @pytest.mark.asyncio
+    async def test_abandoned_session_drains_one_pip_with_no_count_change(
+        self, db_session: AsyncSession
+    ) -> None:
+        """D-08: a session left open past its window and never completed is
+        judged by the LAZY walk (via get_progress) as a plain missed
+        scheduled day — never by the eager completion path."""
+        await ensure_test_user(db_session, _USER_ID)
+        await _seed_tick_state(
+            db_session,
+            _USER_ID,
+            streak_count=3,
+            shield_level=5,
+            streak_settled_through=datetime.date(2026, 1, 13),
+            pool_eligible_since=datetime.date(2026, 1, 1),
+        )
+        # Left open, never solved.
+        await _seed_open_session_dated(
+            db_session, _USER_ID, "abandoned", session_date=_TICK_WEDNESDAY
+        )
+
+        progress = await train_repository.get_progress(db_session, user_id=_USER_ID, now_utc=_NOW)
+
+        assert progress.shield_level == 4
+        assert progress.session_streak_count == 3  # unchanged — no count tick on a miss
+
+    @pytest.mark.asyncio
+    async def test_double_count_guard_late_completion_after_lazy_miss(
+        self, db_session: AsyncSession
+    ) -> None:
+        """RESEARCH.md Pitfall 2 (dev-clock shifted): compose on a scheduled
+        day, advance the clock past its window without completing it, call
+        get_progress so the lazy walk judges that day a miss, THEN complete
+        the stale open session via record_solve. The net effect across both
+        steps must be at most +1 shield relative to the post-miss state,
+        streak_count must be unchanged by the late completion, and
+        streak_settled_through must not move backwards."""
+        await ensure_test_user(db_session, _USER_ID)
+        await _seed_tick_state(
+            db_session,
+            _USER_ID,
+            streak_count=2,
+            shield_level=5,
+            streak_settled_through=datetime.date(2026, 1, 13),
+            pool_eligible_since=datetime.date(2026, 1, 1),
+        )
+        drill_session = await _seed_open_session_dated(
+            db_session, _USER_ID, "stale", session_date=_TICK_WEDNESDAY
+        )
+
+        # The window for _TICK_WEDNESDAY (dense mask) closes at _TODAY
+        # (2026-01-15) — a progress read "now" judges it a miss.
+        post_miss = await train_repository.get_progress(db_session, user_id=_USER_ID, now_utc=_NOW)
+        assert post_miss.shield_level == 4  # one miss drained
+        assert post_miss.session_streak_count == 2  # unchanged by a miss
+
+        post_miss_row = await _read_tick_row(db_session, _USER_ID)
+        assert post_miss_row.streak_settled_through == _TICK_WEDNESDAY
+
+        # The late completion: the stale open session is still 'open' —
+        # record_solve has no expiry check, exactly the bug this guard closes.
+        recorded = await train_repository.record_solve(
+            db_session,
+            user_id=_USER_ID,
+            session_id=drill_session.id,
+            position=0,
+            guess="critical",
+            played_move="e2e4",
+            move_quality="good",
+            now_utc=_NOW,
+        )
+        assert recorded is not None
+        assert recorded.session_complete is True
+
+        row = await _read_tick_row(db_session, _USER_ID)
+        assert row.shield_level == post_miss.shield_level + 1
+        assert row.shield_level == 5
+        assert row.streak_count == post_miss.session_streak_count  # unchanged
+        assert row.streak_settled_through == _TICK_WEDNESDAY  # unchanged (never moves backwards)
+
+    @pytest.mark.asyncio
+    async def test_skip_guard_drains_intervening_misses_before_applying_completion(
+        self, db_session: AsyncSession
+    ) -> None:
+        """With streak_settled_through two scheduled days in the past and two
+        intervening missed scheduled days, completing today drains both
+        missed days first and then applies the completion — shield_level
+        ends at start - 2 + 1, never start + 1."""
+        await ensure_test_user(db_session, _USER_ID)
+        start_shield = 5
+        start_count = 2
+        await _seed_tick_state(
+            db_session,
+            _USER_ID,
+            streak_count=start_count,
+            shield_level=start_shield,
+            streak_settled_through=_TICK_MONDAY,  # 2026-01-12
+            pool_eligible_since=datetime.date(2026, 1, 1),
+        )
+        # 2026-01-13 (Tue) and 2026-01-14 (Wed) are the two intervening
+        # missed scheduled days under the dense default mask; _TODAY
+        # (2026-01-15, Thu) is the completed day.
+        drill_session = await _seed_open_session_dated(
+            db_session, _USER_ID, "skip-guard", session_date=_TODAY
+        )
+
+        await train_repository.record_solve(
+            db_session,
+            user_id=_USER_ID,
+            session_id=drill_session.id,
+            position=0,
+            guess="critical",
+            played_move="e2e4",
+            move_quality="good",
+            now_utc=_NOW,
+        )
+
+        row = await _read_tick_row(db_session, _USER_ID)
+        assert row.shield_level == start_shield - 2 + 1
+        assert row.streak_count == start_count + 1
+        assert row.streak_settled_through == _TODAY
+
+    @pytest.mark.asyncio
+    async def test_non_final_puzzle_writes_no_snapshot_change(
+        self, db_session: AsyncSession
+    ) -> None:
+        await ensure_test_user(db_session, _USER_ID)
+        await _seed_tick_state(
+            db_session,
+            _USER_ID,
+            streak_count=2,
+            shield_level=3,
+            streak_settled_through=_TICK_WEDNESDAY,
+            pool_eligible_since=datetime.date(2026, 1, 1),
+        )
+        drill_session = await _seed_open_session_dated(
+            db_session, _USER_ID, "nonfinal", session_date=_TODAY, puzzle_count=2
+        )
+        before = await _read_tick_row(db_session, _USER_ID)
+
+        recorded = await train_repository.record_solve(
+            db_session,
+            user_id=_USER_ID,
+            session_id=drill_session.id,
+            position=0,
+            guess="critical",
+            played_move="e2e4",
+            move_quality="good",
+            now_utc=_NOW,
+        )
+        assert recorded is not None
+        assert recorded.session_complete is False
+
+        after = await _read_tick_row(db_session, _USER_ID)
+        assert after.streak_count == before.streak_count
+        assert after.shield_level == before.shield_level
+        assert after.streak_settled_through == before.streak_settled_through
+
+    @pytest.mark.asyncio
+    async def test_resubmit_of_already_solved_final_puzzle_does_not_apply_second_tick(
+        self, db_session: AsyncSession
+    ) -> None:
+        """The lost-claim branch (re-submitting an already-solved final
+        puzzle) must not apply a second tick — this is what requires gating
+        the eager-tick call on `claimed`, not on `session_complete` alone."""
+        await ensure_test_user(db_session, _USER_ID)
+        await _seed_tick_state(
+            db_session,
+            _USER_ID,
+            streak_count=2,
+            shield_level=3,
+            streak_settled_through=_TICK_WEDNESDAY,
+            pool_eligible_since=datetime.date(2026, 1, 1),
+        )
+        drill_session = await _seed_open_session_dated(
+            db_session, _USER_ID, "resubmit", session_date=_TODAY
+        )
+
+        first = await train_repository.record_solve(
+            db_session,
+            user_id=_USER_ID,
+            session_id=drill_session.id,
+            position=0,
+            guess="critical",
+            played_move="e2e4",
+            move_quality="good",
+            now_utc=_NOW,
+        )
+        assert first is not None
+        assert first.session_complete is True
+        after_first = await _read_tick_row(db_session, _USER_ID)
+        assert after_first.shield_level == 4
+        assert after_first.streak_count == 3
+        assert after_first.streak_settled_through == _TODAY
+
+        second = await train_repository.record_solve(
+            db_session,
+            user_id=_USER_ID,
+            session_id=drill_session.id,
+            position=0,
+            guess="several",
+            played_move="d2d4",
+            move_quality="wrong",
+            now_utc=_NOW,
+        )
+        assert second is not None
+        assert second.session_complete is True  # still complete — re-derived, not re-applied
+
+        after_second = await _read_tick_row(db_session, _USER_ID)
+        assert after_second.shield_level == after_first.shield_level
+        assert after_second.streak_count == after_first.streak_count
+        assert after_second.streak_settled_through == after_first.streak_settled_through
+
+
+# ---------------------------------------------------------------------------
+# badge_visible — D-09/D-10 nav-badge signal (Phase 193 Plan 02)
+# ---------------------------------------------------------------------------
+
+# 2026-01-13 is a Tuesday — not scheduled under a Mon/Wed/Fri mask.
+_BADGE_TUESDAY = datetime.date(2026, 1, 13)
+_BADGE_TUESDAY_NOW = datetime.datetime.combine(
+    _BADGE_TUESDAY, datetime.time(12, 0), tzinfo=datetime.timezone.utc
+)
+_MON_WED_FRI_MASK = 0b0010101
+
+
+async def _set_weekday_mask(db_session: AsyncSession, user_id: int, mask: int) -> None:
+    await train_repository.get_or_create_settings(db_session, user_id=user_id)
+    await db_session.execute(
+        update(TrainSettings).where(TrainSettings.user_id == user_id).values(weekday_mask=mask)
+    )
+    await db_session.flush()
+
+
+class TestBadgeVisible:
+    """D-09 (scheduled-day gate) and D-10 (open-session carve-out) for the
+    server-computed nav-badge visibility signal (`ProgressSnapshot.badge_visible`)."""
+
+    @pytest.mark.asyncio
+    async def test_default_mask_with_waiting_material_is_visible(
+        self, db_session: AsyncSession
+    ) -> None:
+        """No-op collapse for the default user (ALL_WEEKDAYS_MASK): every day
+        is scheduled, so a non-zero waiting_count always shows the badge."""
+        await ensure_test_user(db_session, _USER_ID)
+        game_id = await _seed_flaw_game(db_session, _USER_ID, "badge-default")
+        db_session.add(
+            DrillItem(
+                user_id=_USER_ID,
+                game_id=game_id,
+                ply=2,
+                status=DrillStatus.ACTIVE,
+                streak=0,
+                due_date=_TODAY,
+                fail_count=0,
+                ever_correct=False,
+            )
+        )
+        await db_session.flush()
+
+        progress = await train_repository.get_progress(db_session, user_id=_USER_ID, now_utc=_NOW)
+
+        assert progress.waiting_count > 0
+        assert progress.badge_visible is True
+
+    @pytest.mark.asyncio
+    async def test_train_anytime_mask_with_waiting_material_is_visible(
+        self, db_session: AsyncSession
+    ) -> None:
+        """No-op collapse for weekday_mask == 0 ("train anytime"): the
+        identity mask schedules every day too."""
+        await ensure_test_user(db_session, _USER_ID)
+        await _set_weekday_mask(db_session, _USER_ID, 0)
+        game_id = await _seed_flaw_game(db_session, _USER_ID, "badge-anytime")
+        db_session.add(
+            DrillItem(
+                user_id=_USER_ID,
+                game_id=game_id,
+                ply=2,
+                status=DrillStatus.ACTIVE,
+                streak=0,
+                due_date=_TODAY,
+                fail_count=0,
+                ever_correct=False,
+            )
+        )
+        await db_session.flush()
+
+        progress = await train_repository.get_progress(db_session, user_id=_USER_ID, now_utc=_NOW)
+
+        assert progress.waiting_count > 0
+        assert progress.badge_visible is True
+
+    @pytest.mark.asyncio
+    async def test_narrowed_mask_off_day_no_open_session_is_hidden(
+        self, db_session: AsyncSession
+    ) -> None:
+        """D-09: a Mon/Wed/Fri mask on a Tuesday, with material waiting but
+        no open session, hides the badge."""
+        await ensure_test_user(db_session, _USER_ID)
+        await _set_weekday_mask(db_session, _USER_ID, _MON_WED_FRI_MASK)
+        game_id = await _seed_flaw_game(db_session, _USER_ID, "badge-offday")
+        db_session.add(
+            DrillItem(
+                user_id=_USER_ID,
+                game_id=game_id,
+                ply=2,
+                status=DrillStatus.ACTIVE,
+                streak=0,
+                due_date=_BADGE_TUESDAY,
+                fail_count=0,
+                ever_correct=False,
+            )
+        )
+        await db_session.flush()
+
+        progress = await train_repository.get_progress(
+            db_session, user_id=_USER_ID, now_utc=_BADGE_TUESDAY_NOW
+        )
+
+        assert progress.waiting_count > 0
+        assert progress.badge_visible is False
+
+    @pytest.mark.asyncio
+    async def test_narrowed_mask_off_day_with_open_unfinished_session_is_visible(
+        self, db_session: AsyncSession
+    ) -> None:
+        """D-10: the same off-day carve-out — an already-open unexpired
+        session with unsolved puzzles keeps the badge lit."""
+        await ensure_test_user(db_session, _USER_ID)
+        await _set_weekday_mask(db_session, _USER_ID, _MON_WED_FRI_MASK)
+        await _seed_open_session_with_solves(
+            db_session,
+            _USER_ID,
+            "badge-d10",
+            puzzle_count=3,
+            solved_count=0,
+            expires_on=_BADGE_TUESDAY + datetime.timedelta(days=3),
+        )
+
+        progress = await train_repository.get_progress(
+            db_session, user_id=_USER_ID, now_utc=_BADGE_TUESDAY_NOW
+        )
+
+        assert progress.badge_visible is True
+
+    @pytest.mark.asyncio
+    async def test_zero_waiting_count_on_scheduled_day_is_hidden(
+        self, db_session: AsyncSession
+    ) -> None:
+        await ensure_test_user(db_session, _USER_ID)
+
+        progress = await train_repository.get_progress(db_session, user_id=_USER_ID, now_utc=_NOW)
+
+        assert progress.waiting_count == 0
+        assert progress.badge_visible is False
+
+    @pytest.mark.asyncio
+    async def test_fully_solved_open_session_contributes_no_carve_out(
+        self, db_session: AsyncSession
+    ) -> None:
+        """An open session whose every puzzle is solved contributes no D-10
+        carve-out — get_waiting_puzzle_count's own branch 1 already reports
+        0 for it, so the badge stays hidden."""
+        await ensure_test_user(db_session, _USER_ID)
+        await _set_weekday_mask(db_session, _USER_ID, _MON_WED_FRI_MASK)
+        await _seed_open_session_with_solves(
+            db_session,
+            _USER_ID,
+            "badge-fully-solved",
+            puzzle_count=2,
+            solved_count=2,
+            expires_on=_BADGE_TUESDAY + datetime.timedelta(days=3),
+        )
+
+        progress = await train_repository.get_progress(
+            db_session, user_id=_USER_ID, now_utc=_BADGE_TUESDAY_NOW
+        )
+
+        assert progress.waiting_count == 0
+        assert progress.badge_visible is False
+
+
+# ---------------------------------------------------------------------------
+# compose_and_materialize_session — D-06 watermark stamp (Phase 193 Plan 02)
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_compose_stamps_pool_eligible_since_once(db_session: AsyncSession) -> None:
+    """A user whose first drill_items row is created by composition also
+    gets the D-06 watermark, without waiting for a GET /train/progress
+    read to discover it. A second compose call (resuming the same open
+    session) must not move it."""
+    await ensure_test_user(db_session, _USER_ID)
+    await _seed_flaw_game(db_session, _USER_ID, "compose-stamp")
+
+    composed = await train_repository.compose_and_materialize_session(
+        db_session, user_id=_USER_ID, now_utc=_NOW
+    )
+    assert composed.session_id is not None
+
+    row = await _read_tick_row(db_session, _USER_ID)
+    assert row.pool_eligible_since == _TODAY
+
+    await train_repository.compose_and_materialize_session(
+        db_session, user_id=_USER_ID, now_utc=_NOW
+    )
+
+    row_after = await _read_tick_row(db_session, _USER_ID)
+    assert row_after.pool_eligible_since == _TODAY

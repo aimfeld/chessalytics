@@ -44,7 +44,7 @@
 - ✅ **v2.6 Bot Strength Calibration** — Phases 173, 180, 181 (shipped 2026-07-21; dev-only, no deploy) — put the bot's play-style presets on a measured strength scale without ever playing a human. Phase 173 (SEED-101) round-robins the calibration anchors into one internal rating scale (verdict: the Maia-3 argmax ladder is ~2.8x compressed); Phase 180 (SEED-102) measures the three-preset (Human/Light/Deep) strength curves on that scale plus the cross-family style-inflation gap `G_preset`; Phase 181 (SEED-104) inverts those curves into per-preset `target_blitz_elo → bot_elo` lookups with honest measured ranges (Human 900–1400, Light 1500–1600, Deep 1600–1800) and an approximate-ELO disclaimer. Nothing in the product reads the lookup yet — see [milestones/v2.6-ROADMAP.md](milestones/v2.6-ROADMAP.md)
 - ✅ **v2.7 Bot Personas & Playstyle Layer** — Phases 182–185 (shipped 2026-07-23; deployed to production, PRs through #275) — a roster of 24 named bot personas (4 styles × 6 ELO rungs, 800–1800) on the Bots page, each a complete pinned opponent (preset, calibrated ELO, style params, opening book, resign/draw-offer policy, avatar, bio). Style levers land first (Phase 182), then the persona registry + Bots page UI (Phase 183), then per-persona harness calibration replaces the provisional labels with measured values (Phase 184, `PERSONA_CALIBRATION_MEASURED=true`), then the roster is re-laid-out as a rung-ladder grid with per-persona win stars (Phase 185) (SEED-098) — see [milestones/v2.7-ROADMAP.md](milestones/v2.7-ROADMAP.md)
 - ✅ **v2.8 Import Filters and Guest Data Cleanup** — Phases 186–188 (shipped 2026-07-24) — user-facing import filters (time-control multiselect + per-platform game cap) on the Import tab to keep storage and Stockfish compute in check, with backward backfill on filter upgrades and grandfathering for existing users (Phase 186, SEED-117); a daily background job that prunes game data for guests inactive ≥30 days while keeping the guest account + auth (Phase 187, SEED-116); and import/eval pipeline cleanup retiring completed backfill machinery while keeping `resweep_holed_games` and tiers 4/4b as permanent safety nets (Phase 188, SEED-115) — see [milestones/v2.8-ROADMAP.md](milestones/v2.8-ROADMAP.md)
-- ⏳ **v2.9 Train — Spaced-Repetition Blunder Drills** — Phases 189–192 (incl. 190.1, in progress)
+- ⏳ **v2.9 Train — Spaced-Repetition Blunder Drills** — Phases 189–193 (incl. 190.1, in progress)
 
 ## Progress
 
@@ -149,7 +149,8 @@
 | 190. Train Page + Solve Loop (SEED-037, v2.9) | 6/6 | In progress (UAT) | — |
 | 190.1. Train Reveal Redesign (INSERTED, 190 UAT feedback) | 5/5 | Complete | 2026-07-26 |
 | 191. Schedule + Progress Surface (SEED-037, v2.9) | 6/6 | Complete | 2026-07-27 |
-| 192. Precomputed Red-Herring Position Pool (SEED-120, v2.9) | 0/? | Context gathered | — |
+| 192. Precomputed Red-Herring Position Pool (SEED-120, v2.9) | 5/5 | Complete | 2026-07-28 |
+| 193. Session-Tick Streaks with a Depletable Shield (SEED-121, v2.9) | 0/? | Context gathered | — |
 
 ## v2.9 Train — Spaced-Repetition Blunder Drills (In Progress)
 
@@ -358,6 +359,41 @@ Plans:
 - [x] 192-05-PLAN.md — Reveal frontend gates (D-07/D-08/D-09) and the four mandatory spec amendments (wave 3)
 
 **UI hint**: minor — reveal panel only (omit the game info line for herrings, hide Analyze when the source game link is null)
+
+### Phase 193: Session-Tick Streaks with a Depletable Shield (SEED-121)
+
+**Goal**: Train's streak stops measuring weeks and starts measuring sessions. One mechanism — tick per scheduled day, shield +1 on a completed session (cap 7), −1 on a miss, count resets when the shield hits 0 — replaces Phase 191's weekly-fulfillment check, the `required_sessions_per_week` popcount (and its 1→6 requirement cliff), and the 3-rung flame ladder. The count then measures intensity for free (a 7-day/week user's count races, a 1-day/week user's crawls) while the shield stays a pure grace buffer that automatically stretches for infrequent trainers.
+
+**Depends on**: Phase 191 (the streak machinery this replaces). Pre-production: verified against `origin/production` on 2026-07-28 that `FLAME_LADDER` is absent there, so there is no live streak state to migrate.
+
+**Requirements**: PROG-01 (amend in place — the weekly-streak wording is the defect), SCHD-02 (amend — badge visibility narrows to scheduled days). No new requirement IDs.
+
+**Plan-time decisions to resolve explicitly (not default)**: the drain rate stays symmetric ±1 per SEED-121 (~50% attendance survival bar) — do not tune by shrinking shield depth. Carry-over of Phase 191's three streak columns (hard-reset vs. replaying `drill_sessions` history) must be decided against Phase 191 D-05, which made retroactivity an explicit user requirement, and bounded by the D-06 eligibility watermark. The settle machine is deliberately asymmetric (completions settle eagerly on session completion, misses lazily at day rollover) — the two paths must not double-count a day.
+
+**Success Criteria** (what must be TRUE):
+
+  1. A completed session on a scheduled day increments both the shield (capped at 7) and the session count immediately, and a missed scheduled day drains exactly one shield pip; when the shield reaches 0 the count resets to 0 and a persistent, state-derived reset notice appears (not a one-shot event).
+  2. A scheduled day earlier than the user's first qualifying material is never judged (neutral — no drain, no tick), so a brand-new user mid-import cannot lose a streak they never had a chance to build.
+  3. An ad-hoc off-day session credits one shield pip but does not advance the count; a session started and left unfinished past its window is a miss.
+  4. A settled day is frozen forever: changing `weekday_mask` or timezone re-judges only days strictly after `streak_settled_through`, never a past day (Phase 191 D-18, carried to per-day granularity).
+  5. The Train stats row renders the shield as a 7-segment pip meter with an "N-session streak" label, and the numeric nav badge appears only on scheduled session days — except that an already-open unfinished session keeps its badge on an off-day.
+
+**UI hint**: yes — flame → 7-segment pip meter in `TrainProgressRow.tsx`, plus the two `App.tsx` badge sites.
+
+**Plans:** 3 plans
+
+Plans:
+**Wave 1**
+
+- [x] 193-01-PLAN.md — Tracer: `shield_level`/`pool_eligible_since` migration, the `_judge_one_day`/`tick_days` machine, the rewritten `GET /train/progress` payload, and the 7-segment pip meter, end to end (wave 1)
+
+**Wave 2** *(blocked on Wave 1 completion)*
+
+- [x] 193-02-PLAN.md — Eager completion tick with the frozen-day guard (D-03/D-07/D-08) and the server-computed `badge_visible` signal (D-09/D-10) (wave 2)
+
+**Wave 3** *(blocked on Wave 2 completion)*
+
+- [x] 193-03-PLAN.md — Both nav badge sites gated on `badge_visible`, PROG-01/SCHD-02 amended in REQUIREMENTS.md, and the manual-only UAT checkpoint (wave 3)
 
 ## Backlog
 

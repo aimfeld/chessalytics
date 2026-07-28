@@ -117,9 +117,6 @@ export interface TrainSettingsUpdate {
   puzzles_per_session: number;
 }
 
-/** The D-02 three-state flame ladder (mirrors the backend `FlameState` StrEnum). */
-export type TrainFlameState = 'minimum' | 'medium' | 'maximum';
-
 /**
  * The server-computed PROG-05/D-16 empty-state discriminant (mirrors the
  * backend `_pool_state`). `'no_material'` = never had any qualifying
@@ -133,31 +130,45 @@ export type TrainFlameState = 'minimum' | 'medium' | 'maximum';
 export type TrainPoolState = 'no_material' | 'exhausted' | 'available';
 
 /**
- * Response for GET /train/progress (PROG-01/PROG-04, Phase 191 Plan 01;
- * waiting_count/pool_state/next_due_date added Plan 02).
+ * Response for GET /train/progress (PROG-01/PROG-04).
  *
- * `flame_state` is the D-03 DISPLAY overlay (never the raw persisted
- * value) — null means never lit. `current_week_required` is null when
- * `weekday_mask === 0` ("train anytime" has no denominator to show).
- * `mastered_count`/`parked_count` are computed on the fly from
- * `drill_items` — D-05, unaffected by D-18 (only the streak/flame portion
- * is snapshotted server-side).
+ * Phase 193 replaced the Phase 191 weekly D-18 settled-streak snapshot with
+ * a per-scheduled-day tick + a 0-7 depletable shield: `session_streak_count`
+ * (was `settled_streak_weeks`) and `shield_level` (was `flame_state`, a
+ * 3-state enum; now a plain number) mirror the persisted tick snapshot on
+ * `train_settings`. There is no display overlay any more — the returned
+ * values are always exactly what is persisted. `current_week_required` is
+ * null when `weekday_mask === 0` ("train anytime" has no denominator to
+ * show). `mastered_count`/`parked_count` are computed on the fly from
+ * `drill_items` (D-05, unaffected by the tick snapshot).
  *
  * `waiting_count` is an upper-bound attention-signal estimate, never a
  * promise of exact session size — the start screen's own "N puzzles
  * waiting" line still comes from the real composed session. `next_due_date`
  * is the earliest date an ACTIVE item will next resurface, or null when
  * nothing will (the "All caught up!" empty state's date).
+ *
+ * `streak_reset_notice` (was `streak_lost_last_week`) is derived from the
+ * RESULTING state (never from "did this call settle the reset"), so it
+ * survives a page reload.
+ *
+ * `badge_visible` (Plan 02, D-09/D-10) is a DISPLAY HINT ONLY — it gates no
+ * server-side authorization, and the number the nav badge shows still comes
+ * from `waiting_count`. The client MUST NEVER attempt its own day-of-week or
+ * timezone math here — it has no `weekday_mask` and no clean way to
+ * reproduce the backend's `local_today` — this field is the single source
+ * of truth for whether the badge should show.
  */
 export interface TrainProgressResponse {
-  settled_streak_weeks: number;
-  flame_state: TrainFlameState | null;
+  session_streak_count: number;
+  shield_level: number;
   current_week_completed: number;
   current_week_required: number | null;
-  streak_lost_last_week: boolean;
+  streak_reset_notice: boolean;
   mastered_count: number;
   parked_count: number;
   waiting_count: number;
   pool_state: TrainPoolState;
   next_due_date: string | null;
+  badge_visible: boolean;
 }

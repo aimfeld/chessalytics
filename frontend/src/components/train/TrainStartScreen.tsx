@@ -17,9 +17,11 @@ import { Button } from '@/components/ui/button';
 import { EmptyState } from '@/components/ui/empty-state';
 import { LoadError } from '@/components/ui/load-error';
 import { TRAIN_CTA_BUTTON_CLASS } from '@/components/train/buttonStyles';
-import { TrainProgressRow } from '@/components/train/TrainProgressRow';
 import { TrainScheduleSettings } from '@/components/train/TrainScheduleSettings';
+import { TrainStatsCard } from '@/components/train/TrainStatsCard';
+import { TrainStreakCard } from '@/components/train/TrainStreakCard';
 import { useTrainProgress } from '@/hooks/useTrainProgress';
+import { TRAIN_POINTS_PER_PUZZLE } from '@/lib/trainScore';
 import type { TrainSessionResponse } from '@/types/train';
 
 export interface TrainStartScreenProps {
@@ -56,9 +58,21 @@ export interface TrainStartScreenProps {
  *
  * Only the landing states use this — `TrainSolveScreen` is a two-column lg
  * layout that must keep the full page width.
+ *
+ * 193 UAT round 3: `py-12` dropped to `py-6 md:py-8` — stacked on the page's
+ * own `py-6` it put 72px of dead space above the title on a phone.
  */
 const LANDING_CONTAINER_CLASS =
-  'mx-auto flex w-full max-w-2xl flex-col items-start gap-4 py-12 text-left';
+  'mx-auto flex w-full max-w-2xl flex-col items-start gap-4 py-6 text-left md:py-8';
+
+/**
+ * 193 UAT round 3: Streak and Puzzle pool sit side by side from `sm:` up and
+ * stack on mobile. Each held two or three short lines inside full-width card
+ * chrome, which pushed `TrainScheduleSettings` — the only interactive block
+ * besides the CTA — below the fold on a laptop. Grid items stretch, so the
+ * two cards stay equal height.
+ */
+const LANDING_CARD_GRID_CLASS = 'grid w-full grid-cols-1 gap-4 sm:grid-cols-2';
 
 type LandingState =
   | { kind: 'loading' }
@@ -101,7 +115,11 @@ function resolveLandingState(
     return {
       kind: 'completed',
       score: sessionScore,
-      totalPoints: session.puzzle_count * 2,
+      // 193 UAT round 2 bug fix: this was a hardcoded `* 2`, left behind when
+      // SEED-119 raised the per-puzzle max to 3 (1 guess + 0-2 move tier).
+      // A 3-puzzle session therefore reported "0/6" while the in-loop score
+      // screen — which reads the shared constant — reported "0/9".
+      totalPoints: session.puzzle_count * TRAIN_POINTS_PER_PUZZLE,
       nextSessionDate: session.expires_on,
     };
   }
@@ -116,16 +134,30 @@ function resolveLandingState(
   return { kind: 'fresh', puzzleCount: session.puzzle_count };
 }
 
-/** The "Train" heading with its Beta badge (190.1 UAT round 6) — the feature
- * is still beta-gated, and the landing screen should say so. `text-sm`
- * overrides the Badge component's baked-in `text-xs` (CLAUDE.md font floor). */
-function TrainTitle(): ReactElement {
+/**
+ * The "Train" heading with its Beta badge (190.1 UAT round 6) — the feature
+ * is still beta-gated, and the landing screen should say so — plus the
+ * tagline directly beneath it. `text-sm` overrides the Badge component's
+ * baked-in `text-xs` (CLAUDE.md font floor).
+ *
+ * 191.1 UAT: the tagline sits directly under the "Train Beta" title in EVERY
+ * landing state — the completed state used to push it below the progress row.
+ * 193 UAT round 3: the two are one `gap-1` unit rather than two children of
+ * the container's uniform `gap-4`, which spaced title, tagline, and CTA
+ * identically so nothing read as a group.
+ */
+function TrainHeader(): ReactElement {
   return (
-    <div className="flex items-center gap-2">
-      <h1 className="text-xl font-semibold">Train</h1>
-      <Badge variant="secondary" className="text-sm" data-testid="train-beta-badge">
-        Beta
-      </Badge>
+    <div className="flex flex-col gap-1">
+      <div className="flex items-center gap-2">
+        <h1 className="text-xl font-semibold">Train</h1>
+        <Badge variant="secondary" className="text-sm" data-testid="train-beta-badge">
+          Beta
+        </Badge>
+      </div>
+      <p className="text-sm text-muted-foreground" data-testid="train-tagline">
+        Learn from the mistakes in your games with personalized puzzles.
+      </p>
     </div>
   );
 }
@@ -172,7 +204,7 @@ function TrainEmptyBody({
         : 'Nothing due right now — nice work.';
     return (
       <>
-        <TrainProgressRow />
+        <TrainStreakCard />
         <div data-testid="train-empty-exhausted">
           <EmptyState layout="page" title="All caught up!" subtitle={`${mastered_count} mastered. ${nextDueCopy}`} />
         </div>
@@ -223,7 +255,7 @@ export function TrainStartScreen({
 
   if (state.kind === 'empty') {
     return (
-      <div data-testid="train-start-screen">
+      <div className={LANDING_CONTAINER_CLASS} data-testid="train-start-screen">
         <TrainEmptyBody progress={progress} />
       </div>
     );
@@ -232,44 +264,31 @@ export function TrainStartScreen({
   if (state.kind === 'completed') {
     return (
       <div className={LANDING_CONTAINER_CLASS} data-testid="train-start-screen">
-        <TrainTitle />
-        {/* 191.1 UAT: the tagline sits directly under the "Train Beta" title in
-            EVERY landing state — the completed state used to push it below the
-            progress row. */}
-        <p className="text-sm text-muted-foreground" data-testid="train-tagline">
-          Learn from the mistakes in your games with personalized puzzles.
-        </p>
-        <TrainProgressRow />
-        <p className="text-sm font-semibold">
-          You scored {state.score}/{state.totalPoints} today.
-        </p>
-        <p className="text-sm font-semibold text-muted-foreground">
-          Next session: {format(parseISO(state.nextSessionDate), 'MMM d, yyyy')}
-        </p>
-        <TrainScheduleSettings onSaved={onSettingsSaved} />
+        <TrainHeader />
+        <div className={LANDING_CARD_GRID_CLASS}>
+          <TrainStreakCard />
+          <TrainStatsCard todayScore={{ total: state.score, max: state.totalPoints }} />
+        </div>
+        <TrainScheduleSettings onSaved={onSettingsSaved} nextSessionDate={state.nextSessionDate} />
       </div>
     );
   }
 
+  // 193 UAT round 3: the fresh/short states' puzzle count moved OFF its own
+  // loose line and into the label, matching the shape 'resume' already used.
+  // Two states describing the same button no longer disagree on where the
+  // number lives, and the fresh state drops a whole line above the CTA.
   const buttonLabel =
-    state.kind === 'resume' ? `Resume session — ${state.solved} of ${state.total} done` : 'Start session';
+    state.kind === 'resume'
+      ? `Resume session — ${state.solved} of ${state.total} done`
+      : `Start session — ${state.puzzleCount} ${state.puzzleCount === 1 ? 'puzzle' : 'puzzles'}`;
 
+  // 193 UAT round 2: the CTA moved ABOVE the cards. With the stats boxed into
+  // card chrome, leaving Start/Resume underneath them pushed the one action on
+  // the page below a screenful of read-only numbers.
   return (
-    <div className="flex flex-col items-start gap-4 py-12 text-left" data-testid="train-start-screen">
-      <TrainTitle />
-      <p className="text-sm text-muted-foreground" data-testid="train-tagline">
-        Learn from the mistakes in your games with personalized puzzles.
-      </p>
-      {state.kind === 'fresh' && <p className="text-sm font-semibold">{state.puzzleCount} puzzles waiting</p>}
-      {state.kind === 'short' && (
-        <>
-          <p className="text-sm font-semibold">{state.puzzleCount} puzzles ready</p>
-          <p className="text-sm font-semibold text-muted-foreground">
-            More of your games are still being analyzed.
-          </p>
-        </>
-      )}
-      <TrainProgressRow />
+    <div className={LANDING_CONTAINER_CLASS} data-testid="train-start-screen">
+      <TrainHeader />
       <Button
         variant="default"
         className={TRAIN_CTA_BUTTON_CLASS}
@@ -278,6 +297,13 @@ export function TrainStartScreen({
       >
         {buttonLabel}
       </Button>
+      {state.kind === 'short' && (
+        <p className="text-sm text-muted-foreground">More of your games are still being analyzed.</p>
+      )}
+      <div className={LANDING_CARD_GRID_CLASS}>
+        <TrainStreakCard />
+        <TrainStatsCard />
+      </div>
       <TrainScheduleSettings onSaved={onSettingsSaved} />
     </div>
   );

@@ -590,6 +590,40 @@ async def _seed_completed_session_router(
             )
 
 
+async def _seed_pool_eligible_since_router(test_engine, user_id: int, since: datetime.date) -> None:
+    """Directly stamp the D-06 eligibility watermark via test_engine
+    (mirrors the repository test suite's `_seed_pool_eligible_since`, for
+    the router test file's HTTP-registered users). Creates a default
+    train_settings row first if one does not already exist, mirroring
+    `train_repository.get_or_create_settings`'s own insert shape."""
+    from sqlalchemy.dialects.postgresql import insert as pg_insert
+
+    from app.models.train_settings import TrainSettings
+    from app.services.train_scheduler import (
+        DEFAULT_PUZZLES_PER_SESSION,
+        DEFAULT_TIMEZONE,
+        DEFAULT_WEEKDAY_MASK,
+    )
+
+    session_maker = async_sessionmaker(test_engine, expire_on_commit=False)
+    async with session_maker() as session:
+        async with session.begin():
+            stmt = pg_insert(TrainSettings).values(
+                user_id=user_id,
+                timezone=DEFAULT_TIMEZONE,
+                weekday_mask=DEFAULT_WEEKDAY_MASK,
+                puzzles_per_session=DEFAULT_PUZZLES_PER_SESSION,
+                streak_count=0,
+                shield_level=0,
+                streak_settled_through=None,
+                pool_eligible_since=since,
+            )
+            stmt = stmt.on_conflict_do_update(
+                index_elements=["user_id"], set_={"pool_eligible_since": since}
+            )
+            await session.execute(stmt)
+
+
 async def _put_settings(
     token: str, *, timezone: str, weekday_mask: int, puzzles_per_session: int
 ) -> httpx.Response:
@@ -2036,14 +2070,14 @@ async def test_untouched_open_session_recomposes_after_size_change(test_engine) 
 
 
 # ---------------------------------------------------------------------------
-# Phase 191 Plan 01 (PROG-01/PROG-04, D-18) — GET /train/progress
+# Phase 193 (PROG-01/PROG-04, per-day tick + depletable shield) —
+# GET /train/progress
 # ---------------------------------------------------------------------------
 
 
 @pytest.mark.asyncio
-async def test_progress_returns_200_with_all_seven_fields(test_engine) -> None:
-    """An authenticated non-guest account gets 200 with every response field
-    (Phase 191 Plan 02 adds waiting_count/pool_state/next_due_date)."""
+async def test_progress_returns_200_with_all_eleven_fields(test_engine) -> None:
+    """An authenticated non-guest account gets 200 with every response field."""
     email = f"train-progress-ok-{uuid.uuid4().hex[:8]}@example.com"
     _user_id, token = await _register_and_login(email)
 
@@ -2051,51 +2085,52 @@ async def test_progress_returns_200_with_all_seven_fields(test_engine) -> None:
     assert resp.status_code == 200
     body = resp.json()
     assert set(body.keys()) == {
-        "settled_streak_weeks",
-        "flame_state",
+        "session_streak_count",
+        "shield_level",
         "current_week_completed",
         "current_week_required",
-        "streak_lost_last_week",
+        "streak_reset_notice",
         "mastered_count",
         "parked_count",
         "waiting_count",
         "pool_state",
         "next_due_date",
+        "badge_visible",
     }
     assert body["pool_state"] in ("no_material", "exhausted", "available")
-    # A brand-new account: never lit, nothing settled, no counts yet, and no
-    # material at all -> the cold-start empty state.
-    assert body["settled_streak_weeks"] == 0
-    assert body["flame_state"] is None
+    # A brand-new account: empty shield, nothing settled, no counts yet, and
+    # no material at all -> the cold-start empty state.
+    assert body["session_streak_count"] == 0
+    assert body["shield_level"] == 0
+    assert body["streak_reset_notice"] is False
     assert body["mastered_count"] == 0
     assert body["parked_count"] == 0
     assert body["waiting_count"] == 0
     assert body["pool_state"] == "no_material"
     assert body["next_due_date"] is None
+    # (Plan 02, D-09/D-10) waiting_count == 0 -> badge_visible is always
+    # False regardless of schedule; still assert its type here since a
+    # brand-new account is the cheapest place to pin "key present, boolean".
+    assert isinstance(body["badge_visible"], bool)
+    assert body["badge_visible"] is False
 
 
 @pytest.mark.asyncio
-async def test_put_settings_settles_elapsed_weeks_with_old_mask_before_get(test_engine) -> None:
-    """End-to-end D-18: an elapsed week judged under the OLD weekday_mask=0
-    (1 session required) settles into the streak BEFORE a PUT installs a
-    stricter 3-scheduled-day mask, and a subsequent GET /train/progress
-    reports that OLD-mask judgment (Phase 191 Plan 02, Task 3)."""
+async def test_put_settings_settles_elapsed_days_with_old_mask_before_get(test_engine) -> None:
+    """End-to-end settle-before-mutate: an elapsed day judged under the OLD
+    dense default weekday_mask settles into the streak BEFORE a PUT installs
+    a stricter 3-scheduled-day mask, and a subsequent GET /train/progress
+    reports that OLD-mask judgment."""
     email = f"train-settle-mutate-{uuid.uuid4().hex[:8]}@example.com"
     user_id, token = await _register_and_login(email)
 
-    # Exactly ONE fully-elapsed week (the Monday immediately before the
-    # current week, computed relative to real wall-clock "now" — settle_weeks
-    # replays EVERY elapsed week since the epoch of no settlement, so an
-    # arbitrarily old date would settle-then-immediately-lose the streak
-    # across the many empty weeks since). One completed session in that week
-    # is fulfilled under the OLD 1-session-per-week requirement
-    # (weekday_mask=0, the D-07 default).
+    # A single day whose window has closed relative to real wall-clock
+    # "now" (yesterday) — one judged day is sufficient to prove the
+    # settle-before-mutate ordering without needing a multi-day walk.
     now_for_seed = datetime.datetime.now(datetime.timezone.utc)
-    current_week_monday = now_for_seed.date() - datetime.timedelta(
-        days=now_for_seed.date().weekday()
-    )
-    elapsed_week_monday = current_week_monday - datetime.timedelta(days=7)
-    await _seed_completed_session_router(test_engine, user_id, elapsed_week_monday)
+    yesterday = now_for_seed.date() - datetime.timedelta(days=1)
+    await _seed_completed_session_router(test_engine, user_id, yesterday)
+    await _seed_pool_eligible_since_router(test_engine, user_id, yesterday)
 
     put_resp = await _put_settings(
         token,
@@ -2107,7 +2142,7 @@ async def test_put_settings_settles_elapsed_weeks_with_old_mask_before_get(test_
 
     progress_resp = await _get_progress(token)
     assert progress_resp.status_code == 200
-    assert progress_resp.json()["settled_streak_weeks"] == 1
+    assert progress_resp.json()["session_streak_count"] == 1
 
 
 @pytest.mark.asyncio

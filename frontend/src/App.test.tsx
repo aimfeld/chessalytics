@@ -55,7 +55,10 @@ vi.mock('@/hooks/useAuth', () => ({
 // stands in for BOTH the pending and errored states — App.tsx derives the
 // badge count from `.data?.waiting_count ?? 0` only, so both states collapse
 // to "no resolved data" from the component's point of view.
-let trainProgressData: { waiting_count: number } | undefined;
+// Phase 193 D-09/D-10: badge_visible is optional here (not required, unlike
+// the real TrainProgressResponse) precisely so a test can omit it to prove
+// the fail-closed `?? false` path in App.tsx.
+let trainProgressData: { waiting_count: number; badge_visible?: boolean } | undefined;
 const useTrainProgressSpy = vi.fn();
 
 vi.mock('@/hooks/useTrainProgress', () => ({
@@ -607,10 +610,10 @@ describe('191-05: Train waiting badge (SCHD-02/D-06..D-08)', () => {
     localStorage.clear();
   });
 
-  it('unlocked profile with waiting_count: 12 -> badge reads 12 on desktop and mobile', () => {
+  it('unlocked profile with waiting_count: 12, badge_visible: true -> badge reads 12 on desktop and mobile', () => {
     profileState = UNLOCKED_PROFILE;
     tier1State = true;
-    trainProgressData = { waiting_count: 12 };
+    trainProgressData = { waiting_count: 12, badge_visible: true };
 
     const { unmount } = renderNavHeader();
     expect(screen.getByTestId('train-notification-badge').textContent).toBe('12');
@@ -620,10 +623,36 @@ describe('191-05: Train waiting badge (SCHD-02/D-06..D-08)', () => {
     expect(screen.getByTestId('train-notification-badge-mobile').textContent).toBe('12');
   });
 
-  it('waiting_count: 0 -> badge absent on both surfaces', () => {
+  it('waiting_count: 0, badge_visible: true -> badge absent on both surfaces (waiting_count guard preserved)', () => {
     profileState = UNLOCKED_PROFILE;
     tier1State = true;
-    trainProgressData = { waiting_count: 0 };
+    trainProgressData = { waiting_count: 0, badge_visible: true };
+
+    const { unmount } = renderNavHeader();
+    expect(screen.queryByTestId('train-notification-badge')).toBeNull();
+    unmount();
+
+    renderMobileBottomBar();
+    expect(screen.queryByTestId('train-notification-badge-mobile')).toBeNull();
+  });
+
+  it('waiting_count: 12, badge_visible: false -> badge absent on both surfaces (D-09 off-day)', () => {
+    profileState = UNLOCKED_PROFILE;
+    tier1State = true;
+    trainProgressData = { waiting_count: 12, badge_visible: false };
+
+    const { unmount } = renderNavHeader();
+    expect(screen.queryByTestId('train-notification-badge')).toBeNull();
+    unmount();
+
+    renderMobileBottomBar();
+    expect(screen.queryByTestId('train-notification-badge-mobile')).toBeNull();
+  });
+
+  it('waiting_count: 12, badge_visible omitted -> badge absent on both surfaces (fails closed)', () => {
+    profileState = UNLOCKED_PROFILE;
+    tier1State = true;
+    trainProgressData = { waiting_count: 12 };
 
     const { unmount } = renderNavHeader();
     expect(screen.queryByTestId('train-notification-badge')).toBeNull();
@@ -661,10 +690,10 @@ describe('191-05: Train waiting badge (SCHD-02/D-06..D-08)', () => {
     expect(screen.queryByText(/failed to load/i)).toBeNull();
   });
 
-  it('waiting_count: 150 -> badge reads 99+ on both surfaces, growing to fit', () => {
+  it('waiting_count: 150, badge_visible: true -> badge reads 99+ on both surfaces, growing to fit (cap logic untouched)', () => {
     profileState = UNLOCKED_PROFILE;
     tier1State = true;
-    trainProgressData = { waiting_count: 150 };
+    trainProgressData = { waiting_count: 150, badge_visible: true };
 
     const { unmount } = renderNavHeader();
     const desktopBadge = screen.getByTestId('train-notification-badge');
@@ -682,7 +711,7 @@ describe('191-05: Train waiting badge (SCHD-02/D-06..D-08)', () => {
   it('the old Train dot is gone regardless of visited flags, even with waiting_count: 12', () => {
     profileState = UNLOCKED_PROFILE;
     tier1State = true;
-    trainProgressData = { waiting_count: 12 };
+    trainProgressData = { waiting_count: 12, badge_visible: true };
     localStorage.setItem(`user_flag:openings_visited:${UNLOCKED_PROFILE.email}`, '1');
     localStorage.setItem(`user_flag:endgames_visited:${UNLOCKED_PROFILE.email}`, '1');
 

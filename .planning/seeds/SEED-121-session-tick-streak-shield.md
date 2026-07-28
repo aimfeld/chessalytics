@@ -2,23 +2,23 @@
 id: SEED-121
 status: open
 planted: 2026-07-27
-planted_during: /gsd-explore session during Phase 192 (v2.9 Train milestone), 2026-07-27. User asked whether the weekly streak model shipped in Phase 191 should switch to a daily model for stronger short-term motivation. Six exchanges converged on a third design that is neither: a per-session tick with a 10-level depletable shield.
+planted_during: /gsd-explore session during Phase 192 (v2.9 Train milestone), 2026-07-27. User asked whether the weekly streak model shipped in Phase 191 should switch to a daily model for stronger short-term motivation. Six exchanges converged on a third design that is neither: a per-session tick with a 7-level depletable shield.
 trigger_when: Before v2.9 closes, if Phase 191's streak surface is still pre-production and the change is cheap; otherwise at the next Train-focused milestone. Also surface if Train retention data shows users losing streaks faster than expected, or if UAT feedback on 191 flags the weekly cadence as unmotivating. The SR-supply prerequisite is CLEARED (measured against prod 2026-07-27, see below) — nothing external now blocks this.
-scope: phase (1-2 plans) — backend rewrite of the settle machine in `app/services/train_scheduler.py` (weekly settle -> per-scheduled-day tick), migration for the widened shield column, frontend swap of the 3-state flame for a 10-state meter, plus a pause/vacation toggle.
+scope: phase (1-2 plans) — backend rewrite of the settle machine in `app/services/train_scheduler.py` (weekly settle -> per-scheduled-day tick), migration for the widened shield column, frontend swap of the 3-state flame for a 7-state meter, plus a pause/vacation toggle.
 depends_on: Phase 191 (the streak machinery this replaces). No open blockers.
 ---
 
-# SEED-121: Session-tick streaks with a 10-level depletable shield
+# SEED-121: Session-tick streaks with a 7-level depletable shield
 
 Replaces Phase 191's weekly streak model with a per-session tick and a
-10-level grace buffer. Not a parameter change: the tick size, the ladder
+7-level grace buffer. Not a parameter change: the tick size, the ladder
 depth, the reset rule, and the meaning of the count all move together.
 
 ## The mechanism
 
 - **Tick = one scheduled day** (a day whose bit is set in `weekday_mask`),
   not a calendar week and not a calendar day. Unscheduled days never tick.
-- **Completed session**: shield +1 (capped at 10), streak count +1.
+- **Completed session**: shield +1 (capped at 7), streak count +1.
 - **Missed scheduled day**: shield −1.
 - **Shield reaches 0**: streak count resets to 0.
 
@@ -60,14 +60,14 @@ Freeze, Streak Repair, and Weekend Amulet.
 
 The session-tick model is that pattern, generalized: it *is* a daily streak
 for a user who trains every day, and it automatically stretches for users who
-don't — a 1-day/week user gets 10 weeks of grace from the same 10-level
+don't — a 1-day/week user gets 7 weeks of grace from the same 7-level
 shield, with no second dial and no special-casing.
 
 ## Properties worth knowing before implementing
 
-**Grace scales with stakes early, then flattens.** For the first 10 sessions
+**Grace scales with stakes early, then flattens.** For the first 7 sessions
 the shield and the count increment together, so a user with a count of 3 has
-a buffer of 3 — proportional to what they'd lose. Past 10 the buffer caps
+a buffer of 3 — proportional to what they'd lose. Past 7 the buffer caps
 while the count keeps climbing, matching Duolingo's fixed 2 freezes
 regardless of streak length. Traced explicitly during the session; the
 "grace is back-loaded and punishes beginners" objection is wrong.
@@ -79,29 +79,36 @@ intensity while the shield stays a pure grace buffer — the exact split the
 user asked for, without the extra settings control an earlier proposal in
 the session needed.
 
-**The effective bar is ~50% attendance.** Symmetric ±1 with a cap at 10 is a
+**The effective bar is ~50% attendance.** Symmetric ±1 with a cap at 7 is a
 bounded random walk: above 50% attendance it drifts up and the streak
 essentially never dies; below 50% it drifts down and dies on a predictable
 schedule; at exactly 50% it is recurrent but slow (expected hitting time from
-10 is ~100 ticks). Unusually explainable as a rule, but far more forgiving
+a full shield of 7 is ~49 ticks; it was ~100 at a cap of 10). Unusually
+explainable as a rule, but far more forgiving
 than anything else considered — confirm it is the intended bar.
 
 **Tuning lever if 50% is too soft:** drain 2 per miss (threshold moves to
-~67%), or refill 1 per 2 completed sessions. Do not tune by shrinking the
-shield depth; that reintroduces the grace-collapse problem.
+~67%), or refill 1 per 2 completed sessions. Do not tune further by shrinking
+the shield depth below 7; past that the grace-collapse problem returns (the
+depth *is* the whole grace budget, and a 1-day/week user's calendar tolerance
+scales with it one-for-one).
 
 ## Known gaps to resolve at planning time
 
-1. **10 levels is not a flame.** The shipped UI has three discrete states
+1. **7 levels is not a flame.** The shipped UI has three discrete states
    (`FlameState` / `FLAME_LADDER` in `train_scheduler.py`, rendered in
-   `TrainProgressRow.tsx`). Ten tiers wants a meter or a plain number
-   ("Streak shield 7/10"), following Duolingo's freeze *count* rather than
-   ten pieces of flame art. This is the main UI cost of the change.
+   `TrainProgressRow.tsx`). Seven tiers wants a meter or a plain number
+   ("Streak shield 5/7"), following Duolingo's freeze *count* rather than
+   seven pieces of flame art. This is the main UI cost of the change.
+   Seven is at least a natural pip count (one per weekday), so a 7-dot row
+   is a plausible rendering that 10 did not have.
 2. **Calendar grace runs inversely to commitment.** A 1-day/week user
-   survives a 10-week absence; a 7-day/week user's streak dies during a
-   two-week holiday. The most committed users get the least tolerance for
-   ordinary life. Standard fix is an explicit pause/vacation toggle, not
-   buffer tuning — see the todo.
+   survives a 7-week absence; a 7-day/week user's streak now dies after
+   exactly one week away, so a normal two-week holiday kills it. Cutting the
+   cap from 10 sharpens this — it was ~10 days of slack, it is now 7. The most
+   committed users get the least tolerance for ordinary life. Standard fix is
+   an explicit pause/vacation toggle, not buffer tuning — see the todo, and
+   treat the toggle as closer to required at a cap of 7.
 3. **"Streak" becomes a slight misnomer**, since misses are absorbed rather
    than breaking the count. Duolingo has the same fudge with freezes, so it
    is survivable, but the label should be sessions-based rather than
@@ -162,6 +169,12 @@ material), not a reason to reject the model.
 
 ## Decisions locked during the session
 
+- **Shield cap is 7, not 10** (user's call, 2026-07-28). Seven maps cleanly to
+  a weekday-shaped pip row, keeps a full week of calendar slack for a daily
+  trainer, and shortens the death spiral for a lapsed user (expected ~49 ticks
+  at 50% attendance rather than ~100). The ±1 rule, the ~50% attendance
+  threshold, and the grace-scales-with-stakes property are all unchanged; only
+  the ceiling moves.
 - **Flame/shield stays a pure grace buffer.** Intensity is expressed in the
   weekly progress surface (day dots, "N sessions this week"), never folded
   into the shield level. User's explicit call, on simplicity grounds.

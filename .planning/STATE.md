@@ -2,18 +2,18 @@
 gsd_state_version: 1.0
 milestone: v2.9
 milestone_name: Train — Spaced-Repetition Blunder Drills
-current_phase: 999.1
-current_phase_name: BACKLOG
-status: planning
-stopped_at: Completed 192-05-PLAN.md
-last_updated: "2026-07-28T03:36:13.300Z"
+current_phase: 193
+current_phase_name: session-tick-streak-shield
+status: verifying
+stopped_at: Completed 193-03-PLAN.md
+last_updated: "2026-07-28T07:18:21.518Z"
 last_activity: 2026-07-28
-last_activity_desc: Phase 192 shipped — squash-merged to main (7b3f1da0), transitioned to Phase 999.1
+last_activity_desc: Phase 193 execution started
 progress:
-  total_phases: 5
-  completed_phases: 5
-  total_plans: 28
-  completed_plans: 28
+  total_phases: 6
+  completed_phases: 6
+  total_plans: 31
+  completed_plans: 31
   percent: 100
 ---
 
@@ -21,13 +21,13 @@ progress:
 
 ## Current Position
 
-Phase: 999.1 — Password Reset (BACKLOG)
-Plan: Not started
-Status: Ready to plan
+Phase: 193 (session-tick-streak-shield) — EXECUTING
+Plan: 3 of 3
+Status: Phase complete — ready for verification
 passed with 2 warnings, both closed at plan time. Two blocking gates are built in: a
 `checkpoint:decision` on the `herring_pool` surrogate PK (192-01) and a second on the
 `drill_solves.game_id` nullability migration (192-02, one-way door).
-Last activity: 2026-07-28 — Phase 192 shipped — squash-merged to main (7b3f1da0), transitioned to Phase 999.1
+Last activity: 2026-07-28 — Phase 193 execution started
 
 Phase 192 fixes a correctness defect in Phase 189's red herrings: they were sourced from
 non-gem `game_best_moves` rows, which does not actually mean "several fine moves". It replaces
@@ -563,6 +563,11 @@ v1.29 Live-Engine Analysis Page shipped 2026-06-29 — 5 phases (136–140), 14 
 - [Phase ?]: 192-04: herring_stmt's query-time tight gate + degenerate exclusion landed; JSONB path extraction via PG14+ subscript syntax; shared default ladder fixtures fixed to clear the new gate
 - [Phase ?]: POOL-03 amended in place naming the precomputed pool sourcing; POOL-03/POOL-09 traceability rows extended to Phase 192
 - [Phase ?]: TrainReveal's D-07 game-footer gate wraps both the error and success branches in one puzzle_type !== 'herring' conditional
+- [Phase ?]: Task 1 checkpoint (193-01): option-b hard reset, no backfill, pool_eligible_since stays nullable/lazily-stamped — D-05 retroactivity waiver recorded explicitly (Phase 190 shipped, Phase 191 streak surface did not)
+- [Phase ?]: 193-01: DayOutcome four-value discriminant (fulfilled/missed/neutral/credit_only) replaces a (fulfilled, eligible) pair so _judge_one_day is the single shield/count arithmetic primitive for both lazy and future eager tick paths
+- [Phase ?]: 193-02: Eager-tick call site gated on claimed AND session_complete (not session_complete alone) — required by the plan's own resubmit acceptance criterion and threat register T-193-06's 'runs at most once per session' claim
+- [Phase ?]: 193-02: Settle-first mutation check confirmed load-bearing by manual revert-and-rerun (skip-guard test failed without the settle_streak_snapshot call, passed with it restored)
+- [Phase ?]: Phase 193 SCHD-02 window-expiry ruling (user, not executor): an open unfinished session's badge does NOT survive its window expiring — no code change; accepted trade-off is that record_solve has no expiry check so a late completion can still net a shield pip against the miss, and the user will never be cued toward that recovery path
 
 ### Pending Todos
 
@@ -663,9 +668,9 @@ Items acknowledged and deferred at **v1.29 milestone close on 2026-06-29** (user
 
 ## Session Continuity
 
-**Stopped at:** Completed 192-05-PLAN.md
+**Stopped at:** Completed 193-03-PLAN.md
 
-**Last session:** 2026-07-28T01:42:53.859Z
+**Last session:** 2026-07-28T07:18:21.478Z
 
 **Resume file:**
 
@@ -753,6 +758,9 @@ None
 | Phase 192 P03 | 70min | 2 tasks | 4 files |
 | Phase 192 P04 | 70min | 3 tasks | 3 files |
 | Phase 192 P05 | 35min | 3 tasks | 8 files |
+| Phase 193 P01 | 18min | 3 tasks | 15 files |
+| Phase 193 P02 | ~30min | 2 tasks | 8 files |
+| Phase 193 P03 | ~15min | 3 tasks | 5 files |
 
 ## Performance Metrics
 

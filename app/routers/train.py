@@ -195,13 +195,14 @@ async def get_train_progress(
     user: Annotated[User, Depends(current_active_user)],
     now_utc: NowUtc,
 ) -> TrainProgressResponse:
-    """Return the D-18 settled streak + honest mastered/parked counts (PROG-01/PROG-04).
+    """Return the per-day tick snapshot + honest mastered/parked counts (PROG-01/PROG-04).
 
-    This GET legitimately commits: D-18's settlement is lazy-on-read, so a
-    successful call may advance `train_settings.streak_count`/`flame_state`/
-    `streak_settled_through` (a guarded, monotonic, idempotent write — see
-    `train_repository.settle_streak_snapshot`) in addition to the ordinary
-    settings create-on-first-touch.
+    This GET legitimately commits: settlement is lazy-on-read, so a
+    successful call may advance `train_settings.streak_count`/
+    `shield_level`/`streak_settled_through`/`pool_eligible_since` (a
+    guarded, monotonic, idempotent write — see
+    `train_repository.settle_streak_snapshot`/`_stamp_pool_eligibility`) in
+    addition to the ordinary settings create-on-first-touch.
     """
     _reject_guest(user)
     try:
@@ -213,16 +214,17 @@ async def get_train_progress(
         sentry_sdk.capture_exception()
         raise
     return TrainProgressResponse(
-        settled_streak_weeks=progress.settled_streak_weeks,
-        flame_state=progress.flame_state.value if progress.flame_state is not None else None,
+        session_streak_count=progress.session_streak_count,
+        shield_level=progress.shield_level,
         current_week_completed=progress.current_week_completed,
         current_week_required=progress.current_week_required,
-        streak_lost_last_week=progress.streak_lost_last_week,
+        streak_reset_notice=progress.streak_reset_notice,
         mastered_count=progress.mastered_count,
         parked_count=progress.parked_count,
         waiting_count=progress.waiting_count,
         pool_state=progress.pool_state,
         next_due_date=progress.next_due_date,
+        badge_visible=progress.badge_visible,
     )
 
 

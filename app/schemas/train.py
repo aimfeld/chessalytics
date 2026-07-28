@@ -196,22 +196,29 @@ class TrainSettingsUpdate(BaseModel):
 
 
 class TrainProgressResponse(BaseModel):
-    """Response for GET /train/progress (PROG-01/PROG-04, Phase 191 Plan 01).
+    """Response for GET /train/progress (PROG-01/PROG-04).
 
-    `settled_streak_weeks` / `flame_state` come from the D-18 settled-streak
-    snapshot on `train_settings`, lazily advanced by this same request
-    (`app.repositories.train_repository.settle_streak_snapshot`).
-    `flame_state` is the D-03 DISPLAY overlay (never the raw persisted
-    value) — None means never lit. `current_week_required` is None when
+    Phase 193 (SEED-121) replaced Phase 191's weekly D-18 settled-streak
+    snapshot with a per-scheduled-day tick + a 0-7 depletable shield:
+    `session_streak_count` (was `settled_streak_weeks`; the wire field spells
+    out the D-02 unit — it counts completed scheduled-day SESSIONS, not
+    settled weeks) and `shield_level` (was `flame_state`, a 3-state enum;
+    now a plain int) come from the persisted tick snapshot on
+    `train_settings`, lazily advanced by this same request
+    (`app.repositories.train_repository.settle_streak_snapshot`). There is
+    no display overlay any more — the returned values are always exactly
+    what is persisted. `current_week_required` is None when
     `weekday_mask == 0` ("train anytime" has no denominator to show);
-    otherwise it is the popcount of the scheduled-day mask.
-    `mastered_count`/`parked_count` are computed on the fly from `drill_items`
-    (D-05, unaffected by D-18 — only the streak/flame portion is snapshotted).
+    otherwise it is the popcount of the scheduled-day mask (no special-
+    casing — nothing gates on this value any more).
+    `mastered_count`/`parked_count` are computed on the fly from
+    `drill_items` (D-05, unaffected by the tick snapshot — only the
+    streak/shield portion is persisted).
 
-    `waiting_count`/`pool_state`/`next_due_date` (Phase 191 Plan 02) are the
-    server-side signals the nav badge and the two PROG-05 empty states need:
-    `waiting_count` is an upper-bound estimate of puzzles waiting right now
-    (never a promise of exact session size — see
+    `waiting_count`/`pool_state`/`next_due_date` are the server-side signals
+    the nav badge and the two PROG-05 empty states need: `waiting_count` is
+    an upper-bound estimate of puzzles waiting right now (never a promise of
+    exact session size — see
     `app.repositories.train_repository.get_waiting_puzzle_count`).
     `pool_state` is the single discriminant the client branches on for the
     empty states: `"no_material"` means the user has never had any
@@ -222,18 +229,32 @@ class TrainProgressResponse(BaseModel):
     start). `next_due_date` is the earliest date an ACTIVE item will next
     resurface, or null when nothing will (the "All caught up!" empty state's
     date).
+
+    `streak_reset_notice` (was `streak_lost_last_week`) is derived from the
+    RESULTING state (never from "did this call settle the reset"), so it
+    survives a page reload and self-clears once the user trains again.
+
+    `badge_visible` (Plan 02, D-09/D-10) is a DISPLAY HINT ONLY — it gates no
+    server-side authorization, and the number the nav badge shows still
+    comes from `waiting_count`. True when `waiting_count > 0` AND (today is
+    a scheduled day per the user's `weekday_mask` OR an already-open
+    unexpired session still has unsolved puzzles left to rescue). The client
+    performs no day-of-week or timezone math of its own — it has no
+    `weekday_mask` and no clean way to reproduce `local_today`, so this
+    field is the single source of truth for whether the badge should show.
     """
 
-    settled_streak_weeks: int
-    flame_state: Literal["minimum", "medium", "maximum"] | None
+    session_streak_count: int
+    shield_level: int
     current_week_completed: int
     current_week_required: int | None
-    streak_lost_last_week: bool
+    streak_reset_notice: bool
     mastered_count: int
     parked_count: int
     waiting_count: int
     pool_state: Literal["no_material", "exhausted", "available"]
     next_due_date: date | None
+    badge_visible: bool
 
 
 __all__ = [

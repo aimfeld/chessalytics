@@ -2,8 +2,9 @@
 
 The drill_items/drill_sessions/drill_solves deletes are plain single-table
 statements; the branch that actually makes a choice is what happens to
-`train_settings`. The default path must clear ONLY the D-18 streak snapshot
-and keep the schedule (timezone / weekday_mask / puzzles_per_session) the user
+`train_settings`. The default path must clear ONLY the per-day tick snapshot
+(streak_count/shield_level/streak_settled_through/pool_eligible_since) and
+keep the schedule (timezone / weekday_mask / puzzles_per_session) the user
 picked — re-selecting a schedule after every reset would defeat the purpose of
 the tool — while `--reset-settings` drops the row so first-touch defaults come
 back.
@@ -33,7 +34,8 @@ _CUSTOM_PUZZLES_PER_SESSION = 9
 
 
 async def _seed_settings(db_session, user_id: int) -> None:
-    """Insert a settings row carrying a custom schedule AND a lit streak."""
+    """Insert a settings row carrying a custom schedule AND a lit streak/
+    shield/watermark."""
     db_session.add(
         TrainSettings(
             user_id=user_id,
@@ -41,8 +43,9 @@ async def _seed_settings(db_session, user_id: int) -> None:
             weekday_mask=_CUSTOM_WEEKDAY_MASK,
             puzzles_per_session=_CUSTOM_PUZZLES_PER_SESSION,
             streak_count=4,
-            flame_state="medium",
+            shield_level=5,
             streak_settled_through=datetime.date(2026, 7, 20),
+            pool_eligible_since=datetime.date(2026, 6, 1),
         )
     )
     await db_session.flush()
@@ -50,7 +53,8 @@ async def _seed_settings(db_session, user_id: int) -> None:
 
 @pytest.mark.asyncio
 async def test_reset_clears_streak_snapshot_but_keeps_schedule(fresh_test_user, db_session) -> None:
-    """The default path zeroes the streak and leaves the chosen schedule intact."""
+    """The default path zeroes the tick snapshot (including the D-06
+    watermark) and leaves the chosen schedule intact."""
     await _seed_settings(db_session, fresh_test_user.id)
 
     await _reset(db_session, fresh_test_user.id, reset_settings=False)
@@ -62,8 +66,9 @@ async def test_reset_clears_streak_snapshot_but_keeps_schedule(fresh_test_user, 
         )
     ).scalar_one()
     assert row.streak_count == 0
-    assert row.flame_state is None
+    assert row.shield_level == 0
     assert row.streak_settled_through is None
+    assert row.pool_eligible_since is None
     assert row.timezone == _CUSTOM_TIMEZONE
     assert row.weekday_mask == _CUSTOM_WEEKDAY_MASK
     assert row.puzzles_per_session == _CUSTOM_PUZZLES_PER_SESSION
