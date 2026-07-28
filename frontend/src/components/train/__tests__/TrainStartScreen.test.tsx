@@ -113,6 +113,7 @@ const BASE_SESSION: TrainSessionResponse = {
   solved_count: 0,
   blob_pending_count: 0,
   puzzles: [],
+  solved_results: [],
 };
 
 // D-04: session_id null and puzzle_count 0 is the shape that reaches the

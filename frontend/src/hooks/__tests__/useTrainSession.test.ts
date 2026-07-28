@@ -2,9 +2,13 @@
 /**
  * useTrainSession.test.ts — 190.1-04 (D-04) coverage: `sessionSolvedCount`,
  * the session score's denominator. Computed as the session response's
- * FROZEN `solved_count` plus the size of the internally tracked
+ * `solved_results.length` plus the size of the internally tracked
  * solved-positions set, updating on exactly the same tick as `sessionScore`
  * (the solve mutation's success path) — never `currentIndex`.
+ *
+ * 260728-tgc (BUGFIX-TRAIN-SCORE-CROSSDEVICE): `sessionScore` and
+ * `sessionSolvedCount` both now seed from `solved_results` on the session
+ * response — server data, not a device-local localStorage tally.
  */
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { act, renderHook, waitFor } from '@testing-library/react';
@@ -27,7 +31,13 @@ vi.mock('@/api/client', async () => {
 import { trainApi } from '@/api/client';
 import { useTrainSession } from '@/hooks/useTrainSession';
 import { TRAIN_PROGRESS_QUERY_KEY } from '@/hooks/useTrainProgress';
-import type { SolveRequest, SolveResponse, TrainPuzzle, TrainSessionResponse } from '@/types/train';
+import type {
+  SolveRequest,
+  SolveResponse,
+  SolvedResult,
+  TrainPuzzle,
+  TrainSessionResponse,
+} from '@/types/train';
 
 const START_FEN = 'rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1';
 
@@ -43,6 +53,10 @@ function makePuzzle(overrides: Partial<TrainPuzzle> = {}): TrainPuzzle {
   };
 }
 
+function makeSolvedResult(overrides: Partial<SolvedResult> = {}): SolvedResult {
+  return { correct_guess: true, move_quality: 'good', ...overrides };
+}
+
 function makeSession(overrides: Partial<TrainSessionResponse> = {}): TrainSessionResponse {
   return {
     session_id: 1,
@@ -53,6 +67,7 @@ function makeSession(overrides: Partial<TrainSessionResponse> = {}): TrainSessio
     solved_count: 0,
     blob_pending_count: 0,
     puzzles: [makePuzzle()],
+    solved_results: [],
     ...overrides,
   };
 }
@@ -83,14 +98,53 @@ describe('useTrainSession — sessionSolvedCount (190.1-04 D-04)', () => {
     vi.mocked(trainApi.solvePuzzle).mockReset();
   });
 
-  it('is the session\'s frozen solved_count before any solve', async () => {
+  it('is the session\'s frozen solved_results.length before any solve', async () => {
     vi.mocked(trainApi.composeOrResumeSession).mockResolvedValue(
-      makeSession({ solved_count: 3 }),
+      makeSession({
+        solved_count: 3,
+        solved_results: [makeSolvedResult(), makeSolvedResult(), makeSolvedResult()],
+      }),
     );
     const { result } = renderHook(() => useTrainSession(), { wrapper: makeWrapper() });
     act(() => result.current.startSession());
     await waitFor(() => expect(result.current.session).not.toBeNull());
     expect(result.current.sessionSolvedCount).toBe(3);
+  });
+
+  it('seeds sessionScore and sessionSolvedCount from solved_results, not a device-local tally', async () => {
+    // 260728-tgc regression coverage: with no localStorage read anywhere in
+    // the hook, this is server data only. Three entries, each 1 (correct
+    // guess) + 2 (good move) = 3 points -> total 9.
+    vi.mocked(trainApi.composeOrResumeSession).mockResolvedValue(
+      makeSession({
+        solved_count: 3,
+        solved_results: [
+          makeSolvedResult({ correct_guess: true, move_quality: 'good' }),
+          makeSolvedResult({ correct_guess: false, move_quality: 'inaccuracy' }),
+          makeSolvedResult({ correct_guess: true, move_quality: 'wrong' }),
+        ],
+      }),
+    );
+    const { result } = renderHook(() => useTrainSession(), { wrapper: makeWrapper() });
+    act(() => result.current.startSession());
+    await waitFor(() => expect(result.current.session).not.toBeNull());
+    // (1+2) + (0+1) + (1+0) = 5.
+    expect(result.current.sessionScore).toBe(5);
+    expect(result.current.sessionSolvedCount).toBe(3);
+
+    // A subsequent solve still increments both live, on top of the seeded base.
+    vi.mocked(trainApi.solvePuzzle).mockResolvedValue(SOLVE_RESPONSE);
+    const body: SolveRequest = {
+      position: 1,
+      guess: 'critical',
+      played_move: 'e2e4',
+      move_quality: 'good',
+    };
+    await act(async () => {
+      await result.current.solvePuzzle(body);
+    });
+    expect(result.current.sessionScore).toBe(8);
+    expect(result.current.sessionSolvedCount).toBe(4);
   });
 
   it('increases by one after a successful solve mutation', async () => {

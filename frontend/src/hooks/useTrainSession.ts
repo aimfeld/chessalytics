@@ -48,13 +48,16 @@
  * (`_discard_if_untouched_and_resized`) only runs on the NEXT compose call,
  * and nothing else on this page ever makes one.
  *
- * `sessionScore` (190-04 D-03) is a client-accumulated, localStorage-backed
- * tally keyed by `session_id`: `TrainSessionResponse` carries no server-side
- * aggregate score field, so the 'completed' landing state's recap line
- * ("You scored N/2M today.") is reconstructed from solve responses seen on
- * this device. A cold reload on a different device (or before this feature
- * shipped) has no stored tally and falls back to 0 — a known limitation
- * flagged in 190-04-SUMMARY.md, not a silent guess.
+ * `sessionScore` (190-04 D-03, replaced 260728-tgc/BUGFIX-TRAIN-SCORE-CROSSDEVICE):
+ * seeded from the session response's `solved_results` — the server-returned
+ * per-puzzle outcomes — via the same `scorePuzzle` + `aggregateSessionScore`
+ * pair from `@/lib/trainScore` that grades a live solve, then accumulated in
+ * memory as the loop progresses. This replaces a client-accumulated,
+ * localStorage-backed tally keyed by `session_id`, which read "0 of N" on any
+ * device that had not itself seen the original solve responses — reproduced
+ * in production (user 28, session 27: 14/18 on the solving device, 0/18 on a
+ * second device). `solved_results` is server data, so the recap is now
+ * correct everywhere.
  *
  * Block-and-retry solve persistence (190-04 Task 3, T-190-12/T-190-15): a
  * failed solve POST must never silently cost the user's spaced-repetition
@@ -73,35 +76,8 @@ import { useCallback, useState } from 'react';
 import { useMutation, useQueryClient } from '@tanstack/react-query';
 import { trainApi } from '@/api/client';
 import { TRAIN_PROGRESS_QUERY_KEY } from '@/hooks/useTrainProgress';
-import { scorePuzzle } from '@/lib/trainScore';
+import { aggregateSessionScore, scorePuzzle } from '@/lib/trainScore';
 import type { SolveRequest, SolveResponse, TrainPuzzle, TrainSessionResponse } from '@/types/train';
-
-const SCORE_STORAGE_PREFIX = 'train_score:';
-
-function scoreStorageKey(sessionId: number): string {
-  return `${SCORE_STORAGE_PREFIX}${sessionId}`;
-}
-
-function readStoredScore(sessionId: number | null): number {
-  if (sessionId == null) return 0;
-  try {
-    const raw = localStorage.getItem(scoreStorageKey(sessionId));
-    if (raw === null) return 0;
-    const parsed = Number.parseInt(raw, 10);
-    return Number.isFinite(parsed) ? parsed : 0;
-  } catch {
-    return 0;
-  }
-}
-
-function persistScore(sessionId: number, score: number): void {
-  try {
-    localStorage.setItem(scoreStorageKey(sessionId), String(score));
-  } catch {
-    // Best-effort only — a localStorage write failure (private browsing,
-    // quota) just means the next cold reload falls back to 0, never a crash.
-  }
-}
 
 export interface UseTrainSessionResult {
   session: TrainSessionResponse | null;
@@ -119,24 +95,22 @@ export interface UseTrainSessionResult {
   startSession: () => void;
   isSessionPending: boolean;
   isSessionError: boolean;
-  /** Client-accumulated score for the current `session.session_id` — see
-   * module docstring. 0 before any puzzle has been solved on this device. */
+  /** Session score, seeded from the response's `solved_results` (server data,
+   * not device-local) and accumulated in memory during the loop — see module
+   * docstring. 0 before any puzzle has been solved. */
   sessionScore: number;
   /**
    * The number of puzzles actually scored so far in the session — the
    * session score's denominator (190.1-04, D-04). Computed as the session
-   * response's FROZEN `solved_count` (puzzles solved before this frontend
-   * session loaded) plus `solvedPositions.size` (puzzles solved so far
-   * within it), updating on exactly the same tick as `sessionScore` (both in
-   * the solve mutation's success path) — unlike `currentIndex`, which only
-   * moves when Next is pressed and would read stale on the very screen the
-   * score is shown (190.1-RESEARCH.md Open Question 3).
-   *
-   * Known cross-device limitation (unchanged from `sessionScore`'s own
-   * docstring): `solvedPositions`/the localStorage tally are device-local,
-   * while `solved_count` is not — a cold reload on a different device (or
-   * before this feature shipped) undercounts the true denominator. Not
-   * silently papered over; documented here as the accepted limitation.
+   * response's `solved_results.length` (puzzles solved before this frontend
+   * session loaded, per the server's own record) plus `solvedPositions.size`
+   * (puzzles solved so far within it), updating on exactly the same tick as
+   * `sessionScore` (both in the solve mutation's success path) — unlike
+   * `currentIndex`, which only moves when Next is pressed and would read
+   * stale on the very screen the score is shown (190.1-RESEARCH.md Open
+   * Question 3). Both the numerator and this denominator's base now come
+   * from the same server-side `solved_results` list (260728-tgc), so they
+   * can no longer disagree across devices.
    */
   sessionSolvedCount: number;
   solvePuzzle: (body: SolveRequest) => Promise<SolveResponse>;
@@ -180,7 +154,24 @@ export function useTrainSession(): UseTrainSessionResult {
       // module docstring. `puzzles` already starts at the resume point in
       // both the fresh (full array) and resume (remaining-only array) cases.
       setCurrentIndex(data.puzzles.length > 0 ? 0 : null);
-      setSessionScore(readStoredScore(data.session_id));
+      // 260728-tgc (BUGFIX-TRAIN-SCORE-CROSSDEVICE): seed the score from the
+      // server's own solved_results via the shared scorePuzzle/
+      // aggregateSessionScore pair, instead of a device-local
+      // localStorage tally — this is the cross-device fix.
+      setSessionScore(
+        aggregateSessionScore(
+          data.solved_results.map((r) => scorePuzzle(r.correct_guess, r.move_quality)),
+        ).total,
+      );
+      // solved_results is now the authoritative record of what the server
+      // has recorded, so a solvedPositions set left over from an earlier
+      // loop on this same mount would double-count against the score just
+      // seeded above. Safe to clear unconditionally: startSession only fires
+      // from the landing screen (mount, and the 191-06 settings-saved
+      // re-fire) — never mid-puzzle — so this can never strand advance()'s
+      // block-and-retry gate (T-190-12), since the puzzle in front of the
+      // user was never in solvedPositions to begin with.
+      setSolvedPositions(new Set());
     },
   });
 
@@ -190,11 +181,11 @@ export function useTrainSession(): UseTrainSessionResult {
     onSuccess: (data, variables) => {
       // SEED-119: the single scorePuzzle formula, never re-derived here.
       const points = scorePuzzle(data.correct_guess, data.move_quality);
-      setSessionScore((prev) => {
-        const next = prev + points;
-        persistScore(variables.sessionId, next);
-        return next;
-      });
+      // 260728-tgc: in-memory accumulation only now, so the in-loop counter
+      // still ticks live on every solve — no localStorage persistence. A
+      // reload now refetches truth (solved_results) instead of replaying a
+      // device-local cache.
+      setSessionScore((prev) => prev + points);
       setSolvedPositions((prev) => {
         const next = new Set(prev);
         next.add(variables.body.position);
@@ -270,7 +261,12 @@ export function useTrainSession(): UseTrainSessionResult {
     isSessionPending: sessionMutation.isPending,
     isSessionError: sessionMutation.isError,
     sessionScore,
-    sessionSolvedCount: (session?.solved_count ?? 0) + solvedPositions.size,
+    // 260728-tgc: base comes from solved_results.length (server-side, same
+    // source the score numerator seeds from), not the separate solved_count
+    // field — solved_count stays on the response for its other consumer
+    // (TrainStartScreen's landing-state resolution) but is no longer the
+    // base here.
+    sessionSolvedCount: (session?.solved_results.length ?? 0) + solvedPositions.size,
     solvePuzzle,
     isSolvePending: solveMutation.isPending,
     isSolveError: solveMutation.isError,
