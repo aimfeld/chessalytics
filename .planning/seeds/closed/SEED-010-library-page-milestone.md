@@ -15,7 +15,7 @@ scope: milestone (multi-phase)
 
 > **CLOSED 2026-06-04 — split into two seeds.** This seed carried both the whole-game analysis page and the spaced-repetition trainer. They are now separate:
 > - **[SEED-036](SEED-036-library-page-milestone.md) — Library** — eval-driven mistake archive + per-mistake analysis (page name reverted Review → **Library**). This is the canonical successor for everything below except the trainer.
-> - **[SEED-037](../SEED-037-train-spaced-repetition-blunder-drills.md) — Train** — spaced-repetition blunder drills; owns the `/train-sketch` prototype.
+> - **[SEED-037](SEED-037-train-spaced-repetition-blunder-drills.md) — Train** — spaced-repetition blunder drills; owns the `/train-sketch` prototype.
 >
 > Live tracking docs that referenced "SEED-010 Library" now point at SEED-036. The content below is preserved verbatim for provenance only — do not plan from it; use SEED-036 / SEED-037.
 

@@ -116,6 +116,7 @@ async def _insert_game(
     full_pv_completed_at: datetime | None = None,
     lichess_evals_at: datetime | None = None,
     best_moves_completed_at: datetime | None = None,
+    blobs_completed_at: datetime | None = None,
 ) -> int:
     """Insert a Game row and commit. Returns game_id."""
     from app.models.game import Game
@@ -136,6 +137,7 @@ async def _insert_game(
             full_pv_completed_at=full_pv_completed_at,
             lichess_evals_at=lichess_evals_at,
             best_moves_completed_at=best_moves_completed_at,
+            blobs_completed_at=blobs_completed_at,
         )
         session.add(g)
         await session.flush()
@@ -1740,12 +1742,24 @@ async def _insert_game_flaw(
 class TestTier4BlobBackfill:
     """Phase 145 Plan 02: tier-4 spare-capacity flaw-blob backfill lottery.
 
+    SEED-125: the predicate is now `games.blobs_completed_at` (games-only, no
+    `game_flaws` JOIN/EXISTS) — see `_claim_tier4_blob`'s docstring.
+
     Tests cover:
-    - tier4_null_blob_picked: _claim_tier4_blob returns analyzed non-guest game with NULL blob
-    - tier4_returns_none_empty_queue: returns None when no matching game exists
+    - tier4_null_blob_picked: _claim_tier4_blob returns analyzed non-guest game
+      with an unset blob stamp
+    - tier4_returns_none_empty_queue: a set blob stamp excludes the game (writes
+      the blob then calls _refresh_blobs_completed exactly as production does)
     - tier4_excludes_guests: guest-owned games are never returned (QUEUE-08)
     - tier4_excludes_unanalyzed: games without full_evals_completed_at are excluded
-    - tier4_blobbed_game_excluded: fully-blobbed game stops matching predicate (idempotency)
+    - tier4_blobbed_game_excluded: fully-blobbed + stamped game stops matching the
+      predicate (idempotency), proven via the real _refresh_blobs_completed call
+    - tier4_stamped_game_not_picked_even_with_null_blob_flaw: a stamped game is
+      never picked even with a NULL-blob flaw row present — pins the predicate to
+      the column, not the flaw rows
+    - tier4_zero_flaw_game_is_claimable_until_stamped: a zero-flaw analyzed game is
+      claimable (a behaviour change vs the old EXISTS-over-game_flaws predicate)
+      until stamped
     - tier4_dispatch_via_claim: claim_eval_job dispatches tier-4 after tier-1/2/3 fall through
     - tier4_dispatch_disabled: tier-4 is suppressed when EVAL_AUTO_DRAIN_ENABLED=False
     - tier4_claimed_job_fields: ClaimedJob has tier=TIER_BLOB_BACKFILL and job_id=None
@@ -1787,7 +1801,15 @@ class TestTier4BlobBackfill:
         tier4_test_users: dict[str, int],
         queue_session_maker: async_sessionmaker[AsyncSession],
     ) -> None:
-        """_claim_tier4_blob returns None when no analyzed non-guest game has a NULL-blob flaw."""
+        """_claim_tier4_blob returns None (or skips this game) once its blob stamp is set.
+
+        SEED-125: the predicate now reads `games.blobs_completed_at`, not the flaw rows
+        directly. A written blob alone no longer excludes the game — the STAMP does — so
+        this realigns to the real lifecycle: write the blob, call
+        `_refresh_blobs_completed` exactly as production does, then assert not picked.
+        This turns the test into an end-to-end proof that the helper and the picker agree.
+        """
+        from app.services.eval_apply import _refresh_blobs_completed
         from app.services.eval_queue_service import _claim_tier4_blob
 
         user_id = tier4_test_users["user"]
@@ -1808,13 +1830,18 @@ class TestTier4BlobBackfill:
 
         try:
             async with queue_session_maker() as session:
+                await _refresh_blobs_completed(session, game_id)
+                await session.commit()
+
+            async with queue_session_maker() as session:
                 result = await _claim_tier4_blob(session)
 
             # If other test games happen to have NULL blobs, result might not be None.
-            # Assert our specific game is NOT picked (it has a written blob).
+            # Assert our specific game is NOT picked (its blob stamp is set).
             if result is not None:
                 assert result[0] != game_id, (
-                    f"Game {game_id} with written blob must not be returned by _claim_tier4_blob"
+                    f"Game {game_id} with a set blob stamp must not be returned by "
+                    f"_claim_tier4_blob"
                 )
         finally:
             await _delete_games(queue_session_maker, [game_id])
@@ -1887,12 +1914,15 @@ class TestTier4BlobBackfill:
         """A game whose flaw blobs are all written stops being selected (idempotency by predicate).
 
         Simulates the full blob-write lifecycle: insert game + flaw with NULL blob,
-        verify it is picked, then set allowed_pv_lines to a non-NULL value and
-        verify the game is no longer returned.
+        verify it is picked, then set allowed_pv_lines to a non-NULL value, call
+        `_refresh_blobs_completed` exactly as production does (SEED-125: the predicate
+        now reads the stamp, not the flaw rows directly), and verify the game is no
+        longer returned.
         """
         from sqlalchemy import update as sa_update2
 
         from app.models.game_flaw import GameFlaw
+        from app.services.eval_apply import _refresh_blobs_completed
         from app.services.eval_queue_service import _claim_tier4_blob
 
         user_id = tier4_test_users["user"]
@@ -1912,7 +1942,8 @@ class TestTier4BlobBackfill:
             assert result is not None, "Before blob write, game with NULL flaw must be returned"
             assert result[0] == game_id, f"Expected game {game_id}; got {result[0]}"
 
-            # Phase 2: write the blob (simulate Plan-03 handler completing the write).
+            # Phase 2: write the blob and refresh the stamp (simulate the Plan-03
+            # handler completing the write + SEED-125's _refresh_blobs_completed call).
             written_blob: list[dict[str, object]] = [
                 {"b": 50, "bm": None, "s": 20, "sm": None, "su": "d2d4"}
             ]
@@ -1922,9 +1953,11 @@ class TestTier4BlobBackfill:
                     .where(GameFlaw.game_id == game_id, GameFlaw.ply == 4)
                     .values(allowed_pv_lines=written_blob)
                 )
+                await _refresh_blobs_completed(session, game_id)
                 await session.commit()
 
-            # Phase 3: all flaw blobs written — game must no longer be returned.
+            # Phase 3: all flaw blobs written and the stamp is set — game must no
+            # longer be returned.
             async with queue_session_maker() as session:
                 for i in range(10):
                     result_after = await _claim_tier4_blob(session)
@@ -1932,6 +1965,91 @@ class TestTier4BlobBackfill:
                         assert result_after[0] != game_id, (
                             f"Draw {i}: fully-blobbed game {game_id} must not be re-selected "
                             f"(idempotency by predicate)"
+                        )
+        finally:
+            await _delete_games(queue_session_maker, [game_id])
+
+    async def test_tier4_stamped_game_not_picked_even_with_null_blob_flaw(
+        self,
+        tier4_test_users: dict[str, int],
+        queue_session_maker: async_sessionmaker[AsyncSession],
+    ) -> None:
+        """SEED-125: a stamped game is never picked, even if a NULL-blob flaw row exists.
+
+        Pins the predicate to `games.blobs_completed_at` — it fails if Stage 1 or
+        Stage 2 still consults `game_flaws` (a game_flaws-consulting predicate would
+        still pick this game, since its flaw row's allowed_pv_lines is NULL).
+        """
+        from app.services.eval_queue_service import _claim_tier4_blob
+
+        user_id = tier4_test_users["user"]
+        now = datetime.now(timezone.utc)
+
+        game_id = await _insert_game(
+            queue_session_maker,
+            user_id,
+            full_evals_completed_at=now,
+            blobs_completed_at=now,
+        )
+        await _insert_game_flaw(queue_session_maker, user_id, game_id)
+
+        try:
+            async with queue_session_maker() as session:
+                for i in range(10):
+                    result = await _claim_tier4_blob(session)
+                    if result is not None:
+                        assert result[0] != game_id, (
+                            f"Draw {i}: stamped game {game_id} must never be returned by "
+                            f"_claim_tier4_blob, even with a NULL-blob flaw row present"
+                        )
+        finally:
+            await _delete_games(queue_session_maker, [game_id])
+
+    async def test_tier4_zero_flaw_game_is_claimable_until_stamped(
+        self,
+        tier4_test_users: dict[str, int],
+        queue_session_maker: async_sessionmaker[AsyncSession],
+    ) -> None:
+        """SEED-125: an analyzed game with NO flaw rows at all is a valid candidate.
+
+        This was NOT true under the old game_flaws-EXISTS predicate (a game with zero
+        flaw rows could never match an EXISTS-over-game_flaws check). It documents the
+        intended behaviour change and proves the forward-progress backstop's target
+        case (nothing-to-do games) is reachable: claimable while unstamped, excluded
+        once `_refresh_blobs_completed` stamps it.
+        """
+        from app.services.eval_apply import _refresh_blobs_completed
+        from app.services.eval_queue_service import _claim_tier4_blob
+
+        user_id = tier4_test_users["user"]
+        now = datetime.now(timezone.utc)
+
+        game_id = await _insert_game(
+            queue_session_maker,
+            user_id,
+            full_evals_completed_at=now,
+        )
+        # Deliberately no game_flaws row for this game.
+
+        try:
+            async with queue_session_maker() as session:
+                result = await _claim_tier4_blob(session)
+            assert result is not None, (
+                "A zero-flaw analyzed game must be claimable before it is stamped"
+            )
+            assert result[0] == game_id, f"Expected game {game_id}; got {result[0]}"
+
+            async with queue_session_maker() as session:
+                await _refresh_blobs_completed(session, game_id)
+                await session.commit()
+
+            async with queue_session_maker() as session:
+                for i in range(10):
+                    result_after = await _claim_tier4_blob(session)
+                    if result_after is not None:
+                        assert result_after[0] != game_id, (
+                            f"Draw {i}: zero-flaw game {game_id} must not be re-selected "
+                            f"once _refresh_blobs_completed has stamped it"
                         )
         finally:
             await _delete_games(queue_session_maker, [game_id])

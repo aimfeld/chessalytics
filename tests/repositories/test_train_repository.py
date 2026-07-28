@@ -1042,6 +1042,102 @@ async def test_second_compose_resumes_open_session(db_session: AsyncSession) -> 
 
 
 @pytest.mark.asyncio
+async def test_fresh_composition_returns_empty_solved_results(db_session: AsyncSession) -> None:
+    """Quick task 260728-tgc: an untouched fresh session carries no recorded
+    outcomes yet — `solved_results` must be `[]`, not omitted or None."""
+    await ensure_test_user(db_session, _USER_ID)
+    await _seed_flaw_game(db_session, _USER_ID, "fresh-solved-results")
+
+    composed = await train_repository.compose_and_materialize_session(
+        db_session, user_id=_USER_ID, now_utc=_NOW
+    )
+    assert composed.session_id is not None
+    assert composed.solved_results == []
+
+
+@pytest.mark.asyncio
+async def test_resume_returns_solved_results_in_position_order(db_session: AsyncSession) -> None:
+    """Quick task 260728-tgc (BUGFIX-TRAIN-SCORE-CROSSDEVICE): resuming a
+    session with a subset of its puzzles solved returns one `ComposedSolvedResult`
+    per solved row, ordered by `position`, matching what was recorded — the
+    ingredient set a second device aggregates into the same session score the
+    solving device would show. Only solved rows (positions 0 and 2) produce
+    entries; the unsolved row (position 1) is excluded."""
+    await ensure_test_user(db_session, _USER_ID)
+    drill_session = await _seed_open_session_with_solves(
+        db_session,
+        _USER_ID,
+        "resume-solved-results",
+        puzzle_count=3,
+        solved_count=0,
+        expires_on=_TODAY + datetime.timedelta(days=1),
+    )
+    await db_session.execute(
+        update(DrillSolve)
+        .where(DrillSolve.session_id == drill_session.id, DrillSolve.position == 0)
+        .values(
+            solved_at=_NOW,
+            correct_guess=True,
+            correct_move=True,
+            move_quality=int(DrillMoveQuality.GOOD),
+        )
+    )
+    await db_session.execute(
+        update(DrillSolve)
+        .where(DrillSolve.session_id == drill_session.id, DrillSolve.position == 2)
+        .values(
+            solved_at=_NOW,
+            correct_guess=False,
+            correct_move=True,
+            move_quality=int(DrillMoveQuality.INACCURACY),
+        )
+    )
+    await db_session.flush()
+
+    resumed = await train_repository.compose_and_materialize_session(
+        db_session, user_id=_USER_ID, now_utc=_NOW
+    )
+    assert resumed.session_id == drill_session.id
+    assert resumed.solved_count == 2
+    assert resumed.solved_count == len(resumed.solved_results)
+    assert [(r.correct_guess, r.move_quality) for r in resumed.solved_results] == [
+        (True, "good"),
+        (False, "inaccuracy"),
+    ]
+
+
+@pytest.mark.asyncio
+async def test_resume_solved_results_degrades_legacy_null_move_quality(
+    db_session: AsyncSession,
+) -> None:
+    """A pre-SEED-119 row with `move_quality IS NULL` still yields a total
+    tier via `_resolve_move_quality_tier`'s boolean degradation, never a
+    validation error."""
+    await ensure_test_user(db_session, _USER_ID)
+    drill_session = await _seed_open_session_with_solves(
+        db_session,
+        _USER_ID,
+        "resume-legacy-null-tier",
+        puzzle_count=1,
+        solved_count=0,
+        expires_on=_TODAY + datetime.timedelta(days=1),
+    )
+    await db_session.execute(
+        update(DrillSolve)
+        .where(DrillSolve.session_id == drill_session.id, DrillSolve.position == 0)
+        .values(solved_at=_NOW, correct_guess=True, correct_move=True, move_quality=None)
+    )
+    await db_session.flush()
+
+    resumed = await train_repository.compose_and_materialize_session(
+        db_session, user_id=_USER_ID, now_utc=_NOW
+    )
+    assert [(r.correct_guess, r.move_quality) for r in resumed.solved_results] == [
+        (True, "good"),
+    ]
+
+
+@pytest.mark.asyncio
 async def test_completed_session_in_window_blocks_recompose(db_session: AsyncSession) -> None:
     """190.1 bug fix: finishing a session must not unlock a fresh one within
     the same D-10 window. A `status='completed'` row is invisible to the

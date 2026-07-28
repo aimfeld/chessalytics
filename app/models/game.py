@@ -105,6 +105,18 @@ class Game(Base):
                 "full_pv_completed_at IS NOT NULL AND best_moves_completed_at IS NULL"
             ),
         ),
+        # SEED-125: partial index backing the tier-4 blob-backfill lottery predicate
+        # in eval_queue_service._claim_tier4_blob — mirrors
+        # ix_games_bestmove_backfill_pending's shape (single user_id column, partial
+        # WHERE). postgresql_where text MUST stay byte-identical to the migration's
+        # create_index call (174-07 alembic-check drift lesson).
+        Index(
+            "ix_games_blob_backfill_pending",
+            "user_id",
+            postgresql_where=sa.text(
+                "full_evals_completed_at IS NOT NULL AND blobs_completed_at IS NULL"
+            ),
+        ),
     )
 
     id: Mapped[int] = mapped_column(primary_key=True)
@@ -242,6 +254,18 @@ class Game(Base):
     # the tier-4b LOTTERY to engine-analyzed games only; the stamp itself is
     # source-agnostic, mirroring full_pv_completed_at).
     best_moves_completed_at: Mapped[datetime.datetime | None] = mapped_column(
+        sa.DateTime(timezone=True), nullable=True
+    )
+    # SEED-125: per-GAME rollup of a per-FLAW-PLY condition — unlike the four
+    # completion columns above (naturally per-game), this one summarizes
+    # `game_flaws.allowed_pv_lines`. The authoritative predicate is "no
+    # `game_flaws` row for this game has `allowed_pv_lines IS NULL`". Maintained
+    # BIDIRECTIONALLY by `_refresh_blobs_completed` (eval_apply.py): stamped
+    # `now()` when every flaw ply's blob is written, cleared back to NULL when a
+    # reclassification (delete-then-insert) inserts a fresh NULL-blob ply on an
+    # already-stamped game. NULL means the tier-4 blob-backfill lottery
+    # (_claim_tier4_blob) may claim this game.
+    blobs_completed_at: Mapped[datetime.datetime | None] = mapped_column(
         sa.DateTime(timezone=True), nullable=True
     )
     # Phase 119 SEED-045: per-game counter of full-drain ticks that left a non-terminal

@@ -33,6 +33,8 @@ in `YYYY-MM-DD` (Europe/Zurich).
 
 ### Fixed
 
+- Train's "Scored today" now reads the same on every device. The score was kept only in the browser you solved in, so opening Train on your phone after finishing a session on your computer showed "0 of 18 points" instead of the score you actually earned. The score now comes from your account, so it is correct wherever you open it, and the running score during a session no longer counts against the wrong total after switching devices mid-session. (quick 260728-tgc)
+
 - Train's "several fine moves" puzzles are drawn from a far wider range of positions. The pool behind them was being filled from only a handful of players' games, with many puzzles sitting a move or two apart in the same game; it now spans hundreds of players and thousands of games, so repeated or near-identical positions are much less likely. (SEED-124)
 
 - A training session can no longer get stuck on Resume forever. If one of its "several fine moves" puzzles could not be served, the session still counted it as outstanding and refused to finish, so it sat there until it expired the next day. Such a puzzle is now skipped for the purpose of finishing, exactly as it already was for the purpose of serving. (quick 260728-kmu)

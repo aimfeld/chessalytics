@@ -75,8 +75,10 @@ class EntrySubmitResponse(BaseModel):
 #
 # These are a DEDICATED, ISOLATED schema set for the flaw-blob backfill endpoint
 # (POST /eval/remote/flaw-blob-lease + POST /eval/remote/flaw-blob-submit).
-# Per D-04, they MUST NOT reuse or modify LeaseResponse/SubmitRequest — the live
-# ply-keyed submit path (_apply_submit) is safety-critical and must remain unchanged.
+# Per D-04, they MUST NOT reuse or modify the primary lease/submit schemas — that
+# ply-keyed path is safety-critical and must remain unchanged. (D-04 was written
+# against the Gen-1 LeaseResponse/SubmitRequest + _apply_submit trio, all deleted in
+# Phase 149-03 PRUNE-01; the constraint now applies to their atomic-lane successors.)
 #
 # Token format (D-04a): "{flaw_ply}:{line}:{node_k}"
 #   - flaw_ply: int  — the game_flaws.ply value for this flaw

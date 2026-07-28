@@ -20,7 +20,29 @@ export interface TrainPuzzle {
   last_move_uci: string | null;
 }
 
-/** Response for POST /train/sessions — a composed or resumed session. */
+/**
+ * One recorded solve's outcome, part of `TrainSessionResponse.solved_results`
+ * (quick task 260728-tgc, BUGFIX-TRAIN-SCORE-CROSSDEVICE).
+ *
+ * One entry per `drill_solves` row with `solved_at IS NOT NULL`, in
+ * `position` order. The client aggregates these with `scorePuzzle` +
+ * `aggregateSessionScore` from `@/lib/trainScore` — that module stays the
+ * single source of truth for scoring (LOCKED, Option B); this response
+ * deliberately carries NO precomputed score integer.
+ */
+export interface SolvedResult {
+  correct_guess: boolean;
+  move_quality: TrainMoveTier;
+}
+
+/**
+ * Response for POST /train/sessions — a composed or resumed session.
+ *
+ * `solved_results` (260728-tgc) is what makes "Scored today" correct on a
+ * device that never saw the original solve responses — see `SolvedResult`'s
+ * docstring. Empty for a freshly composed session and for the
+ * no-eligible-material (`session_id === null`) case.
+ */
 export interface TrainSessionResponse {
   session_id: number | null;
   session_date: string;
@@ -30,6 +52,7 @@ export interface TrainSessionResponse {
   solved_count: number;
   blob_pending_count: number;
   puzzles: TrainPuzzle[];
+  solved_results: SolvedResult[];
 }
 
 /**

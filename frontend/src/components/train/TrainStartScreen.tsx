@@ -29,10 +29,9 @@ export interface TrainStartScreenProps {
   isLoading: boolean;
   isError: boolean;
   /**
-   * Client-accumulated score for the session's `session_id` (persisted in
-   * localStorage across reloads on the same day — see useTrainSession's
-   * `sessionScore` — TrainSessionResponse itself carries no server-side
-   * aggregate score field). Only consumed by the 'completed' state.
+   * The session's score, seeded server-side from `TrainSessionResponse.solved_results`
+   * (260728-tgc) — see `useTrainSession`'s `sessionScore` docstring. Only
+   * consumed by the 'completed' state.
    */
   sessionScore: number;
   /** Enter the solve loop at the already-seeded resume index. Does not

@@ -23,7 +23,12 @@ import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { MemoryRouter } from 'react-router-dom';
 import { saveTrainRevealCache } from '@/lib/trainRevealCache';
 import type { CachedTrainReveal } from '@/lib/trainRevealCache';
-import type { TrainSessionResponse, SolveResponse } from '@/types/train';
+import type {
+  TrainSessionResponse,
+  SolveResponse,
+  SolvedResult,
+  TrainProgressResponse,
+} from '@/types/train';
 
 // ─── ResizeObserver stub ────────────────────────────────────────────────────
 // jsdom has no ResizeObserver; TrainSolveScreen's useFitBoardToViewport
@@ -71,6 +76,7 @@ const SESSION_RESPONSE: TrainSessionResponse = {
   puzzles: [
     { position: 1, game_id: 100, ply: 20, fen: START_FEN, side_to_move: 'white', last_move_uci: 'd7d5' },
   ],
+  solved_results: [],
 };
 
 const SOLVE_RESPONSE: SolveResponse = {
@@ -97,6 +103,27 @@ const revealPuzzle = vi.fn(async () => ({
   has_tactic_lines: false,
 }));
 
+// TrainStatsCard/TrainStreakCard (rendered by every non-loading/error landing
+// state) call useTrainProgress() -> trainApi.getProgress internally. Without
+// a resolved mock they stay in their loading skeleton forever (no queryFn ->
+// react-query never settles) — harmless for the earlier tests here (they
+// never assert on these cards), but the 260728-tgc regression test below
+// DOES need the 'completed' state's TrainStatsCard to actually resolve.
+const DEFAULT_TRAIN_PROGRESS: TrainProgressResponse = {
+  session_streak_count: 0,
+  shield_level: 0,
+  current_week_completed: 0,
+  current_week_required: null,
+  streak_reset_notice: false,
+  mastered_count: 0,
+  parked_count: 0,
+  waiting_count: 0,
+  pool_state: 'available',
+  next_due_date: null,
+  badge_visible: false,
+};
+const getProgress = vi.fn(async () => DEFAULT_TRAIN_PROGRESS);
+
 // 190-05: TrainReveal (mounted once the verdict lands) also fetches the
 // game card via libraryApi.getGame — mocked to reject deterministically
 // (fast, no real network call) since this tracer doesn't exercise the game
@@ -111,6 +138,7 @@ vi.mock('@/api/client', async () => {
       revealPuzzle: (sessionId: number, position: number) => revealPuzzle(sessionId, position),
       getSettings: vi.fn(),
       updateSettings: vi.fn(),
+      getProgress: () => getProgress(),
     },
     libraryApi: {
       ...actual.libraryApi,
@@ -279,6 +307,7 @@ describe('Train solve loop (end-to-end tracer)', () => {
       puzzles: [
         { position: 8, game_id: 200, ply: 30, fen: REMAINING_FEN, side_to_move: 'white', last_move_uci: 'c8e6' },
       ],
+      solved_results: [],
     });
 
     await renderTrainPage();
@@ -294,15 +323,27 @@ describe('Train solve loop (end-to-end tracer)', () => {
     expect(screen.getByTestId('train-progress').textContent).toBe('8 of 12');
   });
 
-  it('a resumed session with a stored score tally shows the resumed score and max, not a restart from zero (190.1-04 D-04)', async () => {
+  it('a resumed session with server-recorded solved_results shows the resumed score and max, not a restart from zero (190.1-04 D-04)', async () => {
     const REMAINING_FEN = 'r1bqkbnr/pppp1ppp/2n5/4p3/4P3/5N2/PPPP1PPP/RNBQKB1R w KQkq - 2 3';
     const RESUMED_SESSION_ID = 3;
-    // Seed the localStorage-backed tally (useTrainSession.ts's persistScore
-    // key format) as if 10 points were already accumulated on this device
-    // before the reload — the resumed sessionSolvedCount denominator (7 x
-    // TRAIN_POINTS_PER_PUZZLE = 21, SEED-119) must combine with this stored
-    // score, never restart from 0.
-    localStorage.setItem(`train_score:${RESUMED_SESSION_ID}`, '10');
+    // 260728-tgc (BUGFIX-TRAIN-SCORE-CROSSDEVICE): the resumed score now
+    // comes entirely from the session response's own `solved_results` —
+    // server data, not a device-local localStorage tally — so the resumed
+    // sessionSolvedCount denominator (7 x TRAIN_POINTS_PER_PUZZLE = 21,
+    // SEED-119) must combine with these SERVER-RECORDED outcomes, never
+    // restart from 0. Seven entries summing to 10 points (three at 2 points
+    // — correct guess + inaccuracy — plus four at 1 point — correct guess +
+    // wrong move), matching the total this test used to seed via
+    // localStorage before the fix.
+    const RESUMED_SOLVED_RESULTS: SolvedResult[] = [
+      { correct_guess: true, move_quality: 'inaccuracy' },
+      { correct_guess: true, move_quality: 'inaccuracy' },
+      { correct_guess: true, move_quality: 'inaccuracy' },
+      { correct_guess: true, move_quality: 'wrong' },
+      { correct_guess: true, move_quality: 'wrong' },
+      { correct_guess: true, move_quality: 'wrong' },
+      { correct_guess: true, move_quality: 'wrong' },
+    ];
     composeOrResumeSession.mockResolvedValueOnce({
       session_id: RESUMED_SESSION_ID,
       session_date: '2026-07-25',
@@ -314,6 +355,7 @@ describe('Train solve loop (end-to-end tracer)', () => {
       puzzles: [
         { position: 8, game_id: 200, ply: 30, fen: REMAINING_FEN, side_to_move: 'white', last_move_uci: 'c8e6' },
       ],
+      solved_results: RESUMED_SOLVED_RESULTS,
     });
 
     await renderTrainPage();
@@ -325,9 +367,52 @@ describe('Train solve loop (end-to-end tracer)', () => {
     const text = screen.getByTestId('train-session-score').textContent ?? '';
     expect(text).toContain('10');
     expect(text).toContain('21'); // 7 already-solved x TRAIN_POINTS_PER_PUZZLE (3, SEED-119)
-
-    localStorage.removeItem(`train_score:${RESUMED_SESSION_ID}`);
   });
+
+  it('REGRESSION (260728-tgc): a completed session with server-recorded solved_results shows the correct non-zero score on a device that never saw the original solve responses', async () => {
+    // The reproduced production bug: user 28, drill_sessions.id=27 — 6 solved
+    // rows, 5 guess points + 9 move points = 14 of a possible 18. Before this
+    // fix, `sessionScore` was seeded ONLY from a localStorage tally keyed by
+    // session_id — a device that never itself ran the solve mutations (a
+    // fresh mount, a second device, an incognito tab) rendered "0 of 18" for
+    // the exact same session the solving device correctly showed "14 of 18"
+    // for. This test asserts the correct total with browser storage
+    // completely empty throughout — it is the case that must fail before the
+    // useTrainSession fix (verified via a mutation check: reverting the
+    // sessionScore seed in the session mutation's onSuccess back to a
+    // constant 0 makes this assertion fail).
+    expect(localStorage.length).toBe(0);
+    const PROD_REPRO_SOLVED_RESULTS: SolvedResult[] = [
+      { correct_guess: true, move_quality: 'good' }, // 1 + 2 = 3
+      { correct_guess: true, move_quality: 'good' }, // 3
+      { correct_guess: true, move_quality: 'good' }, // 3
+      { correct_guess: true, move_quality: 'inaccuracy' }, // 1 + 1 = 2
+      { correct_guess: true, move_quality: 'inaccuracy' }, // 2
+      { correct_guess: false, move_quality: 'inaccuracy' }, // 0 + 1 = 1
+    ]; // total = 3+3+3+2+2+1 = 14, max = 6 * TRAIN_POINTS_PER_PUZZLE (3) = 18
+    composeOrResumeSession.mockResolvedValueOnce({
+      session_id: 27,
+      session_date: '2026-07-25',
+      expires_on: '2026-07-26',
+      puzzle_count: 6,
+      requested_count: 6,
+      solved_count: 6,
+      blob_pending_count: 0,
+      puzzles: [],
+      solved_results: PROD_REPRO_SOLVED_RESULTS,
+    });
+
+    await renderTrainPage();
+
+    await waitFor(() => expect(screen.getByTestId('train-stats-today-score')).not.toBeNull());
+    expect(screen.getByTestId('train-stats-today-score').textContent).toBe('Scored today14 of 18 points');
+    // Never touched browser storage — the whole point of this test.
+    expect(localStorage.length).toBe(0);
+    // Same per-test timeout precedent as the other whole-Train-page mounts in
+    // this file (project_frontend_heavy_test_timeout_flake) — this test
+    // mounts the full page including TrainStreakCard/TrainScheduleSettings,
+    // which flakes past Vitest's 5s default under the full parallel run.
+  }, 15000);
 
   // ─── 190.1 UAT round 5: Analyze -> browser back restores the solved reveal ──
 
@@ -386,6 +471,7 @@ describe('Train solve loop (end-to-end tracer)', () => {
       puzzles: [
         { position: 2, game_id: 200, ply: 30, fen: RESTORE_REMAINING_FEN, side_to_move: 'white', last_move_uci: 'c8e6' },
       ],
+      solved_results: [{ correct_guess: true, move_quality: 'wrong' }],
     });
 
     await renderTrainPage();

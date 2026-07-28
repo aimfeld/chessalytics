@@ -24,7 +24,13 @@ import { TRAIN_STEP_HIGHLIGHT } from '@/lib/trainArrows';
 import { buildGameAnalysisUrl } from '@/lib/analysisUrl';
 import { useTrainSession } from '@/hooks/useTrainSession';
 import { useTrainGradingEngine } from '@/hooks/useTrainGradingEngine';
-import type { SolveRequest, SolveResponse, TrainPuzzle, TrainSessionResponse } from '@/types/train';
+import type {
+  SolveRequest,
+  SolveResponse,
+  SolvedResult,
+  TrainPuzzle,
+  TrainSessionResponse,
+} from '@/types/train';
 
 // ─── ResizeObserver stub ────────────────────────────────────────────────────
 // jsdom has no ResizeObserver; TrainSolveScreen's useFitBoardToViewport
@@ -235,6 +241,10 @@ const SOLVE_RESPONSE: SolveResponse = {
   session_complete: false,
 };
 
+function makeSolvedResult(overrides: Partial<SolvedResult> = {}): SolvedResult {
+  return { correct_guess: true, move_quality: 'good', ...overrides };
+}
+
 function makeSession(overrides: Partial<TrainSessionResponse> = {}): TrainSessionResponse {
   return {
     session_id: 1,
@@ -245,6 +255,7 @@ function makeSession(overrides: Partial<TrainSessionResponse> = {}): TrainSessio
     solved_count: 0,
     blob_pending_count: 0,
     puzzles: [],
+    solved_results: [],
     ...overrides,
   };
 }
@@ -702,7 +713,12 @@ describe('TrainSolveScreen — progress, last move, grading state, engine failur
   });
 
   it('train-session-score and train-progress are siblings in the same row, with train-progress-bar below them', async () => {
-    await renderScreen(makePuzzle(), makeSession({ solved_count: 1 }));
+    // sessionSolvedCount (260728-tgc) derives from solved_results.length, not
+    // solved_count — seed one entry so the score row actually renders.
+    await renderScreen(
+      makePuzzle(),
+      makeSession({ solved_count: 1, solved_results: [makeSolvedResult()] }),
+    );
     const score = screen.getByTestId('train-session-score');
     const progress = screen.getByTestId('train-progress');
     expect(score.parentElement).toBe(progress.parentElement);

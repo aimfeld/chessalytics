@@ -34,10 +34,15 @@ WHAT IT DELETES / RESETS (for ONE user)
     or evals.
 
 DB target (per CLAUDE.md), selected with ``--db``:
-    dev:       localhost:5432  (flawchess-dev Docker compose) — the intended target
+    dev:       localhost:5432  (flawchess-dev Docker compose) — the usual target
     benchmark: localhost:5433
-    prod:      REFUSED. This is destructive per-user state; there is no
-               legitimate reason to run it against production.
+    prod:      localhost:15432 via ``bin/prod_db_tunnel.sh``. Allowed, but ONLY
+               ever for a single explicitly named ``--user-id`` (the script has
+               no "all users" mode and refuses a non-positive id), and only
+               after an explicit confirmation: interactively you must type the
+               user id back, non-interactively you must pass ``--yes``. This is
+               destructive, unrecoverable state — a support/debug reset of one
+               account, never a bulk operation.
 
 Usage:
     # Show what would be deleted, touch nothing:
@@ -48,6 +53,11 @@ Usage:
 
     # Also drop the settings row (back to first-touch defaults):
     uv run python scripts/reset_train_state.py --user-id 1 --reset-settings
+
+    # One user on production (tunnel must be running):
+    bin/prod_db_tunnel.sh
+    uv run python scripts/reset_train_state.py --db prod --user-id 28 --dry-run
+    uv run python scripts/reset_train_state.py --db prod --user-id 28 --yes
 """
 
 from __future__ import annotations
@@ -79,8 +89,9 @@ from app.models.train_settings import TrainSettings  # noqa: E402
 from app.models.oauth_account import OAuthAccount  # noqa: E402, F401
 from app.models.user import User  # noqa: E402, F401
 
-# Deliberately excludes "prod" — see the module docstring.
-ALLOWED_DB_TARGETS = ("dev", "benchmark")
+# "prod" is selectable, but only under the single-user + confirmation guard in
+# _guard_prod() — see the module docstring.
+ALLOWED_DB_TARGETS = ("dev", "benchmark", "prod")
 
 
 def _parse_args() -> argparse.Namespace:
@@ -93,7 +104,14 @@ def _parse_args() -> argparse.Namespace:
         "--db",
         choices=ALLOWED_DB_TARGETS,
         default="dev",
-        help="DB target (default: dev). Production is intentionally not selectable.",
+        help="DB target (default: dev). 'prod' needs bin/prod_db_tunnel.sh running "
+        "and is restricted to one --user-id plus a confirmation (see --yes).",
+    )
+    parser.add_argument(
+        "--yes",
+        action="store_true",
+        help="Skip the interactive confirmation on --db prod. Required when running "
+        "against prod without a TTY. Ignored for dev/benchmark.",
     )
     parser.add_argument(
         "--reset-settings",
@@ -107,6 +125,33 @@ def _parse_args() -> argparse.Namespace:
         help="Report the row counts that WOULD be affected, then exit without writing.",
     )
     return parser.parse_args()
+
+
+def _guard_prod(args: argparse.Namespace) -> str | None:
+    """Return a refusal message if this prod invocation is not allowed, else None.
+
+    Two conditions, both about blast radius. First, the reset must name exactly
+    one real user: argparse already makes ``--user-id`` required, but this
+    re-asserts it locally so a future "reset everyone" convenience can't silently
+    inherit prod access. Second, prod deletions are unrecoverable (the drill pool
+    re-materialises, spaced-repetition history does not), so they need an
+    explicit ack: type the user id back, or pass ``--yes`` when there's no TTY.
+    """
+    if args.db != "prod" or args.dry_run:
+        return None
+    if not isinstance(args.user_id, int) or args.user_id <= 0:
+        return "Refusing --db prod: a single positive --user-id is required."
+    if args.yes:
+        return None
+    if not sys.stdin.isatty():
+        return "Refusing --db prod: no TTY to confirm on. Re-run with --yes."
+    print(
+        f"\nAbout to DELETE the Train state of user {args.user_id} on PRODUCTION.\n"
+        "This cannot be undone. Type the user id to confirm, anything else aborts."
+    )
+    if input("user id: ").strip() != str(args.user_id):
+        return "Aborted: confirmation did not match."
+    return None
 
 
 async def _count_rows(session: AsyncSession, user_id: int) -> dict[str, int]:
@@ -171,6 +216,10 @@ async def main() -> int:
             if sum(before.values()) == 0:
                 print("\nNothing to reset.")
                 return 0
+            refusal = _guard_prod(args)
+            if refusal is not None:
+                print(f"\n{refusal}")
+                return 1
             await _reset(session, args.user_id, reset_settings=args.reset_settings)
             await session.commit()
             after = await _count_rows(session, args.user_id)

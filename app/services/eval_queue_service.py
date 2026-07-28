@@ -594,7 +594,7 @@ async def _claim_tier3_derived(
 async def _claim_tier4_blob(
     session: AsyncSession,
 ) -> tuple[int, int] | None:
-    """Tier-4 spare-capacity lottery: pick one analyzed non-guest game with a NULL-blob flaw.
+    """Tier-4 spare-capacity lottery: pick one analyzed non-guest game pending a blob stamp.
 
     Two-stage Efraimidis-Spirakis (ES) weighted lottery mirroring _claim_tier3_derived's
     two-step pattern, built on the same shared _es_weighted_user_pick /
@@ -603,16 +603,41 @@ async def _claim_tier4_blob(
     no asyncio.gather (AsyncSession is not safe for concurrent coroutine use) and no
     locking, mirroring tier-3's plain-SELECT shape.
 
+    SEED-125: both stages read the games-only predicate
+    `full_evals_completed_at IS NOT NULL AND blobs_completed_at IS NULL` — no
+    `game_flaws` JOIN/EXISTS. Prior to this, Stage 1's candidate check semi-joined
+    the whole games/game_flaws corpus (`EXISTS (SELECT 1 FROM games g JOIN
+    game_flaws gf ...)`), which measured 84.8% of all prod DB time (504h over 33
+    days, 2.5M calls at 727ms avg): the planner had to materialize the semi-join
+    and probe `games` tens of thousands of times per call. Prod EXPLAIN ANALYZE of
+    the identical query shape against an existing games-side partial index
+    (ix_games_bestmove_backfill_pending) measured 340ms -> 7.5ms and 260k -> 1.8k
+    buffers for the SAME predicate shape. The column makes the cost O(users)
+    instead of O(backlog) — it stops growing with the corpus, because the
+    semi-join can short-circuit on each user's first matching row once matching
+    is against `games` alone (backed by ix_games_blob_backfill_pending). Both
+    predicates below MUST read `full_evals_completed_at IS NOT NULL AND
+    blobs_completed_at IS NULL` in exactly that clause form so the partial index
+    matches (174-07 alembic drift lesson).
+
+    The column's correctness now depends entirely on `_refresh_blobs_completed`
+    (app/services/eval_apply.py) running on every blob-write and reclassification
+    path — see its docstring for the bidirectional (set + clear) invariant. The
+    "never re-selected once complete" property that used to be read live off the
+    flaw rows is now carried by the stamp instead; the /flaw-blob-lease and
+    /flaw-blob-submit backstop call sites (the all-sentinel/forward-progress
+    branch and the idempotency gate) are what keep a missed stamp from becoming
+    an infinite re-pick (the SEED-073 failure mode).
+
     Stage 1 — WEIGHTED USER PICK:
-      Candidate users = non-guest users with at least one analyzed game
-      (full_evals_completed_at IS NOT NULL) that has a NULL-blob flaw
-      (game_flaws.allowed_pv_lines IS NULL). weight = exp(-Δt/τ_u) +
-      TIER4_USER_WEIGHT_FLOOR, where Δt = seconds since last_activity (NULL
-      coalesced to epoch-0 so the exp term ≈ 0, weight ≈ floor) and τ_u =
-      TIER4_USER_RECENCY_HALF_LIFE_DAYS / ln(2) in seconds.
+      Candidate users = non-guest users with at least one game pending a blob
+      stamp (full_evals_completed_at IS NOT NULL AND blobs_completed_at IS NULL).
+      weight = exp(-Δt/τ_u) + TIER4_USER_WEIGHT_FLOOR, where Δt = seconds since
+      last_activity (NULL coalesced to epoch-0 so the exp term ≈ 0, weight ≈
+      floor) and τ_u = TIER4_USER_RECENCY_HALF_LIFE_DAYS / ln(2) in seconds.
 
     Stage 2 — WEIGHTED GAME PICK FOR THE PICKED USER:
-      Within the picked user, pick a NULL-blob-flaw analyzed game weighted by
+      Within the picked user, pick a blob-pending game weighted by
       full_evals_completed_at recency AND time-control priority (longer TCs first),
       mirroring tier-3's game pick. weight =
       tc_multiplier * (exp(-Δt_evals/τ_g) + TIER4_GAME_WEIGHT_FLOOR), where
@@ -629,13 +654,13 @@ async def _claim_tier4_blob(
     drains, while the recency weighting keeps freshly-analyzed games dominant on most
     draws (SEED-072 fairness fix).
 
-    Returns (game_id, user_id) or None when no backfill-eligible flaw remains (either
+    Returns (game_id, user_id) or None when no backfill-eligible game remains (either
     stage returning no row is a None-guard fall-through, mirroring _claim_tier3_derived's
     None-guard shape).
 
     No eval_jobs row is created — this is a table-less, idempotent-by-construction lottery.
-    Once all of a game's flaw blobs (or D-06 sentinels) are written the game stops matching
-    the predicate (no flaw with allowed_pv_lines IS NULL) and is never re-selected.
+    Once a game's blobs_completed_at is stamped (all flaw blobs, or D-06 sentinels,
+    written) the game stops matching the predicate and is never re-selected.
 
     is_lichess_eval_game is NOT resolved here — it is determined later in the Plan-03 lease
     handler, which has the full game context needed to route the blob write correctly
@@ -652,15 +677,15 @@ async def _claim_tier4_blob(
     tau_g_seconds: float = TIER4_GAME_RECENCY_HALF_LIFE_DAYS / math.log(2) * 86400.0
     floor_g: float = TIER4_GAME_WEIGHT_FLOOR
 
-    # Stage 1: ES weighted user pick over users with an eligible NULL-blob analyzed game.
+    # Stage 1: ES weighted user pick over users with a blob-pending analyzed game.
+    # SEED-125: games-only predicate, backed by ix_games_blob_backfill_pending.
     picked_user_id = await _es_weighted_user_pick(
         session,
         candidate_exists_sql="""
                 SELECT 1 FROM games g
-                JOIN game_flaws gf ON gf.game_id = g.id
                 WHERE g.user_id = u.id
                   AND g.full_evals_completed_at IS NOT NULL
-                  AND gf.allowed_pv_lines IS NULL
+                  AND g.blobs_completed_at IS NULL
         """,
         recency_col_sql="u.last_activity",
         tau_seconds=tau_u_seconds,
@@ -671,15 +696,13 @@ async def _claim_tier4_blob(
 
     # Stage 2: ES weighted game pick for the picked user — full_evals_completed_at
     # recency AND TC priority (longer TCs first), mirroring tier-3's game pick.
+    # SEED-125: games-only predicate, same form as Stage 1 above.
     game_id = await _es_weighted_game_pick(
         session,
         game_where_sql=(
             "g.user_id = :picked_user"
             " AND g.full_evals_completed_at IS NOT NULL"
-            " AND EXISTS ("
-            "SELECT 1 FROM game_flaws gf"
-            " WHERE gf.game_id = g.id AND gf.allowed_pv_lines IS NULL"
-            ")"
+            " AND g.blobs_completed_at IS NULL"
         ),
         recency_col_sql="g.full_evals_completed_at",
         tau_seconds=tau_g_seconds,
@@ -798,17 +821,26 @@ async def claim_eval_job(
     Tier-4 (TIER_BLOB_BACKFILL) fires only after tier-1/3 fall through AND only
     under EVAL_AUTO_DRAIN_ENABLED — spare-capacity flaw-blob backfill (Phase 145).
 
-    SEED-072: tier-4 is NOT served through the idle `/lease` path. Phase 146 removed the
-    inline server walk that used to fill blobs on the `/submit` path (`_apply_submit` now
-    forces `blob_map={}`), so a tier-4 game re-evaluated via `/lease` → `/submit` writes no
-    blob and stays NULL-blob → gets re-served indefinitely (~5:1 submit:completion waste,
-    `/lease?scope=idle` never 204s, gating backfill starved). Remote workers must instead
-    fall through to their dedicated rung-4 `/flaw-blob-lease` (→ `_claim_tier4_blob` →
-    MultiPV-2 continuation → `/flaw-blob-submit`), the only post-146 path that writes blobs.
-    So the idle scope returns None (→ 204) once tier-3 is empty. The bundled `scope=None`
-    path below DOES keep tier-4: its sole consumer is the in-process server-pool drain
+    SEED-072: tier-4 is NOT served through the idle lease scope — it returns None (→ 204)
+    once tier-3 is empty, so remote workers fall through to their dedicated rung-4
+    `/flaw-blob-lease` (→ `_claim_tier4_blob` → MultiPV-2 continuation → `/flaw-blob-submit`).
+
+    Doc correction (2026-07-28): this paragraph used to justify that gate by claiming the
+    `/submit` path "writes no blob" because `_apply_submit` forces `blob_map={}`. That is
+    no longer true — Phase 149-03 PRUNE-01 DELETED the Gen-1 `/lease` + `/submit` pair and
+    `_apply_submit` outright, and the atomic lane that replaced them DOES write blobs
+    inline: the worker submits `body.blob_nodes`, which `_assemble_flaw_blobs_from_submit`
+    reassembles into the `blob_map` passed to `apply_full_eval` (app/routers/eval_remote.py).
+    So there are three live blob write paths, not one: the atomic submit (bulk of volume),
+    `/flaw-blob-submit` (this tier-4 rung), and the in-process drain.
+
+    The gate itself still stands, but for an EFFICIENCY reason rather than a correctness
+    one: routing tier-4 through the atomic lane would re-run a full-game MultiPV-1 pass
+    just to fill the residual flaw plies the original submit left NULL, whereas
+    `/flaw-blob-lease` evaluates only the continuation FENs. The bundled `scope=None` path
+    below keeps tier-4 for its sole consumer, the in-process server-pool drain
     (eval_drain.run_one_full_eval_tick), which writes blobs via the MultiPV-2 pass
-    (_build_flaw_multipv2_blobs → _run_multipv2_pass) — not the broken `/submit` path.
+    (_build_flaw_multipv2_blobs).
 
     Returns ClaimedJob or None when there is nothing to process.
     """

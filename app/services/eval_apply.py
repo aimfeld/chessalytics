@@ -898,10 +898,12 @@ async def _classify_and_fill_oracle(
             existing ply's blob/tactic columns are preserved-by-omission).
         blobs_pending: Phase 147 (D-01/D-03) — forwarded unchanged to
             classify_game_flaws. Defaults to False (local drain / discovery
-            behavior unchanged, D-05). The remote go-forward call site
-            (_apply_submit) passes True so cp-based flaws whose continuation blob
-            is deferred to the tier-4 pass are suppressed to NULL instead of
-            persisted raw/ungated.
+            behavior unchanged, D-05). The remote go-forward call site — the
+            /atomic-submit handler in app/routers/eval_remote.py (named
+            _apply_submit before Phase 149-03 PRUNE-01 deleted the Gen-1 pair) —
+            passes True so cp-based flaws whose continuation blob is deferred to
+            the tier-4 pass are suppressed to NULL instead of persisted
+            raw/ungated.
 
     Errors in the flaw delete/insert/update statements and the oracle-count UPDATE
     are intentionally NOT caught here — they must propagate to the caller so the
@@ -1152,6 +1154,19 @@ async def _classify_and_fill_oracle(
             )
             sentry_sdk.set_tag("source", "full_eval_drain")
             sentry_sdk.capture_exception(exc)
+
+    # SEED-125: unconditional, end-of-function refresh of the games-side blob
+    # completion stamp. Deliberately NOT hooked onto the `if flaw_pv_blobs:`
+    # branch above (the _batch_update_flaw_pv_lines call at line ~1050) — a
+    # submit carrying zero blobs (the local-drain `blobs_pending=True` path)
+    # can insert NULL-blob plies (step 1/2/3/4 above) without ever entering
+    # that branch, which would leave a reclassified game wrongly stamped
+    # complete. This is also the clear-direction site for tier-3 branch (b):
+    # it picks lichess-eval games whose full_evals_completed_at is already
+    # stamped, and the delete-then-insert reclassification above can insert a
+    # fresh NULL-blob ply on a game that already carries a blobs_completed_at
+    # stamp from an earlier tier-4 pass.
+    await _refresh_blobs_completed(session, game_id)
 
 
 async def _classify_with_overlay(
@@ -1523,6 +1538,38 @@ async def _batch_update_flaw_pv_lines(
         f" AND game_flaws.ply = v.ply"
     )
     await session.execute(sql, params)
+
+
+async def _refresh_blobs_completed(session: AsyncSession, game_id: int) -> None:
+    """SEED-125: maintain `games.blobs_completed_at` BIDIRECTIONALLY.
+
+    Probes for any remaining NULL-blob flaw ply (index-only via
+    ix_game_flaws_blob_backfill, sub-ms) and stamps the games-side column
+    accordingly: `now()` when no NULL-blob ply remains, NULL when one does.
+
+    Load-bearing rule: the invariant runs in BOTH directions. A stamp-only-if-empty
+    design would silently drop a reclassified game out of the tier-4 blob-backfill
+    population forever — tier-3 branch (b) picks lichess-eval games whose
+    full_evals_completed_at is already stamped, and _classify_and_fill_oracle's
+    delete-then-insert reclassification can insert a fresh NULL-blob ply on a game
+    that already carries a blobs_completed_at stamp from an earlier tier-4 pass.
+    Without the clear direction that game would never be re-picked.
+
+    Does NOT commit — the caller owns the transaction (mirrors
+    _batch_update_flaw_pv_lines, not _stamp_best_moves_completed_directly).
+    """
+    probe = await session.execute(
+        sa.text(
+            "SELECT 1 FROM game_flaws WHERE game_id = :game_id AND allowed_pv_lines IS NULL LIMIT 1"
+        ),
+        {"game_id": game_id},
+    )
+    has_null_blob_flaw = probe.first() is not None
+    stamp_value = None if has_null_blob_flaw else datetime.now(timezone.utc)
+    await session.execute(
+        sa.text("UPDATE games SET blobs_completed_at = :value WHERE id = :game_id"),
+        {"value": stamp_value, "game_id": game_id},
+    )
 
 
 async def _build_flaw_blob_lease_positions(

@@ -44,6 +44,34 @@ class TrainPuzzle(BaseModel):
     last_move_uci: str | None
 
 
+class SolvedResult(BaseModel):
+    """One recorded solve's outcome, part of `TrainSessionResponse.solved_results`.
+
+    Quick task 260728-tgc (BUGFIX-TRAIN-SCORE-CROSSDEVICE): one entry per
+    `drill_solves` row with `solved_at IS NOT NULL`, in `position` order. The
+    client aggregates these with its own points formula
+    (`frontend/src/lib/trainScore.ts`, `scorePuzzle` + `aggregateSessionScore`)
+    — that file stays the single source of truth for scoring (LOCKED, Option
+    B). This response deliberately carries NO precomputed score integer;
+    porting the formula server-side was considered and rejected (see
+    `app.models.drill_solve.DrillMoveQuality`'s docstring, which explicitly
+    forbids using its enum values to compute a score directly).
+
+    Not an answer-key leak: both `correct_guess` and `move_quality` were
+    already returned by `SolveResponse` for each of these same positions at
+    the moment they were attempted — this endpoint just re-serves outcomes
+    the client already saw once, from the server instead of a device-local
+    cache. The `PuzzleRevealResponse` 409 gate (which protects the actual
+    answer key — best move, PV, puzzle type) is untouched and continues to
+    protect UNSOLVED positions only. Entries here carry no `position`,
+    `game_id`, `ply`, or best-move field, so they reveal nothing about
+    puzzles still to be attempted in the session.
+    """
+
+    correct_guess: bool
+    move_quality: Literal["good", "inaccuracy", "wrong"]
+
+
 class TrainSessionResponse(BaseModel):
     """Response for POST /train/sessions — a composed or resumed session.
 
@@ -59,6 +87,13 @@ class TrainSessionResponse(BaseModel):
     `blob_pending_count` to tell "still analyzing" (non-zero) apart from
     "genuinely caught up" (zero) — removing either field re-hides the
     Pitfall 4 signal this schema exists to surface.
+
+    `solved_results` (260728-tgc) is one `SolvedResult` per recorded solve in
+    `position` order — see that schema's docstring. Empty for a freshly
+    composed session and for the no-eligible-material (`session_id is None`)
+    case. This is what makes "Scored today" correct on a device that never
+    saw the original solve responses (the reproduced prod bug: a
+    localStorage-only tally read "0 of 18" on a second device).
     """
 
     session_id: int | None
@@ -69,6 +104,7 @@ class TrainSessionResponse(BaseModel):
     solved_count: int
     blob_pending_count: int
     puzzles: list[TrainPuzzle]
+    solved_results: list[SolvedResult]
 
 
 class SolveRequest(BaseModel):
@@ -261,6 +297,7 @@ __all__ = [
     "PuzzleRevealResponse",
     "SolveRequest",
     "SolveResponse",
+    "SolvedResult",
     "TrainProgressResponse",
     "TrainPuzzle",
     "TrainSessionResponse",
