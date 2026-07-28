@@ -609,9 +609,7 @@ async def test_blunder_heavy_game_contributes_exactly_one_pool_pick(
     tracked_items = (
         (
             await db_session.execute(
-                select(DrillItem).where(
-                    DrillItem.user_id == _USER_ID, DrillItem.game_id == game_id
-                )
+                select(DrillItem).where(DrillItem.user_id == _USER_ID, DrillItem.game_id == game_id)
             )
         )
         .scalars()

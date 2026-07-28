@@ -274,7 +274,9 @@ class TestPickOnePerGame:
         or removed from the candidate pool — the seed carries game_id."""
         game_one = [(1, ply, None) for ply in range(0, 20, 2)]
         with_extra_games = game_one + [(2, 4, None), (3, 6, None), (3, 8, None)]
-        result_alone = pick_one_per_game(game_one, user_id=7, session_date=datetime.date(2026, 5, 1))
+        result_alone = pick_one_per_game(
+            game_one, user_id=7, session_date=datetime.date(2026, 5, 1)
+        )
         result_with_others = pick_one_per_game(
             with_extra_games, user_id=7, session_date=datetime.date(2026, 5, 1)
         )
