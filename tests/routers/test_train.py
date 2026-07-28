@@ -1399,6 +1399,10 @@ async def test_last_solve_completes_session(test_engine) -> None:
     game_id_sr = await _seed_game_with_blunder(test_engine, user_id, ply=_FLAW_PLY_WHITE)
     game_id_herring = await _seed_bare_game(test_engine, user_id, "complete-herring")
     await _seed_drill_item(test_engine, user_id, game_id_sr, _FLAW_PLY_WHITE)
+    # SEED-123: the herring MUST carry a real pool row, or it is unservable and
+    # correctly excluded from `remaining` — the session would then complete on
+    # the first solve and this test would assert nothing about the last one.
+    pool_id = await _seed_herring_pool_row(test_engine, user_id, game_id_herring, 8)
     session_id = await _seed_session(
         test_engine,
         user_id,
@@ -1406,6 +1410,7 @@ async def test_last_solve_completes_session(test_engine) -> None:
             (game_id_sr, _FLAW_PLY_WHITE, int(DrillSource.SR_ITEM)),
             (game_id_herring, 8, int(DrillSource.RED_HERRING)),
         ],
+        herring_pool_ids={1: pool_id},
     )
 
     try:
@@ -1419,6 +1424,7 @@ async def test_last_solve_completes_session(test_engine) -> None:
         assert second.json()["session_complete"] is True
         assert await _get_session_status(test_engine, session_id) == "completed"
     finally:
+        await _delete_herring_pool_rows(test_engine, [pool_id])
         await _delete_games(test_engine, [game_id_sr, game_id_herring])
 
 
@@ -1438,6 +1444,10 @@ async def test_session_completes_when_sr_item_flaw_row_vanishes_under_reclassifi
     game_id_sr = await _seed_game_with_blunder(test_engine, user_id, ply=_FLAW_PLY_WHITE)
     game_id_herring = await _seed_bare_game(test_engine, user_id, "complete-evicted-herring")
     await _seed_drill_item(test_engine, user_id, game_id_sr, _FLAW_PLY_WHITE)
+    # SEED-123: a real pool row keeps the herring servable, so this test still
+    # isolates the SR-eviction path it exists to pin (an unservable herring
+    # would complete the session on its own and mask the eviction).
+    pool_id = await _seed_herring_pool_row(test_engine, user_id, game_id_herring, 8)
     session_id = await _seed_session(
         test_engine,
         user_id,
@@ -1445,6 +1455,7 @@ async def test_session_completes_when_sr_item_flaw_row_vanishes_under_reclassifi
             (game_id_sr, _FLAW_PLY_WHITE, int(DrillSource.SR_ITEM)),
             (game_id_herring, 8, int(DrillSource.RED_HERRING)),
         ],
+        herring_pool_ids={1: pool_id},
     )
 
     # Simulate reclassification evicting the SR item's backing flaw row —
@@ -1470,6 +1481,7 @@ async def test_session_completes_when_sr_item_flaw_row_vanishes_under_reclassifi
         assert resp.json()["session_complete"] is True
         assert await _get_session_status(test_engine, session_id) == "completed"
     finally:
+        await _delete_herring_pool_rows(test_engine, [pool_id])
         await _delete_games(test_engine, [game_id_sr, game_id_herring])
 
 

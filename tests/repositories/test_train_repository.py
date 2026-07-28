@@ -1302,6 +1302,105 @@ async def test_completion_ignores_orphaned_sr_row_but_counts_orphaned_herring(
     assert session_complete_after is True
 
 
+@pytest.mark.asyncio
+async def test_completion_ignores_herring_with_missing_pool_row(
+    db_session: AsyncSession,
+) -> None:
+    """SEED-123: a herring whose `herring_pool` row is gone must not pin the
+    session open forever.
+
+    The mirror image of the test above, and the distinction is the whole point:
+    an orphaned *game* leaves the herring servable off its pool row (keeps
+    counting), while an orphaned *pool row* leaves it unservable — and
+    `load_session_puzzles` already drops it. Counting an undroppable-yet-
+    unservable row made `remaining` unreachable, so the session stuck on
+    "resume" until `expires_on` passed. Observed in prod 2026-07-28 across 14
+    sessions; reachable any time a `herring_pool` row is pruned because
+    `drill_solves.herring_pool_id` is `ON DELETE SET NULL`.
+    """
+    await ensure_test_user(db_session, _USER_ID)
+    sr_game_id = await _seed_flaw_game(db_session, _USER_ID, "poolless-sr", ply=2)
+    herring_game_id, pool_id = await _seed_herring_pool_row(
+        db_session, _USER_ID, "poolless-herring", ply=8
+    )
+
+    drill_session = DrillSession(
+        user_id=_USER_ID,
+        session_date=_TODAY,
+        status="open",
+        puzzle_count=2,
+        expires_on=_TODAY + datetime.timedelta(days=7),
+    )
+    db_session.add(drill_session)
+    await db_session.flush()
+    db_session.add(
+        DrillSolve(
+            session_id=drill_session.id,
+            position=0,
+            user_id=_USER_ID,
+            game_id=sr_game_id,
+            ply=2,
+            source=DrillSource.SR_ITEM,
+            solved_at=None,
+        )
+    )
+    db_session.add(
+        DrillSolve(
+            session_id=drill_session.id,
+            position=1,
+            user_id=_USER_ID,
+            game_id=herring_game_id,
+            ply=8,
+            source=DrillSource.RED_HERRING,
+            herring_pool_id=pool_id,
+            solved_at=None,
+        )
+    )
+    await db_session.flush()
+
+    # Delete the POOL row (not the game) and let the real ON DELETE SET NULL FK
+    # policy null the pointer — never null the column by hand, which would
+    # prove nothing about the actual constraint. The source game stays alive,
+    # isolating "pool row gone" from the orphaned-game case above.
+    await db_session.execute(delete(HerringPool).where(HerringPool.id == pool_id))
+    await db_session.flush()
+
+    orphaned_pool_id = (
+        await db_session.execute(
+            select(DrillSolve.herring_pool_id).where(
+                DrillSolve.session_id == drill_session.id, DrillSolve.position == 1
+            )
+        )
+    ).scalar_one()
+    assert orphaned_pool_id is None  # SET NULL fired; the drill_solves row survives
+
+    # Half one: the herring is unservable and already dropped at serve time.
+    puzzles = await train_repository.load_session_puzzles(
+        db_session, user_id=_USER_ID, session_id=drill_session.id
+    )
+    assert [p.position for p in puzzles] == [0]
+
+    # Half two (the fix): recording every SERVABLE puzzle completes the session.
+    await db_session.execute(
+        update(DrillSolve)
+        .where(DrillSolve.session_id == drill_session.id, DrillSolve.position == 0)
+        .values(solved_at=_NOW, correct_move=True)
+    )
+    await db_session.flush()
+
+    session_complete = await train_repository._mark_session_complete_if_done(
+        db_session, session_id=drill_session.id, now_utc=_NOW
+    )
+
+    assert session_complete is True
+    status = (
+        await db_session.execute(
+            select(DrillSession.status).where(DrillSession.id == drill_session.id)
+        )
+    ).scalar_one()
+    assert status == "completed"
+
+
 # ---------------------------------------------------------------------------
 # get_waiting_puzzle_count (Phase 191 Plan 02, Task 1)
 # ---------------------------------------------------------------------------
