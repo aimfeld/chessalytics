@@ -898,10 +898,12 @@ async def _classify_and_fill_oracle(
             existing ply's blob/tactic columns are preserved-by-omission).
         blobs_pending: Phase 147 (D-01/D-03) — forwarded unchanged to
             classify_game_flaws. Defaults to False (local drain / discovery
-            behavior unchanged, D-05). The remote go-forward call site
-            (_apply_submit) passes True so cp-based flaws whose continuation blob
-            is deferred to the tier-4 pass are suppressed to NULL instead of
-            persisted raw/ungated.
+            behavior unchanged, D-05). The remote go-forward call site — the
+            /atomic-submit handler in app/routers/eval_remote.py (named
+            _apply_submit before Phase 149-03 PRUNE-01 deleted the Gen-1 pair) —
+            passes True so cp-based flaws whose continuation blob is deferred to
+            the tier-4 pass are suppressed to NULL instead of persisted
+            raw/ungated.
 
     Errors in the flaw delete/insert/update statements and the oracle-count UPDATE
     are intentionally NOT caught here — they must propagate to the caller so the

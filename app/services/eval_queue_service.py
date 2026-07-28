@@ -798,17 +798,26 @@ async def claim_eval_job(
     Tier-4 (TIER_BLOB_BACKFILL) fires only after tier-1/3 fall through AND only
     under EVAL_AUTO_DRAIN_ENABLED — spare-capacity flaw-blob backfill (Phase 145).
 
-    SEED-072: tier-4 is NOT served through the idle `/lease` path. Phase 146 removed the
-    inline server walk that used to fill blobs on the `/submit` path (`_apply_submit` now
-    forces `blob_map={}`), so a tier-4 game re-evaluated via `/lease` → `/submit` writes no
-    blob and stays NULL-blob → gets re-served indefinitely (~5:1 submit:completion waste,
-    `/lease?scope=idle` never 204s, gating backfill starved). Remote workers must instead
-    fall through to their dedicated rung-4 `/flaw-blob-lease` (→ `_claim_tier4_blob` →
-    MultiPV-2 continuation → `/flaw-blob-submit`), the only post-146 path that writes blobs.
-    So the idle scope returns None (→ 204) once tier-3 is empty. The bundled `scope=None`
-    path below DOES keep tier-4: its sole consumer is the in-process server-pool drain
+    SEED-072: tier-4 is NOT served through the idle lease scope — it returns None (→ 204)
+    once tier-3 is empty, so remote workers fall through to their dedicated rung-4
+    `/flaw-blob-lease` (→ `_claim_tier4_blob` → MultiPV-2 continuation → `/flaw-blob-submit`).
+
+    Doc correction (2026-07-28): this paragraph used to justify that gate by claiming the
+    `/submit` path "writes no blob" because `_apply_submit` forces `blob_map={}`. That is
+    no longer true — Phase 149-03 PRUNE-01 DELETED the Gen-1 `/lease` + `/submit` pair and
+    `_apply_submit` outright, and the atomic lane that replaced them DOES write blobs
+    inline: the worker submits `body.blob_nodes`, which `_assemble_flaw_blobs_from_submit`
+    reassembles into the `blob_map` passed to `apply_full_eval` (app/routers/eval_remote.py).
+    So there are three live blob write paths, not one: the atomic submit (bulk of volume),
+    `/flaw-blob-submit` (this tier-4 rung), and the in-process drain.
+
+    The gate itself still stands, but for an EFFICIENCY reason rather than a correctness
+    one: routing tier-4 through the atomic lane would re-run a full-game MultiPV-1 pass
+    just to fill the residual flaw plies the original submit left NULL, whereas
+    `/flaw-blob-lease` evaluates only the continuation FENs. The bundled `scope=None` path
+    below keeps tier-4 for its sole consumer, the in-process server-pool drain
     (eval_drain.run_one_full_eval_tick), which writes blobs via the MultiPV-2 pass
-    (_build_flaw_multipv2_blobs → _run_multipv2_pass) — not the broken `/submit` path.
+    (_build_flaw_multipv2_blobs).
 
     Returns ClaimedJob or None when there is nothing to process.
     """
