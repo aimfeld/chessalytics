@@ -86,6 +86,27 @@ _MOVE_QUALITY_ENUM: dict[Literal["good", "inaccuracy", "wrong"], DrillMoveQualit
     literal: enum_member for enum_member, literal in _MOVE_QUALITY_LITERAL.items()
 }
 
+
+def _resolve_move_quality_tier(
+    move_quality: int | None, correct_move: bool
+) -> Literal["good", "inaccuracy", "wrong"]:
+    """Resolve a stored `drill_solves` row's move-quality tier (SEED-119).
+
+    A non-NULL `move_quality` maps through `_MOVE_QUALITY_LITERAL`. A NULL
+    `move_quality` means the row predates SEED-119 (go-forward only, no
+    backfill) — degrade from the stored `correct_move` boolean instead: True
+    maps to the good tier (the pre-tiering era only ever recorded a full move
+    point), False maps to the wrong tier. These legacy rows predate SEED-119
+    and cannot actually reach the landing-screen display path — the landing
+    screen only ever shows the CURRENT window's session — so this mapping
+    exists purely to make the type total; build nothing further for it.
+    Shared by `record_solve`'s lost-claim re-read and `_resume_session`'s
+    `solved_results` builder so the rule exists in exactly one place.
+    """
+    if move_quality is not None:
+        return _MOVE_QUALITY_LITERAL[DrillMoveQuality(move_quality)]
+    return "good" if correct_move else "wrong"
+
 # Quick task 260728-pgp: due_stmt over-fetches by this factor before the
 # session-wide per-game cap is applied in Python (it must span both SR
 # sources — due drill_items AND fresh pool picks — so it cannot be a bare
@@ -139,6 +160,23 @@ class ComposedPuzzle:
 
 
 @dataclass(frozen=True)
+class ComposedSolvedResult:
+    """Internal dataclass for one recorded solve within a composed/resumed session.
+
+    Quick task 260728-tgc (BUGFIX-TRAIN-SCORE-CROSSDEVICE): mirrors
+    `app.schemas.train.SolvedResult` field-for-field — the router maps one
+    directly onto the other, same convention as `ComposedPuzzle` ->
+    `TrainPuzzle`. `correct_guess`/`move_quality` are the RECORDED OUTCOME of
+    an attempt (the same values `record_solve` already wrote to this row),
+    never a server-computed score — this dataclass carries no score field and
+    the repository must not import from `app.schemas`.
+    """
+
+    correct_guess: bool
+    move_quality: Literal["good", "inaccuracy", "wrong"]
+
+
+@dataclass(frozen=True)
 class ComposedSession:
     """Internal dataclass returned by `compose_and_materialize_session`.
 
@@ -154,6 +192,10 @@ class ComposedSession:
     opportunistic tier-4 analysis hasn't caught up yet from a genuinely
     exhausted pool (Pitfall 4) — see `app.schemas.train.TrainSessionResponse`
     for the wire-level contract this mirrors.
+
+    `solved_results` (260728-tgc) is one `ComposedSolvedResult` per recorded
+    solve, in `position` order — `[]` for a fresh composition and for the
+    nothing-qualified case. `solved_count` always equals its length.
     """
 
     session_id: int | None
@@ -164,6 +206,7 @@ class ComposedSession:
     solved_count: int
     blob_pending_count: int
     puzzles: list[ComposedPuzzle]
+    solved_results: list[ComposedSolvedResult]
 
 
 async def get_settings(session: AsyncSession, *, user_id: int) -> TrainSettingsRow | None:
@@ -1125,23 +1168,37 @@ async def _resume_session(
     returned for the loop to continue) and the completed-in-window path (a
     `status='completed'` session: `load_session_puzzles` returns [] and the
     landing screen renders the D-03 recap from `solved_count`/`expires_on`).
+
+    Quick task 260728-tgc (BUGFIX-TRAIN-SCORE-CROSSDEVICE): the former
+    `solved_count`-only `func.count()` query is widened into a row select of
+    `correct_guess`/`move_quality`/`correct_move`, ordered by `position` —
+    still ONE query, no second round-trip. `solved_count` is now derived as
+    `len(solved_results)` rather than a separate COUNT.
     """
     puzzles = await load_session_puzzles(session, user_id=user_id, session_id=drill_session.id)
-    solved_count_stmt = (
-        select(func.count())
-        .select_from(DrillSolve)
+    solved_rows_stmt = (
+        select(DrillSolve.correct_guess, DrillSolve.move_quality, DrillSolve.correct_move)
         .where(DrillSolve.session_id == drill_session.id, DrillSolve.solved_at.isnot(None))
+        .order_by(DrillSolve.position)
     )
-    solved_count = (await session.execute(solved_count_stmt)).scalar_one()
+    solved_rows = (await session.execute(solved_rows_stmt)).all()
+    solved_results = [
+        ComposedSolvedResult(
+            correct_guess=bool(row.correct_guess),
+            move_quality=_resolve_move_quality_tier(row.move_quality, bool(row.correct_move)),
+        )
+        for row in solved_rows
+    ]
     return ComposedSession(
         session_id=drill_session.id,
         session_date=drill_session.session_date,
         expires_on=drill_session.expires_on,
         puzzle_count=drill_session.puzzle_count,
         requested_count=requested_count,
-        solved_count=solved_count,
+        solved_count=len(solved_results),
         blob_pending_count=blob_pending_count,
         puzzles=puzzles,
+        solved_results=solved_results,
     )
 
 
@@ -1529,6 +1586,7 @@ async def compose_and_materialize_session(
             solved_count=0,
             blob_pending_count=blob_pending_count,
             puzzles=[],
+            solved_results=[],
         )
 
     # D-09: deterministic (user_id, session_date)-seeded shuffle so a red
@@ -1633,6 +1691,7 @@ async def compose_and_materialize_session(
         solved_count=0,
         blob_pending_count=blob_pending_count,
         puzzles=puzzles,
+        solved_results=[],
     )
 
 
@@ -2137,14 +2196,9 @@ async def record_solve(
         ).one()
         stored_correct_guess = bool(stored.correct_guess)
         stored_correct_move = bool(stored.correct_move)
-        if stored.move_quality is not None:
-            stored_move_quality = _MOVE_QUALITY_LITERAL[DrillMoveQuality(stored.move_quality)]
-        else:
-            # Legacy row recorded before SEED-119: no stored tier exists, so
-            # degrade from the stored boolean — True maps to the good tier
-            # (the pre-tiering era only ever recorded a full move point),
-            # False maps to the wrong tier.
-            stored_move_quality = "good" if stored_correct_move else "wrong"
+        # Legacy-tier fallback (SEED-119) lives once in _resolve_move_quality_tier
+        # — shared with _resume_session's solved_results builder.
+        stored_move_quality = _resolve_move_quality_tier(stored.move_quality, stored_correct_move)
         # Same nullability narrowing as the claimed branch above.
         if is_sr and solve_row.game_id is not None:
             item_state = await _read_drill_item_state(

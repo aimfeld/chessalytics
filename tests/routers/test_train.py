@@ -670,6 +670,10 @@ async def test_compose_session_serves_own_blunder(test_engine) -> None:
         fen_fields = puzzle["fen"].split(" ")
         assert len(fen_fields) == 6, f"Expected a full 6-field FEN, got: {puzzle['fen']!r}"
         assert body["session_id"] is not None
+        # Quick task 260728-tgc: the wire response carries solved_results —
+        # empty here since nothing has been solved in this freshly composed
+        # session yet.
+        assert body["solved_results"] == []
     finally:
         await _delete_games(test_engine, [game_id])
 

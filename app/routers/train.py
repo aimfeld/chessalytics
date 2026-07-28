@@ -29,6 +29,7 @@ from app.schemas.train import (
     PuzzleRevealResponse,
     SolveRequest,
     SolveResponse,
+    SolvedResult,
     TrainProgressResponse,
     TrainPuzzle,
     TrainSessionResponse,
@@ -93,6 +94,10 @@ async def compose_or_resume_session(
                 last_move_uci=p.last_move_uci,
             )
         )
+    solved_results = [
+        SolvedResult(correct_guess=r.correct_guess, move_quality=r.move_quality)
+        for r in composed.solved_results
+    ]
     return TrainSessionResponse(
         session_id=composed.session_id,
         session_date=composed.session_date,
@@ -102,6 +107,7 @@ async def compose_or_resume_session(
         solved_count=composed.solved_count,
         blob_pending_count=composed.blob_pending_count,
         puzzles=puzzles,
+        solved_results=solved_results,
     )
 
 
