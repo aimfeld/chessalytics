@@ -52,13 +52,20 @@ describe('TrainScoreScreen', () => {
     expect(fireWinConfetti).toHaveBeenCalledTimes(1);
   });
 
-  it('a green-band score with prefersReducedMotion true does not fire confetti, and the total/percentage/CTA still render', () => {
+  it('a green-band score with prefersReducedMotion true does not fire confetti, and the total/percentage still render', () => {
     prefersReducedMotion.mockReturnValue(true);
     renderScoreScreen({ total: 20, max: 20 });
     expect(fireWinConfetti).not.toHaveBeenCalled();
     expect(screen.getByTestId('train-score-total')).not.toBeNull();
     expect(screen.getByTestId('train-score-percentage')).not.toBeNull();
-    expect(screen.getByTestId('btn-train-again')).not.toBeNull();
+  });
+
+  // SEED-122: the permanently-disabled "Train again" CTA was removed — it could
+  // never enable (no same-day resume path), so it read as broken rather than as
+  // a completed session. The next-session date line is the terminal statement.
+  it('renders no Train-again CTA', () => {
+    renderScoreScreen({ total: 20, max: 20 });
+    expect(screen.queryByTestId('btn-train-again')).toBeNull();
   });
 
   it('a yellow-band score fires only the smaller partial burst', () => {

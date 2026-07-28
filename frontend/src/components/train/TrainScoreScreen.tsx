@@ -24,8 +24,6 @@
 
 import { useEffect, type ReactElement } from 'react';
 import { format, parseISO } from 'date-fns';
-import { Button } from '@/components/ui/button';
-import { TRAIN_CTA_BUTTON_CLASS } from '@/components/train/buttonStyles';
 import { fireWinConfetti, firePartialConfetti, prefersReducedMotion } from '@/lib/confetti';
 import { playSound, type SoundEvent } from '@/lib/sounds';
 import {
@@ -64,11 +62,12 @@ export interface TrainScoreScreenProps {
   score: TrainSessionScore;
   /**
    * ISO date string for the next available session (`TrainSessionResponse.
-   * expires_on`) — shown as the disabled Train-again CTA's completed-session
-   * copy. Phase 190 has no same-day resume path (sessions are once-per-day,
-   * Phase 189), so the CTA is always disabled here; a future live session-
-   * availability check can wire a real `onTrainAgain` without changing this
-   * component's shape.
+   * expires_on`) — the screen's terminal statement. Sessions are once-per-day
+   * (Phase 189) and Phase 190 has no same-day resume path, so this line is
+   * deliberately the last thing on the screen: SEED-122 removed the
+   * permanently-disabled "Train again" CTA that used to sit above it, because
+   * a primary button that can never enable reads as broken rather than as
+   * "you're done for today".
    */
   nextSessionDate: string;
 }
@@ -121,9 +120,6 @@ export function TrainScoreScreen({ score, nextSessionDate }: TrainScoreScreenPro
       <p className="text-lg font-semibold text-muted-foreground" data-testid="train-score-total">
         Points: {score.total}/{score.max}
       </p>
-      <Button variant="default" className={TRAIN_CTA_BUTTON_CLASS} disabled data-testid="btn-train-again">
-        Train again
-      </Button>
       <p className="text-sm font-semibold text-muted-foreground">
         Next session: {format(parseISO(nextSessionDate), 'MMM d, yyyy')}
       </p>
