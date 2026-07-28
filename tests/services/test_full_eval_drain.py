@@ -3123,6 +3123,155 @@ class TestAccuracyAcplHook:
         finally:
             await _delete_games(full_drain_session_maker, [game_id])
 
+    async def test_seed125_clear_direction_reclassification_nulls_blob_stamp(
+        self,
+        full_drain_test_user_117: int,
+        full_drain_session_maker: async_sessionmaker[AsyncSession],
+    ) -> None:
+        """SEED-125 CLEAR direction: a game already carrying a `blobs_completed_at`
+        stamp, whose reclassification (`_classify_and_fill_oracle`) inserts a fresh
+        NULL-blob flaw ply, has the stamp cleared back to NULL. Uses the same
+        stored (post-move) eval-by-ply as `_blunder_eval_sequence`'s docstring —
+        [20, 30, -500, -480, 60, 30] — which classifies to exactly one white
+        blunder at ply 2 (unlike the interior-hole fixture, whose NULL at ply 2
+        nulls out both adjacent flaw classifications and produces zero rows)."""
+        import app.services.eval_apply as eval_apply_module
+        from app.models.game import Game
+        from app.models.game_flaw import GameFlaw
+
+        now = datetime.now(timezone.utc)
+        game_id = await _insert_game(
+            full_drain_session_maker,
+            full_drain_test_user_117,
+            pgn=_SIX_PLY_PGN,
+            evals_completed_at=now,
+            full_evals_completed_at=now,
+        )
+
+        gp_rows = [
+            {"ply": 0, "full_hash": 0xB0BF_0100, "eval_cp": 20, "eval_mate": None},
+            {"ply": 1, "full_hash": 0xB0BF_0101, "eval_cp": 30, "eval_mate": None},
+            {"ply": 2, "full_hash": 0xB0BF_0102, "eval_cp": -500, "eval_mate": None},
+            {"ply": 3, "full_hash": 0xB0BF_0103, "eval_cp": -480, "eval_mate": None},
+            {"ply": 4, "full_hash": 0xB0BF_0104, "eval_cp": 60, "eval_mate": None},
+            {"ply": 5, "full_hash": 0xB0BF_0105, "eval_cp": 30, "eval_mate": None},
+        ]
+        await _insert_game_positions(
+            full_drain_session_maker, full_drain_test_user_117, game_id, gp_rows
+        )
+        try:
+            # Pre-stamp blobs_completed_at directly (not via _insert_game — that
+            # helper has no kwarg for this column) to simulate an earlier tier-4
+            # pass having already completed the blob backfill for this game.
+            async with full_drain_session_maker() as pre_session:
+                await pre_session.execute(
+                    sa.update(Game).where(Game.id == game_id).values(blobs_completed_at=now)
+                )
+                await pre_session.commit()
+
+            async with full_drain_session_maker() as session:
+                await eval_apply_module._classify_and_fill_oracle(
+                    session, game_id, engine_result_map={}
+                )
+                await session.commit()
+
+            async with full_drain_session_maker() as verify:
+                stamp = (
+                    await verify.execute(
+                        select(Game.blobs_completed_at).where(Game.id == game_id)
+                    )
+                ).scalar_one()
+                null_blob_flaws = (
+                    await verify.execute(
+                        select(GameFlaw.ply).where(
+                            GameFlaw.game_id == game_id,
+                            GameFlaw.allowed_pv_lines.is_(None),
+                        )
+                    )
+                ).scalars().all()
+
+            assert stamp is None, (
+                "blobs_completed_at must be cleared back to NULL after a reclassification "
+                "inserts a fresh NULL-blob flaw ply on an already-stamped game"
+            )
+            assert null_blob_flaws, (
+                "the reclassification must have actually produced a NULL-blob flaw ply — "
+                "otherwise this test would pass vacuously"
+            )
+        finally:
+            await _delete_games(full_drain_session_maker, [game_id])
+
+    async def test_seed125_set_direction_refresh_stamps_blob_completed(
+        self,
+        full_drain_test_user_117: int,
+        full_drain_session_maker: async_sessionmaker[AsyncSession],
+    ) -> None:
+        """SEED-125 SET direction: once every flaw ply on a game carries a non-NULL
+        `allowed_pv_lines` blob, calling `_refresh_blobs_completed` stamps
+        `blobs_completed_at` non-NULL."""
+        import app.services.eval_apply as eval_apply_module
+        from app.models.game import Game
+        from app.models.game_flaw import GameFlaw
+
+        now = datetime.now(timezone.utc)
+        game_id = await _insert_game(
+            full_drain_session_maker,
+            full_drain_test_user_117,
+            pgn=_SIX_PLY_PGN,
+            evals_completed_at=now,
+            full_evals_completed_at=now,
+        )
+
+        gp_rows = [
+            {"ply": 0, "full_hash": 0xB0C0_0100, "eval_cp": 20, "eval_mate": None},
+            {"ply": 1, "full_hash": 0xB0C0_0101, "eval_cp": 30, "eval_mate": None},
+            {"ply": 2, "full_hash": 0xB0C0_0102, "eval_cp": -500, "eval_mate": None},
+            {"ply": 3, "full_hash": 0xB0C0_0103, "eval_cp": -480, "eval_mate": None},
+            {"ply": 4, "full_hash": 0xB0C0_0104, "eval_cp": 60, "eval_mate": None},
+            {"ply": 5, "full_hash": 0xB0C0_0105, "eval_cp": 30, "eval_mate": None},
+        ]
+        await _insert_game_positions(
+            full_drain_session_maker, full_drain_test_user_117, game_id, gp_rows
+        )
+        try:
+            async with full_drain_session_maker() as session:
+                await eval_apply_module._classify_and_fill_oracle(
+                    session, game_id, engine_result_map={}
+                )
+                await session.commit()
+
+            # Confirm the classify pass actually produced at least one flaw ply,
+            # then write a non-NULL blob onto every one of them (simulating a
+            # tier-4 submit that fills every remaining NULL-blob ply).
+            async with full_drain_session_maker() as blob_session:
+                flaw_plies = (
+                    await blob_session.execute(
+                        select(GameFlaw.ply).where(GameFlaw.game_id == game_id)
+                    )
+                ).scalars().all()
+                assert flaw_plies, "classify must produce at least one flaw ply for this test"
+                await blob_session.execute(
+                    sa.update(GameFlaw)
+                    .where(GameFlaw.game_id == game_id)
+                    .values(allowed_pv_lines=[], missed_pv_lines=[])
+                )
+                await eval_apply_module._refresh_blobs_completed(blob_session, game_id)
+                await blob_session.commit()
+
+            async with full_drain_session_maker() as verify:
+                stamp = (
+                    await verify.execute(
+                        select(Game.blobs_completed_at).where(Game.id == game_id)
+                    )
+                ).scalar_one()
+
+            assert stamp is not None, (
+                "blobs_completed_at must be stamped non-NULL once every flaw ply's blob "
+                "is written"
+            )
+        finally:
+            await _delete_games(full_drain_session_maker, [game_id])
+
 
 # ─── Phase 119 SEED-045: hole-aware completion gate + bounded re-pick ──────────
 

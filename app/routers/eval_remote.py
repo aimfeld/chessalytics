@@ -105,6 +105,7 @@ from app.services.eval_apply import (
     _derive_atomic_sentinel_lines,
     _fetch_dedup_evals,
     _parse_token,
+    _refresh_blobs_completed,
     _signal_flaw_completion,
     _stamp_best_moves_completed_directly,
     apply_full_eval,
@@ -814,15 +815,27 @@ async def flaw_blob_lease(
 
     # All-sentinel: no walkable lines → write [] sentinels and return 204 (T-145-07).
     # This clears the allowed_pv_lines IS NULL predicate so the game is never re-picked.
+    #
+    # SEED-125: the session is opened UNCONDITIONALLY (the sentinel write stays
+    # conditional on sentinel_lines) so _refresh_blobs_completed always runs here.
+    # This single block covers BOTH the sentinel branch and the forward-progress
+    # backstop for the "no walkable lines, no sentinels" case, which used to
+    # return 204 writing nothing at all. With a stamp column, a missed stamp (two
+    # concurrent blob writers, neither's probe seeing the other's uncommitted
+    # rows) would otherwise make the lottery re-pick the game forever (the
+    # SEED-073 infinite-repick failure mode). Stamping here makes a missed stamp
+    # self-healing (one wasted pick, then stamped) and is what covers analyzed
+    # games that never run through _classify_and_fill_oracle at all.
     if not lease_positions:
-        if sentinel_lines:
-            # Build blob_map: {flaw_ply: ([], [])} for every sentinel flaw.
-            # Both allowed and missed get [] because the worker won't fill them.
-            sentinel_plies = {flaw_ply for flaw_ply, _line in sentinel_lines}
-            sentinel_blob_map = {ply: ([], []) for ply in sentinel_plies}
-            async with async_session_maker() as write_session:
+        async with async_session_maker() as write_session:
+            if sentinel_lines:
+                # Build blob_map: {flaw_ply: ([], [])} for every sentinel flaw.
+                # Both allowed and missed get [] because the worker won't fill them.
+                sentinel_plies = {flaw_ply for flaw_ply, _line in sentinel_lines}
+                sentinel_blob_map = {ply: ([], []) for ply in sentinel_plies}
                 await _batch_update_flaw_pv_lines(write_session, game_id, sentinel_blob_map)
-                await write_session.commit()
+            await _refresh_blobs_completed(write_session, game_id)
+            await write_session.commit()
         return Response(status_code=status.HTTP_204_NO_CONTENT)
 
     # SEED-073: over-cap sentinel. Fat games (> MAX_SUBMIT_EVALS walkable flaw-blob
@@ -847,6 +860,7 @@ async def flaw_blob_lease(
         over_cap_blob_map = {ply: ([], []) for ply in over_cap_plies}
         async with async_session_maker() as write_session:
             await _batch_update_flaw_pv_lines(write_session, game_id, over_cap_blob_map)
+            await _refresh_blobs_completed(write_session, game_id)  # SEED-125
             await write_session.commit()
         return Response(status_code=status.HTTP_204_NO_CONTENT)
 
@@ -906,7 +920,14 @@ async def _apply_flaw_blob_submit(
     # read_session closed
 
     # ── Idempotency gate: all blobs already written → no-op double-submit (D-03) ──
+    # SEED-125 backstop: no session is open here (read_session is closed) — open a
+    # short one to run the stamp refresh. Same forward-progress rationale as the
+    # /flaw-blob-lease backstop above: this is a nothing-to-do path that must not
+    # let a previously-missed stamp go uncorrected forever.
     if not null_flaw_plies:
+        async with async_session_maker() as write_session:
+            await _refresh_blobs_completed(write_session, game_id)
+            await write_session.commit()
         return FlawBlobSubmitResponse(game_id=game_id, blobs_written=0)
 
     # ── Re-derive lease for token validation and sentinel detection ───────────
@@ -970,6 +991,7 @@ async def _apply_flaw_blob_submit(
     async with async_session_maker() as write_session:
         await _batch_update_flaw_pv_lines(write_session, game_id, blob_map)
         await bulk_update_tactic_tags(write_session, updates)
+        await _refresh_blobs_completed(write_session, game_id)  # SEED-125
 
         # PRUNE-06: passive telemetry only (D-01/D-04) — no gate, submits only.
         await upsert_worker_heartbeat(
