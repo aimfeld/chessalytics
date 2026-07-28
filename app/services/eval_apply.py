@@ -1560,8 +1560,7 @@ async def _refresh_blobs_completed(session: AsyncSession, game_id: int) -> None:
     """
     probe = await session.execute(
         sa.text(
-            "SELECT 1 FROM game_flaws WHERE game_id = :game_id"
-            " AND allowed_pv_lines IS NULL LIMIT 1"
+            "SELECT 1 FROM game_flaws WHERE game_id = :game_id AND allowed_pv_lines IS NULL LIMIT 1"
         ),
         {"game_id": game_id},
     )

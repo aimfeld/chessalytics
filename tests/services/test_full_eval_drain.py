@@ -3177,18 +3177,20 @@ class TestAccuracyAcplHook:
 
             async with full_drain_session_maker() as verify:
                 stamp = (
-                    await verify.execute(
-                        select(Game.blobs_completed_at).where(Game.id == game_id)
-                    )
+                    await verify.execute(select(Game.blobs_completed_at).where(Game.id == game_id))
                 ).scalar_one()
                 null_blob_flaws = (
-                    await verify.execute(
-                        select(GameFlaw.ply).where(
-                            GameFlaw.game_id == game_id,
-                            GameFlaw.allowed_pv_lines.is_(None),
+                    (
+                        await verify.execute(
+                            select(GameFlaw.ply).where(
+                                GameFlaw.game_id == game_id,
+                                GameFlaw.allowed_pv_lines.is_(None),
+                            )
                         )
                     )
-                ).scalars().all()
+                    .scalars()
+                    .all()
+                )
 
             assert stamp is None, (
                 "blobs_completed_at must be cleared back to NULL after a reclassification "
@@ -3245,10 +3247,14 @@ class TestAccuracyAcplHook:
             # tier-4 submit that fills every remaining NULL-blob ply).
             async with full_drain_session_maker() as blob_session:
                 flaw_plies = (
-                    await blob_session.execute(
-                        select(GameFlaw.ply).where(GameFlaw.game_id == game_id)
+                    (
+                        await blob_session.execute(
+                            select(GameFlaw.ply).where(GameFlaw.game_id == game_id)
+                        )
                     )
-                ).scalars().all()
+                    .scalars()
+                    .all()
+                )
                 assert flaw_plies, "classify must produce at least one flaw ply for this test"
                 await blob_session.execute(
                     sa.update(GameFlaw)
@@ -3260,14 +3266,11 @@ class TestAccuracyAcplHook:
 
             async with full_drain_session_maker() as verify:
                 stamp = (
-                    await verify.execute(
-                        select(Game.blobs_completed_at).where(Game.id == game_id)
-                    )
+                    await verify.execute(select(Game.blobs_completed_at).where(Game.id == game_id))
                 ).scalar_one()
 
             assert stamp is not None, (
-                "blobs_completed_at must be stamped non-NULL once every flaw ply's blob "
-                "is written"
+                "blobs_completed_at must be stamped non-NULL once every flaw ply's blob is written"
             )
         finally:
             await _delete_games(full_drain_session_maker, [game_id])
