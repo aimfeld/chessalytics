@@ -238,7 +238,16 @@ export function NavHeader() {
                     // badge (MobileBottomBar below) is unaffected: it was
                     // reported fine and sits inside a differently-shaped
                     // column item with no clipping ancestor.
-                    className="absolute top-0 -right-1 flex h-3.5 min-w-3.5 items-center justify-center rounded-full bg-red-500 px-0.5 text-sm font-semibold text-white"
+                    // `leading-none` is required for the digit to sit centered:
+                    // the default line-height overflowed the 14px circle, so the
+                    // glyph rode high. Collapsing the line box to the font size
+                    // lets `items-center` actually centre it. `text-xs` is a
+                    // deliberate exception to CLAUDE.md's text-sm floor — the
+                    // digit has to fit a 14px counter badge.
+                    // `pt-0.5` is an optical nudge: digits sit above the em box's
+                    // vertical middle (the descender space is unused), so exact
+                    // box-centering still reads high.
+                    className="absolute top-0 -right-1 flex h-3.5 min-w-3.5 items-center justify-center rounded-full bg-red-500 px-0.5 pt-0.5 text-xs leading-none font-semibold text-white"
                     data-testid="train-notification-badge"
                   >
                     {trainWaitingCount > NAV_BADGE_MAX_DISPLAY ? `${NAV_BADGE_MAX_DISPLAY}+` : trainWaitingCount}
@@ -414,7 +423,9 @@ export function MobileBottomBar({ onMoreClick }: { onMoreClick: () => void }) {
           )}
           {to === '/train' && trainWaitingCount > 0 && trainBadgeVisible && (
             <span
-              className="absolute top-1.5 right-[30%] flex h-4 min-w-4 items-center justify-center rounded-full bg-red-500 px-1 text-sm font-semibold text-white"
+              // `leading-none` + `text-xs` for the same centering/fit reason as
+              // the desktop badge above.
+              className="absolute top-1.5 right-[30%] flex h-4 min-w-4 items-center justify-center rounded-full bg-red-500 px-1 pt-0.5 text-xs leading-none font-semibold text-white"
               data-testid="train-notification-badge-mobile"
             >
               {trainWaitingCount > NAV_BADGE_MAX_DISPLAY ? `${NAV_BADGE_MAX_DISPLAY}+` : trainWaitingCount}
