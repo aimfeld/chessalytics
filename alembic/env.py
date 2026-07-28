@@ -25,6 +25,7 @@ from app.models.drill_item import DrillItem  # noqa: F401
 from app.models.drill_session import DrillSession  # noqa: F401
 from app.models.drill_solve import DrillSolve  # noqa: F401
 from app.models.train_settings import TrainSettings  # noqa: F401
+from app.models.herring_pool import HerringPool  # noqa: F401
 
 # this is the Alembic Config object, which provides
 # access to the values within the .ini file in use.

@@ -31,7 +31,7 @@ from __future__ import annotations
 import datetime
 import math
 import uuid
-from typing import Any
+from typing import Any, Literal
 
 import httpx
 import pytest
@@ -42,11 +42,17 @@ from app.main import app
 from app.models.drill_session import DrillSession
 from app.models.drill_solve import DrillSolve, DrillSource
 from app.models.game import Game
-from app.models.game_best_move import GameBestMove
 from app.models.game_flaw import GameFlaw
 from app.models.game_position import GamePosition
+from app.models.herring_pool import HerringPool
 from app.services.eval_utils import LICHESS_K
+from app.services.flaws_service import INACCURACY_DROP
 from app.services.train_pool import (
+    HERRING_DEGENERATE_MIN_GAP_ES,
+    HERRING_LADDER_SIZE,
+    HERRING_LOOSE_BAND_ES,
+    HERRING_MIN_QUALIFYING_MOVES,
+    HERRING_PREFERRED_QUALIFYING_MOVES,
     SHARP_GAP_ES,
     blob_pending_stmt,
     classify_puzzle_type,
@@ -392,20 +398,32 @@ async def test_empty_blob_not_counted_as_blob_pending(test_engine) -> None:
 # ---------------------------------------------------------------------------
 
 
-async def _seed_herring_candidate(
-    test_engine,
-    user_id: int,
-    *,
-    ply: int = 8,
-    user_color: str = "white",
-    best_cp: int = 50,
-    second_cp: int = 45,
-    maia_prob: float = 0.9,
-    prior_eval_cp: int | None = 300,
-    played_at: datetime.datetime | None = None,
+# ---------------------------------------------------------------------------
+# Phase 192 (POOL-03 amended) — herring_pool source-swap seed/cleanup helpers
+# ---------------------------------------------------------------------------
+
+# A default 5-entry MultiPV-5 ladder (white POV, best-first) for pool-row
+# fixtures that don't care about the exact ladder shape. Deliberately clears
+# BOTH of herring_stmt's Phase 192 (192-04) query-time gates so a fixture
+# using this default is, by construction, a valid non-degenerate herring:
+# PV0/PV1/PV2 all fall within INACCURACY_DROP (0.05 ES) of PV0 (3 qualifying
+# moves, above HERRING_MIN_QUALIFYING_MOVES=2), and PV0-to-PV4 is ~0.092 ES,
+# comfortably above HERRING_DEGENERATE_MIN_GAP_ES (0.02).
+_DEFAULT_HERRING_LADDER: list[dict[str, object]] = [
+    {"move_uci": "e2e4", "cp": 60, "mate": None},
+    {"move_uci": "d2d4", "cp": 45, "mate": None},
+    {"move_uci": "g1f3", "cp": 20, "mate": None},
+    {"move_uci": "c2c4", "cp": -10, "mate": None},
+    {"move_uci": "b1c3", "cp": -40, "mate": None},
+]
+
+
+async def _seed_bare_game(
+    test_engine, user_id: int, *, played_at: datetime.datetime | None = None
 ) -> int:
-    """Seed one game + one game_best_moves candidate row (+ optional prior-ply
-    eval for the winnability floor). Returns game_id."""
+    """Seed a Game row with no game_best_moves/game_flaws attached — a bare FK
+    target for herring_pool fixtures (the pool row carries everything the
+    query needs; the game exists only to satisfy the composite FK, D-01)."""
     session_maker = async_sessionmaker(test_engine, expire_on_commit=False)
     async with session_maker() as session:
         async with session.begin():
@@ -416,7 +434,7 @@ async def _seed_herring_candidate(
                 platform_url="https://lichess.org/test",
                 pgn=_PGN,
                 result="1-0",
-                user_color=user_color,
+                user_color="white",
                 time_control_str="600+0",
                 time_control_bucket="blitz",
                 time_control_seconds=600,
@@ -431,78 +449,52 @@ async def _seed_herring_candidate(
             session.add(game)
             await session.flush()
             game_id: int = game.id
-
-            candidate = GameBestMove(
-                game_id=game_id,
-                ply=ply,
-                maia_prob=maia_prob,
-                best_cp=best_cp,
-                best_mate=None,
-                second_cp=second_cp,
-                second_mate=None,
-            )
-            session.add(candidate)
-
-            if prior_eval_cp is not None:
-                prior = GamePosition(
-                    user_id=user_id,
-                    game_id=game_id,
-                    ply=ply - 1,
-                    full_hash=1_000_000 + game_id * 100 + ply,
-                    white_hash=2_000_000 + game_id * 100 + ply,
-                    black_hash=3_000_000 + game_id * 100 + ply,
-                    eval_cp=prior_eval_cp,
-                    eval_mate=None,
-                )
-                session.add(prior)
-
     return game_id
 
 
-async def _add_herring_candidate_row(
+async def _seed_pool_row(
     test_engine,
     user_id: int,
     game_id: int,
     *,
-    ply: int,
-    best_cp: int = 50,
-    second_cp: int = 45,
-    maia_prob: float = 0.9,
-    prior_eval_cp: int | None = 300,
-) -> None:
-    """Add one more game_best_moves candidate row (+ prior-ply eval) to an
-    EXISTING game_id — for multi-candidate-per-game ordering tests."""
+    ply: int = 8,
+    mover_color: str = "white",
+    fen: str = "rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1",
+    arriving_move_uci: str | None = "e2e4",
+    phase: int = 1,
+    played_at: datetime.datetime | None = None,
+    ladder: list[dict[str, object]] | None = None,
+) -> int:
+    """Seed one `herring_pool` row against an existing `(user_id, game_id)`.
+    Returns the new row's `id`."""
     session_maker = async_sessionmaker(test_engine, expire_on_commit=False)
     async with session_maker() as session:
         async with session.begin():
-            candidate = GameBestMove(
+            row = HerringPool(
+                user_id=user_id,
                 game_id=game_id,
                 ply=ply,
-                maia_prob=maia_prob,
-                best_cp=best_cp,
-                best_mate=None,
-                second_cp=second_cp,
-                second_mate=None,
+                mover_color=mover_color,
+                fen=fen,
+                arriving_move_uci=arriving_move_uci,
+                phase=phase,
+                source_played_at=played_at,
+                ladder=ladder if ladder is not None else _DEFAULT_HERRING_LADDER,
             )
-            session.add(candidate)
-
-            if prior_eval_cp is not None:
-                prior = GamePosition(
-                    user_id=user_id,
-                    game_id=game_id,
-                    ply=ply - 1,
-                    full_hash=4_000_000 + game_id * 100 + ply,
-                    white_hash=5_000_000 + game_id * 100 + ply,
-                    black_hash=6_000_000 + game_id * 100 + ply,
-                    eval_cp=prior_eval_cp,
-                    eval_mate=None,
-                )
-                session.add(prior)
+            session.add(row)
+            await session.flush()
+            pool_id: int = row.id
+    return pool_id
 
 
-async def _seed_served_herring(test_engine, user_id: int, game_id: int, ply: int) -> None:
-    """Insert a DrillSession + DrillSolve(source=RED_HERRING) row marking
-    (user_id, game_id, ply) as already served."""
+async def _seed_served_herring_by_pool_id(
+    test_engine, user_id: int, game_id: int, herring_pool_id: int
+) -> None:
+    """Insert a DrillSession + DrillSolve(source=RED_HERRING, herring_pool_id=...)
+    marking a pool row as already served. Uses a `ply` distinct from the pool
+    row's own `ply` to prove the exclusion keys on `herring_pool_id` (D-04),
+    never on `(game_id, ply)` coincidence."""
+    served_ply_sentinel = 999
     session_maker = async_sessionmaker(test_engine, expire_on_commit=False)
     async with session_maker() as session:
         async with session.begin():
@@ -520,177 +512,409 @@ async def _seed_served_herring(test_engine, user_id: int, game_id: int, ply: int
                 position=0,
                 user_id=user_id,
                 game_id=game_id,
-                ply=ply,
+                ply=served_ply_sentinel,
                 source=DrillSource.RED_HERRING,
+                herring_pool_id=herring_pool_id,
             )
             session.add(solve)
 
 
+async def _delete_herring_pool_rows(test_engine, herring_pool_ids: list[int]) -> None:
+    """Explicit cleanup for herring_pool test rows.
+
+    `_delete_games`'s FK is `ondelete="SET NULL"` (D-01), NOT `CASCADE` —
+    deleting the backing game nulls out the pool row's `user_id`/`game_id`
+    but does not remove it. `herring_stmt` is deliberately identity-blind
+    (D-10, no `HerringPool.user_id` filter), so an orphaned row from an
+    earlier test would leak into every later test's results in this shared
+    per-run DB. Must be cleaned up explicitly, before `_delete_games`.
+    """
+    if not herring_pool_ids:
+        return
+    session_maker = async_sessionmaker(test_engine, expire_on_commit=False)
+    async with session_maker() as session:
+        async with session.begin():
+            await session.execute(delete(HerringPool).where(HerringPool.id.in_(herring_pool_ids)))
+
+
 @pytest.mark.asyncio
-async def test_herring_includes_close_best_and_second(test_engine) -> None:
-    """A candidate whose best/second gap is below SHARP_GAP_ES (several fine
-    moves) and clears the winnability floor is a valid herring."""
-    user_id, _ = await _register_and_login(f"herring-close-{uuid.uuid4().hex[:8]}@example.com")
-    game_id = await _seed_herring_candidate(test_engine, user_id, best_cp=50, second_cp=45)
+async def test_herring_selects_pool_row(test_engine) -> None:
+    """Phase 192 source swap: herring_stmt returns a HerringPool row directly
+    — not a two-tuple carrying a joined Game row (the superseded shape)."""
+    user_id, _ = await _register_and_login(f"herring-poolrow-{uuid.uuid4().hex[:8]}@example.com")
+    game_id = await _seed_bare_game(test_engine, user_id)
+    pool_id = await _seed_pool_row(test_engine, user_id, game_id, ply=10)
 
     try:
         session_maker = async_sessionmaker(test_engine, expire_on_commit=False)
         async with session_maker() as session:
-            rows = (await session.execute(herring_stmt(user_id))).all()
-        assert [(bm.game_id, bm.ply) for bm, _game in rows] == [(game_id, 8)]
+            rows = (await session.execute(herring_stmt(user_id))).scalars().all()
+        assert len(rows) == 1
+        row = rows[0]
+        assert isinstance(row, HerringPool)
+        assert row.id == pool_id
+        assert row.game_id == game_id
+        assert row.ply == 10
     finally:
+        await _delete_herring_pool_rows(test_engine, [pool_id])
         await _delete_games(test_engine, [game_id])
 
 
 @pytest.mark.asyncio
-async def test_herring_excludes_gem_tier(test_engine) -> None:
-    """A candidate that classifies as gem (large gap, low maia_prob) is excluded."""
-    user_id, _ = await _register_and_login(f"herring-gem-{uuid.uuid4().hex[:8]}@example.com")
-    game_id = await _seed_herring_candidate(
-        test_engine, user_id, best_cp=300, second_cp=-300, maia_prob=0.05
+async def test_herring_excludes_already_served_by_pool_id(test_engine) -> None:
+    """D-04: the exclude_served pair keys on herring_pool_id, not (game_id, ply)."""
+    user_id, _ = await _register_and_login(f"herring-servedpool-{uuid.uuid4().hex[:8]}@example.com")
+    game_id = await _seed_bare_game(test_engine, user_id)
+    pool_id = await _seed_pool_row(test_engine, user_id, game_id, ply=10)
+    await _seed_served_herring_by_pool_id(test_engine, user_id, game_id, pool_id)
+
+    try:
+        session_maker = async_sessionmaker(test_engine, expire_on_commit=False)
+        async with session_maker() as session:
+            excluded_rows = (
+                (await session.execute(herring_stmt(user_id, exclude_served=True))).scalars().all()
+            )
+            included_rows = (
+                (await session.execute(herring_stmt(user_id, exclude_served=False))).scalars().all()
+            )
+        assert excluded_rows == []
+        assert [row.id for row in included_rows] == [pool_id]
+    finally:
+        await _delete_herring_pool_rows(test_engine, [pool_id])
+        await _delete_games(test_engine, [game_id])
+
+
+def test_loose_band_exceeds_tight_gate() -> None:
+    """D-15: the generation-time loose band must sit comfortably above the
+    query-time tight gate (INACCURACY_DROP), or the generator could reject
+    at write time a candidate the (retuned-downward) query-time gate would
+    otherwise have accepted — defeating the whole loose-gen/tight-query
+    split's "retunable with zero re-analysis" promise (192-03 Task 2)."""
+    assert HERRING_LOOSE_BAND_ES > INACCURACY_DROP
+
+
+def test_degenerate_min_gap_is_a_real_positive_discriminator() -> None:
+    """D-17: the query-time degenerate-exclusion floor must be a real,
+    positive threshold (0 would exclude nothing — every position has a
+    PV0-PV4 gap >= 0) and small relative to the full [0, 1] expected-score
+    range, matching D-17's "trim the tail, not the body" intent (192-03
+    Task 2)."""
+    assert 0 < HERRING_DEGENERATE_MIN_GAP_ES < 1.0
+
+
+# ---------------------------------------------------------------------------
+# herring_stmt query-time gate tests (Phase 192, Plan 04)
+#
+# The nine tests this block replaces exercised the pre-Phase-192 source
+# (best/second gap + tier exclusion). Three of the behaviors they protected
+# have a new home rather than a re-expression here — recorded as decisions,
+# not omissions:
+#   - The winnability floor now lives in the generator's own selection frame
+#     (WINNABILITY_FLOOR_ES against the generator's own MultiPV[0] on its own
+#     searched board — scripts/gen_red_herring_pool.py, pinned by 192-03's
+#     tests). A served HerringPool row is winnable by construction; this
+#     query never re-checks it.
+#   - "Mover is the opponent" ply-parity exclusion is now settled by the
+#     stored `HerringPool.mover_color` (the side to move on the generator's
+#     own searched board, D-16) rather than re-derived from `Game.user_color`
+#     plus ply parity at query time — there is no `Game` join on the happy
+#     path at all.
+#   - The other-users'-games exclusion is DELIBERATELY GONE: D-10 explicitly
+#     permits (and this pool is identity-blind about) serving a user a
+#     herring drawn from someone else's — or their own — game. Adding it
+#     back would cost a join to prevent a harmless coincidence.
+# ---------------------------------------------------------------------------
+
+
+def _ladder(*entries: tuple[int | None, int | None]) -> list[dict[str, object]]:
+    """Build a `HERRING_LADDER_SIZE`-entry ladder from (cp, mate) pairs,
+    best-first, mover POV. Move UCIs are arbitrary placeholders — none of
+    herring_stmt's gates read `move_uci`."""
+    ucis = ["e2e4", "d2d4", "g1f3", "c2c4", "b1c3"]
+    assert len(entries) == HERRING_LADDER_SIZE
+    return [
+        {"move_uci": uci, "cp": cp, "mate": mate}
+        for uci, (cp, mate) in zip(ucis, entries, strict=True)
+    ]
+
+
+def _ladder_with_qualifying_count(
+    qualifying: int, *, best_cp: int = 0, small_gap_cp: int = -10
+) -> list[dict[str, object]]:
+    """Build a ladder with exactly `qualifying` entries (PV[0] plus
+    `qualifying - 1` near-`best_cp` entries) inside `INACCURACY_DROP` of the
+    best, and the remaining entries far enough outside both the tight gate
+    and the degenerate bound to never affect either one.
+    """
+    assert 1 <= qualifying <= HERRING_LADDER_SIZE
+    entries: list[tuple[int | None, int | None]] = [(best_cp, None)]
+    entries.extend((small_gap_cp, None) for _ in range(qualifying - 1))
+    entries.extend((best_cp - 500 - 100 * i, None) for i in range(HERRING_LADDER_SIZE - qualifying))
+    return _ladder(*entries)
+
+
+def _boundary_cp(
+    best_cp: int, target_gap: float, mover_color: Literal["white", "black"] = "white"
+) -> int:
+    """Return the integer cp closest to `best_cp` (moving away from it,
+    mover-POV) whose expected-score gap from `best_cp` first reaches or
+    exceeds `target_gap`. One cp step back TOWARD `best_cp` has a strictly
+    SMALLER gap — so this is the tightest INCLUSIVE-boundary value for any
+    `>=`-style gate, and the first EXCLUDED value for any strict `<`-style
+    gate. Constructs the gap in expected-score space per 192-04-PLAN.md's
+    instruction, rather than picking a cp offset and hoping it lands right.
+    """
+    best_es = expected_score_for(best_cp, None, mover_color)
+    assert best_es is not None
+    step = -1 if mover_color == "white" else 1
+    cp = best_cp
+    while True:
+        cp += step
+        es = expected_score_for(cp, None, mover_color)
+        assert es is not None
+        if best_es - es >= target_gap:
+            return cp
+
+
+@pytest.mark.asyncio
+async def test_herring_requires_two_within_inaccuracy_drop(test_engine) -> None:
+    """A row with only PV[0] inside the band (every alternative clearly
+    worse) is not selected; a row with PV[0] and PV[1] inside it is."""
+    user_id, _ = await _register_and_login(f"herring-reqtwo-{uuid.uuid4().hex[:8]}@example.com")
+    game_one = await _seed_bare_game(test_engine, user_id)
+    pool_one = await _seed_pool_row(
+        test_engine, user_id, game_one, ply=8, ladder=_ladder_with_qualifying_count(1)
+    )
+    game_two = await _seed_bare_game(test_engine, user_id)
+    pool_two = await _seed_pool_row(
+        test_engine,
+        user_id,
+        game_two,
+        ply=8,
+        ladder=_ladder_with_qualifying_count(HERRING_MIN_QUALIFYING_MOVES),
     )
 
     try:
         session_maker = async_sessionmaker(test_engine, expire_on_commit=False)
         async with session_maker() as session:
-            rows = (await session.execute(herring_stmt(user_id))).all()
-        assert rows == []
+            rows = (await session.execute(herring_stmt(user_id))).scalars().all()
+        assert [row.id for row in rows] == [pool_two]
     finally:
-        await _delete_games(test_engine, [game_id])
+        await _delete_herring_pool_rows(test_engine, [pool_one, pool_two])
+        await _delete_games(test_engine, [game_one, game_two])
 
 
 @pytest.mark.asyncio
-async def test_herring_excludes_large_gap_easy_move(test_engine) -> None:
-    """A large-gap candidate that is EASY to find (high maia_prob, tier NULL)
-    must still be excluded — tier-IS-NULL alone would wrongly include it."""
-    user_id, _ = await _register_and_login(f"herring-easy-{uuid.uuid4().hex[:8]}@example.com")
-    game_id = await _seed_herring_candidate(
-        test_engine, user_id, best_cp=300, second_cp=-300, maia_prob=0.95
+async def test_herring_gate_boundary_at_inaccuracy_drop(test_engine) -> None:
+    """Three rows differing only in PV[1]'s cp: gap right at
+    INACCURACY_DROP (excluded — the gate is strict `<`), one representable
+    cp step closer to the best (gap just under the threshold, selected), and
+    one step further away (gap just over, excluded)."""
+    user_id, _ = await _register_and_login(f"herring-boundary-{uuid.uuid4().hex[:8]}@example.com")
+    best_cp = 0
+    at_boundary_cp = _boundary_cp(best_cp, INACCURACY_DROP)  # first EXCLUDED cp
+
+    def _row_ladder(pv1_cp: int) -> list[dict[str, object]]:
+        return _ladder((best_cp, None), (pv1_cp, None), (-1000, None), (-1010, None), (-1020, None))
+
+    game_at = await _seed_bare_game(test_engine, user_id)
+    pool_at = await _seed_pool_row(
+        test_engine, user_id, game_at, ply=8, ladder=_row_ladder(at_boundary_cp)
+    )
+    game_under = await _seed_bare_game(test_engine, user_id)
+    pool_under = await _seed_pool_row(
+        test_engine, user_id, game_under, ply=8, ladder=_row_ladder(at_boundary_cp + 1)
+    )
+    game_over = await _seed_bare_game(test_engine, user_id)
+    pool_over = await _seed_pool_row(
+        test_engine, user_id, game_over, ply=8, ladder=_row_ladder(at_boundary_cp - 1)
     )
 
     try:
         session_maker = async_sessionmaker(test_engine, expire_on_commit=False)
         async with session_maker() as session:
-            rows = (await session.execute(herring_stmt(user_id))).all()
-        assert rows == []
+            rows = (await session.execute(herring_stmt(user_id))).scalars().all()
+        assert [row.id for row in rows] == [pool_under]
     finally:
+        await _delete_herring_pool_rows(test_engine, [pool_at, pool_under, pool_over])
+        await _delete_games(test_engine, [game_at, game_under, game_over])
+
+
+@pytest.mark.asyncio
+async def test_herring_gate_counts_exactly_equal_moves(test_engine) -> None:
+    """PV[0] and PV[1] share an identical cp (gap 0.0) — both count toward
+    the qualifying tally (2, not 1 via an accidental distinct-value
+    collapse), so the row is selected."""
+    user_id, _ = await _register_and_login(f"herring-equalcp-{uuid.uuid4().hex[:8]}@example.com")
+    game_id = await _seed_bare_game(test_engine, user_id)
+    ladder = _ladder((100, None), (100, None), (-500, None), (-600, None), (-700, None))
+    pool_id = await _seed_pool_row(test_engine, user_id, game_id, ply=8, ladder=ladder)
+
+    try:
+        session_maker = async_sessionmaker(test_engine, expire_on_commit=False)
+        async with session_maker() as session:
+            rows = (await session.execute(herring_stmt(user_id))).scalars().all()
+        assert [row.id for row in rows] == [pool_id]
+    finally:
+        await _delete_herring_pool_rows(test_engine, [pool_id])
         await _delete_games(test_engine, [game_id])
 
 
 @pytest.mark.asyncio
-async def test_herring_excludes_opponent_ply(test_engine) -> None:
-    """A candidate whose mover is the opponent (ply parity) is excluded."""
-    user_id, _ = await _register_and_login(f"herring-opp-{uuid.uuid4().hex[:8]}@example.com")
-    # user_color=white, ply=7 (odd) -> black mover -> opponent ply.
-    game_id = await _seed_herring_candidate(
-        test_engine, user_id, ply=7, user_color="white", best_cp=50, second_cp=45
+async def test_herring_excludes_degenerate_all_fine_position(test_engine) -> None:
+    """A row whose PV[1] qualifies but whose PV[4] is inside
+    HERRING_DEGENERATE_MIN_GAP_ES is not selected; the same row with PV[4]
+    pushed exactly to the (inclusive) bound is selected."""
+    user_id, _ = await _register_and_login(f"herring-degenerate-{uuid.uuid4().hex[:8]}@example.com")
+    best_cp = 0
+    at_bound_pv4 = _boundary_cp(best_cp, HERRING_DEGENERATE_MIN_GAP_ES)  # first INCLUDED cp
+
+    game_flat = await _seed_bare_game(test_engine, user_id)
+    pool_flat = await _seed_pool_row(
+        test_engine,
+        user_id,
+        game_flat,
+        ply=8,
+        ladder=_ladder(
+            (best_cp, None), (-5, None), (-10, None), (-15, None), (at_bound_pv4 + 1, None)
+        ),
+    )
+    game_boundary = await _seed_bare_game(test_engine, user_id)
+    pool_boundary = await _seed_pool_row(
+        test_engine,
+        user_id,
+        game_boundary,
+        ply=8,
+        ladder=_ladder((best_cp, None), (-5, None), (-10, None), (-15, None), (at_bound_pv4, None)),
     )
 
     try:
         session_maker = async_sessionmaker(test_engine, expire_on_commit=False)
         async with session_maker() as session:
-            rows = (await session.execute(herring_stmt(user_id))).all()
-        assert rows == []
+            rows = (await session.execute(herring_stmt(user_id))).scalars().all()
+        assert [row.id for row in rows] == [pool_boundary]
     finally:
-        await _delete_games(test_engine, [game_id])
+        await _delete_herring_pool_rows(test_engine, [pool_flat, pool_boundary])
+        await _delete_games(test_engine, [game_flat, game_boundary])
 
 
 @pytest.mark.asyncio
-async def test_herring_excludes_below_winnability_floor(test_engine) -> None:
-    """A candidate from an already-hopeless pre-move position is excluded."""
-    user_id, _ = await _register_and_login(f"herring-hopeless-{uuid.uuid4().hex[:8]}@example.com")
-    game_id = await _seed_herring_candidate(
-        test_engine, user_id, best_cp=50, second_cp=45, prior_eval_cp=-2000
+async def test_herring_prefers_three_qualifying_moves(test_engine) -> None:
+    """A row with HERRING_PREFERRED_QUALIFYING_MOVES qualifiers sorts before
+    an otherwise-comparable row with only HERRING_MIN_QUALIFYING_MOVES, even
+    though the 2-qualifier row was played MORE recently — the preference
+    outranks recency — and the 2-qualifier row is still present in the
+    result (a preference, never a filter)."""
+    user_id, _ = await _register_and_login(f"herring-prefer3-{uuid.uuid4().hex[:8]}@example.com")
+    game_three = await _seed_bare_game(test_engine, user_id)
+    pool_three = await _seed_pool_row(
+        test_engine,
+        user_id,
+        game_three,
+        ply=8,
+        ladder=_ladder_with_qualifying_count(HERRING_PREFERRED_QUALIFYING_MOVES),
+        played_at=datetime.datetime(2026, 1, 1, tzinfo=datetime.timezone.utc),
+    )
+    game_two = await _seed_bare_game(test_engine, user_id)
+    pool_two = await _seed_pool_row(
+        test_engine,
+        user_id,
+        game_two,
+        ply=8,
+        ladder=_ladder_with_qualifying_count(HERRING_MIN_QUALIFYING_MOVES),
+        played_at=datetime.datetime(2026, 1, 5, tzinfo=datetime.timezone.utc),
     )
 
     try:
         session_maker = async_sessionmaker(test_engine, expire_on_commit=False)
         async with session_maker() as session:
-            rows = (await session.execute(herring_stmt(user_id))).all()
-        assert rows == []
+            rows = (await session.execute(herring_stmt(user_id))).scalars().all()
+        assert [row.id for row in rows] == [pool_three, pool_two]
     finally:
-        await _delete_games(test_engine, [game_id])
+        await _delete_herring_pool_rows(test_engine, [pool_three, pool_two])
+        await _delete_games(test_engine, [game_three, game_two])
 
 
 @pytest.mark.asyncio
-async def test_herring_excludes_other_users_games(test_engine) -> None:
-    """An identical candidate seeded under a second user is absent from the
-    first user's herring results (IDOR safety — T-189-09)."""
-    user_id_a, _ = await _register_and_login(f"herring-a-{uuid.uuid4().hex[:8]}@example.com")
-    user_id_b, _ = await _register_and_login(f"herring-b-{uuid.uuid4().hex[:8]}@example.com")
-    game_id_b = await _seed_herring_candidate(test_engine, user_id_b, best_cp=50, second_cp=45)
+async def test_herring_gate_handles_mate_ladder_entry(test_engine) -> None:
+    """A runner-up carrying `mate` (a small integer mate distance, not `cp`)
+    converts through MATE_CP_EQUIVALENT before the sigmoid rather than being
+    read as a near-zero raw cp value — a losing mate for the mover must not
+    silently qualify as "fine" just because its magnitude looks small. PV[1]
+    here is a mate-in-1 AGAINST the mover: mis-handled as a raw cp of -1
+    (instead of -MATE_CP_EQUIVALENT), it would sit right next to a cp=0 best
+    move and look like a second fine alternative. Correctly converted, it is
+    far outside INACCURACY_DROP, so only PV[0] qualifies (count 1, below
+    HERRING_MIN_QUALIFYING_MOVES) and the row is excluded."""
+    user_id, _ = await _register_and_login(f"herring-mate-{uuid.uuid4().hex[:8]}@example.com")
+    game_id = await _seed_bare_game(test_engine, user_id)
+    ladder = _ladder((0, None), (None, -1), (-1000, None), (-1010, None), (-1020, None))
+    pool_id = await _seed_pool_row(test_engine, user_id, game_id, ply=8, ladder=ladder)
 
     try:
         session_maker = async_sessionmaker(test_engine, expire_on_commit=False)
         async with session_maker() as session:
-            rows = (await session.execute(herring_stmt(user_id_a))).all()
+            rows = (await session.execute(herring_stmt(user_id))).scalars().all()
         assert rows == []
     finally:
-        await _delete_games(test_engine, [game_id_b])
+        await _delete_herring_pool_rows(test_engine, [pool_id])
+        await _delete_games(test_engine, [game_id])
 
 
 @pytest.mark.asyncio
-async def test_herring_excludes_already_served(test_engine) -> None:
-    """A (game_id, ply) already served as a red herring is excluded by default."""
-    user_id, _ = await _register_and_login(f"herring-served-{uuid.uuid4().hex[:8]}@example.com")
-    game_id = await _seed_herring_candidate(test_engine, user_id, ply=8, best_cp=50, second_cp=45)
-    await _seed_served_herring(test_engine, user_id, game_id, ply=8)
+async def test_herring_order_is_total_and_stable_under_ties(test_engine) -> None:
+    """Two rows equal on preferred-tier and `source_played_at` still serve in
+    the same sequence across repeated executions of the same statement —
+    the trailing `id ASC` tiebreak, not insertion-order happenstance."""
+    user_id, _ = await _register_and_login(f"herring-tiebreak-{uuid.uuid4().hex[:8]}@example.com")
+    tied_played_at = datetime.datetime(2026, 1, 10, tzinfo=datetime.timezone.utc)
+    ladder = _ladder_with_qualifying_count(HERRING_MIN_QUALIFYING_MOVES)
+
+    game_a = await _seed_bare_game(test_engine, user_id)
+    pool_a = await _seed_pool_row(
+        test_engine, user_id, game_a, ply=8, ladder=ladder, played_at=tied_played_at
+    )
+    game_b = await _seed_bare_game(test_engine, user_id)
+    pool_b = await _seed_pool_row(
+        test_engine, user_id, game_b, ply=8, ladder=ladder, played_at=tied_played_at
+    )
+    expected_order = sorted([pool_a, pool_b])
 
     try:
         session_maker = async_sessionmaker(test_engine, expire_on_commit=False)
         async with session_maker() as session:
-            rows = (await session.execute(herring_stmt(user_id))).all()
-        assert rows == []
+            first_run = (await session.execute(herring_stmt(user_id))).scalars().all()
+            second_run = (await session.execute(herring_stmt(user_id))).scalars().all()
+        assert [row.id for row in first_run] == expected_order
+        assert [row.id for row in second_run] == expected_order
     finally:
-        await _delete_games(test_engine, [game_id])
+        await _delete_herring_pool_rows(test_engine, [pool_a, pool_b])
+        await _delete_games(test_engine, [game_a, game_b])
 
 
 @pytest.mark.asyncio
 async def test_herring_allows_repeats_when_exhausted(test_engine) -> None:
-    """With exclude_served=False the same already-served candidate is returned
-    again — the exhaustion fallback."""
-    user_id, _ = await _register_and_login(f"herring-repeat-{uuid.uuid4().hex[:8]}@example.com")
-    game_id = await _seed_herring_candidate(test_engine, user_id, ply=8, best_cp=50, second_cp=45)
-    await _seed_served_herring(test_engine, user_id, game_id, ply=8)
+    """With every pool row already served, `exclude_served=True` returns
+    empty and `exclude_served=False` returns them — the exhaustion contract,
+    carried over unchanged from the pre-Phase-192 source and re-expressed
+    against the `herring_pool_id` key (D-04)."""
+    user_id, _ = await _register_and_login(f"herring-exhausted-{uuid.uuid4().hex[:8]}@example.com")
+    game_id = await _seed_bare_game(test_engine, user_id)
+    ladder = _ladder_with_qualifying_count(HERRING_MIN_QUALIFYING_MOVES)
+    pool_id = await _seed_pool_row(test_engine, user_id, game_id, ply=8, ladder=ladder)
+    await _seed_served_herring_by_pool_id(test_engine, user_id, game_id, pool_id)
 
     try:
         session_maker = async_sessionmaker(test_engine, expire_on_commit=False)
         async with session_maker() as session:
-            rows = (await session.execute(herring_stmt(user_id, exclude_served=False))).all()
-        assert [(bm.game_id, bm.ply) for bm, _game in rows] == [(game_id, 8)]
+            excluded_rows = (
+                (await session.execute(herring_stmt(user_id, exclude_served=True))).scalars().all()
+            )
+            included_rows = (
+                (await session.execute(herring_stmt(user_id, exclude_served=False))).scalars().all()
+            )
+        assert excluded_rows == []
+        assert [row.id for row in included_rows] == [pool_id]
     finally:
+        await _delete_herring_pool_rows(test_engine, [pool_id])
         await _delete_games(test_engine, [game_id])
-
-
-@pytest.mark.asyncio
-async def test_herring_order_is_recency_then_deterministic(test_engine) -> None:
-    """Game.played_at DESC (nulls last), then game_id DESC, then ply ASC —
-    three candidates across two games with distinct played_at, exact order."""
-    user_id, _ = await _register_and_login(f"herring-order-{uuid.uuid4().hex[:8]}@example.com")
-    game_a = await _seed_herring_candidate(
-        test_engine,
-        user_id,
-        ply=8,
-        best_cp=50,
-        second_cp=45,
-        played_at=datetime.datetime(2026, 1, 3, tzinfo=datetime.timezone.utc),
-    )
-    game_b = await _seed_herring_candidate(
-        test_engine,
-        user_id,
-        ply=6,
-        best_cp=50,
-        second_cp=45,
-        played_at=datetime.datetime(2026, 1, 1, tzinfo=datetime.timezone.utc),
-    )
-    await _add_herring_candidate_row(test_engine, user_id, game_b, ply=10)
-
-    try:
-        session_maker = async_sessionmaker(test_engine, expire_on_commit=False)
-        async with session_maker() as session:
-            rows = (await session.execute(herring_stmt(user_id))).all()
-        actual_order = [(bm.game_id, bm.ply) for bm, _game in rows]
-        # game_a (most recent) first; then game_b's two candidates, ply ASC.
-        assert actual_order == [(game_a, 8), (game_b, 6), (game_b, 10)]
-    finally:
-        await _delete_games(test_engine, [game_a, game_b])

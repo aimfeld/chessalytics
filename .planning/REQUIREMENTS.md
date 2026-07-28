@@ -10,7 +10,7 @@
 
 - [x] **POOL-01**: User's own blunders (ply parity vs `user_color` via the existing `is_opponent_expr` helper) enter the drill pool when they clear the winnability floor (expected score ≥ ~20–25% via `eval_cp_to_expected_score`, respecting the post-move eval-shift convention) and carry a stored answer key (`best_move` + `pv` + non-empty `missed_pv_lines` blob)
 - [x] **POOL-02**: Each drill item is classified sharp vs avoid-the-blunder from the `missed_pv_lines` node-0 best-vs-second expected-score gap (classifier, not entry gate)
-- [x] **POOL-03**: Red herrings are sourced from non-gem `game_best_moves` candidate rows (user played the stored best move out-of-book, best ≈ second), winnability-floored, recency-weighted, no repeats until the source is exhausted, with no SR bookkeeping
+- [x] **POOL-03**: Red herrings are sourced from a precomputed, MultiPV-5-confirmed, phase-balanced global position pool (several genuinely fine moves within the inaccuracy threshold), winnability-floored, recency-weighted, no repeats until the source is exhausted, with no SR bookkeeping (amended Phase 192 — the original `game_best_moves` sourcing was structurally incapable of producing a several-fine-moves position; see Phase 192-CONTEXT.md)
 - [x] **POOL-04**: Per-item SR state (streak, due date, fail count, parked flag, solve log) persists per (user, flaw); the streak-keyed interval ladder (0 → next session, 1 → ~3d, 2 → ~10d) snaps due dates forward to the next scheduled session day
 - [x] **POOL-05**: An item retires as mastered after 3 correct solves in 3 separate sessions (a miss resets the counter); mastery is driven by move correctness alone, never the guess
 - [x] **POOL-06**: An item failed 3 times with zero correct solves ever is parked ("too hard for now") and leaves the queue; a single correct solve permanently zeroes the fail counter; parked items do not return in v1
@@ -97,13 +97,13 @@ Which phases cover which requirements. Updated during roadmap creation.
 |-------------|-------|--------|
 | POOL-01 | Phase 189 | Complete |
 | POOL-02 | Phase 189 | Complete |
-| POOL-03 | Phase 189 | Complete |
+| POOL-03 | Phase 189, Phase 192 | Complete |
 | POOL-04 | Phase 189 | Complete |
 | POOL-05 | Phase 189 | Complete |
 | POOL-06 | Phase 189 | Complete |
 | POOL-07 | Phase 189 | Complete |
 | POOL-08 | Phase 189 | Complete |
-| POOL-09 | Phase 189 | Complete |
+| POOL-09 | Phase 189, Phase 192 | Complete |
 | POOL-10 | Phase 189 | Complete |
 | SOLV-01 | Phase 190 | Complete |
 | SOLV-02 | Phase 190 | Complete |

@@ -64,6 +64,16 @@ from app.models.drill_session import DrillSession  # noqa: E402
 from app.models.drill_solve import DrillSolve  # noqa: E402
 from app.models.train_settings import TrainSettings  # noqa: E402
 
+# Importing ANY `app.models.*` submodule executes `app/models/__init__.py`,
+# which registers `Game`/`GamePosition` (a relationship() pair) but NOT `User`.
+# The first ORM-level delete()/update() below forces a full
+# configure_mappers(), which then trips over `games.user_id`'s FK to a `users`
+# table that is absent from the metadata (NoReferencedTableError). Registering
+# User (and OAuthAccount, which User.oauth_accounts resolves by name) closes
+# the gap. Unused at runtime — imported for the side effect only.
+from app.models.oauth_account import OAuthAccount  # noqa: E402, F401
+from app.models.user import User  # noqa: E402, F401
+
 # Deliberately excludes "prod" — see the module docstring.
 ALLOWED_DB_TARGETS = ("dev", "benchmark")
 

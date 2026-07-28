@@ -8,15 +8,53 @@ list, stable '4 of 12' progress across a resumed mid-window session" cheap:
 of the original composition needed. The solve endpoint becomes an UPDATE, not
 an INSERT.
 
-`game_id`/`ply` FK/reference to `games(id) ON DELETE CASCADE` (mirroring
-`drill_items`' D-02 anchoring): a mid-window game deletion cascades this row
-away for free, which is exactly D-09's "items evicted underneath mid-window"
-behavior with zero extra application code.
+Phase 192 Plan 02 (D-05, the phase's one-way door): `game_id` is now
+`ON DELETE SET NULL`, NOT `CASCADE` as originally shipped in Phase 189. With
+a GLOBAL herring pool (Phase 192), a *foreign* user deleting one of their own
+games must never delete a row out of a STRANGER's in-flight session —
+`drill_solves` rows ARE the session's frozen puzzle list (PK `(session_id,
+position)`), so a CASCADE-delete here would punch a hole in the position
+sequence and shift the session-score denominator for a user who did nothing.
+Only a global pool (shared across users) can produce this failure mode; the
+pre-Phase-192 CASCADE was correct when every herring/SR item was necessarily
+the solving user's own game.
+
+The row now survives its source game's deletion with `game_id` NULL instead
+of being deleted. "Still servable" after that now means two DIFFERENT things
+depending on `source` (see `app.repositories.train_repository`'s
+`load_session_puzzles` / `_mark_session_complete_if_done` / `reveal_for_puzzle`
+docstrings for the full branch semantics):
+- A `RED_HERRING` row stays servable — its FEN/arriving move live on the
+  `herring_pool` row (D-03), self-sufficient regardless of the game link.
+- An `SR_ITEM` row becomes unservable (its answer key was the game's own
+  PGN) and is lazily evicted — the pre-D-05 CASCADE behavior for SR items is
+  preserved exactly, just via an application-level exclusion instead of a
+  deleted row.
+
+`uq_drill_solves_session_puzzle` (`session_id`, `game_id`, `ply`) no longer
+protects a row whose `game_id` has nulled out — PostgreSQL treats NULLs as
+distinct in a unique constraint, so two nulled rows in the same session would
+not collide on this index. This is acceptable and deliberate: the
+constraint's real job is to stop *composition* from inserting the same
+position twice, and at composition time every row still has a non-NULL
+`game_id` (composition additionally drops an own-game herring colliding with
+an SR pick, Plan 01 D-10). Do NOT add a partial unique index on
+`herring_pool_id` "for safety" — it would forbid the exhaustion fallback
+(`herring_stmt(..., exclude_served=False)`) from ever re-serving a pool row
+in a later session.
 
 Per D-01, this table stores NO answer-key snapshot: `correct_move`/
 `correct_guess`/`played_move` are the RECORDED OUTCOME of an attempt (written
 by POST /train/sessions/{id}/solve, Plan 05), never a cached copy of
 `best_move`/`pv`/the sharp-soft classification itself.
+
+Phase 192 (D-04): `herring_pool_id` is the herring's authoritative no-repeat
+key. Once `drill_solves.game_id`/`ply` can no longer be trusted as a stable
+identity for a herring puzzle (the source game link is nullable, D-01/D-05),
+`(game_id, ply)` is no longer usable for that purpose — the no-repeat
+exclusion in `herring_stmt` keys on `herring_pool_id` instead. NULL for every
+pre-Phase-192 row and every SR row (a herring's `herring_pool_id` is the only
+non-NULL case).
 """
 
 from __future__ import annotations
@@ -89,9 +127,20 @@ class DrillSolve(Base):
     position: Mapped[int] = mapped_column(SmallInteger, primary_key=True)
 
     user_id: Mapped[int] = mapped_column(ForeignKey("users.id", ondelete="CASCADE"), nullable=False)
-    # D-02-mirrored anchoring: FK to games(id) only, plain ply reference column.
-    game_id: Mapped[int] = mapped_column(ForeignKey("games.id", ondelete="CASCADE"), nullable=False)
+    # Phase 192 Plan 02 (D-05, one-way door): nullable + SET NULL, was NOT
+    # NULL + CASCADE in Phase 189 — see module docstring for the full
+    # rationale (a global pool means a foreign user's game deletion must
+    # never delete a row out of another user's session).
+    game_id: Mapped[int | None] = mapped_column(
+        ForeignKey("games.id", ondelete="SET NULL"), nullable=True
+    )
     ply: Mapped[int] = mapped_column(SmallInteger, nullable=False)
+
+    # Phase 192 D-04: the herring's authoritative no-repeat key. NULL for
+    # every SR row and every pre-Phase-192 row (see module docstring).
+    herring_pool_id: Mapped[int | None] = mapped_column(
+        ForeignKey("herring_pool.id", ondelete="SET NULL"), nullable=True
+    )
 
     source: Mapped[int] = mapped_column(SmallInteger, nullable=False)
     # P-02: the user's raw pre-attempt guess, submitted by the client. NULL

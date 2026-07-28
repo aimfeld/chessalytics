@@ -13,7 +13,7 @@ import type { TrainMoveTier } from '@/lib/trainScore';
 
 export interface TrainPuzzle {
   position: number;
-  game_id: number;
+  game_id: number | null;
   ply: number;
   fen: string;
   side_to_move: 'white' | 'black';
@@ -84,9 +84,15 @@ export interface SolveResponse {
  * `played_in_game_move_uci` (190.1-01, D-05) is the UCI counterpart of
  * `played_in_game_san`, behind the identical gate — used to dispatch the
  * client's reveal-time engine search.
+ *
+ * `game_id` is `number | null` (Phase 192 Plan 02/05, D-05/D-09): a red
+ * herring's source game can be nulled by the OWNER deleting it (a global
+ * pool row survives independently, D-03) — never by the solving user. A
+ * null `game_id` degrades the reveal's game footer to nothing (D-07) and
+ * hides the Analyze deep-link (D-09) rather than disabling it.
  */
 export interface PuzzleRevealResponse {
-  game_id: number;
+  game_id: number | null;
   ply: number;
   fen: string;
   played_in_game_san: string | null;

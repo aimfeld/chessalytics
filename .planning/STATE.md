@@ -2,18 +2,18 @@
 gsd_state_version: 1.0
 milestone: v2.9
 milestone_name: Train — Spaced-Repetition Blunder Drills
-current_phase: 191
-current_phase_name: schedule-progress-surface
-status: complete
-stopped_at: Completed 191-06-PLAN.md — phase verified and squash-merged to main
-last_updated: "2026-07-27T20:30:00.000Z"
-last_activity: 2026-07-27
-last_activity_desc: Phase 191 verified (5/5 criteria) and integrated into main — milestone v2.9 phases all complete
+current_phase: 999.1
+current_phase_name: BACKLOG
+status: planning
+stopped_at: Completed 192-05-PLAN.md
+last_updated: "2026-07-28T03:36:13.300Z"
+last_activity: 2026-07-28
+last_activity_desc: Phase 192 complete, transitioned to Phase 999.1
 progress:
-  total_phases: 4
-  completed_phases: 4
-  total_plans: 23
-  completed_plans: 23
+  total_phases: 5
+  completed_phases: 5
+  total_plans: 28
+  completed_plans: 28
   percent: 100
 ---
 
@@ -21,11 +21,52 @@ progress:
 
 ## Current Position
 
-Phase: 191 (schedule-progress-surface) — COMPLETE (verified 2026-07-27, 5/5 criteria)
-Plan: 6 of 6
-Status: Squash-merged to `main`. All v2.9 phases (189, 190, 190.1, 191) are done — next is
-`/gsd-complete-milestone` and a `main → production` release PR.
-Last activity: 2026-07-27 — Phase 191 verified and integrated
+Phase: 999.1 — Password Reset (BACKLOG)
+Plan: Not started
+Status: Ready to plan
+passed with 2 warnings, both closed at plan time. Two blocking gates are built in: a
+`checkpoint:decision` on the `herring_pool` surrogate PK (192-01) and a second on the
+`drill_solves.game_id` nullability migration (192-02, one-way door).
+Last activity: 2026-07-28 — Phase 192 complete, transitioned to Phase 999.1
+
+Phase 192 fixes a correctness defect in Phase 189's red herrings: they were sourced from
+non-gem `game_best_moves` rows, which does not actually mean "several fine moves". It replaces
+that source with a precomputed, globally shared `herring_pool` table sampled from all signed-up
+users' `game_positions`, phase-balanced, confirmed by a MultiPV-5 Stockfish search whose raw
+5-move ladder is stored on the row, with the qualifier thresholds applied at **query** time so
+they are retunable without re-analysis.
+
+Waves: **1** — 192-01 tracer (pool table + `evaluate_nodes_multipv5` + generator + `herring_stmt`
+swap, one real row proven end to end). **2** — 192-02 (D-05 nullability migration + all three
+INNER→OUTER join fixes + D-06 owner-scoped reveal) and 192-03 (generator completion + the
+measurement that pins D-15/D-17), no `files_modified` overlap. **3** — 192-04 (query-time tight
+gate, degenerate exclusion, replacement herring tests, empty-pool regression) and 192-05 (reveal
+frontend gates + the four spec amendments).
+
+Notes carried into execution:
+
+- **The planner contradicted RESEARCH.md assumption A2, deliberately.** After
+  `drill_solves.game_id` becomes `ondelete="SET NULL"`, an orphaned **SR** row survives forever
+  with `solved_at IS NULL` and pins `remaining` above zero — reproducing exactly the stuck-session
+  bug WR-02 fixed via CASCADE. SR and herring orphans need *opposite* treatment in
+  `_mark_session_complete_if_done`; 192-02 specifies and tests both together.
+
+- **`herring_pool` uses a surrogate `id` PK, not SEED-120's `(user_id, game_id, ply)` triple** — a
+  PK column cannot be NULL, so `SET NULL` makes the seed's literal wording unimplementable. The
+  triple becomes a UNIQUE constraint, still doing its real job (generation dedup + `ON CONFLICT`
+  top-up idempotency). Recorded as a `checkpoint:decision`, not a silent derivation.
+
+- **Recency ordering deviates from "unchanged".** SEED-120 keeps `Game.played_at` ordering, but
+  that needs a `games` join D-01 lets null out; `source_played_at` is copied onto the pool row at
+  generation instead, same survivability logic D-03 applies to FEN and arriving move.
+
+- **D-15/D-17 constants are deliberately unset.** 192-01 ships `HERRING_LOOSE_BAND_ES` marked
+  PROVISIONAL; 192-03 measures the first run's qualifying-rate distribution and re-pins both from
+  the histogram, then grep-asserts `PROVISIONAL` is gone.
+
+Phase 191 remains COMPLETE (verified 2026-07-27, 5/5 criteria, squash-merged to `main`). All
+earlier v2.9 phases (189, 190, 190.1, 191) are done; the v2.9 `main → production` release PR is
+still outstanding and independent of this phase.
 
 The blocking human gate on plan 06 returned five real defects (nav-badge clipping,
 inconsistent schedule pickers, wrong Train defaults, centered start-screen text, and a
@@ -513,6 +554,15 @@ v1.29 Live-Engine Analysis Page shipped 2026-06-29 — 5 phases (136–140), 14 
 - [Phase ?]: 191-04: useTrainSettings.save is the raw mutate ref; indicator state driven by per-call onSuccess/onError callbacks, not the hook's own isSaveSuccess/isSaveError
 - [Phase ?]: 191-04: TrainScheduleSettings.test.tsx uses real timers (not vi.useFakeTimers()) for the debounce window -- this project's vitest has no global jest alias so waitFor can't self-advance a fake clock
 - [Phase ?]: 191-05: useTrainProgress gains options.enabled to gate the nav badge query off for guests/locked-nav accounts, preventing expected 403s from reaching Sentry
+- [Phase ?]: herring_pool.id is a surrogate BigInteger PK (Task 1 checkpoint, user-approved option-a); the SEED-120 (user_id, game_id, ply) triple is demoted to a UNIQUE constraint since D-01's SET NULL rules out a nullable PK
+- [Phase ?]: herring_stmt applies no qualifier gate beyond exclude_served in this tracer; the tight query-time gate is explicitly Plan 04's job
+- [Phase ?]: Own-game herring/SR collisions are dropped at composition time (not filtered at query time) since herring_stmt stays identity-blind per D-10
+- [Phase ?]: 192-02: Task 1 checkpoint option-a (in-place ALTER, both halves in one migration, landed after Task 2's join fixes) — user-approved
+- [Phase ?]: 192-02: D-06 reveal lookup resolves game.user_id (source game owner), never the solving user, selecting only GamePosition.move_san
+- [Phase ?]: HERRING_LOOSE_BAND_ES confirmed at 0.10 and new HERRING_DEGENERATE_MIN_GAP_ES pinned at 0.02, both from a real ~900-candidate MultiPV-5 measurement against dev (192-03)
+- [Phase ?]: 192-04: herring_stmt's query-time tight gate + degenerate exclusion landed; JSONB path extraction via PG14+ subscript syntax; shared default ladder fixtures fixed to clear the new gate
+- [Phase ?]: POOL-03 amended in place naming the precomputed pool sourcing; POOL-03/POOL-09 traceability rows extended to Phase 192
+- [Phase ?]: TrainReveal's D-07 game-footer gate wraps both the error and success branches in one puzzle_type !== 'herring' conditional
 
 ### Pending Todos
 
@@ -613,9 +663,9 @@ Items acknowledged and deferred at **v1.29 milestone close on 2026-06-29** (user
 
 ## Session Continuity
 
-**Stopped at:** Completed 191-05-PLAN.md
+**Stopped at:** Completed 192-05-PLAN.md
 
-**Last session:** 2026-07-27T13:27:22.093Z
+**Last session:** 2026-07-28T01:42:53.859Z
 
 **Resume file:**
 
@@ -698,6 +748,11 @@ None
 | Phase 191 P03 | 20min | 2 tasks | 6 files |
 | Phase 191 P04 | 20min | 2 tasks | 8 files |
 | Phase 191 P05 | 20min | 1 tasks | 3 files |
+| Phase 192 P01 | 41min | 3 tasks | 10 files |
+| Phase 192 P02 | 50min | 3 tasks | 9 files |
+| Phase 192 P03 | 70min | 2 tasks | 4 files |
+| Phase 192 P04 | 70min | 3 tasks | 3 files |
+| Phase 192 P05 | 35min | 3 tasks | 8 files |
 
 ## Performance Metrics
 

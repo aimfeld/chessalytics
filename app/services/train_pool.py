@@ -28,7 +28,19 @@ import math
 from typing import Any, Literal
 
 import chess.pgn
-from sqlalchemy import Select, and_, case, cast, exists, func, literal, select, true
+from sqlalchemy import (
+    Integer,
+    Select,
+    and_,
+    case,
+    cast,
+    column,
+    exists,
+    func,
+    literal,
+    select,
+    true,
+)
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import undefer
 from sqlalchemy.sql.elements import ColumnElement
@@ -36,13 +48,12 @@ from sqlalchemy.sql.selectable import LateralFromClause
 
 from app.models.drill_solve import DrillSolve, DrillSource
 from app.models.game import Game
-from app.models.game_best_move import GameBestMove
 from app.models.game_flaw import GameFlaw
 from app.models.game_position import GamePosition
+from app.models.herring_pool import HerringPool
 from app.repositories.query_utils import player_only_gate
-from app.services.best_move_candidates import best_move_tier_sql
 from app.services.eval_utils import LICHESS_K, eval_cp_to_expected_score
-from app.services.flaws_service import MATE_CP_EQUIVALENT, MISTAKE_DROP
+from app.services.flaws_service import INACCURACY_DROP, MATE_CP_EQUIVALENT, MISTAKE_DROP
 
 # P-05: low end of the seed's ~20-25% expected-score band. Planner discretion
 # (CONTEXT.md "Claude's Discretion").
@@ -61,6 +72,66 @@ _SEVERITY_BLUNDER: int = 2
 # POOL-03: red herrings make up 25% of every session mix. Planner discretion
 # per the seed's stated ratio (CONTEXT.md "Claude's Discretion").
 HERRING_SHARE: float = 0.25
+
+# Phase 192 (POOL-03 amended, D-15): the herring_pool generation-time loose
+# band. A candidate qualifies when at least HERRING_MIN_QUALIFYING_MOVES of
+# its 5-move ladder are within this many points of expected score of the best
+# move (inclusive at the band — generation is deliberately permissive; the
+# strict qualifier gate runs at query time, Plan 04's job, so thresholds stay
+# retunable with zero re-analysis).
+#
+# MEASURED (192-03 Task 2, 2026-07-28): 298-300 real MultiPV-5-searched dev
+# candidates per phase (opening/middlegame/endgame), PV0-to-PV1 expected-score
+# gap. The ~0.10 anchor is CONFIRMED, not moved: at 0.10 ES, 94.0% (opening),
+# 93.0% (middlegame), and 83.3% (endgame) of searched candidates already have
+# a second move within the band (>= HERRING_MIN_QUALIFYING_MOVES=2 satisfied
+# by PV0+PV1 alone) — loosening further to 0.15 only gains another ~1-5
+# points per phase (e.g. endgame 83.3% -> 87.7%), so 0.10 is not leaving a
+# meaningful slice of real several-fine-moves positions on the table. It
+# stays comfortably (2x) above the query-time tight gate (INACCURACY_DROP =
+# 0.05), the retunability headroom D-15 requires. Full histograms and the
+# measurement script are in the 192-03-SUMMARY.md. Retunable without
+# re-analysis — the ladder is stored raw (D-16).
+HERRING_LOOSE_BAND_ES: float = 0.10
+# D-15: a candidate needs at least this many "several fine moves" ladder
+# entries (including the best move itself) to qualify at generation time.
+HERRING_MIN_QUALIFYING_MOVES: int = 2
+# The generator's tally target for a comfortably-qualifying pool row (informational
+# threshold consumed by scripts/gen_red_herring_pool.py's accept/reject logging).
+HERRING_PREFERRED_QUALIFYING_MOVES: int = 3
+# The MultiPV-5 ladder size — every stored `HerringPool.ladder` has exactly this
+# many entries (see ck_herring_pool_ladder_shape).
+HERRING_LADDER_SIZE: int = 5
+# D-18: positions before this ply are excluded from the sampling frame — a red
+# herring is a "several fine moves" MIDDLEGAME/endgame judgment call, not an
+# opening-theory pick.
+HERRING_MIN_PLY: int = 12
+# A plain, uncorrelated pre-filter on the sampled row's OWN stored eval_cp
+# (never a self-join): |eval_cp| <= this many centipawns keeps the sampled
+# frame roughly balanced instead of drawing mostly-decided positions. Off-by-one
+# ply noise in the stored eval costs only a noisier candidate frame, nothing
+# else (SEED-120 Pitfall 1) — the real qualifier gate is the MultiPV-5 search.
+HERRING_PREFILTER_ABS_CP: int = 200
+
+# Phase 192 (POOL-03 amended, D-17), consumed at QUERY time by Plan 04: the
+# minimum PV0-to-PV4 expected-score gap a stored row must have to be SERVED.
+# Excludes the degenerate "every legal move is fine" tail (dead-drawn,
+# totally winning) that MultiPV-5 exists to catch and boolean-count designs
+# cannot.
+#
+# MEASURED (192-03 Task 2, 2026-07-28): same 298-300-candidate-per-phase
+# sample, PV0-to-PV4 gap. The bottom of the distribution (gap < 0.02 ES) is
+# 24.8% (opening), 17.0% (middlegame), 29.0% (endgame) of searched
+# candidates — the genuinely flat, no-real-decision positions. 0.02 trims
+# that tail while retaining 71-83% of the population per phase; one bucket
+# down (0.01) only trims 5.0-18.3% (too thin a cut, especially opening/
+# middlegame), and one bucket up (0.03) starts cutting 30.3-40.3% — deep
+# enough into the body of genuine several-fine-moves positions to risk
+# under-serving. Full histograms in 192-03-SUMMARY.md. Retunable without
+# re-analysis — this is a query-time bound over the raw stored ladder
+# (D-16), never baked into what gets stored (D-17: stored-and-excluded, not
+# generation-time-filtered).
+HERRING_DEGENERATE_MIN_GAP_ES: float = 0.02
 
 # POOL-02: a puzzle's ground-truth classification — "sharp" when the runner-up
 # at node 0 is itself a mistake (only one move is right); "soft" otherwise
@@ -359,102 +430,201 @@ def pool_entry_stmt(user_id: int) -> Select[tuple[GameFlaw, Game]]:
     )
 
 
-def herring_stmt(user_id: int, *, exclude_served: bool = True) -> Select[tuple[GameBestMove, Game]]:
-    """Red-herring source candidates for `user_id` (POOL-03).
+# The 5-move ladder's first/last index — named rather than bare `0`/`4` so
+# the query-time gate below reads as "best" and "worst-of-five", not magic
+# offsets (CLAUDE.md "no magic numbers"). `_PV_WORST_INDEX` is derived from
+# `HERRING_LADDER_SIZE` so it can never drift out of sync with the ladder
+# shape the `ck_herring_pool_ladder_shape` CHECK enforces.
+_PV_BEST_INDEX: int = 0
+_PV_WORST_INDEX: int = HERRING_LADDER_SIZE - 1
 
-    Selects `GameBestMove`/`Game` rows for user-owned, "several fine moves"
-    positions: the mover is the user (`player_only_gate`, never hand-rolled
-    parity), the best move does NOT clearly beat the runner-up
-    (`best_move_tier_sql(...).is_(None)` AND the best/second expected-score
-    gap is below `SHARP_GAP_ES`), and the PRE-move position clears
-    `WINNABILITY_FLOOR_ES` via a `PriorPosition` self-join on `ply - 1`
-    (mirroring `pool_entry_stmt`'s Pitfall-2 prior-ply eval source).
 
-    `game_best_moves` has NO `user_id` column — candidacy is position-scoped,
-    not user-scoped (see `GameBestMove`'s model docstring). The
-    `Game.user_id == user_id` correlation to an already user-scoped `games`
-    row is therefore the ONLY access-control seam (mirrors
-    `library_repository.best_move_exists_from_table`'s IDOR-safety comment).
+def _ladder_field(ladder_element: Any, field: str) -> ColumnElement[int]:
+    """Extract an integer `field` ("cp" or "mate") from a JSONB ladder element.
 
-    Tier-IS-NULL alone is insufficient (this plan's flagged POOL-03
-    assumption): `best_move_tier_sql` also returns NULL for an easy-to-find
-    move with a LARGE best/second gap (high `maia_prob`, big margin) — a
-    terrible herring, since the "several fine moves" guess would be wrong
-    there. Requiring BOTH conditions (tier NULL AND gap < `SHARP_GAP_ES`)
-    matches POOL-03's own "best ≈ second" parenthetical.
+    `ladder_element` is either an indexed element of `HerringPool.ladder`
+    (e.g. `HerringPool.ladder[_PV_BEST_INDEX]`) or a per-row element yielded
+    by `jsonb_array_elements(HerringPool.ladder)` in a correlated subquery —
+    both resolve to a JSONB object shaped `{"move_uci": str, "cp": int |
+    null, "mate": int | null}` (see `HerringPool.ladder`'s model docstring).
+    `->>` on a missing or JSON-null key resolves to SQL NULL, which is
+    exactly the "absent" signal `expected_score_sql` already expects — no
+    special-casing needed here.
 
-    `GuardPos` (a second aliased `GamePosition`, joined on the candidate's OWN
-    ply) feeds `best_move_tier_sql`'s imported-eval divergence guard exactly
-    as `library_repository.best_move_exists_from_table` wires it — distinct
-    from `PriorPosition`, which feeds the winnability floor on `ply - 1`.
+    Args:
+        ladder_element: A JSONB-typed expression for one ladder entry.
+        field: "cp" or "mate".
 
-    Herrings carry NO SR bookkeeping: this function never reads or writes
-    `DrillItem`/`drill_items`.
+    Returns:
+        A SQLAlchemy Integer column expression, or SQL NULL when the key is
+        absent or JSON-null.
+    """
+    return cast(ladder_element[field].astext, Integer)
 
-    Exhaustion contract: when a caller's `exclude_served=True` query returns
-    no rows, it re-runs with `exclude_served=False` to allow repeats — that
-    fallback lives with this query's contract, not duplicated at call sites.
+
+def _ladder_element_es(ladder_element: Any, mover_color_col: Any) -> ColumnElement[float]:
+    """Mover-POV expected score for one ladder element, via the shared sigmoid.
+
+    Delegates entirely to `expected_score_sql` — the single shared
+    `LICHESS_K` sigmoid implementation already used by `pool_entry_stmt` and
+    `blob_pending_stmt`. Declaring a second sigmoid here would risk silent
+    disagreement with the first at exactly the threshold boundary
+    `herring_stmt`'s query-time gate lives on.
+
+    Args:
+        ladder_element: A JSONB-typed expression for one ladder entry (see
+            `_ladder_field`).
+        mover_color_col: A column/expression resolving to 'white'/'black'
+            (`HerringPool.mover_color` — the side to move on the generator's
+            own searched board, D-16).
+
+    Returns:
+        A SQLAlchemy ColumnElement[float] in (0, 1), or NULL when the
+        element carries neither cp nor mate.
+    """
+    return expected_score_sql(
+        _ladder_field(ladder_element, "cp"), _ladder_field(ladder_element, "mate"), mover_color_col
+    )
+
+
+def herring_stmt(user_id: int, *, exclude_served: bool = True) -> Select[tuple[HerringPool]]:
+    """Red-herring source candidates for `user_id` (POOL-03, amended Phase 192).
+
+    Phase 192 replaces the structurally-broken pre-Phase-192 `GameBestMove`
+    source with `herring_pool` — a global, phase-balanced pool of positions
+    confirmed by a real MultiPV-5 Stockfish search
+    (`scripts/gen_red_herring_pool.py`). A
+    red herring is "several genuinely fine moves for whoever is to move",
+    drawn across ALL signed-up users' games, not "one of the user's own
+    several-fine-moves plies". Winnability (`WINNABILITY_FLOOR_ES`) is
+    enforced once at generation time against the generator's own MultiPV[0]
+    on its own searched board — never re-checked here, and never derived
+    from a correlated `game_positions` read (SEED-120 Pitfall 1's
+    `ply`/`ply - 1` ambiguity does not apply: the generator's board is
+    authoritative by construction). There is no SR bookkeeping in this
+    function at all (no `drill_items`, no `GameFlaw` join) — the pool is
+    entirely separate material from a user's own blunders.
+
+    D-15 loose-generation / tight-query split, both constants named: the
+    generator applies a deliberately LOOSE gate at write time
+    (`HERRING_LOOSE_BAND_ES`, `HERRING_MIN_QUALIFYING_MOVES`) so a stored row
+    is a superset of what could ever qualify at serve time. THIS function
+    applies the real, tight, retunable-with-zero-re-analysis gate over the
+    raw stored `ladder`:
+
+    - **Qualifying count** (D-15): at least `HERRING_MIN_QUALIFYING_MOVES` of
+      the 5 ladder entries must be within `INACCURACY_DROP` expected-score
+      points of PV[0] (the best move). PV[0] always satisfies its own
+      predicate (gap 0.0 to itself), so a count of 2 means "the best plus one
+      genuinely fine alternative" — not "two alternatives besides the best".
+      The comparison is STRICT (`<`, not `<=`), and that direction is
+      load-bearing: `flaws_service._classify_severity` classifies a drop as
+      an inaccuracy at `drop >= INACCURACY_DROP`, so a move exactly
+      `INACCURACY_DROP` below the best is already an inaccuracy and must not
+      count as one of the "several fine moves" this gate exists to certify.
+    - **Degenerate exclusion** (D-17): PV[4]'s (the worst-of-five's) expected
+      score must be at least `HERRING_DEGENERATE_MIN_GAP_ES` below PV[0]'s,
+      INCLUSIVE at the bound (`>=`) — a dead-drawn or totally-winning
+      position where even the fifth-best move is fine is not a judgment
+      test, and MultiPV-5 exists precisely to catch it. Kept at QUERY time
+      rather than baked into generation: retunable without re-analysis, and
+      later auditable for over-aggressiveness, because the raw 5-move ladder
+      always survives on the row (D-16 forbids a pre-converted
+      expected-score/gap column, so the stored `game_positions.eval_cp` can
+      never leak back in as an authoritative value here).
+
+    Both thresholds are computed from the raw stored ladder through
+    `_ladder_element_es` (a thin wrapper over `expected_score_sql`, the
+    single shared sigmoid) — mate is mapped via `MATE_CP_EQUIVALENT` before
+    the sigmoid (Option-B), matching every other mover-POV conversion in this
+    module. No second sigmoid is declared and no rounding/truncation step is
+    introduced anywhere in this gate.
+
+    No `jsonb_typeof` shape guard is added anywhere here, deliberately:
+    `ck_herring_pool_ladder_shape` (a write-time CHECK on `herring_pool`)
+    makes "a complete 5-element JSON array" a structural invariant of every
+    stored row, so `jsonb_array_elements(HerringPool.ladder)` and indexed
+    access (`HerringPool.ladder[_PV_BEST_INDEX]`,
+    `HerringPool.ladder[_PV_WORST_INDEX]`) are TOTAL on this column. Pairing
+    a type guard with an array function in the same WHERE clause is a
+    documented live crash in this codebase — Postgres does not guarantee
+    AND-clause evaluation order (see `answer_key_present`'s docstring).
+    Enforce shape at write time, never re-check it at read time.
+
+    `.options(undefer(HerringPool.ladder))` is mandatory: `ladder` is
+    `deferred=True` by design (structural leak guard, mirroring
+    `GameFlaw.missed_pv_lines`) and would otherwise raise `MissingGreenlet`
+    on first implicit async access outside this query's session context.
+
+    Ordering is a TOTAL order, stable across repeated executions of the same
+    statement — which is what makes "no repeats until the pool is exhausted"
+    observable:
+    `(qualifying_count >= HERRING_PREFERRED_QUALIFYING_MOVES) DESC` (D-15's
+    "preferring 3+" — a PREFERENCE, not a filter; rows with exactly
+    `HERRING_MIN_QUALIFYING_MOVES` must still be reachable), then
+    `HerringPool.source_played_at DESC NULLS LAST`, then `HerringPool.id
+    ASC` (the deterministic tiebreak for rows equal on both prior keys).
+    Recency reads off the pool row's own denormalized `source_played_at`
+    rather than a `games` join: SEED-120 carries the recency ordering
+    forward, but a global pool cannot join `games` for it without
+    reintroducing exactly the link D-01 lets null out. Copying `played_at`
+    onto the row at generation time preserves the recency contract and
+    survives source-game deletion — the same reasoning D-03 already applies
+    to the FEN and arriving move. This is a deliberate resolution, not a
+    dropped requirement.
+
+    D-10: this function NEVER filters on `HerringPool.user_id` — a user may
+    legitimately be served a herring drawn from their own game (own-game
+    herrings are permitted; composition drops one only when it collides with
+    an SR pick in the same session, `app/repositories/train_repository.py`'s
+    `_ReconstructedPuzzle` assembly).
+
+    Exhaustion contract (unchanged): when a caller's `exclude_served=True`
+    query returns no rows, it re-runs with `exclude_served=False` to allow
+    repeats — that fallback lives with this query's contract, not duplicated
+    at call sites.
 
     Args:
         user_id: Authenticated user's internal PK (V4: never client-supplied
-            — callers must source this from `current_active_user.id`).
-        exclude_served: When True (default), exclude any (game_id, ply) pair
+            — callers must source this from `current_active_user.id`). Used
+            ONLY to scope the `exclude_served` no-repeat exclusion below —
+            never as a `HerringPool` row filter (D-10).
+        exclude_served: When True (default), exclude any `HerringPool.id`
             already served to this user as a red herring
-            (`drill_solves.source == DrillSource.RED_HERRING`). Set False to
-            allow repeats once the source is exhausted.
+            (`drill_solves.herring_pool_id`, D-04 — NOT `(game_id, ply)`,
+            which can no longer serve as a stable identity once the source
+            game link is nullable). Set False to allow repeats once the
+            source is exhausted.
 
     Returns:
-        A SQLAlchemy Select yielding `(GameBestMove, Game)` rows ordered by
-        `Game.played_at DESC` (nulls last), then `GameBestMove.game_id DESC`,
-        then `GameBestMove.ply ASC` — recency-weighted and fully
-        deterministic.
+        A SQLAlchemy Select yielding qualifying, non-degenerate `HerringPool`
+        rows in the total order described above.
     """
-    # LATERAL, not a plain self-join — see `_prior_position_lateral`'s
-    # docstring (Phase 190-01 checkpoint bug fix): the same composite-index
-    # planner pathology applies to both correlations here, offset ply and
-    # same-ply alike.
-    prior_position = _prior_position_lateral(
-        name="herring_prior_position",
-        user_id_col=Game.user_id,
-        game_id_col=GameBestMove.game_id,
-        ply_expr=GameBestMove.ply - 1,
-    )
-    guard_position = _prior_position_lateral(
-        name="herring_guard_pos",
-        user_id_col=Game.user_id,
-        game_id_col=GameBestMove.game_id,
-        ply_expr=GameBestMove.ply,
-    )
+    best_es = _ladder_element_es(HerringPool.ladder[_PV_BEST_INDEX], HerringPool.mover_color)
+    worst_es = _ladder_element_es(HerringPool.ladder[_PV_WORST_INDEX], HerringPool.mover_color)
 
-    tier_expr = best_move_tier_sql(
-        GameBestMove.maia_prob,
-        GameBestMove.best_cp,
-        GameBestMove.best_mate,
-        GameBestMove.second_cp,
-        GameBestMove.second_mate,
-        Game.user_color,
-        guard_position.c.eval_cp,
-        guard_position.c.eval_mate,
-        Game.lichess_evals_at.isnot(None),
+    # A correlated per-row scan of the raw ladder (jsonb_array_elements is
+    # TOTAL on this column, no shape guard needed — see the docstring above).
+    # `column("value", JSONB)` names the function's own builtin output
+    # column so `.c.value` reads naturally.
+    ladder_element = func.jsonb_array_elements(HerringPool.ladder).table_valued(
+        column("value", JSONB)
     )
-    gap_expr = expected_score_sql(
-        GameBestMove.best_cp, GameBestMove.best_mate, Game.user_color
-    ) - expected_score_sql(GameBestMove.second_cp, GameBestMove.second_mate, Game.user_color)
-    prior_es = expected_score_sql(
-        prior_position.c.eval_cp, prior_position.c.eval_mate, Game.user_color
+    element_es = _ladder_element_es(ladder_element.c.value, HerringPool.mover_color)
+
+    qualifying_count = (
+        select(func.count())
+        .select_from(ladder_element)
+        .where(best_es - element_es < INACCURACY_DROP)
+        .scalar_subquery()
     )
 
     stmt = (
-        select(GameBestMove, Game)
-        .join(Game, Game.id == GameBestMove.game_id)
-        .outerjoin(prior_position, true())
-        .outerjoin(guard_position, true())
+        select(HerringPool)
+        .options(undefer(HerringPool.ladder))
         .where(
-            Game.user_id == user_id,
-            player_only_gate(GameBestMove.ply, Game.user_color),
-            tier_expr.is_(None),
-            gap_expr < SHARP_GAP_ES,
-            prior_es >= WINNABILITY_FLOOR_ES,
+            qualifying_count >= HERRING_MIN_QUALIFYING_MOVES,
+            best_es - worst_es >= HERRING_DEGENERATE_MIN_GAP_ES,
         )
     )
     if exclude_served:
@@ -462,16 +632,15 @@ def herring_stmt(user_id: int, *, exclude_served: bool = True) -> Select[tuple[G
             ~exists(
                 select(DrillSolve.session_id).where(
                     DrillSolve.user_id == user_id,
-                    DrillSolve.game_id == GameBestMove.game_id,
-                    DrillSolve.ply == GameBestMove.ply,
+                    DrillSolve.herring_pool_id == HerringPool.id,
                     DrillSolve.source == DrillSource.RED_HERRING,
                 )
             )
         )
     return stmt.order_by(
-        Game.played_at.desc().nullslast(),
-        GameBestMove.game_id.desc(),
-        GameBestMove.ply.asc(),
+        (qualifying_count >= HERRING_PREFERRED_QUALIFYING_MOVES).desc(),
+        HerringPool.source_played_at.desc().nullslast(),
+        HerringPool.id.asc(),
     )
 
 

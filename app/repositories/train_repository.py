@@ -18,7 +18,7 @@ from __future__ import annotations
 import datetime
 import random
 from dataclasses import dataclass
-from typing import Literal
+from typing import Literal, cast
 
 import chess
 from sqlalchemy import and_, delete, exists, func, or_, select, update
@@ -33,6 +33,7 @@ from app.models.drill_solve import DrillGuess, DrillMoveQuality, DrillSolve, Dri
 from app.models.game import Game
 from app.models.game_flaw import GameFlaw
 from app.models.game_position import GamePosition
+from app.models.herring_pool import HerringPool
 from app.models.train_settings import TrainSettings
 from app.services.best_move_candidates import mover_color_for_ply
 from app.services.train_pool import (
@@ -103,14 +104,22 @@ class TrainSettingsRow:
 
 @dataclass(frozen=True)
 class ComposedPuzzle:
-    """Internal dataclass for one puzzle within a composed/resumed session."""
+    """Internal dataclass for one puzzle within a composed/resumed session.
+
+    Phase 192: `game_id` is `int | None` — a puzzle's source game link is
+    nullable provenance (D-01/D-05), not the puzzle's identity
+    (`herring_pool_id` is, for a herring). `drill_solves.game_id` itself went
+    nullable in Plan 02 (the phase's one-way door, `ondelete="SET NULL"`), so
+    `None` here is a real, servable case — not merely forward-compat typing.
+    """
 
     position: int
-    game_id: int
+    game_id: int | None
     ply: int
     fen: str
     side_to_move: Literal["white", "black"]
     last_move_uci: str | None
+    herring_pool_id: int | None = None
 
 
 @dataclass(frozen=True)
@@ -767,20 +776,33 @@ async def load_session_puzzles(
     """Return the ordered, not-yet-attempted puzzles for a session (D-09/D-12 resume path).
 
     `drill_solves` rows with `solved_at IS NULL`, ordered by `position` (the
-    frozen composition order), joined to `games` for the PGN and rebuilt into
-    a `ComposedPuzzle` via `fen_and_last_move_at_ply`. Scoped by `user_id` in the WHERE
+    frozen composition order), OUTER-joined to `games` (Phase 192 D-05:
+    `game_id` can be NULL after a source-game deletion, so this can no longer
+    be an INNER JOIN without silently dropping puzzles) and to `herring_pool`
+    for a herring's FEN/arriving move. Scoped by `user_id` in the WHERE
     clause IN ADDITION to `session_id` — a session id arriving from a request
     body/path parameter is untrusted client input (T-189-12 / V4 IDOR guard);
     a foreign session id resolves to zero rows rather than another user's
     puzzles.
 
-    Rows whose backing `game_flaws` row has since vanished under
-    reclassification (SR source only — herrings carry no such row) are
-    skipped rather than served or deleted (lazy eviction, D-02), and so are
-    rows whose FEN will not reconstruct. The session's frozen `puzzle_count`
-    is returned UNCHANGED by this function — callers must not derive it from
-    `len(puzzles)` here, so `solved_count + len(puzzles)` may legitimately be
-    less than `puzzle_count` after an eviction.
+    Two independent lazy-eviction paths, opposite reasons:
+    - A `RED_HERRING` row reads its FEN/arriving move straight off the
+      `herring_pool` row (D-03 — the only herring path, alive game-link or
+      not) and is skipped only if the pool row itself is gone (never
+      observed in practice — pool rows are `SET NULL`, not `CASCADE` — but
+      handled identically to a broken FEN: drop, never serve).
+    - An `SR_ITEM` row is skipped when its `games` row has vanished (D-05:
+      the row now survives its source game's deletion with `game_id` NULL
+      instead of being CASCADE-deleted, so an orphaned SR row is unservable
+      but must not be served or crash — mirrors the pre-D-05 CASCADE
+      behavior) OR when its backing `game_flaws` row has since vanished under
+      reclassification (pre-existing D-02 lazy eviction, unchanged).
+
+    Rows whose FEN will not reconstruct are also skipped. The session's
+    frozen `puzzle_count` is returned UNCHANGED by this function — callers
+    must not derive it from `len(puzzles)` here, so `solved_count +
+    len(puzzles)` may legitimately be less than `puzzle_count` after an
+    eviction.
 
     Args:
         session: AsyncSession.
@@ -788,8 +810,9 @@ async def load_session_puzzles(
         session_id: The `drill_sessions.id` to load remaining puzzles for.
     """
     stmt = (
-        select(DrillSolve, Game)
-        .join(Game, Game.id == DrillSolve.game_id)
+        select(DrillSolve, Game, HerringPool)
+        .outerjoin(Game, Game.id == DrillSolve.game_id)
+        .outerjoin(HerringPool, HerringPool.id == DrillSolve.herring_pool_id)
         .where(
             DrillSolve.session_id == session_id,
             DrillSolve.user_id == user_id,
@@ -801,7 +824,11 @@ async def load_session_puzzles(
     if not rows:
         return []
 
-    sr_game_ids = {solve.game_id for solve, _game in rows if solve.source == DrillSource.SR_ITEM}
+    sr_game_ids = {
+        solve.game_id
+        for solve, _game, _herring in rows
+        if solve.source == DrillSource.SR_ITEM and solve.game_id is not None
+    }
     existing_flaw_keys: set[tuple[int, int]] = set()
     if sr_game_ids:
         flaw_rows = await session.execute(
@@ -812,11 +839,31 @@ async def load_session_puzzles(
         existing_flaw_keys = {(gid, ply) for gid, ply in flaw_rows.all()}
 
     puzzles: list[ComposedPuzzle] = []
-    for solve, game in rows:
-        if (
-            solve.source == DrillSource.SR_ITEM
-            and (solve.game_id, solve.ply) not in existing_flaw_keys
-        ):
+    for solve, game, herring_row in rows:
+        if solve.source == DrillSource.RED_HERRING:
+            if herring_row is None:
+                continue  # pool row itself is gone — drop, never serve broken
+            puzzles.append(
+                ComposedPuzzle(
+                    position=solve.position,
+                    game_id=solve.game_id,
+                    ply=solve.ply,
+                    fen=herring_row.fen,
+                    side_to_move=mover_color_for_ply(solve.ply),
+                    last_move_uci=herring_row.arriving_move_uci,
+                    herring_pool_id=solve.herring_pool_id,
+                )
+            )
+            continue
+
+        # SR_ITEM
+        if game is None:
+            continue  # orphaned by a source-game deletion (D-05): lazily evicted
+        # The outer join above guarantees game.id == solve.game_id here, so
+        # solve.game_id is non-None whenever game is not None — narrowed
+        # explicitly for ty rather than suppressed.
+        assert solve.game_id is not None
+        if (solve.game_id, solve.ply) not in existing_flaw_keys:
             continue  # lazy eviction: the backing flaw row vanished (D-02)
         result = fen_and_last_move_at_ply(game.pgn, solve.ply)
         if result is None:
@@ -830,6 +877,7 @@ async def load_session_puzzles(
                 fen=fen,
                 side_to_move=mover_color_for_ply(solve.ply),
                 last_move_uci=last_move_uci,
+                herring_pool_id=solve.herring_pool_id,
             )
         )
     return puzzles
@@ -916,6 +964,25 @@ async def _discard_if_untouched_and_resized(
         return False
     await session.execute(delete(DrillSession).where(DrillSession.id == drill_session.id))
     return True
+
+
+@dataclass(frozen=True)
+class _ReconstructedPuzzle:
+    """One puzzle after FEN/arriving-move reconstruction, pre-shuffle/pre-insert.
+
+    Phase 192: replaces the former 7-tuple `reconstructed` element (seven
+    positional fields is past readable as a tuple). `herring_pool_id` is
+    non-None only for a `RED_HERRING` row (D-04); an `SR_ITEM` row always
+    carries `herring_pool_id=None`.
+    """
+
+    game_id: int | None
+    ply: int
+    fen: str
+    last_move_uci: str | None
+    side_to_move: Literal["white", "black"]
+    source: int
+    herring_pool_id: int | None
 
 
 async def compose_and_materialize_session(
@@ -1084,19 +1151,17 @@ async def compose_and_materialize_session(
         new_sr_items.append(pick)
         sr_needed -= 1
 
-    # --- Herring side ---
-    herring_rows = (
-        await session.execute(herring_stmt(user_id, exclude_served=True).limit(n))
-    ).all()
+    # --- Herring side (Phase 192, D-03): HerringPool rows carry their own FEN/
+    # arriving-move/mover_color — no Game join, no PGN reconstruction. ---
+    herring_rows: list[HerringPool] = list(
+        (await session.execute(herring_stmt(user_id, exclude_served=True).limit(n))).scalars()
+    )
     if not herring_rows:
         # Source exhausted (every candidate already served this user) — repeats allowed.
-        herring_rows = (
-            await session.execute(herring_stmt(user_id, exclude_served=False).limit(n))
-        ).all()
-    herring_pool: list[tuple[int, int, Game]] = [
-        (best_move.game_id, best_move.ply, game) for best_move, game in herring_rows
-    ]
-    herring_candidates = herring_pool[:herring_slots]
+        herring_rows = list(
+            (await session.execute(herring_stmt(user_id, exclude_served=False).limit(n))).scalars()
+        )
+    herring_candidates = herring_rows[:herring_slots]
     herring_idx = herring_slots
 
     # --- Cross-backfill (Pitfall 4): a short side never silently shrinks the
@@ -1107,7 +1172,7 @@ async def compose_and_materialize_session(
             # SR side came up short -> pull extra herrings, continuing the same
             # deterministic herring_stmt ordering from where herring_slots left off.
             herring_candidates = (
-                herring_candidates + herring_pool[herring_idx : herring_idx + shortfall]
+                herring_candidates + herring_rows[herring_idx : herring_idx + shortfall]
             )
         elif len(herring_candidates) < herring_slots:
             # Herring side came up short -> pull extra SR, continuing the same
@@ -1121,22 +1186,41 @@ async def compose_and_materialize_session(
 
     # --- Reconstruct FENs + arriving move, dropping (never backfilling)
     # unparseable puzzles ---
-    reconstructed: list[tuple[int, int, str, str | None, Literal["white", "black"], int]] = []
+    reconstructed: list[_ReconstructedPuzzle] = []
     for game_id, ply, game in sr_candidates:
         result = fen_and_last_move_at_ply(game.pgn, ply)
         if result is None:
             continue
         fen, last_move_uci = result
         reconstructed.append(
-            (game_id, ply, fen, last_move_uci, mover_color_for_ply(ply), DrillSource.SR_ITEM)
+            _ReconstructedPuzzle(
+                game_id=game_id,
+                ply=ply,
+                fen=fen,
+                last_move_uci=last_move_uci,
+                side_to_move=mover_color_for_ply(ply),
+                source=DrillSource.SR_ITEM,
+                herring_pool_id=None,
+            )
         )
-    for game_id, ply, game in herring_candidates:
-        result = fen_and_last_move_at_ply(game.pgn, ply)
-        if result is None:
+    # D-10: own-game herrings are permitted, so a position can legitimately be
+    # both a several-fine-moves pool row and the user's own blunder ply —
+    # drop the herring before insert rather than colliding on
+    # uq_drill_solves_session_puzzle and raising IntegrityError mid-composition.
+    sr_keys = {(puzzle.game_id, puzzle.ply) for puzzle in reconstructed}
+    for pool_row in herring_candidates:
+        if (pool_row.game_id, pool_row.ply) in sr_keys:
             continue
-        fen, last_move_uci = result
         reconstructed.append(
-            (game_id, ply, fen, last_move_uci, mover_color_for_ply(ply), DrillSource.RED_HERRING)
+            _ReconstructedPuzzle(
+                game_id=pool_row.game_id,
+                ply=pool_row.ply,
+                fen=pool_row.fen,
+                last_move_uci=pool_row.arriving_move_uci,
+                side_to_move=cast(Literal["white", "black"], pool_row.mover_color),
+                source=DrillSource.RED_HERRING,
+                herring_pool_id=pool_row.id,
+            )
         )
     reconstructed = reconstructed[:n]  # defensive cap; slot arithmetic already sums to <= n
 
@@ -1158,9 +1242,9 @@ async def compose_and_materialize_session(
     random.Random(f"{user_id}:{today.isoformat()}").shuffle(reconstructed)
 
     surviving_sr_keys = {
-        (gid, ply)
-        for gid, ply, _fen, _last_move_uci, _side, source in reconstructed
-        if source == DrillSource.SR_ITEM
+        (puzzle.game_id, puzzle.ply)
+        for puzzle in reconstructed
+        if puzzle.source == DrillSource.SR_ITEM
     }
 
     try:
@@ -1196,28 +1280,34 @@ async def compose_and_materialize_session(
             await session.flush()
 
             puzzles: list[ComposedPuzzle] = []
-            for position, (game_id, ply, fen, last_move_uci, side_to_move, source) in enumerate(
-                reconstructed
-            ):
+            for position, puzzle in enumerate(reconstructed):
+                # Phase 192 Plan 02: `drill_solves.game_id` is now nullable
+                # (D-05) — a herring composed from an already-orphaned pool
+                # row (its source game deleted before this composition ran)
+                # legitimately has `game_id=None` here. SR items always carry
+                # a non-None `game_id` (sourced via an INNER JOIN to `games`
+                # above), so this is never a real NULL constraint violation.
                 session.add(
                     DrillSolve(
                         session_id=drill_session.id,
                         position=position,
                         user_id=user_id,
-                        game_id=game_id,
-                        ply=ply,
-                        source=source,
+                        game_id=puzzle.game_id,
+                        ply=puzzle.ply,
+                        source=puzzle.source,
+                        herring_pool_id=puzzle.herring_pool_id,
                         solved_at=None,
                     )
                 )
                 puzzles.append(
                     ComposedPuzzle(
                         position=position,
-                        game_id=game_id,
-                        ply=ply,
-                        fen=fen,
-                        side_to_move=side_to_move,
-                        last_move_uci=last_move_uci,
+                        game_id=puzzle.game_id,
+                        ply=puzzle.ply,
+                        fen=puzzle.fen,
+                        side_to_move=puzzle.side_to_move,
+                        last_move_uci=puzzle.last_move_uci,
+                        herring_pool_id=puzzle.herring_pool_id,
                     )
                 )
             await session.flush()
@@ -1392,12 +1482,30 @@ async def _mark_session_complete_if_done(
 ) -> bool:
     """Complete the session once every still-servable puzzle has been recorded.
 
-    "Still servable" excludes `drill_solves` rows whose `games` row has since
-    vanished (mirrors `load_session_puzzles`'s lazy-eviction posture — a
-    deleted game can never be attempted, so it must not block completion).
+    "Still servable" now means two DIFFERENT things depending on `source`
+    (Phase 192, D-05 — `drill_solves.game_id` went from `NOT NULL` +
+    `CASCADE` to nullable + `SET NULL`, so a deleted game no longer deletes
+    the row):
 
-    Bug fix (WR-02): ALSO excludes SR-source rows whose backing `game_flaws`
-    row has vanished under reclassification. `load_session_puzzles` already
+    - `SR_ITEM`: excluded from `remaining` when EITHER its `games` row OR its
+      `game_flaws` row has vanished. An orphaned SR row can never be
+      attempted (the game it drills is gone), so it must not block
+      completion — this is the WR-02 fix's exact reasoning, extended from
+      "flaw row gone" to also cover "game row gone". Bug-fix note: this
+      `Game.id.isnot(None)` clause is MANDATORY, not optional.
+      189-RESEARCH.md's assumption A2 (that the outer join needed no
+      parallel `or_` guard here) is wrong: before this phase, a deleted game
+      CASCADE-deleted the `drill_solves` row, which is what let `remaining`
+      reach 0 in the first place. After `SET NULL`, an orphaned SR row
+      survives forever with `solved_at IS NULL` and would pin `remaining`
+      above zero, reproducing the exact stuck-session bug WR-02 fixed.
+    - `RED_HERRING`: NEVER excluded by either clause below (an unsolved
+      herring with a nulled game link is still perfectly servable off its
+      `herring_pool` row, D-03, and must keep counting toward `remaining`
+      until solved — the opposite of the SR-orphan treatment above).
+
+    Bug fix (WR-02, pre-Phase-192): excludes SR-source rows whose backing
+    `game_flaws` row has vanished under reclassification. `load_session_puzzles`
     documents this as "lazy eviction" (a delete-then-insert reclassify can
     drop the flaw row a `drill_solves` SR item points at) and simply skips
     serving such a row rather than deleting it — leaving it `solved_at IS
@@ -1406,8 +1514,6 @@ async def _mark_session_complete_if_done(
     showing "resume" indefinitely (only self-healing once `expires_on`
     passed). The LEFT OUTER JOIN mirrors `load_session_puzzles`'s own
     `existing_flaw_keys` check, keyed the same way: (user_id, game_id, ply).
-    Red herrings carry no `game_flaws` row by design (source != SR_ITEM), so
-    they're never excluded here regardless of the join's outcome.
 
     The `status = 'open'` guard makes the UPDATE a no-op on a session that's
     already completed, so re-running this after an idempotent re-submit never
@@ -1416,7 +1522,7 @@ async def _mark_session_complete_if_done(
     remaining_stmt = (
         select(func.count())
         .select_from(DrillSolve)
-        .join(Game, Game.id == DrillSolve.game_id)
+        .outerjoin(Game, Game.id == DrillSolve.game_id)
         .outerjoin(
             GameFlaw,
             and_(
@@ -1431,6 +1537,13 @@ async def _mark_session_complete_if_done(
             or_(
                 DrillSolve.source != DrillSource.SR_ITEM,
                 GameFlaw.game_id.isnot(None),
+            ),
+            # Phase 192 (D-05): mandatory parallel leniency clause — an
+            # orphaned SR row (source-game deleted) must be excluded here the
+            # same way an orphaned herring must NOT be. See docstring above.
+            or_(
+                DrillSolve.source != DrillSource.SR_ITEM,
+                Game.id.isnot(None),
             ),
         )
     )
@@ -1553,7 +1666,14 @@ async def record_solve(
             correct_move,
             move_quality,
         )
-        if is_sr:
+        # Phase 192 (D-05): `solve_row.game_id` is `int | None` now that the
+        # column is nullable. `DrillItem.game_id` stays NOT NULL + CASCADE
+        # (SR items are always sourced from the user's own live or lazily
+        # evicted game), so when an SR row's game link has been nulled, the
+        # backing `drill_items` row was never created in the first place for
+        # this puzzle to exist in a servable session (load_session_puzzles
+        # already excludes orphaned SR rows) — there is nothing to advance.
+        if is_sr and solve_row.game_id is not None:
             item_status, streak, due_date = await _advance_drill_item(
                 session,
                 user_id=user_id,
@@ -1587,7 +1707,8 @@ async def record_solve(
             # (the pre-tiering era only ever recorded a full move point),
             # False maps to the wrong tier.
             stored_move_quality = "good" if stored_correct_move else "wrong"
-        if is_sr:
+        # Same nullability narrowing as the claimed branch above.
+        if is_sr and solve_row.game_id is not None:
             item_state = await _read_drill_item_state(
                 session, user_id=user_id, game_id=solve_row.game_id, ply=solve_row.ply
             )
@@ -1622,9 +1743,15 @@ RevealNotAttempted = Literal["not_attempted"]
 
 @dataclass(frozen=True)
 class RevealedPuzzle:
-    """Internal dataclass returned by `reveal_for_puzzle` on a solved puzzle."""
+    """Internal dataclass returned by `reveal_for_puzzle` on a solved puzzle.
 
-    game_id: int
+    `game_id` is `int | None` (Phase 192, D-01/D-05): `None` means the
+    puzzle's source game has since been deleted — only reachable for a
+    `RED_HERRING` row (an orphaned `SR_ITEM` row returns `RevealNotFound`
+    instead, see the function docstring).
+    """
+
+    game_id: int | None
     ply: int
     fen: str
     played_in_game_san: str | None
@@ -1647,6 +1774,17 @@ async def reveal_for_puzzle(
     returns `"not_found"`. `solved_at IS NULL` returns `"not_attempted"`
     (T-189-17): the puzzle type and in-game move are unreachable before the
     attempt is recorded.
+
+    Phase 192 (D-01/D-05): `Game` and `HerringPool` are now OUTER joins — a
+    `RED_HERRING` row's source game can be gone (still fully revealable off
+    its `herring_pool` row, D-03), and an `SR_ITEM` row's source game can
+    also be gone (D-05, `SET NULL`). AFTER the `not_attempted` gate: when
+    `game is None` and `solve.source == SR_ITEM`, this returns `"not_found"`
+    — this preserves the exact pre-D-05 behavior, where a deleted game
+    CASCADE-deleted the whole `drill_solves` row and the reveal query
+    returned no row at all. There is no "reveal an orphaned SR item" state to
+    invent; the puzzle simply cannot be re-shown once its source game is
+    gone.
 
     190.1-03 (D-01/D-05): the answer key here is deliberately thin — the
     puzzle type, the in-game move (SAN + UCI), and a tactic-lines pointer.
@@ -1671,8 +1809,9 @@ async def reveal_for_puzzle(
     """
     row = (
         await session.execute(
-            select(DrillSolve, Game)
-            .join(Game, Game.id == DrillSolve.game_id)
+            select(DrillSolve, Game, HerringPool)
+            .outerjoin(Game, Game.id == DrillSolve.game_id)
+            .outerjoin(HerringPool, HerringPool.id == DrillSolve.herring_pool_id)
             .where(
                 DrillSolve.session_id == session_id,
                 DrillSolve.position == position,
@@ -1682,24 +1821,53 @@ async def reveal_for_puzzle(
     ).one_or_none()
     if row is None:
         return "not_found"
-    solve, game = row
+    solve, game, herring_row = row
     if solve.solved_at is None:
         return "not_attempted"
+    if game is None and solve.source == DrillSource.SR_ITEM:
+        # D-05: an orphaned SR row is unservable/unrevealable — this is the
+        # exact pre-D-05 CASCADE outcome (the row, and therefore this query's
+        # result, used to not exist at all). Never invent a new "reveal with
+        # an empty FEN" state for this case.
+        return "not_found"
 
-    position_row = (
-        await session.execute(
-            select(GamePosition.move_san).where(
-                GamePosition.user_id == user_id,
-                GamePosition.game_id == solve.game_id,
-                GamePosition.ply == solve.ply,
+    # D-06 (T-192-02 mitigation): the position lookup resolves the SOURCE
+    # GAME'S OWNER (`game.user_id`), not the solving `user_id` — a red
+    # herring can be drawn from another user's game, and the pre-D-06 filter
+    # returned None (silently degrading `played_in_game_san`) for every
+    # cross-user herring even though the game row was perfectly alive. The
+    # owner id is resolved server-side from the outer-joined `Game` row,
+    # never from request input, so no IDOR seam is opened — and the select
+    # list stays exactly `GamePosition.move_san`, never the whole entity or
+    # any other column, which is what makes this widening safe rather than a
+    # cross-user data leak (a security control, not an optimization). Skipped
+    # entirely when `game is None` (only reachable for a herring at this
+    # point) — `played_in_game_san` degrades to None per D-08.
+    played_in_game_san: str | None = None
+    if game is not None:
+        position_row = (
+            await session.execute(
+                select(GamePosition.move_san).where(
+                    GamePosition.user_id == game.user_id,
+                    GamePosition.game_id == game.id,
+                    GamePosition.ply == solve.ply,
+                )
             )
-        )
-    ).one_or_none()
-    played_in_game_san = position_row.move_san if position_row is not None else None
+        ).one_or_none()
+        played_in_game_san = position_row.move_san if position_row is not None else None
 
     # P-03: game_flaws.fen is board_fen() only (no castling/en-passant) —
-    # reconstruct the full FEN the same way composition did.
-    fen = full_fen_at_ply(game.pgn, solve.ply) or ""
+    # reconstruct the full FEN the same way composition did. D-03: a herring
+    # always reads its FEN off the pool row (never the PGN), alive game-link
+    # or not — the only exception to "game is None -> degrade" above.
+    if solve.source == DrillSource.RED_HERRING:
+        fen = herring_row.fen if herring_row is not None else ""
+    else:
+        # The not_found gate above already excluded (game is None and
+        # source == SR_ITEM), so game is guaranteed non-None here — narrowed
+        # explicitly for ty rather than suppressed.
+        assert game is not None
+        fen = full_fen_at_ply(game.pgn, solve.ply) or ""
 
     # 190.1-01, D-05: the game move as UCI — SAN -> UCI, never-raise contract,
     # same house try/except shape (app/services/library_service.py:135,
@@ -1716,13 +1884,16 @@ async def reveal_for_puzzle(
         puzzle_type: Literal["sharp", "soft", "herring"] = "herring"
         has_tactic_lines = False
     else:
+        # Same not_found-gate invariant as above: source == SR_ITEM implies
+        # game is not None by this point.
+        assert game is not None
         flaw_row = (
             await session.execute(
                 select(GameFlaw)
                 .options(undefer(GameFlaw.missed_pv_lines))
                 .where(
                     GameFlaw.user_id == user_id,
-                    GameFlaw.game_id == solve.game_id,
+                    GameFlaw.game_id == game.id,
                     GameFlaw.ply == solve.ply,
                 )
             )

@@ -27,10 +27,17 @@ class TrainPuzzle(BaseModel):
     client's exact-match/grading path runs entirely client-side against its
     own vendored Stockfish WASM output (see 189-01-PLAN.md P-01). Do not add
     fields here without re-reading that decision.
+
+    `game_id` is `int | None` (Phase 192 Plan 02, D-01/D-05): a red herring's
+    source-game link is nullable provenance — `None` here means either the
+    herring's source game has been deleted (the puzzle is still fully
+    servable off its `herring_pool` row, D-03) or the pool row was never
+    linked to a game in the first place. Never used as an identity key
+    client-side; a puzzle's identity within a session is `position`.
     """
 
     position: int
-    game_id: int
+    game_id: int | None
     ply: int
     fen: str
     side_to_move: Literal["white", "black"]
@@ -133,9 +140,14 @@ class PuzzleRevealResponse(BaseModel):
     calls the existing `GET /api/library/flaws/{game_id}/{ply}/tactic-lines`
     endpoint for the steppable PV line. Train adds no second PV-fetching
     surface — see 189-05-PLAN.md's key_links.
+
+    `game_id` is `int | None` (Phase 192 Plan 02, D-01/D-05): `None` means the
+    puzzle's source game has since been deleted. The client hides the Analyze
+    deep-link in that case (D-09) rather than disabling it — nothing else on
+    the reveal panel references the game either way.
     """
 
-    game_id: int
+    game_id: int | None
     ply: int
     fen: str
     played_in_game_san: str | None

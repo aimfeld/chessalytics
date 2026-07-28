@@ -311,6 +311,21 @@ async def evaluate_nodes_multipv2(
     return await _pool.evaluate_nodes_multipv2(board)
 
 
+async def evaluate_nodes_multipv5(board: chess.Board) -> list[chess.engine.InfoDict] | None:
+    """Evaluate position at 1M nodes with multipv=5, returning the raw per-PV info list.
+
+    Phase 192 (D-12): module-level wrapper around `EnginePool.evaluate_nodes_multipv5`
+    for the red-herring pool generator's ladder search. Callers must reject positions
+    with fewer than 5 legal moves before calling — see
+    `EnginePool.evaluate_nodes_multipv5`'s docstring for the full contract.
+
+    Returns None when the pool is not started or on engine failure.
+    """
+    if _pool is None:
+        return None
+    return await _pool.evaluate_nodes_multipv5(board)
+
+
 def _pv_to_best_move(info: chess.engine.InfoDict) -> str | None:
     """Extract the best move UCI string from an InfoDict (EVAL-04 / D-117-01).
 
@@ -619,3 +634,29 @@ class EnginePool:
             second_mate = None
             second_uci = ""
         return eval_cp, eval_mate, best_move, pv_string, second_cp, second_mate, second_uci
+
+    async def evaluate_nodes_multipv5(
+        self, board: chess.Board
+    ) -> list[chess.engine.InfoDict] | None:
+        """Evaluate at 1M nodes with multipv=5, returning the raw per-PV info list.
+
+        Phase 192 (D-12): the red-herring pool generator's MultiPV-5 ladder search.
+        Reuses `_NODES_BUDGET` and `_NODES_TIMEOUT_S` verbatim — D-12 forbids a new
+        budget constant.
+
+        Callers are responsible for rejecting positions with fewer than 5 legal
+        moves BEFORE calling (the cheapest possible reject — see
+        `scripts/gen_red_herring_pool.py`'s D-18 legal-move-count guard). The
+        return may still be shorter than 5 at the margin (Stockfish returns at
+        most `len(legal_moves)` PVs), so no caller may index blindly past the
+        returned list's actual length.
+
+        Returns None on engine failure (not started, missing protocol, timeout,
+        or engine crash/restart) or when the result is not a list.
+        """
+        result = await self._acquire_and_analyse(
+            board, chess.engine.Limit(nodes=_NODES_BUDGET), _NODES_TIMEOUT_S, multipv=5
+        )
+        if result is None or not isinstance(result, list):
+            return None
+        return result

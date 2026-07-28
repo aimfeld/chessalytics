@@ -640,17 +640,25 @@ export function TrainSolveScreen({
           >
             Solution
           </Button>
-          <Button asChild variant="brand-outline" className={cn('flex-1', TRAIN_BUTTON_CLASS)}>
-            <Link
-              to={buildGameAnalysisUrl(puzzle.game_id, puzzle.ply > 0 ? puzzle.ply - 1 : null)}
-              data-testid="btn-train-analyze"
-              aria-label="Analyze this position"
-              onClick={handleAnalyzeClick}
-            >
-              <Search className="h-4 w-4 mr-1" />
-              Analyze
-            </Link>
-          </Button>
+          {/* D-09 (Phase 192): hidden — not disabled — when the herring's
+              source game link is null. Nothing else on the reveal
+              references the game at that point, so a disabled control
+              would be an unexplained stub. `buildGameAnalysisUrl` keeps its
+              `(gameId: number, ...)` signature unwidened; this gate is what
+              guarantees it is never called with null. */}
+          {puzzle.game_id !== null && (
+            <Button asChild variant="brand-outline" className={cn('flex-1', TRAIN_BUTTON_CLASS)}>
+              <Link
+                to={buildGameAnalysisUrl(puzzle.game_id, puzzle.ply > 0 ? puzzle.ply - 1 : null)}
+                data-testid="btn-train-analyze"
+                aria-label="Analyze this position"
+                onClick={handleAnalyzeClick}
+              >
+                <Search className="h-4 w-4 mr-1" />
+                Analyze
+              </Link>
+            </Button>
+          )}
           <Button
             variant="default"
             className={cn('flex-1', TRAIN_BUTTON_CLASS)}

@@ -589,24 +589,38 @@ export function TrainReveal({
           "Game: <TC> · vs <opponent> (<elo>) · <date>" — same `useLibraryGame`
           fetch and solve-response gate as before. The Solution/Analyze/Next
           row that used to close this panel now lives below the board
-          (TrainSolveScreen, UAT round 3). */}
-      {gameQuery.isError && (
-        <LoadError resource="the game" data-testid="train-gamecard-error" />
-      )}
-      {game !== null && (
-        <p className="text-sm text-muted-foreground" data-testid="train-reveal-footer">
-          Game:{' '}
-          {game.time_control_bucket !== null && (
-            <>
-              <span className="capitalize">{game.time_control_bucket}</span>
-              {game.time_control_str !== null && ` ${formatTimeControl(game.time_control_str)}`}
-              {' · '}
-            </>
+          (TrainSolveScreen, UAT round 3).
+
+          D-07 (Phase 192): a herring reveal omits this footer entirely — "vs
+          <opponent>" has no referent when the solver was never a participant
+          in a stranger's game, and the reveal already labels the puzzle a
+          herring outright, so dropping the line leaks nothing new. Both the
+          error branch and the success branch sit behind the SAME
+          `puzzle_type !== 'herring'` gate — gating only the success branch
+          would leave a herring free to render "Failed to load the game" for
+          a `useLibraryGame` query that (for a null `game_id`, D-09) never
+          fired in the first place. */}
+      {verdict.puzzle_type !== 'herring' && (
+        <>
+          {gameQuery.isError && (
+            <LoadError resource="the game" data-testid="train-gamecard-error" />
           )}
-          vs {opponentName}
-          {opponentRating !== null && ` (${opponentRating})`}
-          {game.played_at !== null && ` · ${formatDateWithYear(game.played_at)}`}
-        </p>
+          {game !== null && (
+            <p className="text-sm text-muted-foreground" data-testid="train-reveal-footer">
+              Game:{' '}
+              {game.time_control_bucket !== null && (
+                <>
+                  <span className="capitalize">{game.time_control_bucket}</span>
+                  {game.time_control_str !== null && ` ${formatTimeControl(game.time_control_str)}`}
+                  {' · '}
+                </>
+              )}
+              vs {opponentName}
+              {opponentRating !== null && ` (${opponentRating})`}
+              {game.played_at !== null && ` · ${formatDateWithYear(game.played_at)}`}
+            </p>
+          )}
+        </>
       )}
     </div>
   );

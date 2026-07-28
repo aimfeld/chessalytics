@@ -80,6 +80,7 @@ from app.models.drill_solve import DrillSolve, DrillSource
 from app.models.game import Game
 from app.models.game_flaw import GameFlaw
 from app.models.game_position import GamePosition
+from app.models.herring_pool import HerringPool
 from app.schemas.train import SolveRequest
 
 ENDPOINT = "/api/train/sessions"
@@ -299,6 +300,72 @@ async def _seed_bare_game(test_engine, user_id: int, label: str) -> int:
             return game.id
 
 
+# A default 5-entry MultiPV-5 ladder (white POV, best-first) for herring_pool
+# row fixtures that don't care about the exact ladder shape (mirrors
+# tests/repositories/test_train_repository.py's _DEFAULT_LADDER).
+_DEFAULT_HERRING_LADDER: list[dict[str, object]] = [
+    {"move_uci": "e2e4", "cp": 30, "mate": None},
+    {"move_uci": "d2d4", "cp": 26, "mate": None},
+    {"move_uci": "g1f3", "cp": 20, "mate": None},
+    {"move_uci": "c2c4", "cp": 15, "mate": None},
+    {"move_uci": "b1c3", "cp": 10, "mate": None},
+]
+
+
+async def _seed_herring_pool_row(
+    test_engine,
+    user_id: int,
+    game_id: int,
+    ply: int,
+    *,
+    mover_color: str = "white",
+    fen: str = "rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1",
+    arriving_move_uci: str | None = "e2e4",
+) -> int:
+    """Seed one `herring_pool` row attached to `game_id` (Phase 192, sibling
+    to tests/repositories/test_train_repository.py's `_seed_herring_pool_row`,
+    duplicated here for this file's `test_engine`-based seeding style rather
+    than the repository suite's rollback-scoped `db_session` fixture).
+    Returns the pool row's id.
+    """
+    session_maker = async_sessionmaker(test_engine, expire_on_commit=False)
+    async with session_maker() as session:
+        async with session.begin():
+            row = HerringPool(
+                user_id=user_id,
+                game_id=game_id,
+                ply=ply,
+                mover_color=mover_color,
+                fen=fen,
+                arriving_move_uci=arriving_move_uci,
+                phase=1,
+                ladder=_DEFAULT_HERRING_LADDER,
+            )
+            session.add(row)
+            await session.flush()
+            return row.id
+
+
+async def _delete_herring_pool_rows(test_engine, herring_pool_ids: list[int]) -> None:
+    """Explicit cleanup for herring_pool test rows (mirrors
+    tests/services/test_train_pool.py's identically-named helper).
+
+    `_delete_games`'s FK is `ondelete="SET NULL"` (D-01), NOT `CASCADE` —
+    deleting the backing game nulls out the pool row's `user_id`/`game_id`
+    but does not remove it. `herring_stmt`/`get_waiting_puzzle_count` are
+    deliberately identity-blind (D-10, no `HerringPool.user_id` filter), so
+    an orphaned row from an earlier test leaks into every later test's
+    results in this shared per-run DB. Must be called BEFORE `_delete_games`
+    in a test's `finally` block.
+    """
+    if not herring_pool_ids:
+        return
+    session_maker = async_sessionmaker(test_engine, expire_on_commit=False)
+    async with session_maker() as session:
+        async with session.begin():
+            await session.execute(delete(HerringPool).where(HerringPool.id.in_(herring_pool_ids)))
+
+
 async def _seed_drill_item(
     test_engine,
     user_id: int,
@@ -334,6 +401,7 @@ async def _seed_session(
     entries: list[tuple[int, int, int]],
     *,
     requested_count: int | None = None,
+    herring_pool_ids: dict[int, int] | None = None,
 ) -> int:
     """Seed one open drill_sessions row plus one unsolved drill_solves row per entry.
 
@@ -348,6 +416,11 @@ async def _seed_session(
     resize check. Pass it explicitly to simulate a session that a real
     composition call would have produced under a specific
     `puzzles_per_session`.
+
+    `herring_pool_ids` (Phase 192) maps a 0-based `position` to the
+    `herring_pool.id` that entry's `RED_HERRING` row should carry — omitted
+    entirely (default `None`) for every pre-Phase-192 caller of this helper,
+    which never needed a real pool link.
     """
     session_maker = async_sessionmaker(test_engine, expire_on_commit=False)
     today = datetime.datetime.now(datetime.timezone.utc).date()
@@ -364,6 +437,7 @@ async def _seed_session(
             session.add(drill_session)
             await session.flush()
             for position, (game_id, ply, source) in enumerate(entries):
+                herring_pool_id = herring_pool_ids.get(position) if herring_pool_ids else None
                 session.add(
                     DrillSolve(
                         session_id=drill_session.id,
@@ -372,6 +446,7 @@ async def _seed_session(
                         game_id=game_id,
                         ply=ply,
                         source=source,
+                        herring_pool_id=herring_pool_id,
                         solved_at=None,
                     )
                 )
@@ -742,14 +817,18 @@ async def test_ply_zero_puzzle_serialises_last_move_uci_as_null(test_engine) -> 
     ply-1, which cannot exist for ply=0 (no row -1) — a ply-0 blunder can
     never qualify through fresh composition. The resume path
     (load_session_puzzles) has no such floor, so a directly-seeded session
-    entry at ply=0 (mirroring what a real red herring or SR item resume
-    would reconstruct) exercises the same fen_and_last_move_at_ply(pgn, 0)
-    call the composition path uses.
+    entry at ply=0 exercises the same fen_and_last_move_at_ply(pgn, 0) call
+    the composition path uses.
+
+    Phase 192 (D-03): a red herring's resume FEN/last-move now come
+    EXCLUSIVELY off its `herring_pool` row, never `fen_and_last_move_at_ply`
+    — so this uses an SR item (the source this call still applies to) rather
+    than the RED_HERRING source the pre-Phase-192 version of this test used.
     """
     email = f"train-ply0-{uuid.uuid4().hex[:8]}@example.com"
     user_id, token = await _register_and_login(email)
-    game_id = await _seed_bare_game(test_engine, user_id, "ply0")
-    await _seed_session(test_engine, user_id, [(game_id, 0, int(DrillSource.RED_HERRING))])
+    game_id = await _seed_game_with_blunder(test_engine, user_id, ply=0, seed_prior_position=False)
+    await _seed_session(test_engine, user_id, [(game_id, 0, int(DrillSource.SR_ITEM))])
 
     try:
         async with httpx.AsyncClient(
@@ -1426,15 +1505,23 @@ _PROMOTION_PLY = 8
 
 @pytest.mark.asyncio
 async def test_reveal_played_in_game_move_uci_promotion(test_engine) -> None:
-    """A 5-char promotion move_san reveals its 5-character UCI (190.1-01, D-05)."""
+    """A 5-char promotion move_san reveals its 5-character UCI (190.1-01, D-05).
+
+    Phase 192 (D-03): a red herring's reveal FEN now comes EXCLUSIVELY off
+    its `herring_pool` row (never `game.pgn`), so this uses an SR item — the
+    source this PGN-derived-FEN path still applies to — rather than the
+    RED_HERRING source the pre-Phase-192 version of this test used. The UCI
+    derivation logic under test is source-agnostic.
+    """
     email = f"train-reveal-uci-promo-{uuid.uuid4().hex[:8]}@example.com"
     user_id, token = await _register_and_login(email)
     game_id = await _seed_game_with_pgn(test_engine, user_id, _PROMOTION_PGN, "promo")
+    await _seed_drill_item(test_engine, user_id, game_id, _PROMOTION_PLY)
     await _seed_position_meta(
         test_engine, user_id, game_id, _PROMOTION_PLY, best_move="g7h8q", move_san="gxh8=Q"
     )
     session_id = await _seed_session(
-        test_engine, user_id, [(game_id, _PROMOTION_PLY, int(DrillSource.RED_HERRING))]
+        test_engine, user_id, [(game_id, _PROMOTION_PLY, int(DrillSource.SR_ITEM))]
     )
 
     try:
@@ -1540,6 +1627,144 @@ async def test_reveal_herring_reports_herring_type(test_engine) -> None:
         assert body["source"] == "red_herring"
     finally:
         await _delete_games(test_engine, [game_id])
+
+
+@pytest.mark.asyncio
+async def test_reveal_cross_user_herring_shows_game_move_and_no_owner_scope_leak(
+    test_engine,
+) -> None:
+    """D-06/T-192-02: a herring drawn from user B's game, solved by user A,
+    reveals with B's in-game move — the `GamePosition` lookup resolves the
+    source game's OWNER (`game.user_id`), not the solving user, so it no
+    longer silently degrades to `played_in_game_san: null` for a cross-user
+    herring even though B's game row is perfectly alive. The response key
+    set stays exactly the standing `PuzzleRevealResponse` contract — no
+    stranger's data leaks through beyond the one `move_san` field the D-06
+    widening exists to expose.
+    """
+    email_a = f"train-herring-crossuser-a-{uuid.uuid4().hex[:8]}@example.com"
+    user_a, token_a = await _register_and_login(email_a)
+    email_b = f"train-herring-crossuser-b-{uuid.uuid4().hex[:8]}@example.com"
+    user_b, _token_b = await _register_and_login(email_b)
+
+    game_id_b = await _seed_bare_game(test_engine, user_b, "crossuser-herring")
+    await _seed_position_meta(test_engine, user_b, game_id_b, 8, best_move="e2e4", move_san="e4")
+    pool_id = await _seed_herring_pool_row(
+        test_engine,
+        user_b,
+        game_id_b,
+        8,
+        fen="rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1",
+        arriving_move_uci="d7d5",
+    )
+    session_id = await _seed_session(
+        test_engine,
+        user_a,
+        [(game_id_b, 8, int(DrillSource.RED_HERRING))],
+        herring_pool_ids={0: pool_id},
+    )
+
+    try:
+        solved = await _solve(token_a, session_id, 0, guess="several", move_quality="good")
+        assert solved.status_code == 200
+
+        resp = await _reveal(token_a, session_id, 0)
+        assert resp.status_code == 200
+        body = resp.json()
+        # B's game move is shown, not degraded to None — this is the exact
+        # D-06 bug fix: the pre-widening filter (GamePosition.user_id ==
+        # solving user) would have returned no row for a foreign game.
+        assert body["played_in_game_san"] == "e4"
+        assert body["played_in_game_move_uci"] == "e2e4"
+        # No field beyond the standing contract — the widened lookup selects
+        # exactly move_san server-side; nothing else about B's game leaks.
+        assert set(body.keys()) == {
+            "game_id",
+            "ply",
+            "fen",
+            "played_in_game_san",
+            "played_in_game_move_uci",
+            "puzzle_type",
+            "source",
+            "has_tactic_lines",
+        }
+    finally:
+        await _delete_herring_pool_rows(test_engine, [pool_id])
+        await _delete_games(test_engine, [game_id_b])
+
+
+@pytest.mark.asyncio
+async def test_reveal_survives_source_game_deletion(test_engine) -> None:
+    """D-01/D-03/D-05: a herring's source game deletion nulls `game_id` (real
+    `ON DELETE SET NULL`) but the reveal still succeeds — FEN comes off the
+    `herring_pool` row, `game_id` reports `None`, and `played_in_game_san`
+    degrades to `None` (D-08) rather than the reveal 404ing.
+    """
+    email = f"train-reveal-orphan-herring-{uuid.uuid4().hex[:8]}@example.com"
+    user_id, token = await _register_and_login(email)
+    game_id = await _seed_bare_game(test_engine, user_id, "reveal-orphan-herring")
+    pool_id = await _seed_herring_pool_row(
+        test_engine,
+        user_id,
+        game_id,
+        8,
+        fen="8/8/8/8/8/8/8/K6k w - - 0 1",
+        arriving_move_uci="a1a2",
+    )
+    session_id = await _seed_session(
+        test_engine,
+        user_id,
+        [(game_id, 8, int(DrillSource.RED_HERRING))],
+        herring_pool_ids={0: pool_id},
+    )
+
+    try:
+        solved = await _solve(token, session_id, 0, guess="several", move_quality="good")
+        assert solved.status_code == 200
+
+        # Delete the source game via the real FK policy — never null the
+        # column by hand, which would prove nothing about ON DELETE SET NULL.
+        await _delete_games(test_engine, [game_id])
+
+        resp = await _reveal(token, session_id, 0)
+        assert resp.status_code == 200
+        body = resp.json()
+        assert body["game_id"] is None
+        assert body["fen"] == "8/8/8/8/8/8/8/K6k w - - 0 1"
+        assert body["played_in_game_san"] is None
+        assert body["played_in_game_move_uci"] is None
+        assert body["puzzle_type"] == "herring"
+        assert body["source"] == "red_herring"
+    finally:
+        await _delete_herring_pool_rows(test_engine, [pool_id])
+
+
+@pytest.mark.asyncio
+async def test_reveal_orphaned_sr_row_returns_not_found(test_engine) -> None:
+    """D-05: an SR item solved BEFORE its source game is deleted returns
+    `"not_found"` on reveal after the deletion — the exact pre-D-05 CASCADE
+    outcome (the whole `drill_solves` row, and therefore this query's
+    result, used to not exist at all). There is no "reveal an orphaned SR
+    item" state; the puzzle simply cannot be re-shown once its source game
+    is gone.
+    """
+    email = f"train-reveal-orphan-sr-{uuid.uuid4().hex[:8]}@example.com"
+    user_id, token = await _register_and_login(email)
+    game_id = await _seed_game_with_blunder(test_engine, user_id)
+    await _seed_drill_item(test_engine, user_id, game_id, _FLAW_PLY_WHITE)
+    session_id = await _seed_session(
+        test_engine, user_id, [(game_id, _FLAW_PLY_WHITE, int(DrillSource.SR_ITEM))]
+    )
+
+    solved = await _solve(token, session_id, 0, guess="critical", move_quality="good")
+    assert solved.status_code == 200
+
+    # Delete the source game via the real FK policy AFTER the solve is
+    # already recorded — never null the column by hand.
+    await _delete_games(test_engine, [game_id])
+
+    resp = await _reveal(token, session_id, 0)
+    assert resp.status_code == 404
 
 
 @pytest.mark.asyncio

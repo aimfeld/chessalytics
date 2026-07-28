@@ -607,6 +607,43 @@ describe('TrainReveal', () => {
     expect(screen.getByTestId('train-verdict-guess')).not.toBeNull();
   });
 
+  // ─── D-07: herring reveal omits the game info line entirely (Phase 192) ──
+
+  it('renders no game footer for a herring reveal', async () => {
+    getGame.mockResolvedValue(makeGame());
+    const { client } = renderReveal({
+      verdict: makeVerdict({ puzzle_type: 'herring', item_status: null, due_date: null, streak: null }),
+    });
+    // Waits for the game query to actually SETTLE (not just be dispatched) —
+    // otherwise this test would pass trivially before the success branch
+    // ever had a chance to render the footer.
+    await waitFor(() =>
+      expect(client.getQueryState(['library-game', 100])?.status).toBe('success'),
+    );
+    expect(screen.queryByTestId('train-reveal-footer')).toBeNull();
+  });
+
+  it('renders no game-load error for a herring reveal', async () => {
+    getGame.mockRejectedValue(new Error('boom'));
+    const { client } = renderReveal({
+      verdict: makeVerdict({ puzzle_type: 'herring', item_status: null, due_date: null, streak: null }),
+    });
+    // T-192-12: a herring's game query can still reject (game_id non-null,
+    // per D-08 — the in-game move survives independently of the game row's
+    // existence) — the error branch must be gated on the SAME puzzle_type
+    // condition as the success branch, not just the success branch.
+    await waitFor(() =>
+      expect(client.getQueryState(['library-game', 100])?.status).toBe('error'),
+    );
+    expect(screen.queryByTestId('train-gamecard-error')).toBeNull();
+  });
+
+  it('still renders the game footer for an SR reveal (positive control)', async () => {
+    getGame.mockResolvedValue(makeGame());
+    renderReveal({ verdict: makeVerdict({ puzzle_type: 'sharp' }) });
+    await waitFor(() => expect(screen.getByTestId('train-reveal-footer')).not.toBeNull());
+  });
+
   // ─── Line-box quality icons + stepping reports (190.1 UAT) ────────────────
 
   it('line-box headers carry the quality icon: star quality on the best box, the played quality on the your-move box', async () => {

@@ -75,15 +75,15 @@ async def compose_or_resume_session(
         sentry_sdk.set_context("train", {"user_id": str(user.id)})
         sentry_sdk.capture_exception()
         raise
-    return TrainSessionResponse(
-        session_id=composed.session_id,
-        session_date=composed.session_date,
-        expires_on=composed.expires_on,
-        puzzle_count=composed.puzzle_count,
-        requested_count=composed.requested_count,
-        solved_count=composed.solved_count,
-        blob_pending_count=composed.blob_pending_count,
-        puzzles=[
+    puzzles: list[TrainPuzzle] = []
+    for p in composed.puzzles:
+        # Phase 192 Plan 02: `ComposedPuzzle.game_id` and `TrainPuzzle.game_id`
+        # are both `int | None` (D-01/D-05) — a herring composed from an
+        # already-orphaned pool row (its source game deleted before this
+        # composition ran) legitimately has `game_id=None` here. No narrowing
+        # needed; the client hides the (n/a) Analyze deep-link for a null
+        # game_id (D-09).
+        puzzles.append(
             TrainPuzzle(
                 position=p.position,
                 game_id=p.game_id,
@@ -92,8 +92,16 @@ async def compose_or_resume_session(
                 side_to_move=p.side_to_move,
                 last_move_uci=p.last_move_uci,
             )
-            for p in composed.puzzles
-        ],
+        )
+    return TrainSessionResponse(
+        session_id=composed.session_id,
+        session_date=composed.session_date,
+        expires_on=composed.expires_on,
+        puzzle_count=composed.puzzle_count,
+        requested_count=composed.requested_count,
+        solved_count=composed.solved_count,
+        blob_pending_count=composed.blob_pending_count,
+        puzzles=puzzles,
     )
 
 

@@ -693,8 +693,19 @@ def _game_row(user_id: int, platform_game_id: str) -> dict:
 class TestDeleteAllGamesDrillCascade:
     @pytest.mark.asyncio
     async def test_delete_games_cascades_drill_rows(self, test_engine) -> None:
-        """DELETE /imports/games cascades drill_items/drill_solves away via the
-        games FK (D-02), while drill_sessions and train_settings survive (D-04)."""
+        """DELETE /imports/games cascades drill_items away via the games FK
+        (D-02, unchanged CASCADE), while drill_sessions and train_settings
+        survive (D-04).
+
+        Phase 192 Plan 02 (D-05): `drill_solves.game_id` is now
+        `ON DELETE SET NULL`, not `CASCADE` — a global herring pool means a
+        game deletion must never delete a row out of another user's
+        in-flight session, and that FK policy is uniform regardless of
+        which user owns the row. So both `drill_solves` rows here SURVIVE
+        this delete-all with `game_id` nulled (orphaned SR items, lazily
+        evicted per `load_session_puzzles`) rather than being deleted
+        alongside `drill_items`.
+        """
         user_id, headers = await _register_and_login()
         session_maker = async_sessionmaker(test_engine, expire_on_commit=False)
 
@@ -767,12 +778,18 @@ class TestDeleteAllGamesDrillCascade:
         assert delete_resp.status_code == 200
 
         assert await _count(DrillItem, DrillItem.user_id == user_id) == 0
-        assert await _count(DrillSolve, DrillSolve.user_id == user_id) == 0
         assert await _count(DrillSession, DrillSession.user_id == user_id) == 1, (
             "drill_sessions must survive delete-all (D-04)"
         )
         assert await _count(TrainSettings, TrainSettings.user_id == user_id) == 1, (
             "train_settings must survive delete-all (D-04)"
+        )
+        # D-05: both drill_solves rows survive with game_id nulled (SET
+        # NULL, not CASCADE) — never deleted alongside drill_items.
+        assert await _count(DrillSolve, DrillSolve.user_id == user_id) == 2
+        assert (
+            await _count(DrillSolve, DrillSolve.user_id == user_id, DrillSolve.game_id.is_(None))
+            == 2
         )
 
     @pytest.mark.asyncio

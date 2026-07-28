@@ -625,6 +625,31 @@ describe('TrainSolveScreen — progress, last move, grading state, engine failur
     expect(playSound).toHaveBeenCalledWith('game-win');
   });
 
+  // ─── D-09: Analyze hidden (not disabled) when game_id is null (Phase 192) ──
+
+  it('hides the Analyze link when the source game link is null, but Solution and Next still render', async () => {
+    await renderScreen(makePuzzle({ game_id: null, ply: 20 }));
+    fireEvent.click(screen.getByTestId('btn-train-guess-critical'));
+    await act(async () => {
+      fireEvent.click(screen.getByTestId('drop-e2e4'));
+    });
+    await waitFor(() => expect(screen.getByTestId('btn-train-solution')).not.toBeNull());
+    expect(screen.queryByTestId('btn-train-analyze')).toBeNull();
+    expect(screen.getByTestId('btn-train-next')).not.toBeNull();
+  });
+
+  it('renders the Analyze link when the source game is present', async () => {
+    await renderScreen(makePuzzle({ game_id: 100, ply: 20 }));
+    fireEvent.click(screen.getByTestId('btn-train-guess-critical'));
+    await act(async () => {
+      fireEvent.click(screen.getByTestId('drop-e2e4'));
+    });
+    await waitFor(() => expect(screen.getByTestId('btn-train-analyze')).not.toBeNull());
+    expect(screen.getByTestId('btn-train-analyze').getAttribute('href')).toBe(
+      buildGameAnalysisUrl(100, 19),
+    );
+  });
+
   it('btn-train-analyze carries no ply query parameter when puzzle.ply is 0', async () => {
     await renderScreen(makePuzzle({ ply: 0 }));
     fireEvent.click(screen.getByTestId('btn-train-guess-critical'));

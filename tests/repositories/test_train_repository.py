@@ -55,6 +55,7 @@ from app.models.game import Game
 from app.models.game_best_move import GameBestMove
 from app.models.game_flaw import GameFlaw
 from app.models.game_position import GamePosition
+from app.models.herring_pool import HerringPool
 from app.models.train_settings import TrainSettings
 from app.repositories import train_repository
 from app.services.train_pool import compose_slots
@@ -225,6 +226,86 @@ async def _seed_herring_game(
     return game_id
 
 
+# A default 5-entry MultiPV-5 ladder (white POV, best-first) for pool-row
+# fixtures that don't care about the exact ladder shape. Deliberately clears
+# BOTH of herring_stmt's Phase 192 (192-04) query-time gates so a fixture
+# using this default is, by construction, a valid non-degenerate herring:
+# PV0/PV1/PV2 all fall within INACCURACY_DROP (0.05 ES) of PV0 (3 qualifying
+# moves, above HERRING_MIN_QUALIFYING_MOVES=2), and PV0-to-PV4 is ~0.092 ES,
+# comfortably above HERRING_DEGENERATE_MIN_GAP_ES (0.02).
+_DEFAULT_LADDER: list[dict[str, object]] = [
+    {"move_uci": "e2e4", "cp": 60, "mate": None},
+    {"move_uci": "d2d4", "cp": 45, "mate": None},
+    {"move_uci": "g1f3", "cp": 20, "mate": None},
+    {"move_uci": "c2c4", "cp": -10, "mate": None},
+    {"move_uci": "b1c3", "cp": -40, "mate": None},
+]
+
+
+async def _seed_herring_pool_row(
+    db_session: AsyncSession,
+    user_id: int,
+    label: str,
+    *,
+    existing_game_id: int | None = None,
+    ply: int = 8,
+    mover_color: str = "white",
+    fen: str = "rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1",
+    arriving_move_uci: str | None = "e2e4",
+    phase: int = 1,
+    played_at: datetime.datetime | None = None,
+    ladder: list[dict[str, object]] | None = None,
+) -> tuple[int, int]:
+    """Seed one `herring_pool` row (Phase 192, sibling to `_seed_herring_game`
+    above, which seeds the superseded source and stays where it is until Plan
+    04 replaces that block).
+
+    Attaches to `existing_game_id` when given (for own-game-herring collision
+    tests, D-10), else creates a fresh `Game` row. Returns `(game_id,
+    herring_pool_id)`.
+    """
+    if existing_game_id is not None:
+        game_id = existing_game_id
+    else:
+        game = Game(
+            user_id=user_id,
+            platform="lichess",
+            platform_game_id=f"{label}-{uuid.uuid4().hex[:8]}",
+            platform_url="https://lichess.org/test",
+            pgn=_PGN,
+            result="1-0",
+            user_color="white",
+            time_control_str="600+0",
+            time_control_bucket="blitz",
+            time_control_seconds=600,
+            base_time_seconds=600,
+            increment_seconds=0.0,
+            rated=True,
+            is_computer_game=False,
+            ply_count=20,
+            full_evals_completed_at=datetime.datetime(2026, 1, 1, tzinfo=datetime.timezone.utc),
+            played_at=played_at,
+        )
+        db_session.add(game)
+        await db_session.flush()
+        game_id = game.id
+
+    row = HerringPool(
+        user_id=user_id,
+        game_id=game_id,
+        ply=ply,
+        mover_color=mover_color,
+        fen=fen,
+        arriving_move_uci=arriving_move_uci,
+        phase=phase,
+        source_played_at=played_at,
+        ladder=ladder if ladder is not None else _DEFAULT_LADDER,
+    )
+    db_session.add(row)
+    await db_session.flush()
+    return game_id, row.id
+
+
 # ---------------------------------------------------------------------------
 # TestComposeSlots — pure arithmetic, no DB
 # ---------------------------------------------------------------------------
@@ -266,7 +347,7 @@ async def test_full_session_is_nine_sr_and_three_herrings(db_session: AsyncSessi
     for i in range(12):
         await _seed_flaw_game(db_session, _USER_ID, f"full-sr-{i}")
     for i in range(5):
-        await _seed_herring_game(db_session, _USER_ID, f"full-herring-{i}")
+        await _seed_herring_pool_row(db_session, _USER_ID, f"full-herring-{i}")
 
     composed = await train_repository.compose_and_materialize_session(
         db_session, user_id=_USER_ID, now_utc=_NOW
@@ -309,7 +390,7 @@ async def test_sr_shortfall_backfills_with_herrings(db_session: AsyncSession) ->
     for i in range(2):
         await _seed_flaw_game(db_session, _USER_ID, f"short-sr-{i}")
     for i in range(15):
-        await _seed_herring_game(db_session, _USER_ID, f"short-herring-{i}")
+        await _seed_herring_pool_row(db_session, _USER_ID, f"short-herring-{i}")
 
     composed = await train_repository.compose_and_materialize_session(
         db_session, user_id=_USER_ID, now_utc=_NOW
@@ -350,7 +431,7 @@ async def test_herring_shortfall_backfills_with_sr(db_session: AsyncSession) -> 
     )
     for i in range(15):
         await _seed_flaw_game(db_session, _USER_ID, f"hshort-sr-{i}")
-    await _seed_herring_game(db_session, _USER_ID, "hshort-herring-0")
+    await _seed_herring_pool_row(db_session, _USER_ID, "hshort-herring-0")
 
     composed = await train_repository.compose_and_materialize_session(
         db_session, user_id=_USER_ID, now_utc=_NOW
@@ -370,6 +451,66 @@ async def test_herring_shortfall_backfills_with_sr(db_session: AsyncSession) -> 
     )
     assert sum(1 for s in rows if s == DrillSource.SR_ITEM) == 11
     assert sum(1 for s in rows if s == DrillSource.RED_HERRING) == 1
+
+
+@pytest.mark.asyncio
+async def test_fully_empty_herring_pool_backfills_with_sr(db_session: AsyncSession) -> None:
+    """ROADMAP SC4: with ZERO herring_pool rows (not `test_herring_shortfall_
+    backfills_with_sr`'s partial-shortfall ONE), a composed session still
+    returns a full N of 100% SR items, `waiting_count` stays honest, and
+    neither `herring_stmt` invocation (exclude_served=True, then the
+    exclude_served=False fallback) raises on the empty table.
+
+    This is a deliberate sibling, not a rewrite of the partial-shortfall
+    test above: that test hits the same cross-backfill branch, but this
+    phase swaps the herring source out from under that code path, so the
+    zero case deserves its own regression rather than inheriting confidence
+    from a test that never exercised zero rows. Per D-13/SEED-120, the
+    empty-pool window needs NO new handling in `compose_and_materialize_
+    session` — if this test fails, the fix belongs in the source swap, not
+    in a new empty-pool special case here.
+
+    Pins puzzles_per_session=12 explicitly (191-06: DEFAULT_PUZZLES_PER_SESSION
+    changed to 6) so all 12 SR flaw games seeded below are needed to fill N.
+    """
+    await ensure_test_user(db_session, _USER_ID)
+    settings_row = await train_repository.upsert_settings(
+        db_session,
+        user_id=_USER_ID,
+        timezone="UTC",
+        weekday_mask=0,
+        puzzles_per_session=12,
+        now_utc=_NOW,
+    )
+    for i in range(12):
+        await _seed_flaw_game(db_session, _USER_ID, f"emptypool-sr-{i}")
+    # Deliberately zero herring_pool rows — the case this test exists to pin.
+
+    composed = await train_repository.compose_and_materialize_session(
+        db_session, user_id=_USER_ID, now_utc=_NOW
+    )
+
+    assert composed.session_id is not None
+    assert composed.puzzle_count == 12  # full N from SR alone, no herring source at all
+
+    rows = (
+        await db_session.execute(
+            select(DrillSolve.source, DrillSolve.herring_pool_id).where(
+                DrillSolve.session_id == composed.session_id
+            )
+        )
+    ).all()
+    assert len(rows) == 12
+    assert all(source == DrillSource.SR_ITEM for source, _herring_pool_id in rows)
+    assert all(herring_pool_id is None for _source, herring_pool_id in rows)
+
+    # waiting_count must stay honest (neither inflated nor deflated by the
+    # absent herring source): the just-composed open session reserved all 12
+    # seeded SR puzzles, none solved yet.
+    waiting_count = await train_repository.get_waiting_puzzle_count(
+        db_session, user_id=_USER_ID, settings_row=settings_row, today=_TODAY
+    )
+    assert waiting_count == 12
 
 
 @pytest.mark.asyncio
@@ -400,7 +541,7 @@ async def test_padding_introduces_new_drill_items_recency_first(db_session: Asyn
         game_ids.append(game_id)
     # Enough herring material that the herring side is never short (no SR cross-backfill).
     for i in range(5):
-        await _seed_herring_game(db_session, _USER_ID, f"recency-herring-{i}")
+        await _seed_herring_pool_row(db_session, _USER_ID, f"recency-herring-{i}")
 
     composed = await train_repository.compose_and_materialize_session(
         db_session, user_id=_USER_ID, now_utc=_NOW
@@ -479,7 +620,7 @@ async def test_composition_on_off_day_draws_from_same_queue(db_session: AsyncSes
     for i in range(9):
         await _seed_flaw_game(db_session, _USER_ID, f"offday-sr-{i}")
     for i in range(5):
-        await _seed_herring_game(db_session, _USER_ID, f"offday-herring-{i}")
+        await _seed_herring_pool_row(db_session, _USER_ID, f"offday-herring-{i}")
 
     composed = await train_repository.compose_and_materialize_session(
         db_session, user_id=_USER_ID, now_utc=_NOW
@@ -503,6 +644,97 @@ async def test_composition_on_off_day_draws_from_same_queue(db_session: AsyncSes
     )
     assert sum(1 for s in rows if s == DrillSource.SR_ITEM) == 9
     assert sum(1 for s in rows if s == DrillSource.RED_HERRING) == 3
+
+
+# ---------------------------------------------------------------------------
+# Herring source swap (Phase 192, D-03/D-04/D-10) — 192-01-PLAN.md Task 2
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_herring_fen_comes_from_pool_row_not_pgn(db_session: AsyncSession) -> None:
+    """D-03: a herring's FEN and arriving move are read straight off the
+    `herring_pool` row, never re-derived from the source game's PGN.
+
+    Seeds a pool row whose `fen` deliberately does NOT match what the game's
+    PGN would produce at that ply — if composition ever fell back to
+    `fen_and_last_move_at_ply`, this assertion would catch it.
+    """
+    await ensure_test_user(db_session, _USER_ID)
+    await train_repository.upsert_settings(
+        db_session,
+        user_id=_USER_ID,
+        timezone="UTC",
+        weekday_mask=0,
+        puzzles_per_session=1,
+        now_utc=_NOW,
+    )
+    deliberately_wrong_fen = "8/8/8/8/8/8/8/K6k w - - 0 1"
+    _game_id, pool_id = await _seed_herring_pool_row(
+        db_session,
+        _USER_ID,
+        "fen-mismatch",
+        fen=deliberately_wrong_fen,
+        arriving_move_uci="a1a2",
+    )
+
+    composed = await train_repository.compose_and_materialize_session(
+        db_session, user_id=_USER_ID, now_utc=_NOW
+    )
+
+    assert composed.puzzle_count == 1
+    puzzle = composed.puzzles[0]
+    assert puzzle.fen == deliberately_wrong_fen
+    assert puzzle.last_move_uci == "a1a2"
+    assert puzzle.herring_pool_id == pool_id
+
+    stored_herring_pool_id = (
+        await db_session.execute(
+            select(DrillSolve.herring_pool_id).where(DrillSolve.session_id == composed.session_id)
+        )
+    ).scalar_one()
+    assert stored_herring_pool_id == pool_id
+
+
+@pytest.mark.asyncio
+async def test_own_game_herring_colliding_with_sr_pick_is_dropped(db_session: AsyncSession) -> None:
+    """D-10: an own-game herring is permitted, but when its `(game_id, ply)`
+    matches an SR pick already selected for this session, the herring is
+    dropped before insert — `uq_drill_solves_session_puzzle` never fires and
+    the SR row wins the slot.
+    """
+    await ensure_test_user(db_session, _USER_ID)
+    await train_repository.upsert_settings(
+        db_session,
+        user_id=_USER_ID,
+        timezone="UTC",
+        weekday_mask=0,
+        puzzles_per_session=4,
+        now_utc=_NOW,
+    )
+    game_id = await _seed_flaw_game(db_session, _USER_ID, "collide-sr", ply=2)
+    await _seed_herring_pool_row(
+        db_session, _USER_ID, "collide-herring", existing_game_id=game_id, ply=2
+    )
+
+    composed = await train_repository.compose_and_materialize_session(
+        db_session, user_id=_USER_ID, now_utc=_NOW
+    )
+
+    # Only the SR row survives — the colliding herring was dropped, not both
+    # inserted (which would have raised IntegrityError on the unique index).
+    assert composed.puzzle_count == 1
+    rows = (
+        await db_session.execute(
+            select(DrillSolve.source, DrillSolve.herring_pool_id).where(
+                DrillSolve.session_id == composed.session_id
+            )
+        )
+    ).all()
+    assert len(rows) == 1
+    source, herring_pool_id = rows[0]
+    assert source == DrillSource.SR_ITEM
+    assert herring_pool_id is None
 
 
 # ---------------------------------------------------------------------------
@@ -897,7 +1129,7 @@ async def test_frozen_order_is_stable_across_resumes(db_session: AsyncSession) -
     for i in range(4):
         await _seed_flaw_game(db_session, _USER_ID, f"frozen-sr-{i}")
     for i in range(2):
-        await _seed_herring_game(db_session, _USER_ID, f"frozen-herring-{i}")
+        await _seed_herring_pool_row(db_session, _USER_ID, f"frozen-herring-{i}")
 
     first = await train_repository.compose_and_materialize_session(
         db_session, user_id=_USER_ID, now_utc=_NOW
@@ -911,6 +1143,162 @@ async def test_frozen_order_is_stable_across_resumes(db_session: AsyncSession) -
     order_second = [(p.position, p.game_id, p.ply) for p in second.puzzles]
 
     assert order_first == order_second
+
+
+# ---------------------------------------------------------------------------
+# D-05 nullability (Phase 192, Plan 02) — orphaned SR vs orphaned herring
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_resume_serves_herring_with_deleted_source_game(db_session: AsyncSession) -> None:
+    """D-01/D-05: a herring whose source game has been deleted is still
+    served on resume, FEN/arriving move read off its `herring_pool` row
+    (D-03) — `game_id` is nulled via the real `ON DELETE SET NULL` FK policy,
+    never dropped, never crashing.
+    """
+    await ensure_test_user(db_session, _USER_ID)
+    deliberately_wrong_fen = "8/8/8/8/8/8/8/K6k w - - 0 1"
+    game_id, pool_id = await _seed_herring_pool_row(
+        db_session,
+        _USER_ID,
+        "orphan-herring",
+        ply=8,
+        fen=deliberately_wrong_fen,
+        arriving_move_uci="a1a2",
+    )
+    drill_session = DrillSession(
+        user_id=_USER_ID,
+        session_date=_TODAY,
+        status="open",
+        puzzle_count=1,
+        expires_on=_TODAY + datetime.timedelta(days=7),
+    )
+    db_session.add(drill_session)
+    await db_session.flush()
+    db_session.add(
+        DrillSolve(
+            session_id=drill_session.id,
+            position=0,
+            user_id=_USER_ID,
+            game_id=game_id,
+            ply=8,
+            source=DrillSource.RED_HERRING,
+            herring_pool_id=pool_id,
+            solved_at=None,
+        )
+    )
+    await db_session.flush()
+
+    # Delete the source game and let the real ON DELETE SET NULL FK policy
+    # act — never null the column by hand, which would prove nothing about
+    # the actual migration.
+    await db_session.execute(delete(Game).where(Game.id == game_id))
+    await db_session.flush()
+
+    puzzles = await train_repository.load_session_puzzles(
+        db_session, user_id=_USER_ID, session_id=drill_session.id
+    )
+
+    assert len(puzzles) == 1
+    puzzle = puzzles[0]
+    assert puzzle.game_id is None  # nulled by ON DELETE SET NULL, row survives
+    assert puzzle.fen == deliberately_wrong_fen  # off the pool row, not a PGN
+    assert puzzle.last_move_uci == "a1a2"
+    assert puzzle.herring_pool_id == pool_id
+
+
+@pytest.mark.asyncio
+async def test_completion_ignores_orphaned_sr_row_but_counts_orphaned_herring(
+    db_session: AsyncSession,
+) -> None:
+    """Two sides of the same `or_` clause in `_mark_session_complete_if_done`:
+
+    - An orphaned SR row (source game deleted) is EXCLUDED from `remaining` —
+      it can never be attempted again, so it must not block completion
+      (the exact pre-D-05 CASCADE-deletion outcome, preserved via lazy
+      exclusion instead of a deleted row; this is the WR-02 stuck-session
+      fix, extended to also cover "game row gone").
+    - An orphaned herring row (source game ALSO deleted) is NOT excluded —
+      it is still perfectly servable off its `herring_pool` row (D-03) and
+      must keep pinning the session open until solved.
+
+    A session with only these two rows must therefore stay open — handling
+    only one side (the documented failure mode) would make it wrongly
+    complete or wrongly stuck forever.
+    """
+    await ensure_test_user(db_session, _USER_ID)
+    sr_game_id = await _seed_flaw_game(db_session, _USER_ID, "orphan-sr", ply=2)
+    herring_game_id, pool_id = await _seed_herring_pool_row(
+        db_session, _USER_ID, "orphan-herring-completion", ply=8
+    )
+
+    drill_session = DrillSession(
+        user_id=_USER_ID,
+        session_date=_TODAY,
+        status="open",
+        puzzle_count=2,
+        expires_on=_TODAY + datetime.timedelta(days=7),
+    )
+    db_session.add(drill_session)
+    await db_session.flush()
+    db_session.add(
+        DrillSolve(
+            session_id=drill_session.id,
+            position=0,
+            user_id=_USER_ID,
+            game_id=sr_game_id,
+            ply=2,
+            source=DrillSource.SR_ITEM,
+            solved_at=None,
+        )
+    )
+    db_session.add(
+        DrillSolve(
+            session_id=drill_session.id,
+            position=1,
+            user_id=_USER_ID,
+            game_id=herring_game_id,
+            ply=8,
+            source=DrillSource.RED_HERRING,
+            herring_pool_id=pool_id,
+            solved_at=None,
+        )
+    )
+    await db_session.flush()
+
+    # Delete BOTH source games via the real FK policy — never null by hand.
+    await db_session.execute(delete(Game).where(Game.id.in_([sr_game_id, herring_game_id])))
+    await db_session.flush()
+
+    session_complete = await train_repository._mark_session_complete_if_done(
+        db_session, session_id=drill_session.id, now_utc=_NOW
+    )
+
+    # The orphaned herring alone keeps `remaining` at 1 — the session must
+    # NOT complete, even though the orphaned SR row is excluded.
+    assert session_complete is False
+    status = (
+        await db_session.execute(
+            select(DrillSession.status).where(DrillSession.id == drill_session.id)
+        )
+    ).scalar_one()
+    assert status == "open"
+
+    # Directly prove the SR-vs-herring asymmetry the docstring promises: mark
+    # the still-servable herring solved and confirm the SR orphan alone no
+    # longer blocks completion.
+    await db_session.execute(
+        update(DrillSolve)
+        .where(DrillSolve.session_id == drill_session.id, DrillSolve.position == 1)
+        .values(solved_at=_NOW, correct_move=True)
+    )
+    await db_session.flush()
+
+    session_complete_after = await train_repository._mark_session_complete_if_done(
+        db_session, session_id=drill_session.id, now_utc=_NOW
+    )
+    assert session_complete_after is True
 
 
 # ---------------------------------------------------------------------------
