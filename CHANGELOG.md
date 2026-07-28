@@ -31,6 +31,8 @@ in `YYYY-MM-DD` (Europe/Zurich).
 
 ### Fixed
 
+- A training session can no longer get stuck on Resume forever. If one of its "several fine moves" puzzles could not be served, the session still counted it as outstanding and refused to finish, so it sat there until it expired the next day. Such a puzzle is now skipped for the purpose of finishing, exactly as it already was for the purpose of serving. (quick 260728-kmu)
+
 - A slow analysis worker no longer restarts its engine when a search times out, which was turning one slow position into a block of missing evaluations for the rest of the game.
 
 - Finishing a training session no longer lets a fresh session be composed the same day, which was quietly defeating the spaced-repetition pacing and could leave a Resume button that did nothing. (Phase 190.1)

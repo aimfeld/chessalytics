@@ -1,9 +1,10 @@
 ---
 id: SEED-123
-status: open
+status: closed
 planted: 2026-07-28
 planted_during: Post-deploy prod inspection of the v2.9 Train release (Phases 191-193), 2026-07-28. The user asked whether `scripts/reset_train_state.py` could clear prod sessions "lingering with old red herrings"; investigating why they were lingering surfaced this asymmetry as the actual mechanism.
 trigger_when: Before the next Train phase, or immediately if a user reports a Train session stuck on "resume" that never completes. Also a prerequisite for ever pruning `herring_pool` rows (a top-up/GC pass over the pool would trigger this bug for live users).
+closed: 2026-07-28 (quick 260728-kmu, commit d2d1f09d)
 scope: quick (single guard + regression test) — mirror the SR-item leniency clause for herrings in `_mark_session_complete_if_done`.
 depends_on: Phase 192 (the global herring pool and the D-05 nullable `game_id`). No open blockers.
 ---
