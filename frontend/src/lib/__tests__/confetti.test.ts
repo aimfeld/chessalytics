@@ -48,6 +48,20 @@ describe('confetti', () => {
     expect(confettiMock).toHaveBeenCalled();
   });
 
+  it('firePartialConfetti fires the same two bursts with strictly fewer particles than fireWinConfetti', async () => {
+    const { fireWinConfetti, firePartialConfetti } = await import('../confetti');
+    fireWinConfetti();
+    const winCounts = confettiMock.mock.calls.map(([opts]) => opts.particleCount as number);
+    confettiMock.mockClear();
+    firePartialConfetti();
+    const partialCounts = confettiMock.mock.calls.map(([opts]) => opts.particleCount as number);
+
+    expect(partialCounts).toHaveLength(winCounts.length);
+    partialCounts.forEach((count, i) => {
+      expect(count).toBeLessThan(winCounts[i]!);
+    });
+  });
+
   it('prefersReducedMotion returns true when matchMedia reports reduce', async () => {
     stubMatchMedia(true);
     const { prefersReducedMotion } = await import('../confetti');

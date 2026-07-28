@@ -337,6 +337,22 @@
   animation: train-points-pop 1.6s ease-in-out forwards;
 }
 
+/* Train score-screen result badge entrance. Unlike train-points-pop above,
+   this element is normally positioned (no translate centering), so the
+   keyframes animate scale only. It overshoots once and settles — a single
+   arrival gesture, not a loop. TrainScoreScreen omits the class entirely
+   under prefers-reduced-motion, so the badge just appears at rest. */
+@keyframes train-score-badge-pop {
+  0%   { opacity: 0; transform: scale(0.5); }
+  55%  { opacity: 1; transform: scale(1.12); }
+  75%  { transform: scale(0.97); }
+  100% { opacity: 1; transform: scale(1); }
+}
+
+.animate-train-score-badge-pop {
+  animation: train-score-badge-pop 0.55s cubic-bezier(0.34, 1.4, 0.64, 1) forwards;
+}
+
 /* Mobile typography bump.
    Below the sm: breakpoint, lift Tailwind's default type scale by one tier so
    labels, filter chips, table captions, and body copy match typical mobile-app
