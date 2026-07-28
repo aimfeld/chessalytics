@@ -44,6 +44,7 @@ from app.services.train_pool import (
     fen_and_last_move_at_ply,
     full_fen_at_ply,
     herring_stmt,
+    pick_one_per_game,
     pool_entry_stmt,
 )
 from app.services.train_scheduler import (
@@ -1353,13 +1354,19 @@ async def compose_and_materialize_session(
         Game.played_at.desc().nulls_last(), GameFlaw.game_id.desc(), GameFlaw.ply.asc()
     )
     pool_rows = (await session.execute(pool_stmt)).all()
-    sr_pool: list[tuple[int, int, Game]] = []
+    deduped_pool: list[tuple[int, int, Game]] = []
     for flaw, game in pool_rows:
         key = (flaw.game_id, flaw.ply)
         if key in existing_pairs:
             continue
-        sr_pool.append((flaw.game_id, flaw.ply, game))
+        deduped_pool.append((flaw.game_id, flaw.ply, game))
         existing_pairs.add(key)
+    # Quick task 260728-pgp: cap the fresh pool at MAX_ITEMS_PER_GAME_PER_SESSION
+    # per game_id BEFORE it's consumed below. pick_one_per_game groups by
+    # game_id in first-appearance order, so the Game.played_at DESC ordering
+    # across games above is unchanged — only the WITHIN-game choice (which
+    # ply of a blunder-heavy game) is randomized.
+    sr_pool = pick_one_per_game(deduped_pool, user_id=user_id, session_date=today)
 
     # pool-sourced picks that need a brand-new drill_items row (never the
     # already-tracked due items above).

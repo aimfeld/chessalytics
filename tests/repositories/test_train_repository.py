@@ -59,7 +59,7 @@ from app.models.game_position import GamePosition
 from app.models.herring_pool import HerringPool
 from app.models.train_settings import TrainSettings
 from app.repositories import train_repository
-from app.services.train_pool import compose_slots
+from app.services.train_pool import MAX_ITEMS_PER_GAME_PER_SESSION, compose_slots, pick_one_per_game
 from app.services.train_scheduler import ALL_WEEKDAYS_MASK, SHIELD_CAP
 from tests.conftest import ensure_test_user
 
@@ -102,30 +102,41 @@ async def _seed_flaw_game(
     missed_pv_lines: list | None = _MISSED_PV_LINES,
     prior_eval_cp: int | None = _WINNABLE_CP,
     played_at: datetime.datetime | None = None,
+    existing_game_id: int | None = None,
 ) -> int:
-    """Seed one game + one qualifying (or blob-pending) blunder flaw row + prior eval."""
-    game = Game(
-        user_id=user_id,
-        platform="lichess",
-        platform_game_id=f"{label}-{uuid.uuid4().hex[:8]}",
-        platform_url="https://lichess.org/test",
-        pgn=_PGN,
-        result="1-0",
-        user_color=user_color,
-        time_control_str="600+0",
-        time_control_bucket="blitz",
-        time_control_seconds=600,
-        base_time_seconds=600,
-        increment_seconds=0.0,
-        rated=True,
-        is_computer_game=False,
-        ply_count=20,
-        full_evals_completed_at=datetime.datetime(2026, 1, 1, tzinfo=datetime.timezone.utc),
-        played_at=played_at,
-    )
-    db_session.add(game)
-    await db_session.flush()
-    game_id: int = game.id
+    """Seed one qualifying (or blob-pending) blunder flaw row + prior eval.
+
+    Attaches to `existing_game_id` when given (mirroring
+    `_seed_herring_pool_row`'s parameter of the same name) — for seeding
+    several blunders on ONE game at different plies (quick task
+    260728-pgp's same-game cap tests) — else creates a fresh `Game` row as
+    before.
+    """
+    if existing_game_id is not None:
+        game_id = existing_game_id
+    else:
+        game = Game(
+            user_id=user_id,
+            platform="lichess",
+            platform_game_id=f"{label}-{uuid.uuid4().hex[:8]}",
+            platform_url="https://lichess.org/test",
+            pgn=_PGN,
+            result="1-0",
+            user_color=user_color,
+            time_control_str="600+0",
+            time_control_bucket="blitz",
+            time_control_seconds=600,
+            base_time_seconds=600,
+            increment_seconds=0.0,
+            rated=True,
+            is_computer_game=False,
+            ply_count=20,
+            full_evals_completed_at=datetime.datetime(2026, 1, 1, tzinfo=datetime.timezone.utc),
+            played_at=played_at,
+        )
+        db_session.add(game)
+        await db_session.flush()
+        game_id = game.id
 
     flaw_kwargs: dict[str, object] = dict(
         user_id=user_id,
@@ -559,6 +570,78 @@ async def test_padding_introduces_new_drill_items_recency_first(db_session: Asyn
 
     assert tracked_game_ids == expected_tracked
     assert tracked_game_ids.isdisjoint(excluded)
+
+
+@pytest.mark.asyncio
+async def test_blunder_heavy_game_contributes_exactly_one_pool_pick(
+    db_session: AsyncSession,
+) -> None:
+    """Quick task 260728-pgp Task 1 (b): a fresh blunder-heavy game (6
+    qualifying blunders, none yet tracked as a drill_items row) contributes
+    EXACTLY ONE new drill_items row and exactly one SR_ITEM drill_solves row
+    to the composed session — never one per qualifying blunder — and the
+    served ply is exactly `pick_one_per_game`'s own prediction for
+    `(user_id, today, game_id)` over that game's deduped candidate list.
+
+    Uses the DEFAULT puzzles_per_session=6 (no upsert_settings override):
+    compose_slots(6) = (sr_slots=5, herring_slots=1). With only one capped
+    SR candidate, the SR side is short by construction, so plenty of
+    herring material is seeded to prove the cap doesn't relax under
+    cross-backfill (Task 2 territory, but this test must not accidentally
+    depend on an unbacked cross-backfill assumption).
+    """
+    await ensure_test_user(db_session, _USER_ID)
+    plies = [2, 4, 6, 8, 10, 12]
+    game_id = await _seed_flaw_game(db_session, _USER_ID, "blunderheavy-0", ply=plies[0])
+    for ply in plies[1:]:
+        await _seed_flaw_game(
+            db_session, _USER_ID, "blunderheavy-n", ply=ply, existing_game_id=game_id
+        )
+    for i in range(6):
+        await _seed_herring_pool_row(db_session, _USER_ID, f"blunderheavy-herring-{i}")
+
+    composed = await train_repository.compose_and_materialize_session(
+        db_session, user_id=_USER_ID, now_utc=_NOW
+    )
+    assert composed.session_id is not None
+    assert composed.puzzle_count == 6
+
+    tracked_items = (
+        (
+            await db_session.execute(
+                select(DrillItem).where(
+                    DrillItem.user_id == _USER_ID, DrillItem.game_id == game_id
+                )
+            )
+        )
+        .scalars()
+        .all()
+    )
+    assert len(tracked_items) == 1
+
+    sr_solves = (
+        (
+            await db_session.execute(
+                select(DrillSolve).where(
+                    DrillSolve.session_id == composed.session_id,
+                    DrillSolve.source == DrillSource.SR_ITEM,
+                    DrillSolve.game_id == game_id,
+                )
+            )
+        )
+        .scalars()
+        .all()
+    )
+    assert len(sr_solves) == 1
+
+    # deduped_pool's order for a single game_id is GameFlaw.ply ASC (the
+    # query's tertiary ORDER BY key, game_id/played_at both constant here)
+    # — matches the ascending `plies` list built above.
+    candidates = [(game_id, ply, None) for ply in plies]
+    predicted = pick_one_per_game(candidates, user_id=_USER_ID, session_date=_TODAY)
+    assert len(predicted) == MAX_ITEMS_PER_GAME_PER_SESSION
+    assert sr_solves[0].ply == predicted[0][1]
+    assert tracked_items[0].ply == predicted[0][1]
 
 
 @pytest.mark.asyncio
