@@ -8,7 +8,7 @@ status: planning
 stopped_at: Completed 192-05-PLAN.md
 last_updated: "2026-07-28T03:36:13.300Z"
 last_activity: 2026-07-28
-last_activity_desc: Phase 192 complete, transitioned to Phase 999.1
+last_activity_desc: Phase 192 shipped — squash-merged to main (7b3f1da0), transitioned to Phase 999.1
 progress:
   total_phases: 5
   completed_phases: 5
@@ -27,7 +27,7 @@ Status: Ready to plan
 passed with 2 warnings, both closed at plan time. Two blocking gates are built in: a
 `checkpoint:decision` on the `herring_pool` surrogate PK (192-01) and a second on the
 `drill_solves.game_id` nullability migration (192-02, one-way door).
-Last activity: 2026-07-28 — Phase 192 complete, transitioned to Phase 999.1
+Last activity: 2026-07-28 — Phase 192 shipped — squash-merged to main (7b3f1da0), transitioned to Phase 999.1
 
 Phase 192 fixes a correctness defect in Phase 189's red herrings: they were sourced from
 non-gem `game_best_moves` rows, which does not actually mean "several fine moves". It replaces
