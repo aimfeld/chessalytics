@@ -1,11 +1,21 @@
 ---
 id: SEED-124
-status: dormant
+status: closed
 planted: 2026-07-28
+closed: 2026-07-28
+closed_by: "commit 858c656d (caps + --reset) and the same-day prod regeneration"
 planted_during: v2.9 Phase 193 ship + prod deploy (first production herring_pool generation)
 trigger_when: before the next herring_pool top-up, or when a Train milestone touches red-herring quality / anti-tell analysis
 scope: small
 ---
+
+> **CLOSED 2026-07-28, same day it was planted.** Fixed in `858c656d`: per-user and
+> per-game caps checked before the Stockfish call, a keyset seek past a capped user, cap
+> counters seeded from existing rows so top-ups cannot re-concentrate, a walk budget
+> separate from the search budget, and a `--reset` flag. Prod was regenerated from scratch
+> the same day: **5000 rows now span 116 users and 2562 games** (was 4 users / 444 games),
+> with both caps binding exactly (34 rows/user/phase, 2 rows/game). Full record in
+> `.planning/phases/192-red-herring-position-pool/192-ROLLOUT.md`.
 
 # SEED-124: `herring_pool` sampling concentrates on 3-4 users instead of spanning the whole frame
 
