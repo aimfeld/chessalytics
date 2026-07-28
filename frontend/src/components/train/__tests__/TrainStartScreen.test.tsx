@@ -4,12 +4,95 @@
  * (D-01..D-04, D-14, plus loading/error) per 190-04-PLAN.md Task 1.
  */
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { cleanup, render, screen } from '@testing-library/react';
+import { act, cleanup, fireEvent, render, screen, within } from '@testing-library/react';
+import { MemoryRouter } from 'react-router-dom';
+
+// 191-01/191-06: TrainStartScreen calls useTrainProgress() directly (for the
+// PROG-05/D-16 tailored empty states) AND renders <TrainStreakCard /> +
+// <TrainStatsCard /> internally, which call the SAME hook — mocked once here
+// with a mutable module-level object so every call site reads the identical
+// resolved value per test, mirroring App.test.tsx's `trainProgressData`
+// pattern (TrainStreakCard.test.tsx / TrainStatsCard.test.tsx cover the
+// hook's own loading/error/populated states in isolation).
+const DEFAULT_TRAIN_PROGRESS: TrainProgressResponse = {
+  session_streak_count: 0,
+  shield_level: 0,
+  current_week_completed: 0,
+  current_week_required: null,
+  streak_reset_notice: false,
+  mastered_count: 0,
+  parked_count: 0,
+  waiting_count: 0,
+  pool_state: 'available',
+  next_due_date: null,
+  badge_visible: false,
+};
+
+let trainProgressMock: {
+  data: TrainProgressResponse | undefined;
+  isPending: boolean;
+  isError: boolean;
+} = {
+  data: DEFAULT_TRAIN_PROGRESS,
+  isPending: false,
+  isError: false,
+};
+
+vi.mock('@/hooks/useTrainProgress', () => ({
+  useTrainProgress: () => trainProgressMock,
+}));
+
+// 191-04: TrainStartScreen renders <TrainScheduleSettings /> internally,
+// which calls useTrainSettings() — mocked here with a resolved stub
+// (TrainScheduleSettings.test.tsx covers the hook's own loading/error/save
+// states in isolation) so the six pre-existing landing-state assertions keep
+// passing without a QueryClientProvider.
+// 191-06: `save` synchronously invokes its `onSuccess` callback AND updates
+// `mockTrainSettingsData` in place, mirroring the real hook's "writes the
+// fresh row into its own cache on success" behavior (191-04-SUMMARY.md) —
+// this lets the "onSettingsSaved wiring" test below exercise the real
+// TrainScheduleSettings -> TrainStartScreen -> caller callback chain without
+// a QueryClientProvider or real network mock. Without this, the mock's
+// `data` would keep reporting stale values forever after a save, and
+// TrainScheduleSettings's "already matches what the server confirmed" guard
+// would never trip — re-firing `save()` on every unrelated re-render.
+let mockTrainSettingsData = { timezone: 'UTC', weekday_mask: 127, puzzles_per_session: 6 };
+
+const saveMock = vi.fn(
+  (
+    body: { weekdayMask: number; puzzlesPerSession: number },
+    opts?: { onSuccess?: () => void },
+  ) => {
+    mockTrainSettingsData = {
+      ...mockTrainSettingsData,
+      weekday_mask: body.weekdayMask,
+      puzzles_per_session: body.puzzlesPerSession,
+    };
+    opts?.onSuccess?.();
+  },
+);
+
+vi.mock('@/hooks/useTrainSettings', () => ({
+  useTrainSettings: () => ({
+    data: mockTrainSettingsData,
+    isPending: false,
+    isError: false,
+    save: saveMock,
+    isSaving: false,
+    isSaveError: false,
+    isSaveSuccess: false,
+  }),
+}));
+
 import { TrainStartScreen } from '@/components/train/TrainStartScreen';
-import type { TrainPuzzle, TrainSessionResponse } from '@/types/train';
+import { TRAIN_SETTINGS_SAVE_DEBOUNCE_MS } from '@/components/train/TrainScheduleSettings';
+import type { TrainProgressResponse, TrainPuzzle, TrainSessionResponse } from '@/types/train';
 
 afterEach(() => {
   cleanup();
+  trainProgressMock = { data: DEFAULT_TRAIN_PROGRESS, isPending: false, isError: false };
+  saveMock.mockClear();
+  mockTrainSettingsData = { timezone: 'UTC', weekday_mask: 127, puzzles_per_session: 6 };
 });
 
 const STUB_PUZZLE: TrainPuzzle = {
@@ -32,19 +115,33 @@ const BASE_SESSION: TrainSessionResponse = {
   puzzles: [],
 };
 
+// D-04: session_id null and puzzle_count 0 is the shape that reaches the
+// 'empty' landing state, which the PROG-05/D-16 tailored bodies branch from.
+const EMPTY_SESSION: TrainSessionResponse = {
+  ...BASE_SESSION,
+  session_id: null,
+  puzzle_count: 0,
+  solved_count: 0,
+  blob_pending_count: 0,
+};
+
 function renderScreen(props: Partial<Parameters<typeof TrainStartScreen>[0]> = {}) {
   const onEnterLoop = vi.fn();
+  const onSettingsSaved = vi.fn();
   render(
-    <TrainStartScreen
-      session={BASE_SESSION}
-      isLoading={false}
-      isError={false}
-      sessionScore={0}
-      onEnterLoop={onEnterLoop}
-      {...props}
-    />,
+    <MemoryRouter>
+      <TrainStartScreen
+        session={BASE_SESSION}
+        isLoading={false}
+        isError={false}
+        sessionScore={0}
+        onEnterLoop={onEnterLoop}
+        onSettingsSaved={onSettingsSaved}
+        {...props}
+      />
+    </MemoryRouter>,
   );
-  return { onEnterLoop };
+  return { onEnterLoop, onSettingsSaved };
 }
 
 describe('TrainStartScreen — six landing states', () => {
@@ -70,41 +167,51 @@ describe('TrainStartScreen — six landing states', () => {
     expect(screen.queryByTestId('btn-train-start')).toBeNull();
   });
 
-  it('fresh: full session with zero pending blobs shows "N puzzles waiting" + Start', () => {
+  // 193 UAT round 3: the puzzle count moved off its own loose line INTO the
+  // button label, matching the shape 'resume' already used. The state
+  // distinction that used to live in two different count sentences ("waiting"
+  // vs. "ready") is now carried solely by the still-being-analyzed notice.
+  it('fresh: full session with zero pending blobs labels Start with the count, no notice', () => {
     const { onEnterLoop } = renderScreen({
       session: { ...BASE_SESSION, puzzle_count: 10, requested_count: 10, blob_pending_count: 0 },
     });
-    expect(screen.getByText('10 puzzles waiting')).not.toBeNull();
-    expect(screen.queryByText(/still being analyzed/)).toBeNull();
     const btn = screen.getByTestId('btn-train-start');
+    expect(btn.textContent).toBe('Start session — 10 puzzles');
+    expect(screen.queryByText(/still being analyzed/)).toBeNull();
+    expect(screen.getByTestId('train-streak-card')).not.toBeNull();
     btn.click();
     expect(onEnterLoop).toHaveBeenCalledTimes(1);
   });
 
-  it('short (positive case): pending blobs AND puzzle_count below requested shows "N puzzles ready" + the notice', () => {
+  it('fresh: a one-puzzle session says "1 puzzle" (singular)', () => {
+    renderScreen({
+      session: { ...BASE_SESSION, puzzle_count: 1, requested_count: 1, blob_pending_count: 0 },
+    });
+    expect(screen.getByTestId('btn-train-start').textContent).toBe('Start session — 1 puzzle');
+  });
+
+  it('short (positive case): pending blobs AND puzzle_count below requested shows the count + the notice', () => {
     renderScreen({
       session: { ...BASE_SESSION, puzzle_count: 4, requested_count: 10, blob_pending_count: 3 },
     });
-    expect(screen.getByText('4 puzzles ready')).not.toBeNull();
+    expect(screen.getByTestId('btn-train-start').textContent).toBe('Start session — 4 puzzles');
     expect(screen.getByText('More of your games are still being analyzed.')).not.toBeNull();
-    expect(screen.getByTestId('btn-train-start')).not.toBeNull();
   });
 
-  it('short negative case 1: pending blobs but a FULL session shows no notice (fresh copy instead)', () => {
+  it('short negative case 1: pending blobs but a FULL session shows no notice', () => {
     renderScreen({
       session: { ...BASE_SESSION, puzzle_count: 10, requested_count: 10, blob_pending_count: 5 },
     });
-    expect(screen.getByText('10 puzzles waiting')).not.toBeNull();
+    expect(screen.getByTestId('btn-train-start').textContent).toBe('Start session — 10 puzzles');
     expect(screen.queryByText(/still being analyzed/)).toBeNull();
   });
 
-  it('short negative case 2: puzzle_count below requested but zero pending blobs shows the FRESH copy, no notice', () => {
+  it('short negative case 2: puzzle_count below requested but zero pending blobs shows no notice', () => {
     renderScreen({
       session: { ...BASE_SESSION, puzzle_count: 4, requested_count: 10, blob_pending_count: 0 },
     });
-    expect(screen.getByText('4 puzzles waiting')).not.toBeNull();
+    expect(screen.getByTestId('btn-train-start').textContent).toBe('Start session — 4 puzzles');
     expect(screen.queryByText(/still being analyzed/)).toBeNull();
-    expect(screen.queryByText('4 puzzles ready')).toBeNull();
   });
 
   it('resume: an open session with solved > 0 and solved < total shows the Resume button labelled with counts', () => {
@@ -125,7 +232,9 @@ describe('TrainStartScreen — six landing states', () => {
       session: { ...BASE_SESSION, puzzle_count: 6, solved_count: 6, expires_on: '2026-08-01' },
       sessionScore: 9,
     });
-    expect(screen.getByText('You scored 9/12 today.')).not.toBeNull();
+    // 193 UAT round 2: the max is puzzle_count * TRAIN_POINTS_PER_PUZZLE (3),
+    // not the stale hardcoded * 2 this assertion used to bake in.
+    expect(screen.getByTestId('train-stats-today-score').textContent).toBe('Scored today9 of 18 points');
     expect(screen.getByText('Next session: Aug 1, 2026')).not.toBeNull();
     expect(screen.queryByTestId('btn-train-start')).toBeNull();
     expect(screen.queryByTestId('btn-train-resume')).toBeNull();
@@ -139,7 +248,7 @@ describe('TrainStartScreen — six landing states', () => {
       session: { ...BASE_SESSION, puzzle_count: 6, solved_count: 5, expires_on: '2026-08-01' },
       sessionScore: 7,
     });
-    expect(screen.getByText('You scored 7/12 today.')).not.toBeNull();
+    expect(screen.getByTestId('train-stats-today-score').textContent).toBe('Scored today7 of 18 points');
     expect(screen.getByText('Next session: Aug 1, 2026')).not.toBeNull();
     expect(screen.queryByTestId('btn-train-start')).toBeNull();
     expect(screen.queryByTestId('btn-train-resume')).toBeNull();
@@ -148,5 +257,109 @@ describe('TrainStartScreen — six landing states', () => {
   it('every state shares the "Train" heading text sizing floor (no text-xs/sub-floor usage)', () => {
     renderScreen();
     expect(screen.getByText('Train')).not.toBeNull();
+  });
+
+  it('D-13: the schedule settings block renders after the Start CTA in the fresh state', () => {
+    renderScreen();
+    const btn = screen.getByTestId('btn-train-start');
+    const settings = screen.getByTestId('train-schedule-settings');
+    expect(btn.compareDocumentPosition(settings) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+  });
+
+  it('191-06 UAT bug fix: a persisted schedule-settings edit calls onSettingsSaved, so the stale mount-time session gets re-fetched', async () => {
+    const { onSettingsSaved } = renderScreen();
+    expect(onSettingsSaved).not.toHaveBeenCalled();
+
+    fireEvent.click(screen.getByTestId('filter-weekday-fr'));
+    await act(async () => {
+      await new Promise((resolve) => setTimeout(resolve, TRAIN_SETTINGS_SAVE_DEBOUNCE_MS + 100));
+    });
+
+    expect(saveMock).toHaveBeenCalledTimes(1);
+    expect(onSettingsSaved).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe('TrainStartScreen — PROG-05/D-16 tailored cold/exhausted empty states (191-06)', () => {
+  it('no_material: renders the cold-start heading/subtitle and an Import games link to /library/import, with no progress row', () => {
+    trainProgressMock = {
+      data: { ...DEFAULT_TRAIN_PROGRESS, pool_state: 'no_material' },
+      isPending: false,
+      isError: false,
+    };
+    renderScreen({ session: EMPTY_SESSION });
+    expect(screen.getByTestId('train-empty-no-material')).not.toBeNull();
+    expect(screen.getByText('Import & analyze your games to start training')).not.toBeNull();
+    expect(screen.getByText("Train drills your own blunders once they're analyzed.")).not.toBeNull();
+    const link = screen.getByTestId('btn-train-import-games');
+    expect(link.getAttribute('href')).toBe('/library/import');
+    expect(screen.queryByTestId('train-streak-card')).toBeNull();
+  });
+
+  it('exhausted: renders "All caught up!", the mastered count, a Next review line, and the progress row', () => {
+    trainProgressMock = {
+      data: { ...DEFAULT_TRAIN_PROGRESS, pool_state: 'exhausted', mastered_count: 7, next_due_date: '2026-08-03' },
+      isPending: false,
+      isError: false,
+    };
+    renderScreen({ session: EMPTY_SESSION });
+    const emptyBlock = screen.getByTestId('train-empty-exhausted');
+    expect(emptyBlock).not.toBeNull();
+    expect(within(emptyBlock).getByText('All caught up!')).not.toBeNull();
+    expect(within(emptyBlock).getByText(/7 mastered/)).not.toBeNull();
+    expect(within(emptyBlock).getByText(/Next review:/)).not.toBeNull();
+    expect(screen.getByTestId('train-streak-card')).not.toBeNull();
+  });
+
+  it('exhausted with no next-due date: renders the "Nothing due right now" copy and no "Next review:" text', () => {
+    trainProgressMock = {
+      data: { ...DEFAULT_TRAIN_PROGRESS, pool_state: 'exhausted', mastered_count: 3, next_due_date: null },
+      isPending: false,
+      isError: false,
+    };
+    renderScreen({ session: EMPTY_SESSION });
+    const emptyBlock = screen.getByTestId('train-empty-exhausted');
+    expect(within(emptyBlock).getByText(/Nothing due right now — nice work\./)).not.toBeNull();
+    expect(within(emptyBlock).queryByText(/Next review:/)).toBeNull();
+  });
+
+  it('pending progress query: falls back to the generic Phase-190 empty copy, neither tailored testid appears', () => {
+    trainProgressMock = { data: undefined, isPending: true, isError: false };
+    renderScreen({ session: EMPTY_SESSION });
+    expect(screen.getByText('No puzzles available yet')).not.toBeNull();
+    expect(screen.queryByTestId('train-empty-no-material')).toBeNull();
+    expect(screen.queryByTestId('train-empty-exhausted')).toBeNull();
+  });
+
+  it('errored progress query: falls back to the generic Phase-190 empty copy, neither tailored testid appears', () => {
+    trainProgressMock = { data: undefined, isPending: false, isError: true };
+    renderScreen({ session: EMPTY_SESSION });
+    expect(screen.getByText('No puzzles available yet')).not.toBeNull();
+    expect(screen.queryByTestId('train-empty-no-material')).toBeNull();
+    expect(screen.queryByTestId('train-empty-exhausted')).toBeNull();
+  });
+
+  it('pool_state available: falls back to the generic Phase-190 empty copy', () => {
+    trainProgressMock = {
+      data: { ...DEFAULT_TRAIN_PROGRESS, pool_state: 'available' },
+      isPending: false,
+      isError: false,
+    };
+    renderScreen({ session: EMPTY_SESSION });
+    expect(screen.getByText('No puzzles available yet')).not.toBeNull();
+    expect(screen.queryByTestId('train-empty-no-material')).toBeNull();
+    expect(screen.queryByTestId('train-empty-exhausted')).toBeNull();
+  });
+
+  it('a non-empty (fresh) session renders no empty state at all, even with a resolved no_material pool_state', () => {
+    trainProgressMock = {
+      data: { ...DEFAULT_TRAIN_PROGRESS, pool_state: 'no_material' },
+      isPending: false,
+      isError: false,
+    };
+    renderScreen();
+    expect(screen.queryByTestId('train-empty-no-material')).toBeNull();
+    expect(screen.queryByTestId('train-empty-exhausted')).toBeNull();
+    expect(screen.queryByText('No puzzles available yet')).toBeNull();
   });
 });

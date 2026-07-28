@@ -1,5 +1,6 @@
 import { useState, useEffect, useRef } from 'react';
 import { ToggleGroup, ToggleGroupItem } from '@/components/ui/toggle-group';
+import { ToggleChipButton } from '@/components/ui/toggle-chip-button';
 import {
   Select,
   SelectContent,
@@ -9,7 +10,6 @@ import {
 } from '@/components/ui/select';
 import { Popover, PopoverAnchor } from '@/components/ui/popover';
 import type { MatchSide, TimeControl, RecencyPreset, Color, Platform, OpponentType, OpponentStrengthRange } from '@/types/api';
-import { cn } from '@/lib/utils';
 import { ANY_RANGE } from '@/lib/opponentStrength';
 import { PlatformIcon } from '@/components/icons/PlatformIcon';
 import { TimeControlIcon } from '@/components/icons/TimeControlIcon';
@@ -409,24 +409,16 @@ export function FilterPanel({
           <p className="mb-1 text-sm text-muted-foreground">Time control</p>
           <div className="grid grid-cols-4 gap-1">
             {TIME_CONTROLS.map((tc) => (
-              <button
+              <ToggleChipButton
                 key={tc}
                 onClick={() => toggleTimeControl(tc)}
-                data-testid={`filter-time-control-${tc}`}
-                aria-label={`${TIME_CONTROL_LABELS[tc]} time control`}
-                aria-pressed={isTimeControlActive(tc)}
-                className={cn(
-                  'rounded border h-11 sm:h-7 text-sm transition-colors',
-                  isTimeControlActive(tc)
-                    ? 'border-toggle-active bg-toggle-active text-toggle-active-foreground pointer-fine:hover:bg-toggle-active-hover'
-                    : 'border-border bg-inactive-bg text-muted-foreground pointer-fine:hover:bg-inactive-bg-hover pointer-fine:hover:text-foreground',
-                )}
+                testId={`filter-time-control-${tc}`}
+                ariaLabel={`${TIME_CONTROL_LABELS[tc]} time control`}
+                active={isTimeControlActive(tc)}
               >
-                <span className="flex items-center justify-center gap-1">
-                  <TimeControlIcon timeControl={tc} className="h-3.5 w-3.5" />
-                  {TIME_CONTROL_LABELS[tc]}
-                </span>
-              </button>
+                <TimeControlIcon timeControl={tc} className="h-3.5 w-3.5" />
+                {TIME_CONTROL_LABELS[tc]}
+              </ToggleChipButton>
             ))}
           </div>
         </div>
@@ -438,24 +430,16 @@ export function FilterPanel({
           <p className="mb-1 text-sm text-muted-foreground">Platform</p>
           <div className="grid grid-cols-2 gap-1">
             {PLATFORMS.map((p) => (
-              <button
+              <ToggleChipButton
                 key={p}
                 onClick={() => togglePlatform(p)}
-                data-testid={`filter-platform-${p === 'chess.com' ? 'chess-com' : p}`}
-                aria-label={`${PLATFORM_LABELS[p]} platform`}
-                aria-pressed={isPlatformActive(p)}
-                className={cn(
-                  'rounded border h-11 sm:h-7 text-sm transition-colors',
-                  isPlatformActive(p)
-                    ? 'border-toggle-active bg-toggle-active text-toggle-active-foreground pointer-fine:hover:bg-toggle-active-hover'
-                    : 'border-border bg-inactive-bg text-muted-foreground pointer-fine:hover:bg-inactive-bg-hover pointer-fine:hover:text-foreground',
-                )}
+                testId={`filter-platform-${p === 'chess.com' ? 'chess-com' : p}`}
+                ariaLabel={`${PLATFORM_LABELS[p]} platform`}
+                active={isPlatformActive(p)}
               >
-                <span className="flex items-center justify-center gap-1">
-                  <PlatformIcon platform={p} className="h-3.5 w-3.5" />
-                  {PLATFORM_LABELS[p]}
-                </span>
-              </button>
+                <PlatformIcon platform={p} className="h-3.5 w-3.5" />
+                {PLATFORM_LABELS[p]}
+              </ToggleChipButton>
             ))}
           </div>
         </div>

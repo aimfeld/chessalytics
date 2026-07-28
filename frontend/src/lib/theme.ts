@@ -538,6 +538,16 @@ export const TRAIN_RATING_GREEN = WDL_WIN;
 export const TRAIN_RATING_YELLOW = 'oklch(0.75 0.15 85)'; // amber
 export const TRAIN_RATING_RED = WDL_LOSS;
 
+// Train "Points: +N" flash badge foregrounds (SEED-119). The badge now
+// covers 4 background tiers (ZONE_DANGER/SEV_MISTAKE/SEV_INACCURACY/
+// ZONE_SUCCESS) instead of the old fixed white-text pill — 3 of those
+// backgrounds are dark enough for near-white text, but SEV_INACCURACY sits
+// at oklch lightness 0.82 (a light amber), which white text cannot clear
+// for legible contrast. Two named foregrounds, not one, so each tier picks
+// the correct-contrast text explicitly rather than a single compromise gray.
+export const TRAIN_POINTS_FG_ON_DARK = 'oklch(0.98 0 0)'; // near-white, for the 3 dark tiers
+export const TRAIN_POINTS_FG_ON_LIGHT = 'oklch(0.20 0 0)'; // near-black, for the light yellow tier
+
 // Train reveal-board best-move arrow (Phase 190.1, D-02; recolored per 190.1
 // UAT) — blue marks the engine's BEST move (matching what blue means
 // everywhere else in the app: an engine/analysis pointer), never the user's
@@ -547,3 +557,33 @@ export const TRAIN_RATING_RED = WDL_LOSS;
 // TRAIN_RATING_GREEN above); the two never coexist on one board (that token
 // is only used on Library miniboards).
 export const TRAIN_BEST_MOVE_ARROW = BEST_MOVE_ARROW;
+
+// Shield flame meter, 7 slots (Phase 193 D-01, 193-UI-SPEC.md `## Color`;
+// amended at 193 UAT — the 3-band pip meter became a per-slot flame ramp).
+// Indexed by SLOT, not by shield_level: slot i always renders the same
+// color whether it is the highest lit flame or one of several. The ramp
+// runs yellow (slot 1) -> orange (slot 4) -> red (slot 7), so the shield's
+// heat reads at a glance without a legend. Empty slots use the neutral
+// text-muted-foreground/50 Tailwind token (a grey outline flame), never an
+// 8th named color.
+// Train session-streak badge (193 UAT round 4). The streak count is the
+// headline number of the Streak card but rendered as plain text it read as
+// just another stat, so it now sits in a filled amber trophy pill. One FLAT
+// amber, deliberately not a value from the flame ramp below: the pill must
+// never read as an 8th flame or as a heat level on the same scale. The
+// foreground is near-black because the amber sits at oklch lightness 0.78,
+// which white text cannot clear for legible contrast (same reasoning as
+// TRAIN_POINTS_FG_ON_LIGHT above, kept as its own constant so a retune of
+// the points badge can't silently retune the streak badge).
+export const TRAIN_STREAK_BADGE_BG = 'oklch(0.78 0.16 85)'; // amber
+export const TRAIN_STREAK_BADGE_FG = 'oklch(0.20 0 0)'; // near-black
+
+export const TRAIN_SHIELD_FLAME_COLORS = [
+  'oklch(0.80 0.15 95)', // 1: yellow
+  'oklch(0.78 0.16 85)', // 2: amber
+  'oklch(0.75 0.17 72)', // 3: deep amber
+  'oklch(0.72 0.18 60)', // 4: orange
+  'oklch(0.69 0.19 50)', // 5: deep orange
+  'oklch(0.66 0.20 40)', // 6: orange-red
+  'oklch(0.62 0.21 29)', // 7: red
+] as const;

@@ -9,9 +9,11 @@
  * not add fields here without re-reading that decision.
  */
 
+import type { TrainMoveTier } from '@/lib/trainScore';
+
 export interface TrainPuzzle {
   position: number;
-  game_id: number;
+  game_id: number | null;
   ply: number;
   fen: string;
   side_to_move: 'white' | 'black';
@@ -33,22 +35,32 @@ export interface TrainSessionResponse {
 /**
  * Body for POST /train/sessions/{session_id}/solve.
  *
- * P-02 (LOCKED): the client asserts `correct_move` (grading happens entirely
- * client-side, SOLV-03) but NEVER `correct_guess` — that is computed
- * server-side from the live blob classifier.
+ * P-02 (LOCKED) / SEED-119: the client asserts the three-way `move_quality`
+ * tier (grading happens entirely client-side, SOLV-03) but NEVER
+ * `correct_guess` — that is computed server-side from the live blob
+ * classifier. The server derives the ladder verdict as
+ * `move_quality != "wrong"`.
  */
 export interface SolveRequest {
   position: number;
   guess: 'critical' | 'several';
   /** UCI move string: 4 chars normal ("e2e4"), 5 chars promotion ("e7e8q"). */
   played_move: string;
-  correct_move: boolean;
+  move_quality: TrainMoveTier;
 }
 
-/** Response for POST /train/sessions/{session_id}/solve. */
+/**
+ * Response for POST /train/sessions/{session_id}/solve.
+ *
+ * SEED-119: `correct_move` retains its exact prior meaning — the SR
+ * ladder's pass/fail verdict, also what the reveal's check/cross mark
+ * reads. `move_quality` is the new three-way scoring tier the client's
+ * points formula consumes.
+ */
 export interface SolveResponse {
   correct_guess: boolean;
   correct_move: boolean;
+  move_quality: TrainMoveTier;
   puzzle_type: 'sharp' | 'soft' | 'herring';
   item_status: 'active' | 'mastered' | 'parked' | null;
   streak: number | null;
@@ -72,9 +84,15 @@ export interface SolveResponse {
  * `played_in_game_move_uci` (190.1-01, D-05) is the UCI counterpart of
  * `played_in_game_san`, behind the identical gate — used to dispatch the
  * client's reveal-time engine search.
+ *
+ * `game_id` is `number | null` (Phase 192 Plan 02/05, D-05/D-09): a red
+ * herring's source game can be nulled by the OWNER deleting it (a global
+ * pool row survives independently, D-03) — never by the solving user. A
+ * null `game_id` degrades the reveal's game footer to nothing (D-07) and
+ * hides the Analyze deep-link (D-09) rather than disabling it.
  */
 export interface PuzzleRevealResponse {
-  game_id: number;
+  game_id: number | null;
   ply: number;
   fen: string;
   played_in_game_san: string | null;
@@ -97,4 +115,60 @@ export interface TrainSettingsUpdate {
   timezone: string;
   weekday_mask: number;
   puzzles_per_session: number;
+}
+
+/**
+ * The server-computed PROG-05/D-16 empty-state discriminant (mirrors the
+ * backend `_pool_state`). `'no_material'` = never had any qualifying
+ * material (cold start); `'exhausted'` = material existed but nothing is
+ * waiting and nothing is still analyzing; `'available'` = every other case,
+ * including a zero-`drill_items` user whose blunders are still being
+ * analyzed ("catching up", not a cold start). The client performs no
+ * arithmetic to pick between the two empty states — this field is the
+ * single source of truth.
+ */
+export type TrainPoolState = 'no_material' | 'exhausted' | 'available';
+
+/**
+ * Response for GET /train/progress (PROG-01/PROG-04).
+ *
+ * Phase 193 replaced the Phase 191 weekly D-18 settled-streak snapshot with
+ * a per-scheduled-day tick + a 0-7 depletable shield: `session_streak_count`
+ * (was `settled_streak_weeks`) and `shield_level` (was `flame_state`, a
+ * 3-state enum; now a plain number) mirror the persisted tick snapshot on
+ * `train_settings`. There is no display overlay any more — the returned
+ * values are always exactly what is persisted. `current_week_required` is
+ * null when `weekday_mask === 0` ("train anytime" has no denominator to
+ * show). `mastered_count`/`parked_count` are computed on the fly from
+ * `drill_items` (D-05, unaffected by the tick snapshot).
+ *
+ * `waiting_count` is an upper-bound attention-signal estimate, never a
+ * promise of exact session size — the start screen's own "N puzzles
+ * waiting" line still comes from the real composed session. `next_due_date`
+ * is the earliest date an ACTIVE item will next resurface, or null when
+ * nothing will (the "All caught up!" empty state's date).
+ *
+ * `streak_reset_notice` (was `streak_lost_last_week`) is derived from the
+ * RESULTING state (never from "did this call settle the reset"), so it
+ * survives a page reload.
+ *
+ * `badge_visible` (Plan 02, D-09/D-10) is a DISPLAY HINT ONLY — it gates no
+ * server-side authorization, and the number the nav badge shows still comes
+ * from `waiting_count`. The client MUST NEVER attempt its own day-of-week or
+ * timezone math here — it has no `weekday_mask` and no clean way to
+ * reproduce the backend's `local_today` — this field is the single source
+ * of truth for whether the badge should show.
+ */
+export interface TrainProgressResponse {
+  session_streak_count: number;
+  shield_level: number;
+  current_week_completed: number;
+  current_week_required: number | null;
+  streak_reset_notice: boolean;
+  mastered_count: number;
+  parked_count: number;
+  waiting_count: number;
+  pool_state: TrainPoolState;
+  next_due_date: string | null;
+  badge_visible: boolean;
 }

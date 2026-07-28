@@ -37,9 +37,11 @@ import { Loader2 } from 'lucide-react';
 import { trainApi } from '@/api/client';
 import { useLibraryGame } from '@/hooks/useLibrary';
 import { Button } from '@/components/ui/button';
+import { TRAIN_BUTTON_CLASS } from '@/components/train/buttonStyles';
 import { LoadError } from '@/components/ui/load-error';
 import { TrainLineStepper } from '@/components/train/TrainLineStepper';
 import type { TrainLineStep } from '@/components/train/TrainLineStepper';
+import { TrainFlawFixedBanner } from '@/components/train/TrainFlawFixedBanner';
 import { replayPvLine, formatScore } from '@/components/analysis/EngineLines';
 import { TRAIN_VERDICT_CORRECT, TRAIN_VERDICT_INCORRECT } from '@/lib/theme';
 import type { TrainMoveQuality } from '@/lib/trainArrows';
@@ -279,18 +281,6 @@ function outcomeCopy(verdict: SolveResponse): string | null {
   return null;
 }
 
-/**
- * D-12, cut down per 190.1 UAT round 3: the "You'll see this position again
- * in ~N days" countdown is removed entirely — only the plain mastered/retired
- * text remains. A herring carries no SR bookkeeping at all (`item_status` is
- * always null for one — POOL-08) so it shows nothing here.
- */
-function comebackHint(verdict: SolveResponse): string | null {
-  if (verdict.puzzle_type === 'herring') return null;
-  if (verdict.item_status === 'mastered') return 'Mastered — retired.';
-  return null;
-}
-
 /** UCI ("e2e4"/"e7e8q") -> SAN via chess.js from `fen`, or null on a null/
  * malformed/illegal input — the move row falls back to the bare mark rather
  * than rendering a broken token (190.1-03 Task 1). */
@@ -430,10 +420,21 @@ export function TrainReveal({
     return (
       <div className="flex flex-col items-center gap-2" data-testid="train-solve-error">
         <p className="text-sm font-semibold">Couldn&apos;t save your result.</p>
-        <Button variant="brand-outline" data-testid="btn-train-solve-retry" onClick={onRetrySolve}>
+        <Button
+          variant="brand-outline"
+          className={TRAIN_BUTTON_CLASS}
+          data-testid="btn-train-solve-retry"
+          onClick={onRetrySolve}
+        >
           Retry
         </Button>
-        <Button variant="default" data-testid="btn-train-next" disabled onClick={onNext}>
+        <Button
+          variant="default"
+          className={TRAIN_BUTTON_CLASS}
+          data-testid="btn-train-next"
+          disabled
+          onClick={onNext}
+        >
           Next
         </Button>
       </div>
@@ -441,7 +442,12 @@ export function TrainReveal({
   }
 
   const outcome = outcomeCopy(verdict);
-  const comeback = comebackHint(verdict);
+  // PROG-03/D-14: the mastery banner supersedes the old plain "Mastered —
+  // retired." comeback hint. Same trigger condition the removed
+  // `comebackHint` used — a herring carries no SR bookkeeping (POOL-08) so
+  // it never shows the banner.
+  const showFlawFixedBanner =
+    verdict.puzzle_type !== 'herring' && verdict.item_status === 'mastered';
   const gameMoveSan = revealQuery.data?.played_in_game_san ?? null;
   // Shared header for the non-ready standalone game-move-box states
   // (loading/error/idle) — the SAN is the only reveal-payload value ever
@@ -503,12 +509,10 @@ export function TrainReveal({
         </p>
       )}
 
-      {/* 3. Comeback hint (D-12) — one quiet line, or nothing for a herring. */}
-      {comeback && (
-        <p className="text-sm font-semibold text-muted-foreground" data-testid="train-comeback-hint">
-          {comeback}
-        </p>
-      )}
+      {/* 3. Flaw fixed banner (PROG-03/D-14) — supersedes the D-12 plain
+          "Mastered — retired." comeback hint; nothing for a herring or a
+          non-mastered item. */}
+      {showFlawFixedBanner && <TrainFlawFixedBanner fen={puzzle.fen} />}
 
       {revealQuery.isError && (
         <p className="text-sm font-semibold text-muted-foreground" data-testid="train-reveal-error">
@@ -585,24 +589,38 @@ export function TrainReveal({
           "Game: <TC> · vs <opponent> (<elo>) · <date>" — same `useLibraryGame`
           fetch and solve-response gate as before. The Solution/Analyze/Next
           row that used to close this panel now lives below the board
-          (TrainSolveScreen, UAT round 3). */}
-      {gameQuery.isError && (
-        <LoadError resource="the game" data-testid="train-gamecard-error" />
-      )}
-      {game !== null && (
-        <p className="text-sm text-muted-foreground" data-testid="train-reveal-footer">
-          Game:{' '}
-          {game.time_control_bucket !== null && (
-            <>
-              <span className="capitalize">{game.time_control_bucket}</span>
-              {game.time_control_str !== null && ` ${formatTimeControl(game.time_control_str)}`}
-              {' · '}
-            </>
+          (TrainSolveScreen, UAT round 3).
+
+          D-07 (Phase 192): a herring reveal omits this footer entirely — "vs
+          <opponent>" has no referent when the solver was never a participant
+          in a stranger's game, and the reveal already labels the puzzle a
+          herring outright, so dropping the line leaks nothing new. Both the
+          error branch and the success branch sit behind the SAME
+          `puzzle_type !== 'herring'` gate — gating only the success branch
+          would leave a herring free to render "Failed to load the game" for
+          a `useLibraryGame` query that (for a null `game_id`, D-09) never
+          fired in the first place. */}
+      {verdict.puzzle_type !== 'herring' && (
+        <>
+          {gameQuery.isError && (
+            <LoadError resource="the game" data-testid="train-gamecard-error" />
           )}
-          vs {opponentName}
-          {opponentRating !== null && ` (${opponentRating})`}
-          {game.played_at !== null && ` · ${formatDateWithYear(game.played_at)}`}
-        </p>
+          {game !== null && (
+            <p className="text-sm text-muted-foreground" data-testid="train-reveal-footer">
+              Game:{' '}
+              {game.time_control_bucket !== null && (
+                <>
+                  <span className="capitalize">{game.time_control_bucket}</span>
+                  {game.time_control_str !== null && ` ${formatTimeControl(game.time_control_str)}`}
+                  {' · '}
+                </>
+              )}
+              vs {opponentName}
+              {opponentRating !== null && ` (${opponentRating})`}
+              {game.played_at !== null && ` · ${formatDateWithYear(game.played_at)}`}
+            </p>
+          )}
+        </>
       )}
     </div>
   );

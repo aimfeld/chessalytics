@@ -44,7 +44,7 @@
 - ✅ **v2.6 Bot Strength Calibration** — Phases 173, 180, 181 (shipped 2026-07-21; dev-only, no deploy) — put the bot's play-style presets on a measured strength scale without ever playing a human. Phase 173 (SEED-101) round-robins the calibration anchors into one internal rating scale (verdict: the Maia-3 argmax ladder is ~2.8x compressed); Phase 180 (SEED-102) measures the three-preset (Human/Light/Deep) strength curves on that scale plus the cross-family style-inflation gap `G_preset`; Phase 181 (SEED-104) inverts those curves into per-preset `target_blitz_elo → bot_elo` lookups with honest measured ranges (Human 900–1400, Light 1500–1600, Deep 1600–1800) and an approximate-ELO disclaimer. Nothing in the product reads the lookup yet — see [milestones/v2.6-ROADMAP.md](milestones/v2.6-ROADMAP.md)
 - ✅ **v2.7 Bot Personas & Playstyle Layer** — Phases 182–185 (shipped 2026-07-23; deployed to production, PRs through #275) — a roster of 24 named bot personas (4 styles × 6 ELO rungs, 800–1800) on the Bots page, each a complete pinned opponent (preset, calibrated ELO, style params, opening book, resign/draw-offer policy, avatar, bio). Style levers land first (Phase 182), then the persona registry + Bots page UI (Phase 183), then per-persona harness calibration replaces the provisional labels with measured values (Phase 184, `PERSONA_CALIBRATION_MEASURED=true`), then the roster is re-laid-out as a rung-ladder grid with per-persona win stars (Phase 185) (SEED-098) — see [milestones/v2.7-ROADMAP.md](milestones/v2.7-ROADMAP.md)
 - ✅ **v2.8 Import Filters and Guest Data Cleanup** — Phases 186–188 (shipped 2026-07-24) — user-facing import filters (time-control multiselect + per-platform game cap) on the Import tab to keep storage and Stockfish compute in check, with backward backfill on filter upgrades and grandfathering for existing users (Phase 186, SEED-117); a daily background job that prunes game data for guests inactive ≥30 days while keeping the guest account + auth (Phase 187, SEED-116); and import/eval pipeline cleanup retiring completed backfill machinery while keeping `resweep_holed_games` and tiers 4/4b as permanent safety nets (Phase 188, SEED-115) — see [milestones/v2.8-ROADMAP.md](milestones/v2.8-ROADMAP.md)
-- ⏳ **v2.9 Train — Spaced-Repetition Blunder Drills** — Phases 189–191 (incl. 190.1, in progress)
+- ⏳ **v2.9 Train — Spaced-Repetition Blunder Drills** — Phases 189–193 (incl. 190.1, in progress)
 
 ## Progress
 
@@ -148,7 +148,9 @@
 | 189. Pool + Scheduler Backend (SEED-037, v2.9) | 6/6 | Complete | 2026-07-25 |
 | 190. Train Page + Solve Loop (SEED-037, v2.9) | 6/6 | In progress (UAT) | — |
 | 190.1. Train Reveal Redesign (INSERTED, 190 UAT feedback) | 5/5 | Complete | 2026-07-26 |
-| 191. Schedule + Progress Surface (SEED-037, v2.9) | 0/? | Not started | — |
+| 191. Schedule + Progress Surface (SEED-037, v2.9) | 6/6 | Complete | 2026-07-27 |
+| 192. Precomputed Red-Herring Position Pool (SEED-120, v2.9) | 5/5 | Complete | 2026-07-28 |
+| 193. Session-Tick Streaks with a Depletable Shield (SEED-121, v2.9) | 0/? | Context gathered | — |
 
 ## v2.9 Train — Spaced-Repetition Blunder Drills (In Progress)
 
@@ -167,7 +169,7 @@ Turn FlawChess from an analysis tool into a habit: a new import-gated `/train` p
 **Success Criteria** (what must be TRUE):
 
   1. A user's own out-of-book blunders (ply-parity filtered via the existing `is_opponent_expr` helper) that clear the winnability floor and carry a full stored answer key (`best_move` + `pv` + non-empty `missed_pv_lines`) are added to that user's drill pool, classified sharp vs avoid-the-blunder from the blob's best-vs-second gap; opponent-side flaws, hopeless positions, and answer-key-incomplete flaws never appear.
-  2. Calling the session-composition endpoint returns exactly N puzzles (~75% most-overdue-first SR items padded by recency-weighted new flaws, ~25% red herrings from non-gem `game_best_moves` rows) whenever the user has any drillable material, and the pre-attempt payload never contains the answer key or puzzle-type ground truth.
+  2. Calling the session-composition endpoint returns exactly N puzzles (~75% most-overdue-first SR items padded by recency-weighted new flaws, ~25% red herrings from a precomputed, MultiPV-5-confirmed global position pool — amended by Phase 192, which replaced the original `game_best_moves` sourcing after it proved structurally incapable of producing a several-fine-moves position) whenever the user has any drillable material, and the pre-attempt payload never contains the answer key or puzzle-type ground truth.
   3. Submitting a result via the result-recording endpoint advances an item's streak/due-date per the interval ladder (0 → next session, 1 → ~3d, 2 → ~10d, snapped to the next scheduled session day) and correctly retires it as mastered after 3 spaced-correct solves or parks it after 3 zero-correct fails, in both cases removing it from the active queue.
   4. Deleting a user's source games (guest 30-day prune, delete-all + re-import) leaves no orphaned drill rows, and the pool/session/result endpoints keep working without errors afterward.
 
@@ -298,8 +300,100 @@ Plans:
   4. The progress surface shows mastered and parked counts honestly (e.g. "3 parked — too hard for now"), never framed as failure.
   5. Cold/empty states never show a dead screen: no analyzed games points to import/analysis, and an exhausted pool (everything mastered, nothing due) shows a celebratory state.
 
-**Plans**: TBD
+**Plans**: 6 plans
+
+Plans:
+**Wave 1**
+
+- [x] 191-01-PLAN.md — Progress read-model tracer: weekly streak/flame replay through to the start-screen stats row
+
+**Wave 2** *(blocked on Wave 1 completion)*
+
+- [x] 191-02-PLAN.md — Read-only waiting count, pool-state discriminant and next-due date on the progress response
+- [x] 191-03-PLAN.md — Celebrations: green-session confetti and the "Flaw fixed!" mastery banner
+
+**Wave 3** *(blocked on Wave 2 completion)*
+
+- [x] 191-04-PLAN.md — Inline auto-saving schedule settings, ad-hoc off-day regression test, delete-all warning copy
+- [x] 191-05-PLAN.md — Numeric waiting-count nav badge replacing the Train first-visit dot
+
+**Wave 4** *(blocked on Wave 3 completion)*
+
+- [x] 191-06-PLAN.md — Two tailored cold/exhausted empty states plus the blocking phase gate
+
 **UI hint**: yes
+
+### Phase 192: Precomputed Red-Herring Position Pool (SEED-120, correctness defect)
+
+**Goal**: Train's red herrings are genuine "several fine moves" positions. A new precomputed, globally shared pool — sampled from all signed-up users' `game_positions`, phase-balanced, and confirmed by a MultiPV-5 Stockfish search whose full ladder is stored raw — replaces `game_best_moves` as the herring source, with query-time qualifier thresholds that are retunable without re-analysis. The pool survives source-game deletion, and a foreign user's deletion can never punch a hole in someone else's in-flight session.
+
+**Depends on**: Phase 189 (the `herring_stmt` / `compose_session` seam this swaps), Phase 190.1 (the reveal panel this adjusts)
+
+**Requirements**: POOL-03 (superseded — its original `game_best_moves` sourcing is the defect being fixed; amend in place, no new requirement IDs)
+
+**Plan-time decisions to resolve explicitly (not default)**: the `drill_solves.game_id` nullability migration (D-05) must be verified against every SR-side code path that assumes `NOT NULL` before it lands — it is a nullability change on a table holding live user results. The generation-time loose band and the query-time degenerate upper bound (D-15/D-17) are both named constants whose values are unset; pick them from the first run's measured qualifying-rate distribution rather than guessing at plan time.
+
+**Success Criteria** (what must be TRUE):
+
+  1. Every position served as a red herring has at least 2 moves within `INACCURACY_DROP` (0.05 ES) of the best, confirmed by a MultiPV-5 search whose raw 5-move ladder is stored on the row — and degenerate "every legal move is fine" positions are excluded by a query-time rule, not by a baked-in generation filter.
+  2. `scripts/gen_red_herring_pool.py --n-positions N [--phase ...] --db dev|benchmark|prod` populates the pool from signed-up (`is_guest = false`) users' games only, phase-balanced across opening/middlegame/endgame, using its own MultiPV PV[0] as the authoritative eval (never the stored `eval_cp`, which is a pre-filter only); it is idempotent and resumable, so re-running tops the pool up rather than duplicating or restarting.
+  3. Deleting a source game leaves the herring puzzle intact and servable (FEN and arriving move come off the pool row, the game link nulls), the reveal's Analyze button is hidden rather than dead, and a foreign user's game deletion never removes a row from another user's in-flight session.
+  4. With the pool empty, sessions return a full N of 100% SR items and `waiting_count` stays honest — pinned by a regression test for the fully-empty source, not inherited from the existing partial-shortfall test.
+  5. A red herring drawn from another user's game reveals with its in-game move and board arrow (the `GamePosition` lookup resolves the game's owner, not the solver) and with no game info line; the herring source no longer reads `game_best_moves` anywhere, and POOL-03 / Phase 189 criterion #2 / `PROJECT.md` / `herring_stmt`'s docstring no longer describe the superseded sourcing.
+
+**Plans**: 5 plans
+
+Plans:
+**Wave 1**
+
+- [x] 192-01-PLAN.md — Tracer: pool table, model, MultiPV-5 engine method, generator, and the `herring_stmt` source swap, proven end to end on one real row (wave 1)
+
+**Wave 2** *(blocked on Wave 1 completion)*
+
+- [x] 192-02-PLAN.md — The `drill_solves.game_id` one-way door: nullability migration plus all three INNER→OUTER join fixes and the D-06 owner-scoped reveal (wave 2)
+- [x] 192-03-PLAN.md — Generator completion (phase thirds, oversampling, resumable top-up, runbook) and the measurement that pins the two deferred constants (wave 2)
+
+**Wave 3** *(blocked on Wave 2 completion)*
+
+- [x] 192-04-PLAN.md — Query-time tight gate, degenerate exclusion, replacement herring test block, and the empty-pool regression (wave 3)
+- [x] 192-05-PLAN.md — Reveal frontend gates (D-07/D-08/D-09) and the four mandatory spec amendments (wave 3)
+
+**UI hint**: minor — reveal panel only (omit the game info line for herrings, hide Analyze when the source game link is null)
+
+### Phase 193: Session-Tick Streaks with a Depletable Shield (SEED-121)
+
+**Goal**: Train's streak stops measuring weeks and starts measuring sessions. One mechanism — tick per scheduled day, shield +1 on a completed session (cap 7), −1 on a miss, count resets when the shield hits 0 — replaces Phase 191's weekly-fulfillment check, the `required_sessions_per_week` popcount (and its 1→6 requirement cliff), and the 3-rung flame ladder. The count then measures intensity for free (a 7-day/week user's count races, a 1-day/week user's crawls) while the shield stays a pure grace buffer that automatically stretches for infrequent trainers.
+
+**Depends on**: Phase 191 (the streak machinery this replaces). Pre-production: verified against `origin/production` on 2026-07-28 that `FLAME_LADDER` is absent there, so there is no live streak state to migrate.
+
+**Requirements**: PROG-01 (amend in place — the weekly-streak wording is the defect), SCHD-02 (amend — badge visibility narrows to scheduled days). No new requirement IDs.
+
+**Plan-time decisions to resolve explicitly (not default)**: the drain rate stays symmetric ±1 per SEED-121 (~50% attendance survival bar) — do not tune by shrinking shield depth. Carry-over of Phase 191's three streak columns (hard-reset vs. replaying `drill_sessions` history) must be decided against Phase 191 D-05, which made retroactivity an explicit user requirement, and bounded by the D-06 eligibility watermark. The settle machine is deliberately asymmetric (completions settle eagerly on session completion, misses lazily at day rollover) — the two paths must not double-count a day.
+
+**Success Criteria** (what must be TRUE):
+
+  1. A completed session on a scheduled day increments both the shield (capped at 7) and the session count immediately, and a missed scheduled day drains exactly one shield pip; when the shield reaches 0 the count resets to 0 and a persistent, state-derived reset notice appears (not a one-shot event).
+  2. A scheduled day earlier than the user's first qualifying material is never judged (neutral — no drain, no tick), so a brand-new user mid-import cannot lose a streak they never had a chance to build.
+  3. An ad-hoc off-day session credits one shield pip but does not advance the count; a session started and left unfinished past its window is a miss.
+  4. A settled day is frozen forever: changing `weekday_mask` or timezone re-judges only days strictly after `streak_settled_through`, never a past day (Phase 191 D-18, carried to per-day granularity).
+  5. The Train stats row renders the shield as a 7-segment pip meter with an "N-session streak" label, and the numeric nav badge appears only on scheduled session days — except that an already-open unfinished session keeps its badge on an off-day.
+
+**UI hint**: yes — flame → 7-segment pip meter in `TrainProgressRow.tsx`, plus the two `App.tsx` badge sites.
+
+**Plans:** 3 plans
+
+Plans:
+**Wave 1**
+
+- [x] 193-01-PLAN.md — Tracer: `shield_level`/`pool_eligible_since` migration, the `_judge_one_day`/`tick_days` machine, the rewritten `GET /train/progress` payload, and the 7-segment pip meter, end to end (wave 1)
+
+**Wave 2** *(blocked on Wave 1 completion)*
+
+- [x] 193-02-PLAN.md — Eager completion tick with the frozen-day guard (D-03/D-07/D-08) and the server-computed `badge_visible` signal (D-09/D-10) (wave 2)
+
+**Wave 3** *(blocked on Wave 2 completion)*
+
+- [x] 193-03-PLAN.md — Both nav badge sites gated on `badge_visible`, PROG-01/SCHD-02 amended in REQUIREMENTS.md, and the manual-only UAT checkpoint (wave 3)
 
 ## Backlog
 

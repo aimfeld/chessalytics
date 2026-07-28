@@ -3,46 +3,90 @@
  * lib/trainScore.ts (RED). One case per behaviour bullet, plus the explicit
  * threshold-boundary/adjacency, display/band-agreement, empty-session, and
  * shuffled-results cases the plan's acceptance criteria call out by name.
+ *
+ * SEED-119: scorePuzzle's second argument widened from a boolean to a
+ * TrainMoveTier and TRAIN_POINTS_PER_PUZZLE went 2 -> 3 (1 guess + 0-2
+ * move). moveTierFromSeverity is the ONLY translation from the project's
+ * existing severity classifier into a score tier — its equivalence test
+ * below is the invariant that keeps the SR ladder's pass/fail rule
+ * unchanged by this widening.
  */
 import { describe, expect, it } from 'vitest';
 import {
   TRAIN_RATING_GREEN_MIN,
   TRAIN_RATING_YELLOW_MIN,
   TRAIN_POINTS_PER_PUZZLE,
+  MOVE_TIER_POINTS,
   scorePuzzle,
+  moveTierFromSeverity,
   aggregateSessionScore,
   resolveRatingBand,
   displaySessionPercentage,
 } from '@/lib/trainScore';
+import type { FlawSeverity } from '@/lib/liveFlaw';
 
 describe('scorePuzzle', () => {
-  it('two correct answers on one puzzle score 2', () => {
-    expect(scorePuzzle(true, true)).toBe(2);
+  it('correct guess + good move scores 3', () => {
+    expect(scorePuzzle(true, 'good')).toBe(3);
   });
 
-  it('one correct (guess only) scores 1', () => {
-    expect(scorePuzzle(true, false)).toBe(1);
+  it('correct guess + inaccuracy scores 2', () => {
+    expect(scorePuzzle(true, 'inaccuracy')).toBe(2);
   });
 
-  it('one correct (move only) scores 1', () => {
-    expect(scorePuzzle(false, true)).toBe(1);
+  it('correct guess + wrong move scores 1 (guess point only)', () => {
+    expect(scorePuzzle(true, 'wrong')).toBe(1);
   });
 
-  it('neither correct scores 0', () => {
-    expect(scorePuzzle(false, false)).toBe(0);
+  it('wrong guess + good move scores 2 (move points only)', () => {
+    expect(scorePuzzle(false, 'good')).toBe(2);
+  });
+
+  it('wrong guess + inaccuracy scores 1', () => {
+    expect(scorePuzzle(false, 'inaccuracy')).toBe(1);
+  });
+
+  it('wrong guess + wrong move scores 0', () => {
+    expect(scorePuzzle(false, 'wrong')).toBe(0);
+  });
+});
+
+describe('moveTierFromSeverity', () => {
+  it('no flaw (null) maps to good', () => {
+    expect(moveTierFromSeverity(null)).toBe('good');
+  });
+
+  it('inaccuracy maps to inaccuracy', () => {
+    expect(moveTierFromSeverity('inaccuracy')).toBe('inaccuracy');
+  });
+
+  it('mistake maps to wrong', () => {
+    expect(moveTierFromSeverity('mistake')).toBe('wrong');
+  });
+
+  it('blunder maps to wrong', () => {
+    expect(moveTierFromSeverity('blunder')).toBe('wrong');
+  });
+
+  it('equivalence: moveTierFromSeverity(s) !== "wrong" matches the legacy pass rule (severity null or inaccuracy) for every severity input — the invariant that keeps the SR ladder unchanged', () => {
+    const severities: (FlawSeverity | null)[] = [null, 'inaccuracy', 'mistake', 'blunder'];
+    for (const severity of severities) {
+      const legacyPass = severity === null || severity === 'inaccuracy';
+      expect(moveTierFromSeverity(severity) !== 'wrong').toBe(legacyPass);
+    }
   });
 });
 
 describe('aggregateSessionScore', () => {
-  it('total is the sum over solved puzzles; max is twice the number of scored puzzles', () => {
-    const result = aggregateSessionScore([2, 1, 0, 2]);
-    expect(result.total).toBe(5);
+  it('total is the sum over solved puzzles; max is TRAIN_POINTS_PER_PUZZLE times the number of scored puzzles', () => {
+    const result = aggregateSessionScore([3, 2, 0, 3]);
+    expect(result.total).toBe(8);
     expect(result.max).toBe(4 * TRAIN_POINTS_PER_PUZZLE);
   });
 
   it('re-ordering the per-puzzle results produces an identical total and max (order-independent sum)', () => {
-    const a = aggregateSessionScore([2, 0, 1, 2, 1]);
-    const b = aggregateSessionScore([1, 2, 2, 1, 0]);
+    const a = aggregateSessionScore([3, 0, 1, 2, 1]);
+    const b = aggregateSessionScore([1, 2, 3, 1, 0]);
     expect(b.total).toBe(a.total);
     expect(b.max).toBe(a.max);
   });
@@ -112,5 +156,31 @@ describe('displaySessionPercentage — flooring and display/band agreement', () 
         expect(pct! >= yellowThresholdPct).toBe(band === 'green' || band === 'yellow');
       }
     }
+  });
+});
+
+describe('SEED-119 scenario checks', () => {
+  it('perfect guesses with every move an inaccuracy floors to 66% and rates yellow', () => {
+    const SOLVED_COUNT = 3;
+    const perPuzzleScores = Array.from({ length: SOLVED_COUNT }, () =>
+      scorePuzzle(true, 'inaccuracy'),
+    );
+    const score = aggregateSessionScore(perPuzzleScores);
+    expect(score.total).toBe(SOLVED_COUNT * MOVE_TIER_POINTS.inaccuracy + SOLVED_COUNT);
+    const pct = displaySessionPercentage(score);
+    expect(pct).toBe(66); // 6/9 = 0.6666... -> floors to 66
+    expect(resolveRatingBand(score.total / score.max)).toBe('yellow');
+  });
+
+  it('chance-level guessing (half correct) with every move good floors to 83% and rates green', () => {
+    const perPuzzleScores = [
+      scorePuzzle(true, 'good'),
+      scorePuzzle(false, 'good'),
+    ];
+    const score = aggregateSessionScore(perPuzzleScores);
+    expect(score.total).toBe(5); // 3 + 2
+    const pct = displaySessionPercentage(score);
+    expect(pct).toBe(83); // 5/6 = 0.8333... -> floors to 83
+    expect(resolveRatingBand(score.total / score.max)).toBe('green');
   });
 });

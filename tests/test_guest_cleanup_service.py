@@ -379,13 +379,25 @@ class TestPurgeGuestDrillCascade:
     async def test_purge_guest_cascades_drill_rows(
         self, real_session_maker: async_sessionmaker[AsyncSession]
     ) -> None:
-        """The 30-day guest purge cascades drill_items/drill_solves away via
-        the games FK (D-02), while the guest's drill_sessions row survives (D-04).
+        """The 30-day guest purge cascades drill_items away via the games FK
+        (D-02, unchanged CASCADE), while the guest's drill_sessions row
+        survives (D-04).
+
+        Phase 192 Plan 02 (D-05): `drill_solves.game_id` is now
+        `ON DELETE SET NULL`, not `CASCADE` — a global herring pool means a
+        *foreign* user's game deletion must never delete a row out of a
+        stranger's in-flight session, and that FK policy applies uniformly
+        regardless of who owns the row. So the guest's own `drill_solves`
+        row now SURVIVES this purge with `game_id` nulled (an orphaned
+        SR item, lazily evicted per `load_session_puzzles` — see
+        `app.models.drill_solve`'s module docstring) rather than being
+        deleted alongside `drill_items`.
 
         Guest-owned rows are cleaned up by the module's autouse
         `_cleanup_leaked_guest_rows` fixture (deletes the guest User row,
-        cascading every FK'd child including drill_sessions) -- no separate
-        finally block is needed since this test creates no non-guest rows.
+        cascading every FK'd child including drill_sessions and the now-
+        orphaned drill_solves row) -- no separate finally block is needed
+        since this test creates no non-guest rows.
         """
         async with real_session_maker() as seed_session:
             guest_id, game_id = await _seed_eligible_guest_with_game(seed_session)
@@ -436,9 +448,15 @@ class TestPurgeGuestDrillCascade:
         assert deleted_count == 1
 
         assert await _count(DrillItem, DrillItem.user_id == guest_id) == 0
-        assert await _count(DrillSolve, DrillSolve.user_id == guest_id) == 0
         assert await _count(DrillSession, DrillSession.id == drill_session_id) == 1, (
             "drill_sessions must survive the guest purge (D-04)"
+        )
+        # D-05: the drill_solves row survives with game_id nulled (SET NULL,
+        # not CASCADE) — never deleted alongside drill_items.
+        assert await _count(DrillSolve, DrillSolve.user_id == guest_id) == 1
+        assert (
+            await _count(DrillSolve, DrillSolve.user_id == guest_id, DrillSolve.game_id.is_(None))
+            == 1
         )
 
     @pytest.mark.asyncio

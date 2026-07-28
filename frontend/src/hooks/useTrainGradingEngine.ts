@@ -22,7 +22,7 @@
  *     2nd search (190.1 UAT round 9 — see gradeMoveInner's rank-match comment)
  *   else -> run a 2nd search on the post-move FEN, esAfter with the SAME mover
  *   severity = classifyLiveSeverity(esBefore, esAfter)
- *   correctMove = severity === null || severity === 'inaccuracy'
+ *   moveTier = moveTierFromSeverity(severity)  (SEED-119: good/inaccuracy/wrong)
  * Never re-derive the sigmoid/threshold locally — both come from
  * `@/lib/liveFlaw` (CI-drift-checked against app/services/flaws_service.py).
  */
@@ -33,6 +33,8 @@ import { parseInfoLine, parseBestmove } from './uciParser';
 import type { PvLine } from './uciParser';
 import { classifyLiveSeverity, evalToExpectedScore, sideToMoveFromFen } from '@/lib/liveFlaw';
 import type { MoverColor } from '@/lib/liveFlaw';
+import { moveTierFromSeverity } from '@/lib/trainScore';
+import type { TrainMoveTier } from '@/lib/trainScore';
 import type { TrainFineMove } from '@/lib/trainArrows';
 
 // ─── Constants ──────────────────────────────────────────────────────────────
@@ -151,7 +153,10 @@ interface QueuedDispatch {
 }
 
 export interface GradeResult {
-  correctMove: boolean;
+  /** SEED-119: the three-way move-quality tier, derived from
+   * `classifyLiveSeverity` via `moveTierFromSeverity` — never a re-derived
+   * boolean. `moveTier !== 'wrong'` is what feeds the SR ladder verdict. */
+  moveTier: TrainMoveTier;
   bestMoveUci: string | null;
   esBefore: number;
   esAfter: number;
@@ -252,11 +257,23 @@ function bestLineFrom(best: BestSearchResult): TrainEngineLine {
  * verdict itself would grade it correct: severity `null` (quality 'good') or
  * `'inaccuracy'` (quality 'inaccuracy') against rank 1 (`esRank1`) — the
  * project's existing live-flaw severity function, never a new cutoff. The
- * predicate deliberately matches `gradeMoveInner`'s `correctMove` rule and
+ * predicate deliberately matches `gradeMoveInner`'s own correct-move rule and
  * the backend's soft-puzzle gap (`SHARP_GAP_ES = MISTAKE_DROP`) — see the
  * `GradeResult.fineMoves` doc comment for the 260726-fma bug this alignment
  * fixed. Iterates `lines` as returned (never a fixed loop to the requested
- * width) so a partial rank count never throws. */
+ * width) so a partial rank count never throws.
+ *
+ * A mistake-level rank is deliberately NOT a fine move (191 UAT): the two
+ * sides measure the shared MISTAKE_DROP threshold with different searches —
+ * the backend from a deep stored answer-key blob, this hook from a 1.5s
+ * MultiPV-4 WASM search (`project_eval_nondeterminism`) — so over 30 real
+ * server-classified SOFT puzzles from the dev DB, ~7% had their runner-up land
+ * just the wrong side here (drops of 0.102 / 0.107 against 0.10) and drew a
+ * single arrow under a "Several fine moves ✓" verdict. Showing that runner-up
+ * anyway, colored as the mistake this search measured, was rejected: a move
+ * this engine grades a mistake must never be presented as a viable
+ * alternative. The lone-arrow case stays, as the honest reading of our own
+ * search. */
 function deriveFineMoves(lines: PvLine[], esRank1: number, mover: MoverColor): TrainFineMove[] {
   const fine: TrainFineMove[] = [];
   for (const line of lines) {
@@ -677,9 +694,11 @@ export function useTrainGradingEngine({
 
       if (!best || best.generation !== generation || best.fen !== fen) {
         // Defensive fallback (should not happen when startGrading was called
-        // for this exact fen) — never crash the solve loop.
+        // for this exact fen) — never crash the solve loop. Resolves the GOOD
+        // tier (SEED-119): a defensive path must never silently cost the
+        // user move points.
         return {
-          correctMove: true,
+          moveTier: 'good',
           bestMoveUci: null,
           esBefore: 0.5,
           esAfter: 0.5,
@@ -696,9 +715,10 @@ export function useTrainGradingEngine({
       if (playedMoveUci === best.bestMoveUci) {
         // D-06 fast path: exact match to the engine's own top move — no
         // second search. playedLine IS bestLine here — rank 1 is the played
-        // move's own line (190.1-02 D-01 point 2).
+        // move's own line (190.1-02 D-01 point 2). An exact match to the
+        // engine's own best move is unambiguously the GOOD tier.
         return {
-          correctMove: true,
+          moveTier: 'good',
           bestMoveUci: best.bestMoveUci,
           esBefore,
           esAfter: esBefore,
@@ -719,7 +739,7 @@ export function useTrainGradingEngine({
         const esAfter = evalToExpectedScore(rankLine.evalCp, rankLine.evalMate, mover);
         const severity = classifyLiveSeverity(esBefore, esAfter);
         return {
-          correctMove: severity === null || severity === 'inaccuracy',
+          moveTier: moveTierFromSeverity(severity),
           bestMoveUci: best.bestMoveUci,
           esBefore,
           esAfter,
@@ -731,8 +751,11 @@ export function useTrainGradingEngine({
 
       const afterFen = fenAfterUciMove(fen, playedMoveUci);
       if (afterFen === null) {
+        // Defensive fallback (illegal/unparseable played move — should not
+        // happen for a real board interaction) — resolves the GOOD tier
+        // (SEED-119), never silently costing the user move points.
         return {
-          correctMove: true,
+          moveTier: 'good',
           bestMoveUci: best.bestMoveUci,
           esBefore,
           esAfter: esBefore,
@@ -752,7 +775,7 @@ export function useTrainGradingEngine({
       const afterRaw = await search(afterFen, generation, 1, TRAIN_GRADING_MOVETIME_MS);
       const esAfter = evalToExpectedScore(afterRaw.evalCp, afterRaw.evalMate, mover);
       const severity = classifyLiveSeverity(esBefore, esAfter);
-      const correctMove = severity === null || severity === 'inaccuracy';
+      const moveTier = moveTierFromSeverity(severity);
       const playedLine = clampLineEvalToBest(
         {
           moves: [playedMoveUci, ...afterRaw.pv],
@@ -762,7 +785,7 @@ export function useTrainGradingEngine({
         bestLine,
         mover,
       );
-      return { correctMove, bestMoveUci: best.bestMoveUci, esBefore, esAfter, bestLine, playedLine, fineMoves };
+      return { moveTier, bestMoveUci: best.bestMoveUci, esBefore, esAfter, bestLine, playedLine, fineMoves };
     },
     [search],
   );

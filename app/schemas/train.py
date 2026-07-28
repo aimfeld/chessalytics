@@ -27,10 +27,17 @@ class TrainPuzzle(BaseModel):
     client's exact-match/grading path runs entirely client-side against its
     own vendored Stockfish WASM output (see 189-01-PLAN.md P-01). Do not add
     fields here without re-reading that decision.
+
+    `game_id` is `int | None` (Phase 192 Plan 02, D-01/D-05): a red herring's
+    source-game link is nullable provenance — `None` here means either the
+    herring's source game has been deleted (the puzzle is still fully
+    servable off its `herring_pool` row, D-03) or the pool row was never
+    linked to a game in the first place. Never used as an identity key
+    client-side; a puzzle's identity within a session is `position`.
     """
 
     position: int
-    game_id: int
+    game_id: int | None
     ply: int
     fen: str
     side_to_move: Literal["white", "black"]
@@ -67,18 +74,21 @@ class TrainSessionResponse(BaseModel):
 class SolveRequest(BaseModel):
     """Body for POST /train/sessions/{session_id}/solve.
 
-    P-02 (LOCKED): the client asserts `correct_move` (the backend never
-    grades the move — see the module/plan docstrings) but NEVER
-    `correct_guess` or `puzzle_type` — those are computed server-side from
-    the live `game_flaws` blob so the sharp/soft ground truth is never
-    handed to the client before the attempt (T-189-18/T-189-11).
+    P-02 (LOCKED) / SEED-119: the client asserts a three-way `move_quality`
+    tier (the backend never grades the move — grading is still entirely
+    client-side, see the module/plan docstrings) but NEVER `correct_guess`
+    or `puzzle_type` — those are computed server-side from the live
+    `game_flaws` blob so the sharp/soft ground truth is never handed to the
+    client before the attempt (T-189-18/T-189-11). The server derives the
+    spaced-repetition ladder's pass/fail boolean from `move_quality`
+    (`!= "wrong"`) — see `app.repositories.train_repository.record_solve`.
     """
 
     position: int
     guess: Literal["critical", "several"]
     # UCI move string: 4 chars normal (e.g. "e2e4"), 5 chars promotion (e.g. "e7e8q").
     played_move: str = Field(min_length=4, max_length=5)
-    correct_move: bool
+    move_quality: Literal["good", "inaccuracy", "wrong"]
 
 
 class SolveResponse(BaseModel):
@@ -87,10 +97,17 @@ class SolveResponse(BaseModel):
     `item_status`/`streak`/`due_date` are None for a red-herring puzzle,
     which carries no SR bookkeeping (POOL-08). `correct_guess` is always the
     server-computed verdict, never an echo of the client's own guess.
+
+    SEED-119: `correct_move` retains its exact prior meaning — the
+    spaced-repetition ladder's pass/fail verdict, which is also what the
+    reveal's check/cross mark reads. `move_quality` is the new three-way
+    scoring tier the client's points formula consumes; it is NOT a synonym
+    for `correct_move` (an "inaccuracy" tier still means `correct_move=True`).
     """
 
     correct_guess: bool
     correct_move: bool
+    move_quality: Literal["good", "inaccuracy", "wrong"]
     puzzle_type: Literal["sharp", "soft", "herring"]
     item_status: Literal["active", "mastered", "parked"] | None
     streak: int | None
@@ -123,9 +140,14 @@ class PuzzleRevealResponse(BaseModel):
     calls the existing `GET /api/library/flaws/{game_id}/{ply}/tactic-lines`
     endpoint for the steppable PV line. Train adds no second PV-fetching
     surface — see 189-05-PLAN.md's key_links.
+
+    `game_id` is `int | None` (Phase 192 Plan 02, D-01/D-05): `None` means the
+    puzzle's source game has since been deleted. The client hides the Analyze
+    deep-link in that case (D-09) rather than disabling it — nothing else on
+    the reveal panel references the game either way.
     """
 
-    game_id: int
+    game_id: int | None
     ply: int
     fen: str
     played_in_game_san: str | None
@@ -173,10 +195,73 @@ class TrainSettingsUpdate(BaseModel):
         return value
 
 
+class TrainProgressResponse(BaseModel):
+    """Response for GET /train/progress (PROG-01/PROG-04).
+
+    Phase 193 (SEED-121) replaced Phase 191's weekly D-18 settled-streak
+    snapshot with a per-scheduled-day tick + a 0-7 depletable shield:
+    `session_streak_count` (was `settled_streak_weeks`; the wire field spells
+    out the D-02 unit — it counts completed scheduled-day SESSIONS, not
+    settled weeks) and `shield_level` (was `flame_state`, a 3-state enum;
+    now a plain int) come from the persisted tick snapshot on
+    `train_settings`, lazily advanced by this same request
+    (`app.repositories.train_repository.settle_streak_snapshot`). There is
+    no display overlay any more — the returned values are always exactly
+    what is persisted. `current_week_required` is None when
+    `weekday_mask == 0` ("train anytime" has no denominator to show);
+    otherwise it is the popcount of the scheduled-day mask (no special-
+    casing — nothing gates on this value any more).
+    `mastered_count`/`parked_count` are computed on the fly from
+    `drill_items` (D-05, unaffected by the tick snapshot — only the
+    streak/shield portion is persisted).
+
+    `waiting_count`/`pool_state`/`next_due_date` are the server-side signals
+    the nav badge and the two PROG-05 empty states need: `waiting_count` is
+    an upper-bound estimate of puzzles waiting right now (never a promise of
+    exact session size — see
+    `app.repositories.train_repository.get_waiting_puzzle_count`).
+    `pool_state` is the single discriminant the client branches on for the
+    empty states: `"no_material"` means the user has never had any
+    qualifying material (cold start); `"exhausted"` means material existed
+    but nothing is waiting and nothing is still analyzing; `"available"`
+    covers every other case, including a zero-`drill_items` user whose own
+    blunders are still being analyzed (that is "catching up", not a cold
+    start). `next_due_date` is the earliest date an ACTIVE item will next
+    resurface, or null when nothing will (the "All caught up!" empty state's
+    date).
+
+    `streak_reset_notice` (was `streak_lost_last_week`) is derived from the
+    RESULTING state (never from "did this call settle the reset"), so it
+    survives a page reload and self-clears once the user trains again.
+
+    `badge_visible` (Plan 02, D-09/D-10) is a DISPLAY HINT ONLY — it gates no
+    server-side authorization, and the number the nav badge shows still
+    comes from `waiting_count`. True when `waiting_count > 0` AND (today is
+    a scheduled day per the user's `weekday_mask` OR an already-open
+    unexpired session still has unsolved puzzles left to rescue). The client
+    performs no day-of-week or timezone math of its own — it has no
+    `weekday_mask` and no clean way to reproduce `local_today`, so this
+    field is the single source of truth for whether the badge should show.
+    """
+
+    session_streak_count: int
+    shield_level: int
+    current_week_completed: int
+    current_week_required: int | None
+    streak_reset_notice: bool
+    mastered_count: int
+    parked_count: int
+    waiting_count: int
+    pool_state: Literal["no_material", "exhausted", "available"]
+    next_due_date: date | None
+    badge_visible: bool
+
+
 __all__ = [
     "PuzzleRevealResponse",
     "SolveRequest",
     "SolveResponse",
+    "TrainProgressResponse",
     "TrainPuzzle",
     "TrainSessionResponse",
     "TrainSettingsResponse",

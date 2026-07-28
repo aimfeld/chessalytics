@@ -3,6 +3,13 @@
 D-05 (LOCKED): Train is not available to guest accounts. Every handler calls
 `_reject_guest` as its FIRST statement — an explicit 403 gate, not an
 inference from an empty pool result (Pitfall 7 in 189-RESEARCH.md).
+
+Every time-dependent handler takes "now" from the `dev_now_utc` dependency
+rather than calling `datetime.now()` inline, so the dev clock override can
+shift the whole Train calendar (weekday mask, session expiry, due-date
+ladder, streak weeks) without waiting real days. Outside
+`ENVIRONMENT == "development"` that dependency IS the real clock — see
+`app/core/dev_clock.py`.
 """
 
 from __future__ import annotations
@@ -15,12 +22,14 @@ from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.database import get_async_session
+from app.core.dev_clock import dev_now_utc
 from app.models.user import User
 from app.repositories import train_repository
 from app.schemas.train import (
     PuzzleRevealResponse,
     SolveRequest,
     SolveResponse,
+    TrainProgressResponse,
     TrainPuzzle,
     TrainSessionResponse,
     TrainSettingsResponse,
@@ -29,6 +38,9 @@ from app.schemas.train import (
 from app.users import current_active_user
 
 router = APIRouter(prefix="/train", tags=["train"])
+
+#: The current UTC instant, dev-clock-shiftable. Real clock outside development.
+NowUtc = Annotated[datetime.datetime, Depends(dev_now_utc)]
 
 
 def _reject_guest(user: User) -> None:
@@ -45,6 +57,7 @@ def _reject_guest(user: User) -> None:
 async def compose_or_resume_session(
     session: Annotated[AsyncSession, Depends(get_async_session)],
     user: Annotated[User, Depends(current_active_user)],
+    now_utc: NowUtc,
 ) -> TrainSessionResponse:
     """Compose a Train session from the user's own qualifying blunders (POOL-01/07).
 
@@ -54,7 +67,7 @@ async def compose_or_resume_session(
     _reject_guest(user)
     try:
         composed = await train_repository.compose_and_materialize_session(
-            session, user_id=user.id, now_utc=datetime.datetime.now(datetime.timezone.utc)
+            session, user_id=user.id, now_utc=now_utc
         )
         await session.commit()
     except Exception:
@@ -62,15 +75,15 @@ async def compose_or_resume_session(
         sentry_sdk.set_context("train", {"user_id": str(user.id)})
         sentry_sdk.capture_exception()
         raise
-    return TrainSessionResponse(
-        session_id=composed.session_id,
-        session_date=composed.session_date,
-        expires_on=composed.expires_on,
-        puzzle_count=composed.puzzle_count,
-        requested_count=composed.requested_count,
-        solved_count=composed.solved_count,
-        blob_pending_count=composed.blob_pending_count,
-        puzzles=[
+    puzzles: list[TrainPuzzle] = []
+    for p in composed.puzzles:
+        # Phase 192 Plan 02: `ComposedPuzzle.game_id` and `TrainPuzzle.game_id`
+        # are both `int | None` (D-01/D-05) — a herring composed from an
+        # already-orphaned pool row (its source game deleted before this
+        # composition ran) legitimately has `game_id=None` here. No narrowing
+        # needed; the client hides the (n/a) Analyze deep-link for a null
+        # game_id (D-09).
+        puzzles.append(
             TrainPuzzle(
                 position=p.position,
                 game_id=p.game_id,
@@ -79,8 +92,16 @@ async def compose_or_resume_session(
                 side_to_move=p.side_to_move,
                 last_move_uci=p.last_move_uci,
             )
-            for p in composed.puzzles
-        ],
+        )
+    return TrainSessionResponse(
+        session_id=composed.session_id,
+        session_date=composed.session_date,
+        expires_on=composed.expires_on,
+        puzzle_count=composed.puzzle_count,
+        requested_count=composed.requested_count,
+        solved_count=composed.solved_count,
+        blob_pending_count=composed.blob_pending_count,
+        puzzles=puzzles,
     )
 
 
@@ -90,6 +111,7 @@ async def solve_puzzle(
     body: SolveRequest,
     session: Annotated[AsyncSession, Depends(get_async_session)],
     user: Annotated[User, Depends(current_active_user)],
+    now_utc: NowUtc,
 ) -> SolveResponse:
     """Record one puzzle's outcome and advance the interval ladder (POOL-08).
 
@@ -106,8 +128,8 @@ async def solve_puzzle(
             position=body.position,
             guess=body.guess,
             played_move=body.played_move,
-            correct_move=body.correct_move,
-            now_utc=datetime.datetime.now(datetime.timezone.utc),
+            move_quality=body.move_quality,
+            now_utc=now_utc,
         )
     except Exception:
         await session.rollback()
@@ -121,6 +143,7 @@ async def solve_puzzle(
     return SolveResponse(
         correct_guess=recorded.correct_guess,
         correct_move=recorded.correct_move,
+        move_quality=recorded.move_quality,
         puzzle_type=recorded.puzzle_type,
         item_status=recorded.item_status,
         streak=recorded.streak,
@@ -166,6 +189,45 @@ async def reveal_puzzle(
     )
 
 
+@router.get("/progress", response_model=TrainProgressResponse)
+async def get_train_progress(
+    session: Annotated[AsyncSession, Depends(get_async_session)],
+    user: Annotated[User, Depends(current_active_user)],
+    now_utc: NowUtc,
+) -> TrainProgressResponse:
+    """Return the per-day tick snapshot + honest mastered/parked counts (PROG-01/PROG-04).
+
+    This GET legitimately commits: settlement is lazy-on-read, so a
+    successful call may advance `train_settings.streak_count`/
+    `shield_level`/`streak_settled_through`/`pool_eligible_since` (a
+    guarded, monotonic, idempotent write — see
+    `train_repository.settle_streak_snapshot`/`_stamp_pool_eligibility`) in
+    addition to the ordinary settings create-on-first-touch.
+    """
+    _reject_guest(user)
+    try:
+        progress = await train_repository.get_progress(session, user_id=user.id, now_utc=now_utc)
+        await session.commit()
+    except Exception:
+        await session.rollback()
+        sentry_sdk.set_context("train", {"user_id": str(user.id)})
+        sentry_sdk.capture_exception()
+        raise
+    return TrainProgressResponse(
+        session_streak_count=progress.session_streak_count,
+        shield_level=progress.shield_level,
+        current_week_completed=progress.current_week_completed,
+        current_week_required=progress.current_week_required,
+        streak_reset_notice=progress.streak_reset_notice,
+        mastered_count=progress.mastered_count,
+        parked_count=progress.parked_count,
+        waiting_count=progress.waiting_count,
+        pool_state=progress.pool_state,
+        next_due_date=progress.next_due_date,
+        badge_visible=progress.badge_visible,
+    )
+
+
 @router.get("/settings", response_model=TrainSettingsResponse)
 async def get_train_settings(
     session: Annotated[AsyncSession, Depends(get_async_session)],
@@ -187,6 +249,7 @@ async def update_train_settings(
     body: TrainSettingsUpdate,
     session: Annotated[AsyncSession, Depends(get_async_session)],
     user: Annotated[User, Depends(current_active_user)],
+    now_utc: NowUtc,
 ) -> TrainSettingsResponse:
     """Persist the user's Train settings (timezone, weekday mask, session size).
 
@@ -197,6 +260,12 @@ async def update_train_settings(
     migration-shaped side effect for no behavioral gain (the one place this
     handler deliberately does NOT follow `users.py`'s diff-driven-side-effect
     pattern).
+
+    D-18 (Phase 191 Plan 02): this PUT settles every fully-elapsed unsettled
+    week using the OLD `weekday_mask`/timezone BEFORE persisting the new
+    values (`train_repository.upsert_settings`'s settle-before-mutate step),
+    so a user who reschedules after several inactive weeks has those weeks
+    judged by the schedule that was actually in force.
     """
     _reject_guest(user)
     settings_row = await train_repository.upsert_settings(
@@ -205,6 +274,7 @@ async def update_train_settings(
         timezone=body.timezone,
         weekday_mask=body.weekday_mask,
         puzzles_per_session=body.puzzles_per_session,
+        now_utc=now_utc,
     )
     await session.commit()
     return TrainSettingsResponse(

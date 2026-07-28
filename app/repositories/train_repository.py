@@ -18,10 +18,10 @@ from __future__ import annotations
 import datetime
 import random
 from dataclasses import dataclass
-from typing import Literal
+from typing import Literal, cast
 
 import chess
-from sqlalchemy import and_, func, or_, select, update
+from sqlalchemy import and_, delete, exists, func, or_, select, update
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -29,10 +29,11 @@ from sqlalchemy.orm import undefer
 
 from app.models.drill_item import DrillItem, DrillStatus
 from app.models.drill_session import DrillSession
-from app.models.drill_solve import DrillGuess, DrillSolve, DrillSource
+from app.models.drill_solve import DrillGuess, DrillMoveQuality, DrillSolve, DrillSource
 from app.models.game import Game
 from app.models.game_flaw import GameFlaw
 from app.models.game_position import GamePosition
+from app.models.herring_pool import HerringPool
 from app.models.train_settings import TrainSettings
 from app.services.best_move_candidates import mover_color_for_ply
 from app.services.train_pool import (
@@ -49,10 +50,18 @@ from app.services.train_scheduler import (
     DEFAULT_PUZZLES_PER_SESSION,
     DEFAULT_TIMEZONE,
     DEFAULT_WEEKDAY_MASK,
+    DayOutcome,
     ItemState,
+    TickSnapshot,
+    TickView,
+    _judge_one_day,
     apply_result,
+    is_scheduled_day,
+    is_session_expired,
     local_today,
+    scheduled_days_per_week,
     session_window,
+    tick_days,
 )
 
 # item_status wire literal <-> DrillStatus enum. Single mapping so the
@@ -63,6 +72,17 @@ _STATUS_LITERAL: dict[DrillStatus, Literal["active", "mastered", "parked"]] = {
     DrillStatus.PARKED: "parked",
 }
 
+# move_quality wire literal <-> DrillMoveQuality enum (SEED-119). Bidirectional
+# so the repository never re-derives either direction independently.
+_MOVE_QUALITY_LITERAL: dict[DrillMoveQuality, Literal["good", "inaccuracy", "wrong"]] = {
+    DrillMoveQuality.GOOD: "good",
+    DrillMoveQuality.INACCURACY: "inaccuracy",
+    DrillMoveQuality.WRONG: "wrong",
+}
+_MOVE_QUALITY_ENUM: dict[Literal["good", "inaccuracy", "wrong"], DrillMoveQuality] = {
+    literal: enum_member for enum_member, literal in _MOVE_QUALITY_LITERAL.items()
+}
+
 
 @dataclass(frozen=True)
 class TrainSettingsRow:
@@ -70,23 +90,39 @@ class TrainSettingsRow:
 
     Frozen (immutable) per CLAUDE.md internal-structured-data rule. Mirrors
     `app.repositories.user_import_settings_repository.ImportSettingsRow`.
+
+    `streak_count`/`shield_level`/`streak_settled_through`/`pool_eligible_since`
+    are the Phase 193 per-day tick snapshot fields (added alongside the
+    original D-06/D-07/D-08 fields, not a separate row type).
     """
 
     timezone: str
     weekday_mask: int
     puzzles_per_session: int
+    streak_count: int
+    shield_level: int
+    streak_settled_through: datetime.date | None
+    pool_eligible_since: datetime.date | None
 
 
 @dataclass(frozen=True)
 class ComposedPuzzle:
-    """Internal dataclass for one puzzle within a composed/resumed session."""
+    """Internal dataclass for one puzzle within a composed/resumed session.
+
+    Phase 192: `game_id` is `int | None` — a puzzle's source game link is
+    nullable provenance (D-01/D-05), not the puzzle's identity
+    (`herring_pool_id` is, for a herring). `drill_solves.game_id` itself went
+    nullable in Plan 02 (the phase's one-way door, `ondelete="SET NULL"`), so
+    `None` here is a real, servable case — not merely forward-compat typing.
+    """
 
     position: int
-    game_id: int
+    game_id: int | None
     ply: int
     fen: str
     side_to_move: Literal["white", "black"]
     last_move_uci: str | None
+    herring_pool_id: int | None = None
 
 
 @dataclass(frozen=True)
@@ -132,6 +168,10 @@ async def get_settings(session: AsyncSession, *, user_id: int) -> TrainSettingsR
         timezone=row.timezone,
         weekday_mask=row.weekday_mask,
         puzzles_per_session=row.puzzles_per_session,
+        streak_count=row.streak_count,
+        shield_level=row.shield_level,
+        streak_settled_through=row.streak_settled_through,
+        pool_eligible_since=row.pool_eligible_since,
     )
 
 
@@ -154,6 +194,15 @@ async def get_or_create_settings(session: AsyncSession, *, user_id: int) -> Trai
         timezone=DEFAULT_TIMEZONE,
         weekday_mask=DEFAULT_WEEKDAY_MASK,
         puzzles_per_session=DEFAULT_PUZZLES_PER_SESSION,
+        # A brand-new row's tick snapshot starts at zero/never-settled —
+        # exactly the state that triggers a full-history replay on first
+        # settlement (mirrors Phase 191's D-05 retroactivity mechanism).
+        # pool_eligible_since stays NULL until _stamp_pool_eligibility finds
+        # real material (D-06).
+        streak_count=0,
+        shield_level=0,
+        streak_settled_through=None,
+        pool_eligible_since=None,
     )
     # ON CONFLICT DO NOTHING: a concurrent first-touch may have already
     # inserted the row between the get_settings check above and this insert;
@@ -164,6 +213,10 @@ async def get_or_create_settings(session: AsyncSession, *, user_id: int) -> Trai
         timezone=DEFAULT_TIMEZONE,
         weekday_mask=DEFAULT_WEEKDAY_MASK,
         puzzles_per_session=DEFAULT_PUZZLES_PER_SESSION,
+        streak_count=0,
+        shield_level=0,
+        streak_settled_through=None,
+        pool_eligible_since=None,
     )
 
 
@@ -174,6 +227,7 @@ async def upsert_settings(
     timezone: str,
     weekday_mask: int,
     puzzles_per_session: int,
+    now_utc: datetime.datetime,
 ) -> TrainSettingsRow:
     """Insert or update one user's `train_settings` row (PUT /train/settings).
 
@@ -184,13 +238,50 @@ async def upsert_settings(
     `puzzles_per_session` are within the table's CHECK bounds — this function
     trusts that and does no re-validation.
 
+    Settle-before-mutate (carried forward from Phase 191 D-18, now at
+    per-day tick granularity): settlement runs STRICTLY BEFORE any new value
+    is applied, judged against the OLD mask and OLD timezone:
+
+    1. `old_row = await get_or_create_settings(...)` — reading this BEFORE
+       applying any new value is load-bearing. Reading it AFTER would settle
+       every elapsed unsettled scheduled day against the NEW schedule
+       instead of the one that was actually in force, silently
+       reintroducing the retroactive re-judging a settled day must never
+       suffer. A user who was inactive for several elapsed days and then
+       reschedules must have those days judged by the OLD schedule.
+    2. `today = local_today(old_row.timezone, now_utc)` — resolved from the
+       OLD timezone, because a timezone change moves day boundaries, and the
+       elapsed days being settled belong to the old frame, not the new one.
+    3. `await settle_streak_snapshot(..., settings_row=old_row, today=today)`
+       — the single settlement entry point, reused verbatim; no second
+       settlement implementation exists here.
+    4. Only then is the `INSERT ... ON CONFLICT DO UPDATE` applying the new
+       `timezone`/`weekday_mask`/`puzzles_per_session` issued.
+
+    Both the settlement UPDATE (if any) and this settings UPSERT run
+    sequentially on the same `AsyncSession`, inside the caller's one
+    transaction — never `asyncio.gather` (CLAUDE.md) — so a failure in
+    either rolls back both, and the snapshot can never advance against a
+    schedule that was never persisted.
+
+    Deliberately does NOT re-snap existing `drill_items.due_date` values when
+    `weekday_mask` changes (unchanged from the router's prior documented
+    behaviour).
+
     Args:
         session: AsyncSession. Caller commits.
         user_id: Authenticated user's internal PK (V4: never client-supplied).
         timezone: A validated IANA timezone string.
         weekday_mask: 7-bit scheduled-day mask, 0-127.
         puzzles_per_session: Requested session size, 1-50.
+        now_utc: The current UTC instant. Used ONLY to resolve `today` from
+            the OLD (pre-mutation) timezone for the settle-before-mutate
+            step — never converted against the NEW timezone being applied.
     """
+    old_row = await get_or_create_settings(session, user_id=user_id)
+    today = local_today(old_row.timezone, now_utc)
+    await settle_streak_snapshot(session, user_id=user_id, settings_row=old_row, today=today)
+
     stmt = pg_insert(TrainSettings).values(
         user_id=user_id,
         timezone=timezone,
@@ -205,9 +296,321 @@ async def upsert_settings(
             "puzzles_per_session": stmt.excluded.puzzles_per_session,
         },
     )
-    await session.execute(stmt)
+    # RETURNING: this UPDATE never touches streak_count/shield_level/
+    # streak_settled_through/pool_eligible_since — the settle-before-mutate
+    # step above is the only writer of those four columns in this function —
+    # so read back whatever the row holds after that settlement (either the
+    # brand-new insert's server defaults or an existing row's just-settled
+    # snapshot) rather than fabricating a value here.
+    stmt = stmt.returning(
+        TrainSettings.streak_count,
+        TrainSettings.shield_level,
+        TrainSettings.streak_settled_through,
+        TrainSettings.pool_eligible_since,
+    )
+    result = await session.execute(stmt)
+    streak_count, shield_level, streak_settled_through, pool_eligible_since = result.one()
     return TrainSettingsRow(
-        timezone=timezone, weekday_mask=weekday_mask, puzzles_per_session=puzzles_per_session
+        timezone=timezone,
+        weekday_mask=weekday_mask,
+        puzzles_per_session=puzzles_per_session,
+        streak_count=streak_count,
+        shield_level=shield_level,
+        streak_settled_through=streak_settled_through,
+        pool_eligible_since=pool_eligible_since,
+    )
+
+
+# ---------------------------------------------------------------------------
+# Progress (PROG-01/PROG-04, Phase 191 Plan 01, D-18)
+# ---------------------------------------------------------------------------
+
+
+async def _count_drill_items_by_status(
+    session: AsyncSession, *, user_id: int, status: DrillStatus
+) -> int:
+    """Count a user's `drill_items` rows in a given status (mastered/parked counts).
+
+    Args:
+        session: AsyncSession.
+        user_id: Authenticated user's internal PK (V4: never client-supplied).
+        status: The `DrillStatus` to count.
+    """
+    stmt = (
+        select(func.count())
+        .select_from(DrillItem)
+        .where(DrillItem.user_id == user_id, DrillItem.status == status)
+    )
+    return (await session.execute(stmt)).scalar_one()
+
+
+@dataclass(frozen=True)
+class ProgressSnapshot:
+    """Internal dataclass mirroring `app.schemas.train.TrainProgressResponse`.
+
+    `session_streak_count` (Phase 193, was `settled_streak_weeks`) counts
+    completed scheduled-day sessions. `shield_level` (was `flame_state`) is
+    the plain 0-`SHIELD_CAP` persisted value — there is no display overlay
+    any more (the eager-write model this plan adds makes the persisted
+    value always current). `streak_reset_notice` (was `streak_lost_last_week`)
+    is derived from the resulting state, so it survives a page reload.
+    `badge_visible` (Plan 02, D-09/D-10) is a display hint only — it gates no
+    server-side authorization; the badge's own number still comes from
+    `waiting_count`.
+    """
+
+    session_streak_count: int
+    shield_level: int
+    current_week_completed: int
+    current_week_required: int | None
+    streak_reset_notice: bool
+    mastered_count: int
+    parked_count: int
+    waiting_count: int
+    pool_state: Literal["no_material", "exhausted", "available"]
+    next_due_date: datetime.date | None
+    badge_visible: bool
+
+
+async def _material_flags(session: AsyncSession, *, user_id: int) -> tuple[bool, bool]:
+    """Return `(has_drill_items, has_pool_candidates)` — the two EXISTS
+    signals `_pool_state` already needed, factored out so `get_progress` can
+    also use them (resolved exactly once per request) to decide whether to
+    stamp the D-06 `pool_eligible_since` watermark.
+
+    `blob_pending_count > 0` alone is deliberately EXCLUDED from "qualifying
+    material": a blunder still awaiting tier-4 analysis has no answer key
+    yet, so it is not yet drillable under D-06's own wording.
+
+    Args:
+        session: AsyncSession.
+        user_id: Authenticated user's internal PK (V4: never client-supplied).
+    """
+    has_drill_items = (
+        await session.execute(
+            select(select(DrillItem.user_id).where(DrillItem.user_id == user_id).exists())
+        )
+    ).scalar_one()
+    has_pool_candidates = (
+        await session.execute(select(pool_entry_stmt(user_id).exists()))
+    ).scalar_one()
+    return has_drill_items, has_pool_candidates
+
+
+async def _stamp_pool_eligibility(
+    session: AsyncSession,
+    *,
+    user_id: int,
+    settings_row: TrainSettingsRow,
+    today: datetime.date,
+    has_material: bool,
+) -> datetime.date | None:
+    """D-06: stamp the eligibility watermark once, the first time qualifying
+    material is observed; never overwrite an existing one.
+
+    Args:
+        session: AsyncSession. Caller commits.
+        user_id: Authenticated user's internal PK (V4: never client-supplied).
+        settings_row: The user's current `TrainSettingsRow`.
+        today: The local calendar day (from `local_today`).
+        has_material: `has_drill_items OR has_pool_candidates` from
+            `_material_flags`, resolved once by the caller.
+
+    Returns:
+        `settings_row.pool_eligible_since` unchanged when already set;
+        `today` when it was NULL and `has_material` is True (the SAME
+        request's tick machine gets a usable floor immediately, rather than
+        waiting for the next read); `None` when it was NULL and there is
+        still no material.
+    """
+    if settings_row.pool_eligible_since is not None:
+        return settings_row.pool_eligible_since
+    if not has_material:
+        return None
+    # Guarded on IS NULL: a concurrent stamp from another request racing
+    # this one is harmless — both would write the same `today` (or the
+    # slower one is simply a no-op UPDATE matching zero rows).
+    await session.execute(
+        update(TrainSettings)
+        .where(TrainSettings.user_id == user_id, TrainSettings.pool_eligible_since.is_(None))
+        .values(pool_eligible_since=today)
+    )
+    return today
+
+
+async def settle_streak_snapshot(
+    session: AsyncSession, *, user_id: int, settings_row: TrainSettingsRow, today: datetime.date
+) -> TickView:
+    """Advance the per-day tick snapshot over every elapsed scheduled day and
+    persist the advance (PROG-01).
+
+    THE SINGLE settlement entry point, shared by `GET /train/progress` (here)
+    and `PUT /train/settings` (settle-before-mutate). Reads the user's
+    `status='completed'` `drill_sessions.session_date` values (order-
+    insensitive — `tick_days` buckets internally), builds the input
+    `TickSnapshot` from `settings_row`'s three snapshot fields, calls
+    `tick_days` (passing `settings_row.pool_eligible_since` as the D-06
+    watermark), and persists the advanced snapshot IF AND ONLY IF
+    `view.changed` is True.
+
+    This is a read endpoint that writes, so it is documented plainly here:
+    the write is a **compare-and-set UPDATE** guarded on the settlement
+    boundary strictly advancing (`streak_settled_through IS NULL OR <
+    new_settled_through`). Two concurrent callers that both settle the same
+    days compute identical results from the same input snapshot, so a
+    duplicate write is harmless — the guard exists only to stop a slower
+    request from writing an OLDER boundary over a newer one.
+    `streak_settled_through` therefore only ever moves forward, and a call
+    with `changed=False` issues no statement at all.
+
+    Args:
+        session: AsyncSession. Caller commits.
+        user_id: Authenticated user's internal PK (V4: never client-supplied).
+        settings_row: The user's current `TrainSettingsRow` (already
+            resolved via `get_or_create_settings`, and — for `get_progress`'s
+            caller — already carrying a just-stamped `pool_eligible_since`
+            from `_stamp_pool_eligibility` in the SAME transaction).
+        today: The local calendar day (from `local_today`).
+    """
+    dates_result = await session.execute(
+        select(DrillSession.session_date).where(
+            DrillSession.user_id == user_id, DrillSession.status == "completed"
+        )
+    )
+    completed_session_dates = [row[0] for row in dates_result.all()]
+
+    snapshot = TickSnapshot(
+        streak_count=settings_row.streak_count,
+        shield_level=settings_row.shield_level,
+        settled_through=settings_row.streak_settled_through,
+    )
+    view = tick_days(
+        snapshot,
+        completed_session_dates,
+        weekday_mask=settings_row.weekday_mask,
+        today=today,
+        pool_eligible_since=settings_row.pool_eligible_since,
+    )
+
+    if view.changed:
+        new_settled_through = view.settled.settled_through
+        await session.execute(
+            update(TrainSettings)
+            .where(
+                TrainSettings.user_id == user_id,
+                or_(
+                    TrainSettings.streak_settled_through.is_(None),
+                    TrainSettings.streak_settled_through < new_settled_through,
+                ),
+            )
+            .values(
+                streak_count=view.settled.streak_count,
+                shield_level=view.settled.shield_level,
+                streak_settled_through=new_settled_through,
+            )
+        )
+
+    return view
+
+
+async def get_progress(
+    session: AsyncSession, *, user_id: int, now_utc: datetime.datetime
+) -> ProgressSnapshot:
+    """Return the full Train progress read-model (PROG-01/PROG-04).
+
+    Sequential awaits only — never `asyncio.gather` on this `AsyncSession`
+    (CLAUDE.md). Steps: `get_or_create_settings` -> resolve today's local
+    date -> `_material_flags` -> `_stamp_pool_eligibility` (so the very call
+    that discovers material gives the tick machine a usable floor, D-06) ->
+    `settle_streak_snapshot` (with a settings row carrying the just-stamped
+    watermark) -> mastered/parked counts -> `current_week_required` ->
+    `blob_pending_count` -> `waiting_count` -> `_pool_state` (now passed the
+    two already-resolved material flags) -> `_next_due_date`.
+
+    `current_week_required` is `scheduled_days_per_week(weekday_mask)` —
+    `None` at `weekday_mask == 0` ("train anytime" has no denominator to
+    show), else the plain popcount (no special-casing: nothing gates on this
+    value any more).
+
+    Args:
+        session: AsyncSession. Caller commits.
+        user_id: Authenticated user's internal PK (V4: never client-supplied).
+        now_utc: The current UTC instant (converted to a local date via
+            `local_today` — called exactly ONCE in this path).
+    """
+    settings_row = await get_or_create_settings(session, user_id=user_id)
+    today = local_today(settings_row.timezone, now_utc)
+
+    has_drill_items, has_pool_candidates = await _material_flags(session, user_id=user_id)
+    has_material = has_drill_items or has_pool_candidates
+    stamped_pool_eligible_since = await _stamp_pool_eligibility(
+        session,
+        user_id=user_id,
+        settings_row=settings_row,
+        today=today,
+        has_material=has_material,
+    )
+    if stamped_pool_eligible_since != settings_row.pool_eligible_since:
+        settings_row = TrainSettingsRow(
+            timezone=settings_row.timezone,
+            weekday_mask=settings_row.weekday_mask,
+            puzzles_per_session=settings_row.puzzles_per_session,
+            streak_count=settings_row.streak_count,
+            shield_level=settings_row.shield_level,
+            streak_settled_through=settings_row.streak_settled_through,
+            pool_eligible_since=stamped_pool_eligible_since,
+        )
+
+    view = await settle_streak_snapshot(
+        session, user_id=user_id, settings_row=settings_row, today=today
+    )
+
+    mastered_count = await _count_drill_items_by_status(
+        session, user_id=user_id, status=DrillStatus.MASTERED
+    )
+    parked_count = await _count_drill_items_by_status(
+        session, user_id=user_id, status=DrillStatus.PARKED
+    )
+
+    current_week_required = scheduled_days_per_week(settings_row.weekday_mask)
+
+    blob_pending_count = (await session.execute(blob_pending_stmt(user_id))).scalar_one()
+    waiting_count = await get_waiting_puzzle_count(
+        session, user_id=user_id, settings_row=settings_row, today=today
+    )
+    pool_state = await _pool_state(
+        session,
+        user_id=user_id,
+        waiting_count=waiting_count,
+        blob_pending_count=blob_pending_count,
+        has_drill_items=has_drill_items,
+        has_pool_candidates=has_pool_candidates,
+    )
+    next_due_date = await _next_due_date(session, user_id=user_id, today=today)
+
+    # D-09/D-10 (Plan 02): the nav badge shows only on a scheduled session
+    # day, UNLESS an already-open unexpired session still has unsolved
+    # puzzles left to rescue (only reachable under a narrowed mask, where
+    # session_window can leave a session open across an unscheduled day).
+    # is_scheduled_day is the SAME bit-test the D-07 off-day tick branch
+    # uses — one predicate, two call sites, never re-derived here.
+    badge_visible = waiting_count > 0 and (
+        is_scheduled_day(today, settings_row.weekday_mask)
+        or await _open_unfinished_exists(session, user_id=user_id, today=today)
+    )
+
+    return ProgressSnapshot(
+        session_streak_count=view.settled.streak_count,
+        shield_level=view.settled.shield_level,
+        current_week_completed=view.current_week_completed,
+        current_week_required=current_week_required,
+        streak_reset_notice=view.streak_reset_notice,
+        mastered_count=mastered_count,
+        parked_count=parked_count,
+        waiting_count=waiting_count,
+        pool_state=pool_state,
+        next_due_date=next_due_date,
+        badge_visible=badge_visible,
     )
 
 
@@ -299,26 +702,317 @@ async def completed_session_in_window(
     return result.scalar_one_or_none()
 
 
+async def _is_untouched_and_resized(
+    session: AsyncSession, *, drill_session: DrillSession, requested_count: int
+) -> bool:
+    """Whether `drill_session` is untouched AND its frozen size has drifted
+    from `requested_count` — i.e. whether the next
+    `compose_and_materialize_session` call will DISCARD it and compose fresh.
+
+    Read-only: issues one COUNT and never writes. The single source of truth
+    for this predicate, shared by the write path
+    (`_discard_if_untouched_and_resized`, which acts on it) and the read path
+    (`get_waiting_puzzle_count`, which must merely *predict* it). Keeping one
+    implementation is load-bearing: when the two drifted, the nav badge kept
+    advertising a stale frozen count for a session the very next composition
+    was going to throw away.
+
+    Compares against the session's OWN `requested_count` snapshot, NEVER its
+    `puzzle_count` — a session can legitimately serve fewer puzzles than
+    requested when the pool is short on material (the D-14 "short session"
+    state), and re-checking that same shortfall on every call would churn the
+    session for no reason. `requested_count is None` (pre-migration rows, or a
+    test fixture seeding a session directly without going through composition)
+    is always treated as "not resized" — the conservative default.
+
+    Only a session with ZERO recorded solves qualifies: once any puzzle has
+    been solved, `puzzle_count` is load-bearing for the SOLV-04/D-13 frozen
+    progress denominator and must never move out from under an in-progress
+    solve loop.
+    """
+    if drill_session.requested_count is None or drill_session.requested_count == requested_count:
+        return False
+    solved_count_stmt = (
+        select(func.count())
+        .select_from(DrillSolve)
+        .where(DrillSolve.session_id == drill_session.id, DrillSolve.solved_at.isnot(None))
+    )
+    solved_so_far = (await session.execute(solved_count_stmt)).scalar_one()
+    return solved_so_far == 0
+
+
+async def get_waiting_puzzle_count(
+    session: AsyncSession, *, user_id: int, settings_row: TrainSettingsRow, today: datetime.date
+) -> int:
+    """Read-only estimate of puzzles waiting for the nav badge (SCHD-02/D-07).
+
+    NEVER calls `compose_and_materialize_session` and NEVER calls
+    `expire_stale_sessions` — this whole function is a read. Takes
+    `settings_row`/`today` as parameters rather than re-resolving them, so a
+    caller resolves `get_or_create_settings`/`local_today` exactly once per
+    request (191-RESEARCH.md Pitfall 2).
+
+    Branch order, all sequential awaits (never `asyncio.gather` on this
+    `AsyncSession`, CLAUDE.md):
+
+    1. An open session that is NOT expired -> its `puzzle_count` minus its
+       solved `drill_solves` count (floored at 0, mirroring `_resume_session`'s
+       solved-count predicate). An expired-but-still-`open` row is skipped in
+       Python here, never flipped to `'expired'` — that write belongs solely
+       to `expire_stale_sessions`, never to this read path.
+       EXCEPTION: an open session that `_is_untouched_and_resized` reports as
+       doomed (zero solves + a `requested_count` that no longer matches the
+       current `puzzles_per_session`) falls through to branch 3 instead. The
+       next composition will discard and recompose it, so its frozen count is
+       already dead — reporting it made the badge advertise a size the user had
+       just changed away from. Predicting the discard is read-only; the delete
+       stays in `_discard_if_untouched_and_resized`.
+    2. Otherwise a completed session still inside its D-10 window -> 0 (D-07:
+       the badge hides once today's session is done).
+    3. Otherwise an estimate of available fresh material, capped at
+       `settings_row.puzzles_per_session`: due `drill_items` (mirroring
+       `compose_and_materialize_session`'s `due_stmt` eligibility predicates
+       exactly, in COUNT-only form) + untracked `pool_entry_stmt` candidates
+       (excluding already-tracked `(game_id, ply)` pairs via a SQL `NOT
+       EXISTS` against `drill_items`, never materializing the pair set in
+       Python) + `herring_stmt(..., exclude_served=False)` candidates.
+
+    Never imports `classify_puzzle_type`, a `missed_pv_lines` reader,
+    `fen_and_last_move_at_ply`, or any other answer-key/classification
+    helper — this function needs counts and dates only (191-RESEARCH.md
+    Pitfall 5). Never issues `session.add`/`session.flush`/INSERT/UPDATE/
+    DELETE.
+
+    The returned number is an UPPER BOUND, never a promise of exact session
+    size: it applies composition's own eligibility predicates and the
+    `puzzles_per_session` cap, but skips per-puzzle FEN reconstruction — a
+    puzzle composition would later drop as unreconstructable can still be
+    counted here. That is acceptable for an attention signal.
+
+    Args:
+        session: AsyncSession.
+        user_id: Authenticated user's internal PK (V4: never client-supplied).
+        settings_row: The caller's already-resolved `TrainSettingsRow`.
+        today: The local calendar day (from `local_today`, resolved once per
+            request by the caller).
+    """
+    open_session = await open_session_for_user(session, user_id=user_id)
+    if open_session is not None and not is_session_expired(open_session.expires_on, today):
+        # Bug fix: an UNTOUCHED open session whose size has drifted from the
+        # current `puzzles_per_session` is about to be discarded and recomposed
+        # by the next `compose_and_materialize_session` call
+        # (`_discard_if_untouched_and_resized`). Reporting its frozen
+        # `puzzle_count` here made the nav badge advertise a number the user had
+        # just changed and that no session would ever serve — the count only
+        # corrected itself once they pressed Start. Falling through to the
+        # fresh-material estimate below predicts the recomposition instead.
+        # A session with any recorded solve is NEVER resized (the predicate
+        # requires zero solves), so an in-progress session keeps counting down
+        # from its own frozen denominator.
+        if not await _is_untouched_and_resized(
+            session,
+            drill_session=open_session,
+            requested_count=settings_row.puzzles_per_session,
+        ):
+            solved_stmt = (
+                select(func.count())
+                .select_from(DrillSolve)
+                .where(DrillSolve.session_id == open_session.id, DrillSolve.solved_at.isnot(None))
+            )
+            solved_count = (await session.execute(solved_stmt)).scalar_one()
+            return max(0, open_session.puzzle_count - solved_count)
+
+    completed = await completed_session_in_window(session, user_id=user_id, today=today)
+    if completed is not None:
+        return 0
+
+    # Due drill_items — mirrors compose_and_materialize_session's due_stmt
+    # eligibility exactly (status/due_date/flaw-row-presence/answer-key),
+    # minus the Game join (not needed for a count).
+    due_count_stmt = (
+        select(func.count())
+        .select_from(DrillItem)
+        .outerjoin(
+            GameFlaw,
+            and_(
+                GameFlaw.user_id == DrillItem.user_id,
+                GameFlaw.game_id == DrillItem.game_id,
+                GameFlaw.ply == DrillItem.ply,
+            ),
+        )
+        .where(
+            DrillItem.user_id == user_id,
+            DrillItem.status == DrillStatus.ACTIVE,
+            DrillItem.due_date <= today,
+            GameFlaw.ply.isnot(None),
+            answer_key_present(GameFlaw.missed_pv_lines),
+        )
+    )
+    due_count = (await session.execute(due_count_stmt)).scalar_one()
+
+    # Untracked pool_entry_stmt candidates — a NOT EXISTS against drill_items
+    # expressed in SQL, never materializing the pair set in Python.
+    pool_subq = pool_entry_stmt(user_id).subquery()
+    untracked_pool_stmt = (
+        select(func.count())
+        .select_from(pool_subq)
+        .where(
+            ~exists(
+                select(DrillItem.game_id).where(
+                    DrillItem.user_id == user_id,
+                    DrillItem.game_id == pool_subq.c.game_id,
+                    DrillItem.ply == pool_subq.c.ply,
+                )
+            )
+        )
+    )
+    untracked_pool_count = (await session.execute(untracked_pool_stmt)).scalar_one()
+
+    herring_count_stmt = select(func.count()).select_from(
+        herring_stmt(user_id, exclude_served=False).subquery()
+    )
+    herring_count = (await session.execute(herring_count_stmt)).scalar_one()
+
+    return min(settings_row.puzzles_per_session, due_count + untracked_pool_count + herring_count)
+
+
+async def _open_unfinished_exists(
+    session: AsyncSession, *, user_id: int, today: datetime.date
+) -> bool:
+    """D-10: whether the user has an open, unexpired session with unsolved
+    puzzles left — the nav-badge carve-out that keeps the badge lit on an
+    off-day when a half-finished session is still rescuable.
+
+    Deliberately mirrors branch 1 of `get_waiting_puzzle_count` (the open-
+    session-not-expired case) as a standalone read-only boolean, rather than
+    widening that function's return type — the cost is two extra indexed
+    single-row lookups on the progress path, accepted for the smaller diff.
+    Never flips an expired-but-still-open row to `'expired'` here; that write
+    belongs solely to `expire_stale_sessions`. Window-based (`expires_on`)
+    only — D-10 cares whether the session is still open, not whether today
+    happens to be a scheduled day.
+
+    Args:
+        session: AsyncSession.
+        user_id: Authenticated user's internal PK (V4: never client-supplied).
+        today: The local calendar day (from `local_today`).
+    """
+    open_session = await open_session_for_user(session, user_id=user_id)
+    if open_session is None or is_session_expired(open_session.expires_on, today):
+        return False
+    solved_stmt = (
+        select(func.count())
+        .select_from(DrillSolve)
+        .where(DrillSolve.session_id == open_session.id, DrillSolve.solved_at.isnot(None))
+    )
+    solved_count = (await session.execute(solved_stmt)).scalar_one()
+    return solved_count < open_session.puzzle_count
+
+
+async def _next_due_date(
+    session: AsyncSession, *, user_id: int, today: datetime.date
+) -> datetime.date | None:
+    """PROG-05: the earliest due date among the user's still-ACTIVE items due
+    strictly in the future — the "All caught up!" empty state's date.
+
+    Args:
+        session: AsyncSession.
+        user_id: Authenticated user's internal PK (V4: never client-supplied).
+        today: The local calendar day (from `local_today`).
+
+    Returns:
+        The minimum `drill_items.due_date` among ACTIVE items with
+        `due_date > today`, or None when nothing will resurface (`func.min`
+        over zero rows is already NULL/None — no special-casing needed).
+    """
+    stmt = select(func.min(DrillItem.due_date)).where(
+        DrillItem.user_id == user_id,
+        DrillItem.status == DrillStatus.ACTIVE,
+        DrillItem.due_date > today,
+    )
+    return (await session.execute(stmt)).scalar_one_or_none()
+
+
+async def _pool_state(
+    session: AsyncSession,
+    *,
+    user_id: int,
+    waiting_count: int,
+    blob_pending_count: int,
+    has_drill_items: bool,
+    has_pool_candidates: bool,
+) -> Literal["no_material", "exhausted", "available"]:
+    """PROG-05/D-16: discriminate cold-start ("never had material") from a
+    genuinely exhausted pool from an available one — the single server-side
+    discriminant the two empty-state surfaces branch on (no client-side
+    arithmetic).
+
+    Resolution order:
+    1. `"no_material"` — the user has zero `drill_items` rows AND zero
+       `pool_entry_stmt` candidates AND `blob_pending_count == 0`: never had
+       any qualifying material, not even material still being analyzed.
+    2. `"exhausted"` — `waiting_count == 0` AND `blob_pending_count == 0`:
+       had (or has) material, but nothing is waiting right now and nothing
+       is still analyzing.
+    3. `"available"` — every other case, including a zero-`drill_items` user
+       whose blunders are still being analyzed (`blob_pending_count > 0`):
+       that is "catching up", not a cold start.
+
+    Args:
+        session: AsyncSession (unused directly — kept in the signature to
+            match every other repository function's shape; the two EXISTS
+            queries this used to run itself now live in `_material_flags`).
+        user_id: Authenticated user's internal PK (V4: never client-supplied).
+        waiting_count: The result of `get_waiting_puzzle_count` for this
+            request (resolved once by the caller, never re-derived here).
+        blob_pending_count: The result of `blob_pending_stmt` for this
+            request (resolved once by the caller, never re-derived here).
+        has_drill_items: The result of `_material_flags` for this request
+            (resolved once by the caller — Phase 193, also feeds the D-06
+            `_stamp_pool_eligibility` check — never re-derived here).
+        has_pool_candidates: The result of `_material_flags` for this
+            request (same "resolved once" contract as `has_drill_items`).
+    """
+    if not has_drill_items and not has_pool_candidates and blob_pending_count == 0:
+        return "no_material"
+    if waiting_count == 0 and blob_pending_count == 0:
+        return "exhausted"
+    return "available"
+
+
 async def load_session_puzzles(
     session: AsyncSession, *, user_id: int, session_id: int
 ) -> list[ComposedPuzzle]:
     """Return the ordered, not-yet-attempted puzzles for a session (D-09/D-12 resume path).
 
     `drill_solves` rows with `solved_at IS NULL`, ordered by `position` (the
-    frozen composition order), joined to `games` for the PGN and rebuilt into
-    a `ComposedPuzzle` via `fen_and_last_move_at_ply`. Scoped by `user_id` in the WHERE
+    frozen composition order), OUTER-joined to `games` (Phase 192 D-05:
+    `game_id` can be NULL after a source-game deletion, so this can no longer
+    be an INNER JOIN without silently dropping puzzles) and to `herring_pool`
+    for a herring's FEN/arriving move. Scoped by `user_id` in the WHERE
     clause IN ADDITION to `session_id` — a session id arriving from a request
     body/path parameter is untrusted client input (T-189-12 / V4 IDOR guard);
     a foreign session id resolves to zero rows rather than another user's
     puzzles.
 
-    Rows whose backing `game_flaws` row has since vanished under
-    reclassification (SR source only — herrings carry no such row) are
-    skipped rather than served or deleted (lazy eviction, D-02), and so are
-    rows whose FEN will not reconstruct. The session's frozen `puzzle_count`
-    is returned UNCHANGED by this function — callers must not derive it from
-    `len(puzzles)` here, so `solved_count + len(puzzles)` may legitimately be
-    less than `puzzle_count` after an eviction.
+    Two independent lazy-eviction paths, opposite reasons:
+    - A `RED_HERRING` row reads its FEN/arriving move straight off the
+      `herring_pool` row (D-03 — the only herring path, alive game-link or
+      not) and is skipped only if the pool row itself is gone (never
+      observed in practice — pool rows are `SET NULL`, not `CASCADE` — but
+      handled identically to a broken FEN: drop, never serve).
+    - An `SR_ITEM` row is skipped when its `games` row has vanished (D-05:
+      the row now survives its source game's deletion with `game_id` NULL
+      instead of being CASCADE-deleted, so an orphaned SR row is unservable
+      but must not be served or crash — mirrors the pre-D-05 CASCADE
+      behavior) OR when its backing `game_flaws` row has since vanished under
+      reclassification (pre-existing D-02 lazy eviction, unchanged).
+
+    Rows whose FEN will not reconstruct are also skipped. The session's
+    frozen `puzzle_count` is returned UNCHANGED by this function — callers
+    must not derive it from `len(puzzles)` here, so `solved_count +
+    len(puzzles)` may legitimately be less than `puzzle_count` after an
+    eviction.
 
     Args:
         session: AsyncSession.
@@ -326,8 +1020,9 @@ async def load_session_puzzles(
         session_id: The `drill_sessions.id` to load remaining puzzles for.
     """
     stmt = (
-        select(DrillSolve, Game)
-        .join(Game, Game.id == DrillSolve.game_id)
+        select(DrillSolve, Game, HerringPool)
+        .outerjoin(Game, Game.id == DrillSolve.game_id)
+        .outerjoin(HerringPool, HerringPool.id == DrillSolve.herring_pool_id)
         .where(
             DrillSolve.session_id == session_id,
             DrillSolve.user_id == user_id,
@@ -339,7 +1034,11 @@ async def load_session_puzzles(
     if not rows:
         return []
 
-    sr_game_ids = {solve.game_id for solve, _game in rows if solve.source == DrillSource.SR_ITEM}
+    sr_game_ids = {
+        solve.game_id
+        for solve, _game, _herring in rows
+        if solve.source == DrillSource.SR_ITEM and solve.game_id is not None
+    }
     existing_flaw_keys: set[tuple[int, int]] = set()
     if sr_game_ids:
         flaw_rows = await session.execute(
@@ -350,11 +1049,31 @@ async def load_session_puzzles(
         existing_flaw_keys = {(gid, ply) for gid, ply in flaw_rows.all()}
 
     puzzles: list[ComposedPuzzle] = []
-    for solve, game in rows:
-        if (
-            solve.source == DrillSource.SR_ITEM
-            and (solve.game_id, solve.ply) not in existing_flaw_keys
-        ):
+    for solve, game, herring_row in rows:
+        if solve.source == DrillSource.RED_HERRING:
+            if herring_row is None:
+                continue  # pool row itself is gone — drop, never serve broken
+            puzzles.append(
+                ComposedPuzzle(
+                    position=solve.position,
+                    game_id=solve.game_id,
+                    ply=solve.ply,
+                    fen=herring_row.fen,
+                    side_to_move=mover_color_for_ply(solve.ply),
+                    last_move_uci=herring_row.arriving_move_uci,
+                    herring_pool_id=solve.herring_pool_id,
+                )
+            )
+            continue
+
+        # SR_ITEM
+        if game is None:
+            continue  # orphaned by a source-game deletion (D-05): lazily evicted
+        # The outer join above guarantees game.id == solve.game_id here, so
+        # solve.game_id is non-None whenever game is not None — narrowed
+        # explicitly for ty rather than suppressed.
+        assert solve.game_id is not None
+        if (solve.game_id, solve.ply) not in existing_flaw_keys:
             continue  # lazy eviction: the backing flaw row vanished (D-02)
         result = fen_and_last_move_at_ply(game.pgn, solve.ply)
         if result is None:
@@ -368,6 +1087,7 @@ async def load_session_puzzles(
                 fen=fen,
                 side_to_move=mover_color_for_ply(solve.ply),
                 last_move_uci=last_move_uci,
+                herring_pool_id=solve.herring_pool_id,
             )
         )
     return puzzles
@@ -407,6 +1127,65 @@ async def _resume_session(
     )
 
 
+async def _discard_if_untouched_and_resized(
+    session: AsyncSession, *, drill_session: DrillSession, requested_count: int
+) -> bool:
+    """Discard `drill_session` iff it is untouched AND its frozen size has
+    drifted from `requested_count`. Returns True if the row was deleted
+    (caller must fall through to fresh composition), False if it should be
+    resumed exactly as-is.
+
+    Bug fix (191-06 UAT checkpoint round, SCHD-01): `Train.tsx` auto-fires
+    `POST /train/sessions` as a status read on page MOUNT (see
+    `useTrainSession.ts`'s module docstring), which can happen BEFORE the
+    user has a chance to edit `TrainScheduleSettings` on the same visit.
+    Pressing Start/Resume never calls this endpoint again, so a session
+    materialized under a stale `puzzles_per_session` stayed frozen at the
+    old size for the rest of the day even after the user changed the
+    setting — "starting a session" kept showing the old requested count.
+
+    Only a session with ZERO recorded solves is eligible: once any puzzle
+    has been solved, `puzzle_count`/`session_id` are load-bearing for the
+    SOLV-04/D-13 frozen progress denominator and must never move out from
+    under an in-progress solve loop. Deleting an untouched
+    `drill_sessions` row cascades its placeholder `drill_solves` rows
+    (`ondelete="CASCADE"`); any `drill_items` padding rows created during the
+    original composition are left alone — they are real, valid ACTIVE items
+    and the fresh composition below will naturally pick them back up as due.
+
+    The untouched-and-resized test itself lives in `_is_untouched_and_resized`
+    (shared with `get_waiting_puzzle_count`, which must predict this discard
+    without performing it); see that function for the `requested_count`-vs-
+    `puzzle_count` and zero-solves rationale. This function is the WRITE half:
+    predicate, then delete.
+    """
+    if not await _is_untouched_and_resized(
+        session, drill_session=drill_session, requested_count=requested_count
+    ):
+        return False
+    await session.execute(delete(DrillSession).where(DrillSession.id == drill_session.id))
+    return True
+
+
+@dataclass(frozen=True)
+class _ReconstructedPuzzle:
+    """One puzzle after FEN/arriving-move reconstruction, pre-shuffle/pre-insert.
+
+    Phase 192: replaces the former 7-tuple `reconstructed` element (seven
+    positional fields is past readable as a tuple). `herring_pool_id` is
+    non-None only for a `RED_HERRING` row (D-04); an `SR_ITEM` row always
+    carries `herring_pool_id=None`.
+    """
+
+    game_id: int | None
+    ply: int
+    fen: str
+    last_move_uci: str | None
+    side_to_move: Literal["white", "black"]
+    source: int
+    herring_pool_id: int | None
+
+
 async def compose_and_materialize_session(
     session: AsyncSession, *, user_id: int, now_utc: datetime.datetime
 ) -> ComposedSession:
@@ -414,13 +1193,25 @@ async def compose_and_materialize_session(
 
     1. Resolve `train_settings` (create-on-first-touch), today's local date,
        and the `(sr_slots, herring_slots)` split (`compose_slots`).
+    1b. D-06 (Plan 02): stamp the `pool_eligible_since` watermark if it is
+       still NULL and real material (`_material_flags`) is present — a user
+       whose first `drill_items` row is created by THIS composition call
+       also gets the eligibility floor immediately, without waiting for a
+       `GET /train/progress` read to discover it. Reuses the same
+       `_material_flags`/`_stamp_pool_eligibility` pair `get_progress`
+       already calls; stamp-if-null only, never an overwrite.
     2. D-11: `expire_stale_sessions` closes out a stale open session before
        anything else runs.
     3. D-12: if an open session still exists after expiry, RESUME it
        (`load_session_puzzles`) rather than composing a new one — this is the
        only path taken on a second call inside an open session's window,
        including an ad-hoc "train now" request from a future phase that hits
-       this same endpoint.
+       this same endpoint. EXCEPTION (191-06 UAT bug fix,
+       `_discard_if_untouched_and_resized`): an open session with ZERO
+       recorded solves whose frozen `puzzle_count` no longer matches the
+       CURRENT `puzzles_per_session` is discarded instead, falling through to
+       fresh composition below — this is what lets a same-day settings edit
+       actually take effect before the first puzzle is solved.
     3b. D-10 guard (190.1 bug fix): if a COMPLETED session's window still
        covers today (`completed_session_in_window`), return it instead of
        composing fresh — completing a session must not unlock an immediate
@@ -463,19 +1254,33 @@ async def compose_and_materialize_session(
     n = settings_row.puzzles_per_session
     today = local_today(settings_row.timezone, now_utc)
 
+    has_drill_items, has_pool_candidates = await _material_flags(session, user_id=user_id)
+    await _stamp_pool_eligibility(
+        session,
+        user_id=user_id,
+        settings_row=settings_row,
+        today=today,
+        has_material=has_drill_items or has_pool_candidates,
+    )
+
     await expire_stale_sessions(session, user_id=user_id, today=today)
 
     blob_pending_count = (await session.execute(blob_pending_stmt(user_id))).scalar_one()
 
     open_session = await open_session_for_user(session, user_id=user_id)
     if open_session is not None:
-        return await _resume_session(
-            session,
-            user_id=user_id,
-            drill_session=open_session,
-            requested_count=n,
-            blob_pending_count=blob_pending_count,
-        )
+        if await _discard_if_untouched_and_resized(
+            session, drill_session=open_session, requested_count=n
+        ):
+            open_session = None
+        else:
+            return await _resume_session(
+                session,
+                user_id=user_id,
+                drill_session=open_session,
+                requested_count=n,
+                blob_pending_count=blob_pending_count,
+            )
 
     # Step 3b (190.1 bug fix): a completed session still inside its D-10
     # window blocks fresh composition — without this, a reload right after
@@ -563,19 +1368,17 @@ async def compose_and_materialize_session(
         new_sr_items.append(pick)
         sr_needed -= 1
 
-    # --- Herring side ---
-    herring_rows = (
-        await session.execute(herring_stmt(user_id, exclude_served=True).limit(n))
-    ).all()
+    # --- Herring side (Phase 192, D-03): HerringPool rows carry their own FEN/
+    # arriving-move/mover_color — no Game join, no PGN reconstruction. ---
+    herring_rows: list[HerringPool] = list(
+        (await session.execute(herring_stmt(user_id, exclude_served=True).limit(n))).scalars()
+    )
     if not herring_rows:
         # Source exhausted (every candidate already served this user) — repeats allowed.
-        herring_rows = (
-            await session.execute(herring_stmt(user_id, exclude_served=False).limit(n))
-        ).all()
-    herring_pool: list[tuple[int, int, Game]] = [
-        (best_move.game_id, best_move.ply, game) for best_move, game in herring_rows
-    ]
-    herring_candidates = herring_pool[:herring_slots]
+        herring_rows = list(
+            (await session.execute(herring_stmt(user_id, exclude_served=False).limit(n))).scalars()
+        )
+    herring_candidates = herring_rows[:herring_slots]
     herring_idx = herring_slots
 
     # --- Cross-backfill (Pitfall 4): a short side never silently shrinks the
@@ -586,7 +1389,7 @@ async def compose_and_materialize_session(
             # SR side came up short -> pull extra herrings, continuing the same
             # deterministic herring_stmt ordering from where herring_slots left off.
             herring_candidates = (
-                herring_candidates + herring_pool[herring_idx : herring_idx + shortfall]
+                herring_candidates + herring_rows[herring_idx : herring_idx + shortfall]
             )
         elif len(herring_candidates) < herring_slots:
             # Herring side came up short -> pull extra SR, continuing the same
@@ -600,22 +1403,41 @@ async def compose_and_materialize_session(
 
     # --- Reconstruct FENs + arriving move, dropping (never backfilling)
     # unparseable puzzles ---
-    reconstructed: list[tuple[int, int, str, str | None, Literal["white", "black"], int]] = []
+    reconstructed: list[_ReconstructedPuzzle] = []
     for game_id, ply, game in sr_candidates:
         result = fen_and_last_move_at_ply(game.pgn, ply)
         if result is None:
             continue
         fen, last_move_uci = result
         reconstructed.append(
-            (game_id, ply, fen, last_move_uci, mover_color_for_ply(ply), DrillSource.SR_ITEM)
+            _ReconstructedPuzzle(
+                game_id=game_id,
+                ply=ply,
+                fen=fen,
+                last_move_uci=last_move_uci,
+                side_to_move=mover_color_for_ply(ply),
+                source=DrillSource.SR_ITEM,
+                herring_pool_id=None,
+            )
         )
-    for game_id, ply, game in herring_candidates:
-        result = fen_and_last_move_at_ply(game.pgn, ply)
-        if result is None:
+    # D-10: own-game herrings are permitted, so a position can legitimately be
+    # both a several-fine-moves pool row and the user's own blunder ply —
+    # drop the herring before insert rather than colliding on
+    # uq_drill_solves_session_puzzle and raising IntegrityError mid-composition.
+    sr_keys = {(puzzle.game_id, puzzle.ply) for puzzle in reconstructed}
+    for pool_row in herring_candidates:
+        if (pool_row.game_id, pool_row.ply) in sr_keys:
             continue
-        fen, last_move_uci = result
         reconstructed.append(
-            (game_id, ply, fen, last_move_uci, mover_color_for_ply(ply), DrillSource.RED_HERRING)
+            _ReconstructedPuzzle(
+                game_id=pool_row.game_id,
+                ply=pool_row.ply,
+                fen=pool_row.fen,
+                last_move_uci=pool_row.arriving_move_uci,
+                side_to_move=cast(Literal["white", "black"], pool_row.mover_color),
+                source=DrillSource.RED_HERRING,
+                herring_pool_id=pool_row.id,
+            )
         )
     reconstructed = reconstructed[:n]  # defensive cap; slot arithmetic already sums to <= n
 
@@ -637,9 +1459,9 @@ async def compose_and_materialize_session(
     random.Random(f"{user_id}:{today.isoformat()}").shuffle(reconstructed)
 
     surviving_sr_keys = {
-        (gid, ply)
-        for gid, ply, _fen, _last_move_uci, _side, source in reconstructed
-        if source == DrillSource.SR_ITEM
+        (puzzle.game_id, puzzle.ply)
+        for puzzle in reconstructed
+        if puzzle.source == DrillSource.SR_ITEM
     }
 
     try:
@@ -665,6 +1487,7 @@ async def compose_and_materialize_session(
                 session_date=today,
                 status="open",
                 puzzle_count=len(reconstructed),
+                requested_count=n,
                 expires_on=session_window(today, settings_row.weekday_mask),
             )
             session.add(drill_session)
@@ -674,28 +1497,34 @@ async def compose_and_materialize_session(
             await session.flush()
 
             puzzles: list[ComposedPuzzle] = []
-            for position, (game_id, ply, fen, last_move_uci, side_to_move, source) in enumerate(
-                reconstructed
-            ):
+            for position, puzzle in enumerate(reconstructed):
+                # Phase 192 Plan 02: `drill_solves.game_id` is now nullable
+                # (D-05) — a herring composed from an already-orphaned pool
+                # row (its source game deleted before this composition ran)
+                # legitimately has `game_id=None` here. SR items always carry
+                # a non-None `game_id` (sourced via an INNER JOIN to `games`
+                # above), so this is never a real NULL constraint violation.
                 session.add(
                     DrillSolve(
                         session_id=drill_session.id,
                         position=position,
                         user_id=user_id,
-                        game_id=game_id,
-                        ply=ply,
-                        source=source,
+                        game_id=puzzle.game_id,
+                        ply=puzzle.ply,
+                        source=puzzle.source,
+                        herring_pool_id=puzzle.herring_pool_id,
                         solved_at=None,
                     )
                 )
                 puzzles.append(
                     ComposedPuzzle(
                         position=position,
-                        game_id=game_id,
-                        ply=ply,
-                        fen=fen,
-                        side_to_move=side_to_move,
-                        last_move_uci=last_move_uci,
+                        game_id=puzzle.game_id,
+                        ply=puzzle.ply,
+                        fen=puzzle.fen,
+                        side_to_move=puzzle.side_to_move,
+                        last_move_uci=puzzle.last_move_uci,
+                        herring_pool_id=puzzle.herring_pool_id,
                     )
                 )
             await session.flush()
@@ -736,10 +1565,17 @@ async def compose_and_materialize_session(
 
 @dataclass(frozen=True)
 class RecordedSolve:
-    """Internal dataclass returned by `record_solve`."""
+    """Internal dataclass returned by `record_solve`.
+
+    `move_quality` (SEED-119) is the three-way scoring tier; `correct_move`
+    keeps its exact prior meaning (the SR ladder verdict, `move_quality !=
+    "wrong"`). Both are always populated with the FIRST recorded outcome,
+    even on a re-submit with a different tier.
+    """
 
     correct_guess: bool
     correct_move: bool
+    move_quality: Literal["good", "inaccuracy", "wrong"]
     puzzle_type: Literal["sharp", "soft", "herring"]
     item_status: Literal["active", "mastered", "parked"] | None
     streak: int | None
@@ -863,12 +1699,30 @@ async def _mark_session_complete_if_done(
 ) -> bool:
     """Complete the session once every still-servable puzzle has been recorded.
 
-    "Still servable" excludes `drill_solves` rows whose `games` row has since
-    vanished (mirrors `load_session_puzzles`'s lazy-eviction posture — a
-    deleted game can never be attempted, so it must not block completion).
+    "Still servable" now means two DIFFERENT things depending on `source`
+    (Phase 192, D-05 — `drill_solves.game_id` went from `NOT NULL` +
+    `CASCADE` to nullable + `SET NULL`, so a deleted game no longer deletes
+    the row):
 
-    Bug fix (WR-02): ALSO excludes SR-source rows whose backing `game_flaws`
-    row has vanished under reclassification. `load_session_puzzles` already
+    - `SR_ITEM`: excluded from `remaining` when EITHER its `games` row OR its
+      `game_flaws` row has vanished. An orphaned SR row can never be
+      attempted (the game it drills is gone), so it must not block
+      completion — this is the WR-02 fix's exact reasoning, extended from
+      "flaw row gone" to also cover "game row gone". Bug-fix note: this
+      `Game.id.isnot(None)` clause is MANDATORY, not optional.
+      189-RESEARCH.md's assumption A2 (that the outer join needed no
+      parallel `or_` guard here) is wrong: before this phase, a deleted game
+      CASCADE-deleted the `drill_solves` row, which is what let `remaining`
+      reach 0 in the first place. After `SET NULL`, an orphaned SR row
+      survives forever with `solved_at IS NULL` and would pin `remaining`
+      above zero, reproducing the exact stuck-session bug WR-02 fixed.
+    - `RED_HERRING`: NEVER excluded by either clause below (an unsolved
+      herring with a nulled game link is still perfectly servable off its
+      `herring_pool` row, D-03, and must keep counting toward `remaining`
+      until solved — the opposite of the SR-orphan treatment above).
+
+    Bug fix (WR-02, pre-Phase-192): excludes SR-source rows whose backing
+    `game_flaws` row has vanished under reclassification. `load_session_puzzles`
     documents this as "lazy eviction" (a delete-then-insert reclassify can
     drop the flaw row a `drill_solves` SR item points at) and simply skips
     serving such a row rather than deleting it — leaving it `solved_at IS
@@ -877,8 +1731,6 @@ async def _mark_session_complete_if_done(
     showing "resume" indefinitely (only self-healing once `expires_on`
     passed). The LEFT OUTER JOIN mirrors `load_session_puzzles`'s own
     `existing_flaw_keys` check, keyed the same way: (user_id, game_id, ply).
-    Red herrings carry no `game_flaws` row by design (source != SR_ITEM), so
-    they're never excluded here regardless of the join's outcome.
 
     The `status = 'open'` guard makes the UPDATE a no-op on a session that's
     already completed, so re-running this after an idempotent re-submit never
@@ -887,7 +1739,7 @@ async def _mark_session_complete_if_done(
     remaining_stmt = (
         select(func.count())
         .select_from(DrillSolve)
-        .join(Game, Game.id == DrillSolve.game_id)
+        .outerjoin(Game, Game.id == DrillSolve.game_id)
         .outerjoin(
             GameFlaw,
             and_(
@@ -903,6 +1755,13 @@ async def _mark_session_complete_if_done(
                 DrillSolve.source != DrillSource.SR_ITEM,
                 GameFlaw.game_id.isnot(None),
             ),
+            # Phase 192 (D-05): mandatory parallel leniency clause — an
+            # orphaned SR row (source-game deleted) must be excluded here the
+            # same way an orphaned herring must NOT be. See docstring above.
+            or_(
+                DrillSolve.source != DrillSource.SR_ITEM,
+                Game.id.isnot(None),
+            ),
         )
     )
     remaining = (await session.execute(remaining_stmt)).scalar_one()
@@ -915,6 +1774,114 @@ async def _mark_session_complete_if_done(
     return remaining == 0
 
 
+async def _apply_completion_tick(
+    session: AsyncSession, *, user_id: int, session_id: int, now_utc: datetime.datetime
+) -> None:
+    """D-03: tick the shield/count IMMEDIATELY when a session completes,
+    correctly composed with the lazy miss walk so neither path can
+    double-count or skip a scheduled day.
+
+    Both branches below route through `_judge_one_day` — the SAME shared
+    primitive `tick_days`'s lazy walk uses — so this function derives NO
+    shield or count value of its own; a divergence gate greps for exactly
+    one shield-credit clamp occurrence in the whole `app/` tree, in
+    `app/services/train_scheduler.py`.
+
+    Order of operations, all sequential awaits on this ONE `AsyncSession`
+    (CLAUDE.md — never `asyncio.gather`):
+
+    1. Resolve `session_date` scoped by `(id, user_id)` together (T-193-07
+       IDOR guard) — a foreign or invented `session_id` resolves to nothing
+       and this function returns without writing.
+    2. `get_or_create_settings` + `local_today` for the current settings row.
+    3. `settle_streak_snapshot` FIRST — the lazy walk runs before the
+       completion is applied, so every scheduled day whose window has
+       already closed is judged before this write, and a completion on a
+       later day can never let an earlier missed scheduled day escape
+       judgement (RESEARCH.md Pitfall 2). `session_window(today, mask)` is
+       strictly after `today`, so today's own scheduled day is never judged
+       by this walk — there is no conflict between the two paths on the
+       current day.
+    4. Choose exactly ONE `DayOutcome` from the POST-settle snapshot
+       (`view.settled`), never a stale pre-settle one:
+       `"fulfilled"` when `session_date` is scheduled AND
+       (`settled_through` is None OR `session_date > settled_through`);
+       otherwise `"credit_only"` — an off-day session (D-07) or a late
+       completion of an already-frozen day (RESEARCH.md Pitfall 2, Phase 191
+       D-18). `"credit_only"` returns `streak_count`/`settled_through`
+       unchanged by construction, so the two branches differ ONLY in which
+       discriminant is passed.
+    5. Persist the already-bounded integers `_judge_one_day` returned — never
+       a SQL-side `shield_level + 1` expression, which would bypass the cap
+       and could violate `ck_train_settings_shield_level`. The fulfilled
+       write keeps the same compare-and-set guard `settle_streak_snapshot`
+       uses (so a concurrent settler cannot be overwritten with an older
+       boundary); the credit-only write needs no boundary guard because it
+       never moves the boundary.
+
+    D-08 needs no code here: only `status='completed'` sessions ever reach
+    this function (the caller gates on the claim that just completed the
+    session), so a started-and-abandoned session is judged by the lazy walk
+    as a plain missed scheduled day, never by this eager path.
+
+    Args:
+        session: AsyncSession. Caller commits.
+        user_id: Authenticated user's internal PK (V4: never client-supplied).
+        session_id: The `drill_sessions.id` that just completed (untrusted
+            client input upstream — resolved only in combination with
+            `user_id`).
+        now_utc: The current UTC instant.
+    """
+    session_date_row = (
+        await session.execute(
+            select(DrillSession.session_date).where(
+                DrillSession.id == session_id, DrillSession.user_id == user_id
+            )
+        )
+    ).scalar_one_or_none()
+    if session_date_row is None:
+        return
+    session_date: datetime.date = session_date_row
+
+    settings_row = await get_or_create_settings(session, user_id=user_id)
+    today = local_today(settings_row.timezone, now_utc)
+
+    view = await settle_streak_snapshot(
+        session, user_id=user_id, settings_row=settings_row, today=today
+    )
+    settled = view.settled
+
+    fulfilled = is_scheduled_day(session_date, settings_row.weekday_mask) and (
+        settled.settled_through is None or session_date > settled.settled_through
+    )
+    outcome: DayOutcome = "fulfilled" if fulfilled else "credit_only"
+    judged = _judge_one_day(settled, day=session_date, outcome=outcome)
+
+    if outcome == "fulfilled":
+        new_settled_through = judged.settled_through
+        await session.execute(
+            update(TrainSettings)
+            .where(
+                TrainSettings.user_id == user_id,
+                or_(
+                    TrainSettings.streak_settled_through.is_(None),
+                    TrainSettings.streak_settled_through < new_settled_through,
+                ),
+            )
+            .values(
+                streak_count=judged.streak_count,
+                shield_level=judged.shield_level,
+                streak_settled_through=new_settled_through,
+            )
+        )
+    else:
+        await session.execute(
+            update(TrainSettings)
+            .where(TrainSettings.user_id == user_id)
+            .values(shield_level=judged.shield_level)
+        )
+
+
 async def record_solve(
     session: AsyncSession,
     *,
@@ -923,7 +1890,7 @@ async def record_solve(
     position: int,
     guess: Literal["critical", "several"],
     played_move: str,
-    correct_move: bool,
+    move_quality: Literal["good", "inaccuracy", "wrong"],
     now_utc: datetime.datetime,
 ) -> RecordedSolve | None:
     """Record one puzzle's outcome and advance the interval ladder (POOL-08).
@@ -950,6 +1917,13 @@ async def record_solve(
        A red-herring row touches no `drill_items` row (POOL-08).
     5. Recompute session completion (`_mark_session_complete_if_done`) after
        every call, win or lose — idempotent via the `status = 'open'` guard.
+    6. D-03 (Plan 02): when THIS call's claim (`solved_at IS NULL` -> now
+       set) is what just completed the session, call
+       `_apply_completion_tick` inside the SAME transaction — a rollback can
+       never leave a half-applied tick. Gated on `claimed AND
+       session_complete`, not `session_complete` alone: a lost-claim
+       re-submit of an already-solved final puzzle also sees
+       `session_complete=True` but must not apply a second tick.
 
     Sequential awaits only — never `asyncio.gather` on this `AsyncSession`.
 
@@ -961,8 +1935,12 @@ async def record_solve(
         position: The puzzle's frozen 0-based order within the session.
         guess: The user's pre-attempt "critical vs several fine" guess.
         played_move: The move the user actually played (UCI).
-        correct_move: Whether the played move matched the puzzle's answer —
-            asserted by the client (T-189-18, accepted per SEED-037).
+        move_quality: The three-way move-quality tier asserted by the client
+            (T-189-18, accepted per SEED-037; SEED-119 widened the boolean to
+            a tier). `correct_move` — what feeds `apply_result` and the SR
+            ladder — is derived here as `move_quality != "wrong"`, keeping
+            the ladder's pass/fail semantics byte-identical to pre-SEED-119
+            (an inaccuracy passed then and passes now).
         now_utc: The current UTC instant.
 
     Returns:
@@ -984,6 +1962,11 @@ async def record_solve(
     puzzle_type = await _classify_solve_puzzle_type(session, solve=solve_row)
     correct_guess = _compute_correct_guess(guess, puzzle_type)
     guess_int = int(DrillGuess.CRITICAL if guess == "critical" else DrillGuess.SEVERAL)
+    # SEED-119: correct_move is DERIVED from move_quality — this is what
+    # keeps the SR ladder's semantics identical to pre-SEED-119 (an
+    # inaccuracy passed then and passes now, since it derives to True here).
+    correct_move = move_quality != "wrong"
+    move_quality_int = int(_MOVE_QUALITY_ENUM[move_quality])
 
     claim_result = await session.execute(
         update(DrillSolve)
@@ -997,6 +1980,7 @@ async def record_solve(
             guess=guess_int,
             played_move=played_move,
             correct_move=correct_move,
+            move_quality=move_quality_int,
             correct_guess=correct_guess,
             solved_at=now_utc,
         )
@@ -1009,8 +1993,19 @@ async def record_solve(
     is_sr = solve_row.source == DrillSource.SR_ITEM
 
     if claimed:
-        stored_correct_guess, stored_correct_move = correct_guess, correct_move
-        if is_sr:
+        stored_correct_guess, stored_correct_move, stored_move_quality = (
+            correct_guess,
+            correct_move,
+            move_quality,
+        )
+        # Phase 192 (D-05): `solve_row.game_id` is `int | None` now that the
+        # column is nullable. `DrillItem.game_id` stays NOT NULL + CASCADE
+        # (SR items are always sourced from the user's own live or lazily
+        # evicted game), so when an SR row's game link has been nulled, the
+        # backing `drill_items` row was never created in the first place for
+        # this puzzle to exist in a servable session (load_session_puzzles
+        # already excludes orphaned SR rows) — there is nothing to advance.
+        if is_sr and solve_row.game_id is not None:
             item_status, streak, due_date = await _advance_drill_item(
                 session,
                 user_id=user_id,
@@ -1022,10 +2017,12 @@ async def record_solve(
     else:
         # Lost the claim race (or this is a plain re-submit): the FIRST
         # recorded outcome wins — re-read it rather than trusting this call's
-        # (possibly different) guess/correct_move arguments.
+        # (possibly different) guess/correct_move/move_quality arguments.
         stored = (
             await session.execute(
-                select(DrillSolve.correct_guess, DrillSolve.correct_move).where(
+                select(
+                    DrillSolve.correct_guess, DrillSolve.correct_move, DrillSolve.move_quality
+                ).where(
                     DrillSolve.session_id == session_id,
                     DrillSolve.position == position,
                     DrillSolve.user_id == user_id,
@@ -1034,7 +2031,16 @@ async def record_solve(
         ).one()
         stored_correct_guess = bool(stored.correct_guess)
         stored_correct_move = bool(stored.correct_move)
-        if is_sr:
+        if stored.move_quality is not None:
+            stored_move_quality = _MOVE_QUALITY_LITERAL[DrillMoveQuality(stored.move_quality)]
+        else:
+            # Legacy row recorded before SEED-119: no stored tier exists, so
+            # degrade from the stored boolean — True maps to the good tier
+            # (the pre-tiering era only ever recorded a full move point),
+            # False maps to the wrong tier.
+            stored_move_quality = "good" if stored_correct_move else "wrong"
+        # Same nullability narrowing as the claimed branch above.
+        if is_sr and solve_row.game_id is not None:
             item_state = await _read_drill_item_state(
                 session, user_id=user_id, game_id=solve_row.game_id, ply=solve_row.ply
             )
@@ -1044,10 +2050,26 @@ async def record_solve(
     session_complete = await _mark_session_complete_if_done(
         session, session_id=session_id, now_utc=now_utc
     )
+    # D-03 eager tick: only when THIS call's claim is what just completed the
+    # session. `claimed=True` means `solved_at` was NULL before this call
+    # (T-193-06's `solved_at IS NULL` claim guard), so before this call the
+    # session could not yet have been complete; if it is complete now, this
+    # is exactly the transition point, and `_mark_session_complete_if_done`'s
+    # own `status = 'open'` guard means that UPDATE fires at most once. A
+    # lost-claim / re-submit call (claimed=False) can still see
+    # session_complete=True on an already-completed session — gating on
+    # `claimed` too is what keeps that resubmit from applying a second tick
+    # (the acceptance test this guards: re-submitting an already-solved
+    # final puzzle must not grant another shield credit).
+    if claimed and session_complete:
+        await _apply_completion_tick(
+            session, user_id=user_id, session_id=session_id, now_utc=now_utc
+        )
 
     return RecordedSolve(
         correct_guess=stored_correct_guess,
         correct_move=stored_correct_move,
+        move_quality=stored_move_quality,
         puzzle_type=puzzle_type,
         item_status=item_status,
         streak=streak,
@@ -1068,9 +2090,15 @@ RevealNotAttempted = Literal["not_attempted"]
 
 @dataclass(frozen=True)
 class RevealedPuzzle:
-    """Internal dataclass returned by `reveal_for_puzzle` on a solved puzzle."""
+    """Internal dataclass returned by `reveal_for_puzzle` on a solved puzzle.
 
-    game_id: int
+    `game_id` is `int | None` (Phase 192, D-01/D-05): `None` means the
+    puzzle's source game has since been deleted — only reachable for a
+    `RED_HERRING` row (an orphaned `SR_ITEM` row returns `RevealNotFound`
+    instead, see the function docstring).
+    """
+
+    game_id: int | None
     ply: int
     fen: str
     played_in_game_san: str | None
@@ -1093,6 +2121,17 @@ async def reveal_for_puzzle(
     returns `"not_found"`. `solved_at IS NULL` returns `"not_attempted"`
     (T-189-17): the puzzle type and in-game move are unreachable before the
     attempt is recorded.
+
+    Phase 192 (D-01/D-05): `Game` and `HerringPool` are now OUTER joins — a
+    `RED_HERRING` row's source game can be gone (still fully revealable off
+    its `herring_pool` row, D-03), and an `SR_ITEM` row's source game can
+    also be gone (D-05, `SET NULL`). AFTER the `not_attempted` gate: when
+    `game is None` and `solve.source == SR_ITEM`, this returns `"not_found"`
+    — this preserves the exact pre-D-05 behavior, where a deleted game
+    CASCADE-deleted the whole `drill_solves` row and the reveal query
+    returned no row at all. There is no "reveal an orphaned SR item" state to
+    invent; the puzzle simply cannot be re-shown once its source game is
+    gone.
 
     190.1-03 (D-01/D-05): the answer key here is deliberately thin — the
     puzzle type, the in-game move (SAN + UCI), and a tactic-lines pointer.
@@ -1117,8 +2156,9 @@ async def reveal_for_puzzle(
     """
     row = (
         await session.execute(
-            select(DrillSolve, Game)
-            .join(Game, Game.id == DrillSolve.game_id)
+            select(DrillSolve, Game, HerringPool)
+            .outerjoin(Game, Game.id == DrillSolve.game_id)
+            .outerjoin(HerringPool, HerringPool.id == DrillSolve.herring_pool_id)
             .where(
                 DrillSolve.session_id == session_id,
                 DrillSolve.position == position,
@@ -1128,24 +2168,53 @@ async def reveal_for_puzzle(
     ).one_or_none()
     if row is None:
         return "not_found"
-    solve, game = row
+    solve, game, herring_row = row
     if solve.solved_at is None:
         return "not_attempted"
+    if game is None and solve.source == DrillSource.SR_ITEM:
+        # D-05: an orphaned SR row is unservable/unrevealable — this is the
+        # exact pre-D-05 CASCADE outcome (the row, and therefore this query's
+        # result, used to not exist at all). Never invent a new "reveal with
+        # an empty FEN" state for this case.
+        return "not_found"
 
-    position_row = (
-        await session.execute(
-            select(GamePosition.move_san).where(
-                GamePosition.user_id == user_id,
-                GamePosition.game_id == solve.game_id,
-                GamePosition.ply == solve.ply,
+    # D-06 (T-192-02 mitigation): the position lookup resolves the SOURCE
+    # GAME'S OWNER (`game.user_id`), not the solving `user_id` — a red
+    # herring can be drawn from another user's game, and the pre-D-06 filter
+    # returned None (silently degrading `played_in_game_san`) for every
+    # cross-user herring even though the game row was perfectly alive. The
+    # owner id is resolved server-side from the outer-joined `Game` row,
+    # never from request input, so no IDOR seam is opened — and the select
+    # list stays exactly `GamePosition.move_san`, never the whole entity or
+    # any other column, which is what makes this widening safe rather than a
+    # cross-user data leak (a security control, not an optimization). Skipped
+    # entirely when `game is None` (only reachable for a herring at this
+    # point) — `played_in_game_san` degrades to None per D-08.
+    played_in_game_san: str | None = None
+    if game is not None:
+        position_row = (
+            await session.execute(
+                select(GamePosition.move_san).where(
+                    GamePosition.user_id == game.user_id,
+                    GamePosition.game_id == game.id,
+                    GamePosition.ply == solve.ply,
+                )
             )
-        )
-    ).one_or_none()
-    played_in_game_san = position_row.move_san if position_row is not None else None
+        ).one_or_none()
+        played_in_game_san = position_row.move_san if position_row is not None else None
 
     # P-03: game_flaws.fen is board_fen() only (no castling/en-passant) —
-    # reconstruct the full FEN the same way composition did.
-    fen = full_fen_at_ply(game.pgn, solve.ply) or ""
+    # reconstruct the full FEN the same way composition did. D-03: a herring
+    # always reads its FEN off the pool row (never the PGN), alive game-link
+    # or not — the only exception to "game is None -> degrade" above.
+    if solve.source == DrillSource.RED_HERRING:
+        fen = herring_row.fen if herring_row is not None else ""
+    else:
+        # The not_found gate above already excluded (game is None and
+        # source == SR_ITEM), so game is guaranteed non-None here — narrowed
+        # explicitly for ty rather than suppressed.
+        assert game is not None
+        fen = full_fen_at_ply(game.pgn, solve.ply) or ""
 
     # 190.1-01, D-05: the game move as UCI — SAN -> UCI, never-raise contract,
     # same house try/except shape (app/services/library_service.py:135,
@@ -1162,13 +2231,16 @@ async def reveal_for_puzzle(
         puzzle_type: Literal["sharp", "soft", "herring"] = "herring"
         has_tactic_lines = False
     else:
+        # Same not_found-gate invariant as above: source == SR_ITEM implies
+        # game is not None by this point.
+        assert game is not None
         flaw_row = (
             await session.execute(
                 select(GameFlaw)
                 .options(undefer(GameFlaw.missed_pv_lines))
                 .where(
                     GameFlaw.user_id == user_id,
-                    GameFlaw.game_id == solve.game_id,
+                    GameFlaw.game_id == game.id,
                     GameFlaw.ply == solve.ply,
                 )
             )
@@ -1194,6 +2266,7 @@ async def reveal_for_puzzle(
 __all__ = [
     "ComposedPuzzle",
     "ComposedSession",
+    "ProgressSnapshot",
     "RecordedSolve",
     "RevealedPuzzle",
     "TrainSettingsRow",
@@ -1201,10 +2274,13 @@ __all__ = [
     "compose_and_materialize_session",
     "expire_stale_sessions",
     "get_or_create_settings",
+    "get_progress",
     "get_settings",
+    "get_waiting_puzzle_count",
     "load_session_puzzles",
     "open_session_for_user",
     "record_solve",
     "reveal_for_puzzle",
+    "settle_streak_snapshot",
     "upsert_settings",
 ]

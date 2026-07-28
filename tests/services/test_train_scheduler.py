@@ -14,27 +14,63 @@ Covers:
   - session_window: D-10 "open until the next scheduled session day".
   - local_today: the one UTC->local conversion site, unknown-zone fallback.
   - is_session_expired: today >= expires_on boundary (inclusive).
+
+Phase 193 (PROG-01, SEED-121) replaces Phase 191's weekly settlement machine
+(the deleted 3-state flame enum + its week-bucketed settle function) with a
+per-scheduled-day tick + a 0-7 depletable shield:
+  - is_scheduled_day / scheduled_days_per_week: the two small pure helpers.
+  - _judge_one_day: the shared arithmetic primitive (neutral/fulfilled/
+    missed/credit_only), including the SHIELD_CAP clamp-parity gate.
+  - tick_days: the day-walk, including the sparse-mask elapsed-day boundary
+    (RESEARCH.md Pitfall 1 — the phase's single highest-risk correctness
+    finding), the frozen-forever guarantee, the D-06 watermark, and the
+    streak_reset_notice derivation.
 """
 
 from __future__ import annotations
 
 import datetime
+import random
 
 from app.models.drill_item import DrillStatus
 from app.services.train_scheduler import (
+    ALL_WEEKDAYS_MASK,
     LADDER_DAYS,
     MASTERY_STREAK_THRESHOLD,
     PARK_FAIL_THRESHOLD,
+    SHIELD_CAP,
     ItemState,
+    TickSnapshot,
+    _judge_one_day,
     apply_result,
+    is_scheduled_day,
     is_session_expired,
     local_today,
     next_scheduled_day,
+    scheduled_days_per_week,
     session_window,
+    tick_days,
+    week_start,
 )
 
 _TODAY = datetime.date(2026, 7, 27)  # a Monday
 _EVERY_DAY_MASK = 0  # D-07 identity mask
+
+# Streak-test reference calendar (all Mondays, since _TODAY is a Monday):
+#   _W0  = current week (2026-07-27)
+#   _W1  = last week    (2026-07-20)
+#   _W2  = two weeks ago (2026-07-13)
+_W0 = datetime.date(2026, 7, 27)
+_W1 = datetime.date(2026, 7, 20)
+_W2 = datetime.date(2026, 7, 13)
+
+# Two arbitrary reference days for the pure _judge_one_day tests (no
+# particular weekday relationship required — the function does no mask
+# math itself).
+_D0 = datetime.date(2026, 7, 20)
+_D1 = datetime.date(2026, 7, 27)
+
+_EMPTY_TICK = TickSnapshot(streak_count=0, shield_level=0, settled_through=None)
 
 
 def _fresh_state(due_date: datetime.date = _TODAY) -> ItemState:
@@ -227,3 +263,262 @@ class TestIsSessionExpired:
     def test_today_after_expiry_is_expired(self) -> None:
         expires_on = datetime.date(2026, 7, 31)
         assert is_session_expired(expires_on, datetime.date(2026, 8, 1)) is True
+
+
+class TestWeekStart:
+    def test_week_start_is_the_monday_of_the_week(self) -> None:
+        # 2026-07-27 is a Monday, 2026-07-30 (Thursday) and 2026-08-02 (Sunday)
+        # both belong to the same Mon-Sun week.
+        assert week_start(datetime.date(2026, 7, 27)) == _W0
+        assert week_start(datetime.date(2026, 7, 30)) == _W0
+        assert week_start(datetime.date(2026, 8, 2)) == _W0
+
+    def test_week_start_of_a_monday_is_itself(self) -> None:
+        assert week_start(_W1) == _W1
+
+
+class TestIsScheduledDay:
+    def test_zero_mask_every_day_is_scheduled(self) -> None:
+        monday = datetime.date(2026, 7, 27)
+        for offset in range(7):
+            assert is_scheduled_day(monday + datetime.timedelta(days=offset), 0) is True
+
+    def test_mirrors_the_weekday_bit_test(self) -> None:
+        # Mon+Wed+Fri = bits 0, 2, 4.
+        mask = (1 << 0) | (1 << 2) | (1 << 4)
+        monday = datetime.date(2026, 7, 27)
+        tuesday = monday + datetime.timedelta(days=1)
+        wednesday = monday + datetime.timedelta(days=2)
+        assert is_scheduled_day(monday, mask) is True
+        assert is_scheduled_day(tuesday, mask) is False
+        assert is_scheduled_day(wednesday, mask) is True
+
+
+class TestScheduledDaysPerWeek:
+    def test_zero_mask_returns_none(self) -> None:
+        assert scheduled_days_per_week(0) is None
+
+    def test_all_weekdays_mask_returns_seven(self) -> None:
+        # Unlike the deleted required_sessions_per_week, ALL_WEEKDAYS_MASK is
+        # NOT special-cased down to 1 any more — nothing gates on this value
+        # any more (the weekly-fulfillment requirement is deleted).
+        assert scheduled_days_per_week(ALL_WEEKDAYS_MASK) == 7
+
+    def test_popcount_for_an_arbitrary_mask(self) -> None:
+        mask = (1 << 0) | (1 << 2) | (1 << 4)  # Mon+Wed+Fri
+        assert scheduled_days_per_week(mask) == 3
+
+
+class TestJudgeOneDay:
+    """The shared arithmetic primitive — every shield/count transition in
+    the whole app/ tree happens here, and only here."""
+
+    def test_neutral_changes_neither_count_nor_shield_but_advances_settled_through(self) -> None:
+        snapshot = TickSnapshot(streak_count=9, shield_level=4, settled_through=_D0)
+        result = _judge_one_day(snapshot, day=_D1, outcome="neutral")
+        assert result.streak_count == 9
+        assert result.shield_level == 4
+        assert result.settled_through == _D1
+
+    def test_fulfilled_increments_count_and_shield_and_advances_settled_through(self) -> None:
+        snapshot = TickSnapshot(streak_count=9, shield_level=4, settled_through=_D0)
+        result = _judge_one_day(snapshot, day=_D1, outcome="fulfilled")
+        assert result.streak_count == 10
+        assert result.shield_level == 5
+        assert result.settled_through == _D1
+
+    def test_fulfilled_at_shield_cap_stays_capped_but_count_still_increments(self) -> None:
+        snapshot = TickSnapshot(streak_count=40, shield_level=SHIELD_CAP, settled_through=_D0)
+        result = _judge_one_day(snapshot, day=_D1, outcome="fulfilled")
+        assert result.shield_level == SHIELD_CAP
+        assert result.streak_count == 41
+        assert result.settled_through == _D1
+
+    def test_missed_drains_one_pip_floored_at_zero_and_resets_count_at_zero(self) -> None:
+        absorbed = _judge_one_day(
+            TickSnapshot(streak_count=17, shield_level=1, settled_through=_D0),
+            day=_D1,
+            outcome="missed",
+        )
+        assert absorbed.shield_level == 0
+        assert absorbed.streak_count == 0
+
+        frozen_count = _judge_one_day(
+            TickSnapshot(streak_count=17, shield_level=3, settled_through=_D0),
+            day=_D1,
+            outcome="missed",
+        )
+        assert frozen_count.shield_level == 2
+        assert frozen_count.streak_count == 17
+
+    def test_missed_at_zero_shield_and_zero_count_is_a_no_op_on_both_values(self) -> None:
+        snapshot = TickSnapshot(streak_count=0, shield_level=0, settled_through=_D0)
+        result = _judge_one_day(snapshot, day=_D1, outcome="missed")
+        assert result.shield_level == 0
+        assert result.streak_count == 0
+        assert result.settled_through == _D1
+
+    def test_credit_only_raises_shield_but_leaves_count_and_settled_through_untouched(self) -> None:
+        snapshot = TickSnapshot(streak_count=40, shield_level=3, settled_through=_D0)
+        result = _judge_one_day(snapshot, day=_D1, outcome="credit_only")
+        assert result.shield_level == 4
+        assert result.streak_count == 40
+        assert result.settled_through == _D0, "credit_only must never move the settled boundary"
+
+    def test_credit_only_and_fulfilled_clamp_identically_at_the_cap(self) -> None:
+        base_at_six = TickSnapshot(streak_count=0, shield_level=SHIELD_CAP - 1, settled_through=_D0)
+        base_at_cap = TickSnapshot(streak_count=0, shield_level=SHIELD_CAP, settled_through=_D0)
+
+        assert (
+            _judge_one_day(base_at_six, day=_D1, outcome="credit_only").shield_level == SHIELD_CAP
+        )
+        assert _judge_one_day(base_at_six, day=_D1, outcome="fulfilled").shield_level == SHIELD_CAP
+        assert (
+            _judge_one_day(base_at_cap, day=_D1, outcome="credit_only").shield_level == SHIELD_CAP
+        )
+        assert _judge_one_day(base_at_cap, day=_D1, outcome="fulfilled").shield_level == SHIELD_CAP
+
+
+class TestTickDays:
+    """The day-walk: elapsed-day boundary, frozen-forever guarantee, D-06
+    watermark, and no-op behavior."""
+
+    def test_empty_snapshot_no_sessions_is_a_pure_noop(self) -> None:
+        view = tick_days(
+            _EMPTY_TICK, [], weekday_mask=_EVERY_DAY_MASK, today=_TODAY, pool_eligible_since=None
+        )
+        assert view.settled == _EMPTY_TICK
+        assert view.current_week_completed == 0
+        assert view.streak_reset_notice is False
+        assert view.changed is False
+
+    def test_no_op_when_nothing_has_elapsed_yet(self) -> None:
+        snapshot = TickSnapshot(streak_count=5, shield_level=6, settled_through=_TODAY)
+        view = tick_days(snapshot, [], weekday_mask=0, today=_TODAY, pool_eligible_since=_TODAY)
+        assert view.changed is False
+        assert view.settled == snapshot
+
+    def test_never_walks_a_day_at_or_before_settled_through(self) -> None:
+        """Frozen forever: a 'completed' session dated ON the already-settled
+        day must never be re-judged, even though it would otherwise look
+        fulfilled."""
+        frozen_day = _TODAY - datetime.timedelta(days=5)
+        snapshot = TickSnapshot(streak_count=2, shield_level=3, settled_through=frozen_day)
+        view = tick_days(
+            snapshot,
+            [frozen_day],
+            weekday_mask=0,
+            today=frozen_day + datetime.timedelta(days=1),
+            pool_eligible_since=frozen_day,
+        )
+        assert view.changed is False
+        assert view.settled == snapshot
+
+    def test_none_watermark_judges_every_walked_day_neutral(self) -> None:
+        snapshot = TickSnapshot(
+            streak_count=3, shield_level=4, settled_through=_TODAY - datetime.timedelta(days=2)
+        )
+        # This date would look "fulfilled" if the walk were eligible — it
+        # is not, since pool_eligible_since is None.
+        completed = [_TODAY - datetime.timedelta(days=1)]
+        view = tick_days(
+            snapshot, completed, weekday_mask=0, today=_TODAY, pool_eligible_since=None
+        )
+        assert view.settled.streak_count == 3
+        assert view.settled.shield_level == 4
+        assert view.changed is True
+        assert view.settled.settled_through == _TODAY - datetime.timedelta(days=1)
+
+    def test_watermark_neutral_strictly_before_judged_on_or_after(self) -> None:
+        watermark = _TODAY - datetime.timedelta(days=1)
+        snapshot = TickSnapshot(
+            streak_count=0,
+            shield_level=SHIELD_CAP,
+            settled_through=_TODAY - datetime.timedelta(days=3),
+        )
+        view = tick_days(snapshot, [], weekday_mask=0, today=_TODAY, pool_eligible_since=watermark)
+        # Two days walked: _TODAY-2 (before watermark -> neutral, no drain)
+        # and _TODAY-1 (on watermark -> missed, drains exactly one pip).
+        assert view.settled.shield_level == SHIELD_CAP - 1
+        assert view.settled.settled_through == _TODAY - datetime.timedelta(days=1)
+
+    def test_sparse_mask_boundary_not_judged_before_window_closes(self) -> None:
+        """RESEARCH.md Pitfall 1 — THE highest-risk correctness case. Under a
+        Mon/Wed/Fri mask, a Monday scheduled day must NOT be judged on
+        Tuesday (its window is still open until Wednesday)."""
+        mask = 0b0010101  # Mon(0) + Wed(2) + Fri(4)
+        prior_friday = _TODAY - datetime.timedelta(days=3)  # 2026-07-24
+        tuesday = _TODAY + datetime.timedelta(days=1)  # 2026-07-28
+        snapshot = TickSnapshot(streak_count=1, shield_level=4, settled_through=prior_friday)
+        view = tick_days(
+            snapshot, [], weekday_mask=mask, today=tuesday, pool_eligible_since=prior_friday
+        )
+        assert view.changed is False
+        assert view.settled == snapshot
+
+    def test_sparse_mask_boundary_judged_once_window_closes(self) -> None:
+        """Sibling of the case above: on Wednesday, the Monday's window HAS
+        closed and it drains by exactly one pip — no more."""
+        mask = 0b0010101  # Mon(0) + Wed(2) + Fri(4)
+        prior_friday = _TODAY - datetime.timedelta(days=3)  # 2026-07-24
+        wednesday = _TODAY + datetime.timedelta(days=2)  # 2026-07-29
+        snapshot = TickSnapshot(streak_count=1, shield_level=4, settled_through=prior_friday)
+        view = tick_days(
+            snapshot, [], weekday_mask=mask, today=wednesday, pool_eligible_since=prior_friday
+        )
+        assert view.changed is True
+        assert view.settled.shield_level == 3
+        assert view.settled.settled_through == _TODAY  # the Monday, judged missed
+
+    def test_shuffled_completed_dates_equal_sorted_input(self) -> None:
+        dates = [_W2, _W1, _W0]
+        shuffled = list(dates)
+        for seed in range(10):
+            random.Random(f"tick-days-ordering-edge-{seed}").shuffle(shuffled)
+            if shuffled != dates:
+                break
+        assert shuffled != dates  # the shuffle must actually reorder something
+
+        sorted_view = tick_days(
+            _EMPTY_TICK, sorted(dates), weekday_mask=0, today=_TODAY, pool_eligible_since=_W2
+        )
+        shuffled_view = tick_days(
+            _EMPTY_TICK, shuffled, weekday_mask=0, today=_TODAY, pool_eligible_since=_W2
+        )
+        assert shuffled_view == sorted_view
+
+
+class TestTickDaysStreakResetNotice:
+    def test_true_only_when_shield_and_count_are_zero_and_history_exists(self) -> None:
+        snapshot = TickSnapshot(
+            streak_count=0, shield_level=1, settled_through=_TODAY - datetime.timedelta(days=2)
+        )
+        # History exists (len > 0) but is unrelated to the walked day, so
+        # the walked day still resolves "missed".
+        completed = [_TODAY - datetime.timedelta(days=10)]
+        view = tick_days(
+            snapshot,
+            completed,
+            weekday_mask=0,
+            today=_TODAY,
+            pool_eligible_since=_TODAY - datetime.timedelta(days=10),
+        )
+        assert view.settled.shield_level == 0
+        assert view.settled.streak_count == 0
+        assert view.streak_reset_notice is True
+
+    def test_false_when_shield_and_count_are_zero_but_no_history(self) -> None:
+        snapshot = TickSnapshot(streak_count=0, shield_level=0, settled_through=_TODAY)
+        view = tick_days(snapshot, [], weekday_mask=0, today=_TODAY, pool_eligible_since=_TODAY)
+        assert view.streak_reset_notice is False
+
+    def test_false_when_shield_is_nonzero(self) -> None:
+        snapshot = TickSnapshot(streak_count=0, shield_level=2, settled_through=_TODAY)
+        view = tick_days(
+            snapshot,
+            [_TODAY - datetime.timedelta(days=1)],
+            weekday_mask=0,
+            today=_TODAY,
+            pool_eligible_since=_TODAY,
+        )
+        assert view.streak_reset_notice is False

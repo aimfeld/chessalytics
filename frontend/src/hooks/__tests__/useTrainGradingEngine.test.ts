@@ -125,7 +125,7 @@ describe('useTrainGradingEngine — checkpoint regression', () => {
       await vi.advanceTimersByTimeAsync(50);
     });
     const grade = await gradePromise;
-    expect(grade.correctMove).toBe(true);
+    expect(grade.moveTier).toBe('good');
   });
 
   it('gradeMove rejects instead of hanging forever when the engine never responds', async () => {
@@ -177,7 +177,7 @@ describe('useTrainGradingEngine — checkpoint regression', () => {
     // forever (the D-06 exact-match fast path could never trigger) and
     // esBefore pinned at the neutral 0.5 fallback.
     expect(grade.bestMoveUci).toBe('e2e4');
-    expect(grade.correctMove).toBe(true);
+    expect(grade.moveTier).toBe('good');
   });
 
   it('surfaces hasError and rejects any in-flight gradeMove when the Worker errors', async () => {
@@ -224,7 +224,7 @@ describe('useTrainGradingEngine — grading contract (Task 2)', () => {
     vi.unstubAllGlobals();
   });
 
-  it('exact match to the engine top move resolves correctMove=true with exactly one go dispatched (fast path)', async () => {
+  it('exact match to the engine top move resolves moveTier="good" with exactly one go dispatched (fast path)', async () => {
     const { result } = renderHook(() => useTrainGradingEngine({ enabled: true }));
     driveInit(mockWorker);
 
@@ -239,7 +239,7 @@ describe('useTrainGradingEngine — grading contract (Task 2)', () => {
     });
 
     const grade = await result.current.gradeMove(FEN, 'e2e4');
-    expect(grade.correctMove).toBe(true);
+    expect(grade.moveTier).toBe('good');
     expect(grade.esAfter).toBe(grade.esBefore);
     expect(mockWorker.messages.filter((m) => m.startsWith('go ')).length).toBe(1);
   });
@@ -271,7 +271,7 @@ describe('useTrainGradingEngine — grading contract (Task 2)', () => {
     expect(grade.bestLine.evalCp).toBe(40);
   });
 
-  it('a drop of exactly MISTAKE_DROP resolves correctMove=false', async () => {
+  it('a drop of exactly MISTAKE_DROP resolves moveTier="wrong"', async () => {
     const { result } = renderHook(() => useTrainGradingEngine({ enabled: true }));
     driveInit(mockWorker);
 
@@ -304,10 +304,10 @@ describe('useTrainGradingEngine — grading contract (Task 2)', () => {
 
     const grade = await gradePromise;
     expect(grade.esBefore - grade.esAfter).toBeGreaterThanOrEqual(MISTAKE_DROP);
-    expect(grade.correctMove).toBe(false);
+    expect(grade.moveTier).toBe('wrong');
   });
 
-  it('a drop just under MISTAKE_DROP (inaccuracy band) resolves correctMove=true', async () => {
+  it('a drop just under MISTAKE_DROP (inside the inaccuracy band) resolves moveTier="inaccuracy" — SEED-119 substantive new coverage: this previously only asserted the optimistic correctMove boolean', async () => {
     const { result } = renderHook(() => useTrainGradingEngine({ enabled: true }));
     driveInit(mockWorker);
 
@@ -336,10 +336,43 @@ describe('useTrainGradingEngine — grading contract (Task 2)', () => {
 
     const grade = await gradePromise;
     expect(grade.esBefore - grade.esAfter).toBeLessThan(MISTAKE_DROP);
-    expect(grade.correctMove).toBe(true);
+    expect(grade.esBefore - grade.esAfter).toBeGreaterThanOrEqual(INACCURACY_DROP);
+    expect(grade.moveTier).toBe('inaccuracy');
   });
 
-  it('a drop at or over BLUNDER_DROP resolves correctMove=false', async () => {
+  it('a drop just under INACCURACY_DROP (below the inaccuracy threshold) resolves moveTier="good"', async () => {
+    const { result } = renderHook(() => useTrainGradingEngine({ enabled: true }));
+    driveInit(mockWorker);
+
+    act(() => {
+      result.current.startGrading(FEN);
+    });
+    act(() => {
+      mockWorker.simulateMessage('info depth 12 multipv 1 score cp 230 nodes 1000 pv e2e4');
+    });
+    act(() => {
+      mockWorker.simulateMessage('bestmove e2e4');
+    });
+
+    const gradePromise = result.current.gradeMove(FEN, 'd2d4');
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(0);
+    });
+    // Raw UCI cp -222 (post-move fen is black to move, whitePovSign -1) ->
+    // stored evalCp +222 -> drop just under INACCURACY_DROP (a clean move).
+    act(() => {
+      mockWorker.simulateMessage('info depth 12 multipv 1 score cp -222 nodes 1000 pv d7d5');
+    });
+    act(() => {
+      mockWorker.simulateMessage('bestmove d7d5');
+    });
+
+    const grade = await gradePromise;
+    expect(grade.esBefore - grade.esAfter).toBeLessThan(INACCURACY_DROP);
+    expect(grade.moveTier).toBe('good');
+  });
+
+  it('a drop at or over BLUNDER_DROP resolves moveTier="wrong"', async () => {
     const { result } = renderHook(() => useTrainGradingEngine({ enabled: true }));
     driveInit(mockWorker);
 
@@ -368,7 +401,7 @@ describe('useTrainGradingEngine — grading contract (Task 2)', () => {
 
     const grade = await gradePromise;
     expect(grade.esBefore - grade.esAfter).toBeGreaterThanOrEqual(BLUNDER_DROP);
-    expect(grade.correctMove).toBe(false);
+    expect(grade.moveTier).toBe('wrong');
   });
 
   it('a mate score is converted through evalToExpectedScore, not treated as a null eval', async () => {
@@ -405,7 +438,7 @@ describe('useTrainGradingEngine — grading contract (Task 2)', () => {
     // 1, so the drop is unambiguously blunder-sized.
     expect(grade.esBefore).toBeGreaterThan(0.9);
     expect(grade.esBefore - grade.esAfter).toBeGreaterThanOrEqual(BLUNDER_DROP);
-    expect(grade.correctMove).toBe(false);
+    expect(grade.moveTier).toBe('wrong');
   });
 
   it('esBefore and esAfter are computed with the SAME mover — a black-to-move position where a sign error would flip the verdict', async () => {
@@ -445,10 +478,10 @@ describe('useTrainGradingEngine — grading contract (Task 2)', () => {
     // ~0.324, esAfter ~0.137, a blunder-sized drop for black. A sign-error
     // bug (re-deriving mover from the post-move fen, i.e. 'white', for
     // esAfter) would instead read as a large GAIN (negative drop) and
-    // resolve correctMove=true — the exact regression this test pins.
+    // resolve moveTier="good" — the exact regression this test pins.
     expect(grade.esBefore).toBeGreaterThan(grade.esAfter);
     expect(grade.esBefore - grade.esAfter).toBeGreaterThanOrEqual(BLUNDER_DROP);
-    expect(grade.correctMove).toBe(false);
+    expect(grade.moveTier).toBe('wrong');
   });
 
   it('calling startGrading for a second puzzle does not construct a second Worker', async () => {
@@ -697,6 +730,9 @@ describe('useTrainGradingEngine — MultiPV mount search (190.1-02 Task 2)', () 
     // verdict grades this correct, so it MUST appear as a fine move (the
     // 260726-fma bug excluded it, leaving soft puzzles with a lone arrow).
     const inaccuracyCp = Math.round(expectedScoreToWhitePovCp(esRank1 - (INACCURACY_DROP + margin), 'white'));
+    // Just past MISTAKE_DROP: excluded. A move this search grades a mistake is
+    // never offered as a viable alternative, even on a puzzle the backend's
+    // deeper analysis classified as having several fine moves (191 UAT).
     const mistakeCp = Math.round(expectedScoreToWhitePovCp(esRank1 - (MISTAKE_DROP + margin), 'white'));
 
     act(() => {
@@ -845,10 +881,10 @@ describe('useTrainGradingEngine — rank-consistent evals (190.1 UAT round 9)', 
     expect(grade.esAfter).toBe(evalToExpectedScore(225, null, 'white'));
     expect(grade.playedLine.moves).toEqual(['d2d4', 'd7d5']);
     expect(grade.playedLine.evalCp).toBe(225);
-    expect(grade.correctMove).toBe(true);
+    expect(grade.moveTier).toBe('good');
   });
 
-  it('a played move matching a rank with a blunder-sized drop still resolves correctMove=false without a second search', async () => {
+  it('a played move matching a rank with a blunder-sized drop still resolves moveTier="wrong" without a second search', async () => {
     const { result } = renderHook(() => useTrainGradingEngine({ enabled: true }));
     driveInit(mockWorker);
     // Same before/after cp pair as the existing BLUNDER_DROP test (230 -> 54),
@@ -858,7 +894,7 @@ describe('useTrainGradingEngine — rank-consistent evals (190.1 UAT round 9)', 
     const grade = await result.current.gradeMove(FEN, 'd2d4');
     expect(mockWorker.messages.filter((m) => m.startsWith('go ')).length).toBe(1);
     expect(grade.esBefore - grade.esAfter).toBeGreaterThanOrEqual(BLUNDER_DROP);
-    expect(grade.correctMove).toBe(false);
+    expect(grade.moveTier).toBe('wrong');
   });
 
   it('a non-rank played move whose after-search reads BETTER than the best move gets its displayed eval clamped to the best line', async () => {
@@ -891,7 +927,7 @@ describe('useTrainGradingEngine — rank-consistent evals (190.1 UAT round 9)', 
 
     const grade = await gradePromise;
     // The verdict stays honest ("better than best" is correct)…
-    expect(grade.correctMove).toBe(true);
+    expect(grade.moveTier).toBe('good');
     expect(grade.esAfter).toBeGreaterThan(grade.esBefore);
     // …but the DISPLAYED eval never contradicts the "best move" label.
     expect(grade.playedLine.evalCp).toBe(grade.bestLine.evalCp);

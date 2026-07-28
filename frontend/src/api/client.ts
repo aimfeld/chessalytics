@@ -1,5 +1,10 @@
 import axios from 'axios';
 import { queryClient } from '@/lib/queryClient';
+import {
+  DEV_CLOCK_ENABLED,
+  DEV_CLOCK_OFFSET_HEADER,
+  readDevClockOffsetMinutes,
+} from '@/lib/devClock';
 import type {
   PositionBookmarkResponse, PositionBookmarkCreate, PositionBookmarkUpdate,
   PositionBookmarkReorderRequest, TimeSeriesRequest, TimeSeriesResponse,
@@ -25,6 +30,7 @@ import type {
   PuzzleRevealResponse,
   TrainSettingsResponse,
   TrainSettingsUpdate,
+  TrainProgressResponse,
 } from '@/types/train';
 
 /**
@@ -48,12 +54,22 @@ export const apiClient = axios.create({
   },
 });
 
-// ─── Request interceptor: attach Bearer token ─────────────────────────────
+// ─── Request interceptor: attach Bearer token (+ dev clock offset) ────────
 
 apiClient.interceptors.request.use((config) => {
   const token = localStorage.getItem('auth_token');
   if (token) {
     config.headers.Authorization = `Bearer ${token}`;
+  }
+  // Dev-only simulated clock for testing Train's day/week schedule without
+  // waiting real days (see lib/devClock.ts). DEV_CLOCK_ENABLED is a
+  // compile-time constant, so this whole branch is dropped from prod builds —
+  // and the backend ignores the header outside ENVIRONMENT=development anyway.
+  if (DEV_CLOCK_ENABLED) {
+    const offsetMinutes = readDevClockOffsetMinutes();
+    if (offsetMinutes !== 0) {
+      config.headers[DEV_CLOCK_OFFSET_HEADER] = String(offsetMinutes);
+    }
   }
   return config;
 });
@@ -258,6 +274,8 @@ export const trainApi = {
     apiClient.get<TrainSettingsResponse>('/train/settings').then(r => r.data),
   updateSettings: (data: TrainSettingsUpdate) =>
     apiClient.put<TrainSettingsResponse>('/train/settings', data).then(r => r.data),
+  getProgress: () =>
+    apiClient.get<TrainProgressResponse>('/train/progress').then(r => r.data),
 };
 
 // ─── Library API ──────────────────────────────────────────────────────────────

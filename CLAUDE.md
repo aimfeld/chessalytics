@@ -100,6 +100,13 @@ Optional one-time hook: `bin/install_pre_push_hook.sh` installs a pre-push hook 
 - **`bin/benchmark_db.sh`** — lifecycle (`start`/`stop`/`reset`) for the benchmark Postgres on port 5433.
 - **`scripts/gen_*.py`** (e.g. `gen_endgame_zones_ts.py`, `gen_flaw_thresholds_ts.py`) — regenerate committed `frontend/src/generated/*` files from Python sources. CI fails on drift, so re-run after editing the source registry.
 - **`scripts/backfill_*.py`** — most take `--db dev|benchmark|prod` and `--user-id`; `--db prod` requires `prod_db_tunnel.sh`.
+- **`scripts/reset_train_state.py`** — wipes one user's Train/drill state (items, sessions, solves, streak snapshot) so a schedule test starts clean. Refuses `--db prod`. Pairs with the dev clock below.
+
+### Dev clock (testing Train's schedule without waiting days)
+
+Train's behavior is calendar-shaped (weekday mask, session expiry, due-date ladder, Mon-start streak weeks). `app/core/dev_clock.py` provides a `dev_now_utc` FastAPI dependency that shifts "now" by the `X-Dev-Clock-Offset-Minutes` request header, **honored only when `ENVIRONMENT == "development"`** (inert in every other environment). The Train page renders a time-travel strip in dev builds (`frontend/src/components/train/TrainDevClock.tsx`, gated on `import.meta.env.DEV`) that persists the offset in localStorage; `frontend/src/api/client.ts`'s request interceptor attaches the header.
+
+Rows written while shifted keep the shifted dates, so after travelling forward use `scripts/reset_train_state.py --user-id N` to get back to a clean slate. Any new time-dependent endpoint should take `now_utc` from this dependency rather than calling `datetime.now()` inline.
 
 ## Database Access (MCP)
 

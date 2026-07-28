@@ -24,6 +24,7 @@ const CACHED: CachedTrainReveal = {
   verdict: {
     correct_guess: true,
     correct_move: false,
+    move_quality: 'wrong',
     puzzle_type: 'sharp',
     item_status: 'active',
     streak: 0,
@@ -33,7 +34,7 @@ const CACHED: CachedTrainReveal = {
   guess: 'critical',
   playedMoveUci: 'g1f3',
   gradeResult: {
-    correctMove: false,
+    moveTier: 'wrong',
     bestMoveUci: 'e2e4',
     esBefore: 0.55,
     esAfter: 0.48,
@@ -66,6 +67,16 @@ describe('trainRevealCache', () => {
     sessionStorage.setItem(
       'train_reveal_cache',
       JSON.stringify({ sessionId: 7, guess: 'critical' }),
+    );
+    expect(readTrainRevealCache()).toBeNull();
+  });
+
+  it('SEED-119: rejects a pre-tiering cache entry whose verdict lacks move_quality', () => {
+    const preSeed119Verdict: Record<string, unknown> = { ...CACHED.verdict };
+    delete preSeed119Verdict.move_quality;
+    sessionStorage.setItem(
+      'train_reveal_cache',
+      JSON.stringify({ ...CACHED, verdict: preSeed119Verdict }),
     );
     expect(readTrainRevealCache()).toBeNull();
   });

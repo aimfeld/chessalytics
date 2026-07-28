@@ -41,8 +41,10 @@ import { useTrainGradingEngine } from '@/hooks/useTrainGradingEngine';
 import { TrainStartScreen } from '@/components/train/TrainStartScreen';
 import { TrainSolveScreen } from '@/components/train/TrainSolveScreen';
 import { TrainScoreScreen } from '@/components/train/TrainScoreScreen';
+import { TrainDevClock } from '@/components/train/TrainDevClock';
 import { clearTrainRevealCache, readTrainRevealCache } from '@/lib/trainRevealCache';
 import type { CachedTrainReveal } from '@/lib/trainRevealCache';
+import { DEV_CLOCK_ENABLED } from '@/lib/devClock';
 import { TRAIN_POINTS_PER_PUZZLE } from '@/lib/trainScore';
 
 export default function TrainPage(): ReactElement {
@@ -103,8 +105,22 @@ export default function TrainPage(): ReactElement {
     if (wasComplete) setShowScoreScreen(true);
   }
 
+  // Dev-only time travel: a shifted clock can compose a DIFFERENT session (or
+  // none at all), so drop back to the landing screen and re-read status
+  // instead of leaving the loop parked on puzzles from the previous "now".
+  function handleDevClockChange(): void {
+    clearTrainRevealCache();
+    setRestoredReveal(null);
+    setHasEnteredLoop(false);
+    setShowScoreScreen(false);
+    startSession();
+  }
+
   return (
-    <div className="p-6" data-testid="train-page">
+    // 191.1 UAT: same horizontal padding as the Import page content
+    // (`px-4 py-6 md:px-6` in Import.tsx) instead of a flat `p-6`.
+    <div className="px-4 py-6 md:px-6" data-testid="train-page">
+      {DEV_CLOCK_ENABLED && <TrainDevClock onChange={handleDevClockChange} />}
       {!showLoop && !showScoreScreen && !restoredActive && (
         <TrainStartScreen
           session={trainSession.session}
@@ -112,6 +128,7 @@ export default function TrainPage(): ReactElement {
           isError={trainSession.isSessionError}
           sessionScore={trainSession.sessionScore}
           onEnterLoop={() => setHasEnteredLoop(true)}
+          onSettingsSaved={startSession}
         />
       )}
       {restoredActive && restoredReveal && (

@@ -7,14 +7,17 @@
  * awarded band can never contradict each other (SOLV-07 edge probe:
  * precision).
  *
- * Deliberately no celebration animation or effect here — that is explicitly
- * Phase 191's (D-12's plain "Mastered — retired." comeback text is this
- * phase's stand-in everywhere a celebration might otherwise go).
+ * Phase 191 (D-15/PROG-02) adds the green-band celebration: a fire-once
+ * confetti burst on mount, reusing `fireWinConfetti`/`prefersReducedMotion`
+ * verbatim from the bot-game win celebration (`useBotGame.ts`'s
+ * `finalizeGame`) rather than a new palette or effect.
  */
 
-import type { ReactElement } from 'react';
+import { useEffect, type ReactElement } from 'react';
 import { format, parseISO } from 'date-fns';
 import { Button } from '@/components/ui/button';
+import { TRAIN_CTA_BUTTON_CLASS } from '@/components/train/buttonStyles';
+import { fireWinConfetti, prefersReducedMotion } from '@/lib/confetti';
 import {
   TRAIN_RATING_GREEN,
   TRAIN_RATING_YELLOW,
@@ -50,6 +53,13 @@ export function TrainScoreScreen({ score, nextSessionDate }: TrainScoreScreenPro
   const percentage = displaySessionPercentage(score);
   const band = score.max > 0 ? resolveRatingBand(score.total / score.max) : null;
 
+  useEffect(() => {
+    // Fire once per mount only (D-15) — the exact reduced-motion guard shape
+    // `useBotGame.ts`'s `finalizeGame` uses for the bot-win burst.
+    if (band === 'green' && !prefersReducedMotion()) fireWinConfetti();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
   return (
     <div className="flex flex-col items-center gap-4 py-12 text-center" data-testid="train-score-screen">
       <h1 className="text-xl font-semibold">Session complete</h1>
@@ -65,7 +75,7 @@ export function TrainScoreScreen({ score, nextSessionDate }: TrainScoreScreenPro
           {percentage}%
         </p>
       )}
-      <Button variant="default" disabled data-testid="btn-train-again">
+      <Button variant="default" className={TRAIN_CTA_BUTTON_CLASS} disabled data-testid="btn-train-again">
         Train again
       </Button>
       <p className="text-sm font-semibold text-muted-foreground">
