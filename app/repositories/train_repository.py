@@ -998,9 +998,14 @@ async def load_session_puzzles(
     Two independent lazy-eviction paths, opposite reasons:
     - A `RED_HERRING` row reads its FEN/arriving move straight off the
       `herring_pool` row (D-03 — the only herring path, alive game-link or
-      not) and is skipped only if the pool row itself is gone (never
-      observed in practice — pool rows are `SET NULL`, not `CASCADE` — but
-      handled identically to a broken FEN: drop, never serve).
+      not) and is skipped only if the pool row itself is gone, handled
+      identically to a broken FEN: drop, never serve. This DOES happen —
+      every session composed before the pool was first generated carried a
+      NULL `herring_pool_id` (prod, 2026-07-28), and `drill_solves
+      .herring_pool_id` is `ON DELETE SET NULL`, so any future pool prune
+      orphans in-flight rows the same way. `_mark_session_complete_if_done`
+      carries the matching exclusion (SEED-123) so a dropped herring cannot
+      pin the session open forever.
     - An `SR_ITEM` row is skipped when its `games` row has vanished (D-05:
       the row now survives its source game's deletion with `game_id` NULL
       instead of being CASCADE-deleted, so an orphaned SR row is unservable
@@ -1716,10 +1721,26 @@ async def _mark_session_complete_if_done(
       reach 0 in the first place. After `SET NULL`, an orphaned SR row
       survives forever with `solved_at IS NULL` and would pin `remaining`
       above zero, reproducing the exact stuck-session bug WR-02 fixed.
-    - `RED_HERRING`: NEVER excluded by either clause below (an unsolved
-      herring with a nulled game link is still perfectly servable off its
-      `herring_pool` row, D-03, and must keep counting toward `remaining`
-      until solved — the opposite of the SR-orphan treatment above).
+    - `RED_HERRING`: never excluded by EITHER of the two SR clauses below (an
+      unsolved herring with a nulled game link is still perfectly servable off
+      its `herring_pool` row, D-03, and must keep counting toward `remaining`
+      until solved — the opposite of the SR-orphan treatment above). It is
+      excluded by its OWN third clause when the `herring_pool` row itself does
+      not resolve; see the SEED-123 bug-fix note below.
+
+    Bug fix (SEED-123, 2026-07-28): a herring whose `herring_pool` row does not
+    resolve is now excluded from `remaining`. `load_session_puzzles` has always
+    skipped such a row ("drop, never serve broken"), so counting it here made it
+    unservable AND unsatisfiable: `remaining` could never reach 0 and the session
+    stuck on "resume" until `expires_on` passed. This is the same stuck-session
+    shape as WR-02 and D-05 above, and it is reachable in normal operation, not
+    just across a migration — `drill_solves.herring_pool_id` is `ON DELETE SET
+    NULL`, so deleting ANY `herring_pool` row (a prune, a regeneration) orphans
+    the pointer on every in-flight session that drew it. The clause tests the
+    JOINED ROW (`HerringPool.id`), not `DrillSolve.herring_pool_id`, so a stale
+    non-NULL id pointing at a deleted pool row is caught too. Observed in prod on
+    2026-07-28: every session composed before the pool was first generated
+    carried `herring_pool_id IS NULL` and was unfinishable.
 
     Bug fix (WR-02, pre-Phase-192): excludes SR-source rows whose backing
     `game_flaws` row has vanished under reclassification. `load_session_puzzles`
@@ -1748,6 +1769,7 @@ async def _mark_session_complete_if_done(
                 GameFlaw.ply == DrillSolve.ply,
             ),
         )
+        .outerjoin(HerringPool, HerringPool.id == DrillSolve.herring_pool_id)
         .where(
             DrillSolve.session_id == session_id,
             DrillSolve.solved_at.is_(None),
@@ -1761,6 +1783,17 @@ async def _mark_session_complete_if_done(
             or_(
                 DrillSolve.source != DrillSource.SR_ITEM,
                 Game.id.isnot(None),
+            ),
+            # SEED-123: the herring's own leniency clause, mirroring
+            # `load_session_puzzles`'s `if herring_row is None: continue`. A
+            # herring that cannot be served must not block completion. Tests
+            # the JOINED ROW, not `DrillSolve.herring_pool_id` — the pool row
+            # can be deleted out from under a live non-NULL id (SET NULL fires
+            # on the FK, but a stale id would still read non-NULL to a naive
+            # column check on a row loaded earlier in the same transaction).
+            or_(
+                DrillSolve.source != DrillSource.RED_HERRING,
+                HerringPool.id.isnot(None),
             ),
         )
     )

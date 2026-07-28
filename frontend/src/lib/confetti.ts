@@ -21,26 +21,51 @@ const CONFETTI_ORIGIN_Y = 0.6;
  * together read as one symmetric celebration burst. */
 const CONFETTI_PARTICLE_COUNT = 60;
 
+/** Spread (degrees) of each full-celebration burst. */
+const CONFETTI_SPREAD = 55;
+
+/** Particle count for the muted burst — a visibly smaller celebration for a
+ * partial result (the Train score screen's yellow band), so a "decent but not
+ * great" session reads as acknowledged rather than celebrated. */
+const CONFETTI_PARTIAL_PARTICLE_COUNT = 20;
+
+/** Spread (degrees) of the partial burst — narrower than the full one so the
+ * fewer particles still read as a deliberate burst, not a stray scatter. */
+const CONFETTI_PARTIAL_SPREAD = 40;
+
+function fireBursts(particleCount: number, spread: number): void {
+  confetti({
+    particleCount,
+    angle: 60,
+    spread,
+    origin: { x: 0, y: CONFETTI_ORIGIN_Y },
+    colors: CONFETTI_COLORS,
+  });
+  confetti({
+    particleCount,
+    angle: 120,
+    spread,
+    origin: { x: 1, y: CONFETTI_ORIGIN_Y },
+    colors: CONFETTI_COLORS,
+  });
+}
+
 /**
  * Fires a short two-burst confetti celebration (one angled from each side)
  * over the current viewport. Call only on a human win, and only when
  * `!prefersReducedMotion()`.
  */
 export function fireWinConfetti(): void {
-  confetti({
-    particleCount: CONFETTI_PARTICLE_COUNT,
-    angle: 60,
-    spread: 55,
-    origin: { x: 0, y: CONFETTI_ORIGIN_Y },
-    colors: CONFETTI_COLORS,
-  });
-  confetti({
-    particleCount: CONFETTI_PARTICLE_COUNT,
-    angle: 120,
-    spread: 55,
-    origin: { x: 1, y: CONFETTI_ORIGIN_Y },
-    colors: CONFETTI_COLORS,
-  });
+  fireBursts(CONFETTI_PARTICLE_COUNT, CONFETTI_SPREAD);
+}
+
+/**
+ * Same two-burst shape as `fireWinConfetti` at roughly a third of the
+ * particles — the partial-success variant. Same reduced-motion contract:
+ * only call when `!prefersReducedMotion()`.
+ */
+export function firePartialConfetti(): void {
+  fireBursts(CONFETTI_PARTIAL_PARTICLE_COUNT, CONFETTI_PARTIAL_SPREAD);
 }
 
 /**
