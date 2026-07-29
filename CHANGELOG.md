@@ -38,6 +38,8 @@ in `YYYY-MM-DD` (Europe/Zurich).
 
 ### Fixed
 
+- Fixed an iOS crash during bot play: when the Maia chess engine's GPU-accelerated path failed to start, it was loading its runtime a second time on top of the first instead of replacing it, roughly doubling memory use and crashing the tab on iPhone. The engine's model and runtime files are now also cached for a month so they aren't re-downloaded on every visit. (quick 260729-sod)
+
 - The Library's Flaws tab loads again, and the Games tab is fast when a tactic filter is on. Both had slowed to a crawl for players with large histories, with the Flaws list often never finishing at all. Two queries were asking the database to compare every position in a game against every flaw in it, and the flaw list was also dragging each game's full move text and stored tactic lines through the sort only to throw them away. On the biggest account in dev, the Flaws tab went from timing out past two minutes to about 0.2s, and a tactic-filtered Games page from 7.8s to 0.15s. (quick 260729)
 
 - Train's "Scored today" now reads the same on every device. The score was kept only in the browser you solved in, so opening Train on your phone after finishing a session on your computer showed "0 of 18 points" instead of the score you actually earned. The score now comes from your account, so it is correct wherever you open it, and the running score during a session no longer counts against the wrong total after switching devices mid-session. (quick 260728-tgc)

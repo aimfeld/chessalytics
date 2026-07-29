@@ -26,6 +26,29 @@ flawchess.com {
         @immutable path /assets/*
         header @immutable Cache-Control "public, max-age=31536000, immutable"
 
+        # Our own Maia worker glue is NOT content-hashed and its message protocol
+        # changes with the app bundle — never cache it (same reason as /sw.js above;
+        # quick 260729-sod FIX 4). Excluded from the vendored-runtime rule below via
+        # `not path`, so ordering between the two `header` directives never matters.
+        @maiaworker path /maia/maia-worker.js
+        header @maiaworker Cache-Control "no-cache"
+
+        # Vendored, version-pinned runtime binaries (the 43.6 MB Maia ONNX model +
+        # onnxruntime-web builds, Stockfish glue + wasm). NOT content-hashed — ORT
+        # resolves its own .wasm/.mjs filenames by appending them to wasmPaths =
+        # '/maia/', so renaming without also versioning the directory would break
+        # asset resolution — so this is NOT `immutable`. 30 days is long enough that
+        # a returning mobile visitor never re-downloads 43.6 MB over a slow link (the
+        # `Load failed` / `Importing a module script is canceled` cluster in
+        # 260729-sod-FINDINGS.md §5), short enough that a stale ORT/Stockfish build
+        # self-heals within a month with zero process discipline required of the next
+        # upgrader.
+        @vendored_runtime {
+            path /maia/* /engine/*
+            not path /maia/maia-worker.js
+        }
+        header @vendored_runtime Cache-Control "public, max-age=2592000"
+
         file_server
     }
 
