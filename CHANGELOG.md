@@ -40,6 +40,8 @@ in `YYYY-MM-DD` (Europe/Zurich).
 
 ### Fixed
 
+- The "N of M analyzed" badge on the Library's Stats tab now agrees with the same badge on the Games and Flaws tabs. It had been counting a different set of games: it skipped bot-practice games, followed the page filters, and treated a game as analyzed as soon as it arrived from lichess with computer analysis attached, rather than once FlawChess had actually analyzed it. The same faulty count was also the denominator behind the flaw rates, so players with a lot of lichess-analyzed games saw their flaw rates per game understated, in the worst case by around threefold. Flaw rates and the you-vs-opponent comparison sections are now measured over exactly the games they draw their numbers from.
+
 - Fixed an iOS crash during bot play: when the Maia chess engine's GPU-accelerated path failed to start, it was loading its runtime a second time on top of the first instead of replacing it, roughly doubling memory use and crashing the tab on iPhone. The engine's model and runtime files are now also cached for a month so they aren't re-downloaded on every visit. (quick 260729-sod)
 
 - The Library's Flaws tab loads again, and the Games tab is fast when a tactic filter is on. Both had slowed to a crawl for players with large histories, with the Flaws list often never finishing at all. Two queries were asking the database to compare every position in a game against every flaw in it, and the flaw list was also dragging each game's full move text and stored tactic lines through the sort only to throw them away. On the biggest account in dev, the Flaws tab went from timing out past two minutes to about 0.2s, and a tactic-filtered Games page from 7.8s to 0.15s. (quick 260729)

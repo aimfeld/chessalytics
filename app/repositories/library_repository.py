@@ -1846,21 +1846,37 @@ async def count_filtered_and_analyzed(
     """Return (total_n, analyzed_n) over the filtered Games-surface set (LIBG-09).
 
     total_n   = count of games matching the filter set.
-    analyzed_n = subset with full-game move-quality analysis (Game.is_analyzed,
-                 i.e. white_blunders IS NOT NULL — currently Lichess games with
-                 computer analysis enabled). The cheap is_analyzed column check
-                 replaces the old per-ply eval-coverage subquery: coarser, but it
-                 matches the product's notion of "analyzed" (move-quality columns
-                 present) and is far cheaper.
+    analyzed_n = subset that is all-ply eval-complete, i.e. present in
+                 _analyzed_game_ids_subquery (full_evals_completed_at IS NOT NULL).
+
+    BUGFIX (badge/denominator mismatch): analyzed_n used to be Game.is_analyzed
+    (white_blunders IS NOT NULL). That column is set at IMPORT time for lichess
+    games shipping a computer-analysis block, so it counted games our engine has
+    never touched. Two things broke:
+
+    1. The Stats-tab coverage badge read "2845 of 2847" while the Games/Flaws
+       badges read "2848 of 2848" — those use full_evals_completed_at
+       (game_repository.count_fully_analyzed_games), as do the per-game cards'
+       Analyze button. Degenerate games (drain-stamped, no move-quality columns)
+       were missing from is_analyzed.
+    2. Worse, analyzed_n is the rate denominator in get_flaw_stats and the gate in
+       get_flaw_comparison / get_tactic_comparison, but every numerator there is
+       aggregated over _analyzed_game_ids_subquery. Denominator and numerator sat
+       on different populations, understating flaw rates for users with lichess
+       %eval games (prod user 269: 5958 vs 1800, a ~3.3x skew).
+
+    Both counts now derive from the same subquery the aggregates join on, so they
+    cannot drift again. See .planning/notes/eval-completion-columns.md for why
+    is_analyzed is not an "our engine analyzed this" signal.
 
     flaw_severity defaults to None so the COVERAGE badge (get_flaw_stats) gets a
     true "x of y" denominator: when it is None the base spans the whole filtered
     game set, so total_n counts unanalyzed games too and analyzed_n <= total_n.
     Passing a flaw_severity (the you-vs-opponent comparison gate does) restricts
     BOTH counts to games with a matching flaw via the base EXISTS, so analyzed_n
-    there matches the set the comparison bullets aggregate over. With a flaw
-    EXISTS on the base, total_n necessarily equals analyzed_n (every flawed game
-    is analyzed) — which is why the badge caller must NOT pass flaw_severity.
+    there matches the set the comparison bullets aggregate over — which is why the
+    badge caller must NOT pass flaw_severity (the EXISTS would collapse the
+    denominator onto flawed games only).
 
     Both are user-scoped.
     """
@@ -1884,8 +1900,9 @@ async def count_filtered_and_analyzed(
     if total_n == 0:
         return 0, 0
 
+    analyzed_subq = _analyzed_game_ids_subquery(user_id)
     analyzed_stmt = select(func.count()).select_from(
-        select(Game.id).where(Game.id.in_(select(base_subq.c.id)), Game.is_analyzed).subquery()
+        select(base_subq.c.id).where(base_subq.c.id.in_(select(analyzed_subq.c.game_id))).subquery()
     )
     analyzed_n = (await session.execute(analyzed_stmt)).scalar_one()
     return total_n, analyzed_n
