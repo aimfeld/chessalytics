@@ -2834,6 +2834,69 @@ class TestTier3Step1PredicateShape:
             "HEAD template (known-good prod plan; T-a86-03)"
         )
 
+    async def test_tier3_step1_stays_two_correlated_exists(self) -> None:
+        """Step 1 MUST keep both branches as SEPARATE correlated EXISTS with the
+        guest guard as an outer conjunct of branch (a).
+
+        This is the only test that protects the 260729-a86 fix. Collapsing the two
+        EXISTS back into one containing an OR is semantically identical — every
+        behavior test in this class passes either way, and so does the whole
+        module — but it costs prod 360 ms / 71,612 buffers per call instead of
+        2.4 ms / 1,443, because `u.is_guest` then has to be evaluated in a join
+        filter over the entire backlog rather than as a per-user index probe on
+        ix_games_needs_engine_full_evals / ix_games_lichess_pv_backfill_pending.
+        The dev DB's `games` is far too small for the planner to show that
+        difference, so a plan-shape assertion is impossible locally and this
+        string-shape assertion is what stands between a well-meaning
+        "simplification" and an 89.8%-of-DB-time regression.
+        """
+        import typing
+
+        from sqlalchemy.ext.asyncio import AsyncSession
+
+        from app.services.eval_queue_service import _claim_tier3_derived
+
+        class _StubResult:
+            def one_or_none(self) -> None:
+                return None
+
+        class _RecordingSession:
+            def __init__(self) -> None:
+                self.recorded_sql: str | None = None
+
+            async def execute(
+                self, clause: object, params: dict[str, object] | None = None
+            ) -> "_StubResult":
+                self.recorded_sql = str(clause)
+                return _StubResult()
+
+        fake = _RecordingSession()
+        # Step 1 returns None (stub), so _claim_tier3_derived short-circuits and
+        # the single recorded statement is the Step-1 user pick.
+        await _claim_tier3_derived(typing.cast(AsyncSession, fake))
+
+        sql = " ".join((fake.recorded_sql or "").split())
+
+        assert sql.count("EXISTS (") == 2, (
+            "Step 1 must issue two separate correlated EXISTS (one per branch), "
+            f"found {sql.count('EXISTS (')} in: {sql}"
+        )
+        assert "WHERE (u.is_guest = false AND EXISTS (" in sql, (
+            "branch (a)'s guest guard must be an OUTER conjunct of its EXISTS — "
+            "moving it inside forces a join filter over the whole backlog"
+        )
+        assert ")) OR EXISTS (" in sql, (
+            "the OR must join the two EXISTS, never sit inside a single one"
+        )
+        assert sql.count(" OR ") == 1, (
+            f"expected exactly one top-level OR in Step 1, got {sql.count(' OR ')}"
+        )
+        # `u.is_guest` inside either EXISTS body is the exact regression shape.
+        assert "u.is_guest" not in sql[sql.index("EXISTS (") :], (
+            "no EXISTS body may reference u.is_guest — that correlation is what "
+            "defeats the per-user partial-index probe"
+        )
+
     async def test_guest_needs_engine_only_never_picked(
         self,
         tier2_test_users: dict[str, int],
