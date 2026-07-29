@@ -2660,3 +2660,472 @@ class TestTier4bBestMoveBackfill:
             )
         finally:
             await _delete_games(queue_session_maker, [game_id])
+
+
+# ─── Quick 260729-a86: Step-1 distributed-OR predicate shape ─────────────────
+
+
+class TestTier3Step1PredicateShape:
+    """Quick 260729-a86: pins the rewritten Step-1 predicate (two correlated
+    EXISTS with the guest guard as an outer conjunct of branch (a)) and the
+    tier-4 blob/bestmove byte-identity invariant (T-a86-01 / T-a86-03).
+
+    Byte-identity assertions use exact `==` against literals derived from the
+    pre-change (HEAD) `_es_weighted_user_pick` f-string template — never from
+    the post-change emitted output. The behavior assertions reuse the existing
+    tier2_test_users fixture / _insert_game / _delete_games helpers and the
+    established loop-and-count style (the lottery is probabilistic and GLOBAL,
+    so no single draw is deterministic).
+    """
+
+    async def test_tier4_blob_call_site_byte_identical_to_head(self) -> None:
+        """_es_weighted_user_pick's candidate_exists_sql branch, invoked with
+        _claim_tier4_blob's exact argument set, emits SQL string-equal to the
+        pre-260729-a86 HEAD template."""
+        import math
+        import typing
+
+        from sqlalchemy.ext.asyncio import AsyncSession
+
+        from app.services.eval_queue_service import (
+            TIER4_USER_RECENCY_HALF_LIFE_DAYS,
+            TIER4_USER_WEIGHT_FLOOR,
+            _es_weighted_user_pick,
+        )
+
+        class _StubResult:
+            def one_or_none(self) -> None:
+                return None
+
+        class _RecordingSession:
+            def __init__(self) -> None:
+                self.recorded_sql: str | None = None
+                self.recorded_params: dict[str, object] | None = None
+
+            async def execute(
+                self, clause: object, params: dict[str, object] | None = None
+            ) -> "_StubResult":
+                self.recorded_sql = str(clause)
+                self.recorded_params = params
+                return _StubResult()
+
+        fake = _RecordingSession()
+
+        # Literal argument set copied verbatim from _claim_tier4_blob's Stage 1
+        # call site (candidate_exists_sql, recency_col_sql; include_guests
+        # defaults False there, so guest_clause = "u.is_guest = false AND").
+        tau_u_seconds = TIER4_USER_RECENCY_HALF_LIFE_DAYS / math.log(2) * 86400.0
+        floor_u = TIER4_USER_WEIGHT_FLOOR
+        candidate_exists_sql = """
+                SELECT 1 FROM games g
+                WHERE g.user_id = u.id
+                  AND g.full_evals_completed_at IS NOT NULL
+                  AND g.blobs_completed_at IS NULL
+        """
+        recency_col_sql = "u.last_activity"
+
+        await _es_weighted_user_pick(
+            typing.cast(AsyncSession, fake),
+            candidate_exists_sql=candidate_exists_sql,
+            recency_col_sql=recency_col_sql,
+            tau_seconds=tau_u_seconds,
+            floor=floor_u,
+        )
+
+        # Pre-change (HEAD) `_es_weighted_user_pick` f-string template,
+        # reproduced mechanically (git show HEAD~1:app/services/eval_queue_service.py
+        # at plan time) — never copy-pasted from the post-change output.
+        guest_clause = "u.is_guest = false AND"  # include_guests=False (tier4-blob default)
+        expected_sql = f"""
+            SELECT u.id
+            FROM users u
+            WHERE {guest_clause}
+              EXISTS (
+                {candidate_exists_sql}
+              )
+            ORDER BY
+                -ln(random()) / (
+                    exp(
+                        -EXTRACT(EPOCH FROM (now() - COALESCE({recency_col_sql}, '1970-01-01'::timestamptz)))
+                        / :tau_s
+                    ) + :floor
+                )
+            LIMIT 1
+        """
+
+        assert fake.recorded_sql == expected_sql, (
+            "_claim_tier4_blob's Stage-1 SQL must stay byte-identical to the HEAD "
+            "template (known-good prod plan; T-a86-03)"
+        )
+        assert fake.recorded_params == {"tau_s": tau_u_seconds, "floor": floor_u}
+
+    async def test_tier4_bestmove_call_site_byte_identical_to_head(self) -> None:
+        """_es_weighted_user_pick's candidate_exists_sql branch, invoked with
+        _claim_tier4_bestmove's exact argument set (include_guests=True), emits
+        SQL string-equal to the pre-260729-a86 HEAD template."""
+        import math
+        import typing
+
+        from sqlalchemy.ext.asyncio import AsyncSession
+
+        from app.services.eval_queue_service import (
+            TIER4_USER_RECENCY_HALF_LIFE_DAYS,
+            TIER4_USER_WEIGHT_FLOOR,
+            _es_weighted_user_pick,
+        )
+
+        class _StubResult:
+            def one_or_none(self) -> None:
+                return None
+
+        class _RecordingSession:
+            def __init__(self) -> None:
+                self.recorded_sql: str | None = None
+
+            async def execute(
+                self, clause: object, params: dict[str, object] | None = None
+            ) -> "_StubResult":
+                self.recorded_sql = str(clause)
+                return _StubResult()
+
+        fake = _RecordingSession()
+
+        # Literal argument set copied verbatim from _claim_tier4_bestmove's
+        # Stage 1 call site, including include_guests=True.
+        tau_u_seconds = TIER4_USER_RECENCY_HALF_LIFE_DAYS / math.log(2) * 86400.0
+        floor_u = TIER4_USER_WEIGHT_FLOOR
+        candidate_exists_sql = """
+                SELECT 1 FROM games g
+                WHERE g.user_id = u.id
+                  AND g.full_pv_completed_at IS NOT NULL
+                  AND g.best_moves_completed_at IS NULL
+        """
+        recency_col_sql = "u.last_activity"
+
+        await _es_weighted_user_pick(
+            typing.cast(AsyncSession, fake),
+            candidate_exists_sql=candidate_exists_sql,
+            recency_col_sql=recency_col_sql,
+            tau_seconds=tau_u_seconds,
+            floor=floor_u,
+            include_guests=True,
+        )
+
+        guest_clause = ""  # include_guests=True (tier4-bestmove)
+        expected_sql = f"""
+            SELECT u.id
+            FROM users u
+            WHERE {guest_clause}
+              EXISTS (
+                {candidate_exists_sql}
+              )
+            ORDER BY
+                -ln(random()) / (
+                    exp(
+                        -EXTRACT(EPOCH FROM (now() - COALESCE({recency_col_sql}, '1970-01-01'::timestamptz)))
+                        / :tau_s
+                    ) + :floor
+                )
+            LIMIT 1
+        """
+
+        assert fake.recorded_sql == expected_sql, (
+            "_claim_tier4_bestmove's Stage-1 SQL must stay byte-identical to the "
+            "HEAD template (known-good prod plan; T-a86-03)"
+        )
+
+    async def test_tier3_step1_stays_two_correlated_exists(self) -> None:
+        """Step 1 MUST keep both branches as SEPARATE correlated EXISTS with the
+        guest guard as an outer conjunct of branch (a).
+
+        This is the only test that protects the 260729-a86 fix. Collapsing the two
+        EXISTS back into one containing an OR is semantically identical — every
+        behavior test in this class passes either way, and so does the whole
+        module — but it costs prod 360 ms / 71,612 buffers per call instead of
+        2.4 ms / 1,443, because `u.is_guest` then has to be evaluated in a join
+        filter over the entire backlog rather than as a per-user index probe on
+        ix_games_needs_engine_full_evals / ix_games_lichess_pv_backfill_pending.
+        The dev DB's `games` is far too small for the planner to show that
+        difference, so a plan-shape assertion is impossible locally and this
+        string-shape assertion is what stands between a well-meaning
+        "simplification" and an 89.8%-of-DB-time regression.
+        """
+        import typing
+
+        from sqlalchemy.ext.asyncio import AsyncSession
+
+        from app.services.eval_queue_service import _claim_tier3_derived
+
+        class _StubResult:
+            def one_or_none(self) -> None:
+                return None
+
+        class _RecordingSession:
+            def __init__(self) -> None:
+                self.recorded_sql: str | None = None
+
+            async def execute(
+                self, clause: object, params: dict[str, object] | None = None
+            ) -> "_StubResult":
+                self.recorded_sql = str(clause)
+                return _StubResult()
+
+        fake = _RecordingSession()
+        # Step 1 returns None (stub), so _claim_tier3_derived short-circuits and
+        # the single recorded statement is the Step-1 user pick.
+        await _claim_tier3_derived(typing.cast(AsyncSession, fake))
+
+        sql = " ".join((fake.recorded_sql or "").split())
+
+        assert sql.count("EXISTS (") == 2, (
+            "Step 1 must issue two separate correlated EXISTS (one per branch), "
+            f"found {sql.count('EXISTS (')} in: {sql}"
+        )
+        assert "WHERE (u.is_guest = false AND EXISTS (" in sql, (
+            "branch (a)'s guest guard must be an OUTER conjunct of its EXISTS — "
+            "moving it inside forces a join filter over the whole backlog"
+        )
+        assert ")) OR EXISTS (" in sql, (
+            "the OR must join the two EXISTS, never sit inside a single one"
+        )
+        assert sql.count(" OR ") == 1, (
+            f"expected exactly one top-level OR in Step 1, got {sql.count(' OR ')}"
+        )
+        # `u.is_guest` inside either EXISTS body is the exact regression shape.
+        assert "u.is_guest" not in sql[sql.index("EXISTS (") :], (
+            "no EXISTS body may reference u.is_guest — that correlation is what "
+            "defeats the per-user partial-index probe"
+        )
+
+    async def test_guest_needs_engine_only_never_picked(
+        self,
+        tier2_test_users: dict[str, int],
+        queue_session_maker: async_sessionmaker[AsyncSession],
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """A guest whose only game is needs-engine is never picked by the rewritten
+        Step 1, even with last_activity=now (would win the ES lottery outright if
+        the outer guest guard on branch (a) were broken)."""
+        import app.services.eval_queue_service as svc
+        from app.models.user import User
+
+        monkeypatch.setattr(svc, "async_session_maker", queue_session_maker)
+
+        guest_id = tier2_test_users["guest"]
+        now = datetime.now(timezone.utc)
+
+        async with queue_session_maker() as session:
+            await session.execute(
+                sa_update(User).where(User.id == guest_id).values(last_activity=now)
+            )
+            await session.commit()
+
+        guest_needs_engine_game = await _insert_game(
+            queue_session_maker,
+            guest_id,
+            full_evals_completed_at=None,
+            lichess_evals_at=None,
+            played_at=now,
+        )
+
+        from app.services.eval_queue_service import _claim_tier3_derived
+
+        try:
+            async with queue_session_maker() as session:
+                for i in range(15):
+                    result = await _claim_tier3_derived(session)
+                    if result is not None:
+                        assert result[0] != guest_needs_engine_game, (
+                            f"Draw {i}: guest's needs-engine game "
+                            f"{guest_needs_engine_game} must never be picked"
+                        )
+        finally:
+            await _delete_games(queue_session_maker, [guest_needs_engine_game])
+
+    async def test_guest_lichess_pv_pending_is_pickable(
+        self,
+        tier2_test_users: dict[str, int],
+        queue_session_maker: async_sessionmaker[AsyncSession],
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """A guest with a lichess-eval pv-pending game (branch (b), unguarded) IS
+        pickable — the outer guest guard applies only to branch (a)."""
+        import app.services.eval_queue_service as svc
+        from app.models.user import User
+
+        monkeypatch.setattr(svc, "async_session_maker", queue_session_maker)
+
+        guest_id = tier2_test_users["guest"]
+        now = datetime.now(timezone.utc)
+
+        async with queue_session_maker() as session:
+            await session.execute(
+                sa_update(User).where(User.id == guest_id).values(last_activity=now)
+            )
+            await session.commit()
+
+        guest_lichess_game = await _insert_game(
+            queue_session_maker,
+            guest_id,
+            full_evals_completed_at=now,
+            full_pv_completed_at=None,
+            lichess_evals_at=now,
+            played_at=now,
+        )
+
+        from app.services.eval_queue_service import _claim_tier3_derived
+
+        n_draws = 200
+        count = 0
+        try:
+            async with queue_session_maker() as session:
+                for _ in range(n_draws):
+                    result = await _claim_tier3_derived(session)
+                    if result is not None and result[0] == guest_lichess_game:
+                        count += 1
+            assert count > 0, (
+                f"Guest's lichess-eval pv-pending game {guest_lichess_game} must be "
+                f"pickable (branch (b), unguarded); got 0 hits of {n_draws} draws"
+            )
+        finally:
+            await _delete_games(queue_session_maker, [guest_lichess_game])
+
+    async def test_non_guest_needs_engine_only_is_pickable(
+        self,
+        tier2_test_users: dict[str, int],
+        queue_session_maker: async_sessionmaker[AsyncSession],
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """A non-guest with only a needs-engine game is pickable via branch (a)."""
+        import app.services.eval_queue_service as svc
+        from app.models.user import User
+
+        monkeypatch.setattr(svc, "async_session_maker", queue_session_maker)
+
+        user_id = tier2_test_users["user"]
+        now = datetime.now(timezone.utc)
+
+        async with queue_session_maker() as session:
+            await session.execute(
+                sa_update(User).where(User.id == user_id).values(last_activity=now)
+            )
+            await session.commit()
+
+        needs_engine_game = await _insert_game(
+            queue_session_maker,
+            user_id,
+            full_evals_completed_at=None,
+            lichess_evals_at=None,
+            played_at=now,
+        )
+
+        from app.services.eval_queue_service import _claim_tier3_derived
+
+        n_draws = 200
+        count = 0
+        try:
+            async with queue_session_maker() as session:
+                for _ in range(n_draws):
+                    result = await _claim_tier3_derived(session)
+                    if result is not None and result[0] == needs_engine_game:
+                        count += 1
+            assert count > 0, (
+                f"Non-guest's needs-engine game {needs_engine_game} must be "
+                f"pickable via branch (a); got 0 hits of {n_draws} draws"
+            )
+        finally:
+            await _delete_games(queue_session_maker, [needs_engine_game])
+
+    async def test_non_guest_lichess_pv_pending_only_is_pickable(
+        self,
+        tier2_test_users: dict[str, int],
+        queue_session_maker: async_sessionmaker[AsyncSession],
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """A non-guest with only a lichess-eval pv-pending game is pickable via
+        branch (b)."""
+        import app.services.eval_queue_service as svc
+        from app.models.user import User
+
+        monkeypatch.setattr(svc, "async_session_maker", queue_session_maker)
+
+        user_id = tier2_test_users["user"]
+        now = datetime.now(timezone.utc)
+
+        async with queue_session_maker() as session:
+            await session.execute(
+                sa_update(User).where(User.id == user_id).values(last_activity=now)
+            )
+            await session.commit()
+
+        lichess_pending_game = await _insert_game(
+            queue_session_maker,
+            user_id,
+            full_evals_completed_at=now,
+            full_pv_completed_at=None,
+            lichess_evals_at=now,
+            played_at=now,
+        )
+
+        from app.services.eval_queue_service import _claim_tier3_derived
+
+        n_draws = 200
+        count = 0
+        try:
+            async with queue_session_maker() as session:
+                for _ in range(n_draws):
+                    result = await _claim_tier3_derived(session)
+                    if result is not None and result[0] == lichess_pending_game:
+                        count += 1
+            assert count > 0, (
+                f"Non-guest's lichess-eval pv-pending game {lichess_pending_game} "
+                f"must be pickable via branch (b); got 0 hits of {n_draws} draws"
+            )
+        finally:
+            await _delete_games(queue_session_maker, [lichess_pending_game])
+
+    async def test_non_guest_fully_complete_game_never_picked(
+        self,
+        tier2_test_users: dict[str, int],
+        queue_session_maker: async_sessionmaker[AsyncSession],
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """A non-guest whose game is fully complete (full_evals_completed_at set,
+        full_pv_completed_at set, lichess_evals_at NULL) matches neither branch and
+        is never picked."""
+        import app.services.eval_queue_service as svc
+        from app.models.user import User
+
+        monkeypatch.setattr(svc, "async_session_maker", queue_session_maker)
+
+        user_id = tier2_test_users["user"]
+        now = datetime.now(timezone.utc)
+
+        async with queue_session_maker() as session:
+            await session.execute(
+                sa_update(User).where(User.id == user_id).values(last_activity=now)
+            )
+            await session.commit()
+
+        complete_game = await _insert_game(
+            queue_session_maker,
+            user_id,
+            full_evals_completed_at=now,
+            full_pv_completed_at=now,
+            lichess_evals_at=None,
+            played_at=now,
+        )
+
+        from app.services.eval_queue_service import _claim_tier3_derived
+
+        try:
+            async with queue_session_maker() as session:
+                for i in range(15):
+                    result = await _claim_tier3_derived(session)
+                    if result is not None:
+                        assert result[0] != complete_game, (
+                            f"Draw {i}: fully-complete game {complete_game} must "
+                            f"never be picked (matches neither branch)"
+                        )
+        finally:
+            await _delete_games(queue_session_maker, [complete_game])

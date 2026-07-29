@@ -295,7 +295,8 @@ async def _claim_queued_job(
 async def _es_weighted_user_pick(
     session: AsyncSession,
     *,
-    candidate_exists_sql: str,
+    candidate_exists_sql: str | None = None,
+    candidate_where_sql: str | None = None,
     recency_col_sql: str,
     tau_seconds: float,
     floor: float,
@@ -303,41 +304,72 @@ async def _es_weighted_user_pick(
 ) -> int | None:
     """Generic Efraimidis–Spirakis weighted user pick (WRITE-06).
 
-    Shared building block behind both _claim_tier3_derived's Step 1 and
-    _claim_tier4_blob's Stage 1 — the acquisition shape (candidate filter +
-    recency-weighted ES key) is identical between tiers; only the EXISTS
-    predicate narrowing "eligible" candidates and which recency column anchors
-    the decay differ per tier.
+    Shared building block behind _claim_tier3_derived's Step 1, _claim_tier4_blob's
+    Stage 1, and _claim_tier4_bestmove's Stage 1 — the acquisition shape (candidate
+    filter + recency-weighted ES key) is identical across all three; only the
+    predicate narrowing "eligible" candidates and which recency column anchors the
+    decay differ per caller.
 
     weight = exp(-Δt/τ) + floor, where Δt = seconds since recency_col_sql
     (COALESCE'd to epoch-0 so NULL → exp term ≈ 0, weight ≈ floor). Pick
     ORDER BY -ln(random()) / weight LIMIT 1 (the ES key: LIMIT 1 = winner).
 
-    candidate_exists_sql / recency_col_sql are trusted, hardcoded SQL fragments
-    authored by the call sites below (never derived from request/user input) —
-    composing query SHAPE from these fixed strings carries no injection surface.
-    All variable VALUES (tau_seconds, floor) are bound via the sa.text params
-    dict — never f-string-interpolated (QUEUE-08).
+    Two mutually-exclusive fragment parameters select the WHERE-predicate shape —
+    exactly one must be supplied (a ValueError guards the other three combinations):
 
-    include_guests (default False) keeps the QUEUE-08 guest exclusion for the
-    tier-3 needs-engine Step-1 and tier-4-blob Stage-1 callers. It is passed
-    True ONLY by _claim_tier4_bestmove (Quick 260719-fsz) so guest full_pv-set
-    best_moves-NULL games self-heal through the minimal best-move lane; the
-    guest clause is composed from fixed in-code literals (no request/user
-    input), so toggling it introduces no injection surface.
+    - candidate_where_sql: the caller supplies the ENTIRE WHERE predicate verbatim,
+      including its own guest guard. Used ONLY by _claim_tier3_derived's Step 1,
+      which needs the `u.is_guest` guard on ONE branch of a two-branch OR rather
+      than as a blanket outer filter — the guest guard isn't a filter this helper
+      can compose generically once a caller needs it distributed across an OR
+      rather than applied uniformly. `include_guests` is not read on this branch.
+    - candidate_exists_sql: the caller supplies only the body of a single EXISTS(...)
+      subquery, and this helper composes the `{guest_clause} EXISTS (...)` shape
+      around it exactly as before. Used by _claim_tier4_blob's Stage 1 and
+      _claim_tier4_bestmove's Stage 1 — kept byte-identical on purpose, because
+      both prod query plans are already known-good (measured EXPLAIN ANALYZE) and
+      churning their SQL text for no behavioral gain would be pure risk.
+
+    candidate_exists_sql / candidate_where_sql / recency_col_sql are trusted,
+    hardcoded SQL fragments authored by the call sites below (never derived from
+    request/user input) — composing query SHAPE from these fixed strings carries
+    no injection surface. All variable VALUES (tau_seconds, floor) are bound via
+    the sa.text params dict — never f-string-interpolated (QUEUE-08).
+
+    include_guests (default False) applies ONLY to the candidate_exists_sql branch,
+    keeping the QUEUE-08 guest exclusion for the tier-4-blob Stage-1 caller. It is
+    passed True ONLY by _claim_tier4_bestmove (Quick 260719-fsz) so guest full_pv-set
+    best_moves-NULL games self-heal through the minimal best-move lane; the guest
+    clause is composed from fixed in-code literals (no request/user input), so
+    toggling it introduces no injection surface.
 
     Returns the picked user_id, or None when no candidate exists.
     """
-    # Fixed-literal composition (no user input) — see include_guests above.
-    guest_clause = "" if include_guests else "u.is_guest = false AND"
+    if (candidate_exists_sql is None) == (candidate_where_sql is None):
+        raise ValueError(
+            "_es_weighted_user_pick requires exactly one of candidate_exists_sql "
+            "or candidate_where_sql, never both or neither"
+        )
+
+    if candidate_where_sql is not None:
+        # Caller (tier-3 Step 1 only) owns the whole predicate, including any
+        # guest guard distributed across its own OR branches.
+        where_body = candidate_where_sql
+    else:
+        # Fixed-literal composition (no user input) — see include_guests above.
+        # Reproduces the pre-existing template byte for byte (tier-4 blob /
+        # bestmove byte-identity is pinned by tests/services/test_eval_queue.py).
+        guest_clause = "" if include_guests else "u.is_guest = false AND"
+        where_body = (
+            f"{guest_clause}\n              EXISTS (\n                "
+            f"{candidate_exists_sql}\n              )"
+        )
+
     result = await session.execute(
         sa.text(f"""
             SELECT u.id
             FROM users u
-            WHERE {guest_clause}
-              EXISTS (
-                {candidate_exists_sql}
-              )
+            WHERE {where_body}
             ORDER BY
                 -ln(random()) / (
                     exp(
@@ -435,7 +467,8 @@ async def _claim_tier3_derived(
     blocks (WRITE-06). There is no residual fallback lane — the population that
     used to run there is folded directly into Step 1/Step 2 below.
 
-    Step 1 — UNIFIED WEIGHTED USER PICK (SEED-046, unified 260723-j6g):
+    Step 1 — UNIFIED WEIGHTED USER PICK (SEED-046, unified 260723-j6g; query-shape
+    rewrite Quick 260729-a86):
       Candidate users = users with at least one game matching EITHER branch of
       the union:
         (a) needs-engine: full_evals_completed_at IS NULL AND lichess_evals_at
@@ -447,10 +480,18 @@ async def _claim_tier3_derived(
             this branch (the same guest-eligible lane the old residual fallback
             ran, Quick 260719-fsz); backed by the
             ix_games_lichess_pv_backfill_pending partial index (174-07).
-      _es_weighted_user_pick is called with include_guests=True so its own
-      outer `u.is_guest = false AND` filter is DROPPED — the per-branch guard
-      above is what enforces QUEUE-08 now, expressed inside the EXISTS subquery
-      (valid: the subquery is correlated on u.id, so u.is_guest is in scope).
+      _es_weighted_user_pick is called with candidate_where_sql supplying the
+      whole distributed-OR predicate as TWO correlated EXISTS subqueries —
+      branch (a)'s `u.is_guest = false` guard sits as an OUTER conjunct of that
+      branch, not inside its EXISTS. This is a logically identical distribution
+      of the union (`u.is_guest` does not depend on `g`, so `(A AND B) OR C` ==
+      `A AND B` distributed the same way regardless of where the EXISTS
+      boundary sits) that lets PostgreSQL probe each branch's own partial index
+      per user instead of forcing a single EXISTS-with-an-OR that can't use
+      either partial index cleanly (see the Index note below for the measured
+      before/after). include_guests is not passed — it only applies to the
+      candidate_exists_sql branch of _es_weighted_user_pick, which this call no
+      longer uses.
       weight = exp(-Δt/τ) + WEIGHT_FLOOR, where Δt = seconds since last_activity
       (NULL → coalesced to a very old timestamp so the exp term ≈ 0 and weight ≈
       floor), τ = RECENCY_HALF_LIFE_DAYS / ln(2) converted to seconds. weight is
@@ -493,10 +534,12 @@ async def _claim_tier3_derived(
     only drawn when the needs-engine backlog is globally empty) with the unified
     single-lottery precedence described above (260723-j6g).
 
-    Guest asymmetry (QUEUE-08, Quick 260719-fsz) is preserved but now expressed
-    per-branch inside the unified predicate rather than via a blanket outer
-    filter: guests are eligible ONLY through the lichess-eval branch, never the
-    needs-engine branch, in both Step 1 and Step 2.
+    Guest asymmetry (QUEUE-08, Quick 260719-fsz) is preserved. In Step 1 branch
+    (a) now carries the guard as an outer conjunct (`u.is_guest = false AND
+    EXISTS (...)`) rather than a condition inside the EXISTS; Step 2 keeps its
+    own `EXISTS (... u.is_guest = false)` form unchanged (see Step 2 docstring
+    above). The behavioral contract is unchanged either way: guests qualify
+    ONLY via branch (b), never branch (a), in both steps.
 
     Returns (game_id, user_id, is_lichess_eval_game) or None when nothing to process.
 
@@ -512,11 +555,27 @@ async def _claim_tier3_derived(
     query-shape-vs-value distinction). The EXISTS-subquery fragments composed
     here are trusted hardcoded literals, never derived from request/user input.
 
-    Index note (no migration needed): both branches of the unified predicate are
-    already backed by existing partial indexes on games(user_id) —
+    Index note (no migration needed — the query SHAPE is the load-bearing part):
+    both partial indexes already exist on games(user_id) and are unchanged —
     ix_games_needs_engine_full_evals (needs-engine) and
-    ix_games_lichess_pv_backfill_pending (lichess-eval-pv-incomplete, 174-07) —
-    so PostgreSQL can BitmapOr the two partials for Step 1's EXISTS predicate.
+    ix_games_lichess_pv_backfill_pending (lichess-eval-pv-incomplete, 174-07).
+    Prior to Quick 260729-a86, Step 1 expressed both branches inside a SINGLE
+    EXISTS containing an OR; that forced a bitmap-or plus a full heap fetch of
+    every matching game row, because `u.is_guest` had to be evaluated in a join
+    filter rather than as a per-user index probe. Measured on prod 2026-07-29:
+    360.478 ms, shared hit=71612, Bitmap Heap Scan on games rows=255,218, Heap
+    Blocks exact=70,274, Hash Right Semi Join to evaluate `u.is_guest` — 89.8%
+    of total DB time (10,376 calls x 221 ms mean over 7.5h). Distributing the OR
+    into two correlated EXISTS (see Step 1 above) yields per-user Index Only
+    Scan probes on ix_games_needs_engine_full_evals (loops=178) and
+    ix_games_lichess_pv_backfill_pending (loops=400): 8.574 ms, shared hit=2235
+    read=5 — ~42x faster, ~32x fewer buffers, turning the cost from O(backlog)
+    into O(users). Equivalence verified on prod with EXCEPT in both directions
+    (orig_n=21, rewritten_n=21, only_in_orig=0, only_in_rewritten=0).
+
+    Do NOT "simplify" this back into one EXISTS with an OR — that reintroduces
+    the regression, and it will not show up on the dev DB where `games` is
+    small enough for the planner to seq-scan either shape at comparable cost.
     """
     # Convert half-life (days) to the decay constant τ in seconds.
     # τ = τ½ / ln2; weight = exp(-Δt_seconds / τ_seconds) + floor
@@ -529,27 +588,33 @@ async def _claim_tier3_derived(
     game_floor: float = GAME_WEIGHT_FLOOR
 
     # Step 1: unified ES weighted user pick over the needs-engine ∪ lichess-eval-
-    # pv-incomplete union (260723-j6g). include_guests=True drops
-    # _es_weighted_user_pick's own outer guest filter — the per-branch guard
-    # below (u.is_guest = false on branch (a) only) is what enforces QUEUE-08.
+    # pv-incomplete union (260723-j6g), rewritten (260729-a86) as two correlated
+    # EXISTS with the guest guard distributed onto branch (a) as an outer
+    # conjunct — see the Step 1 / Index note docstrings above for the measured
+    # prod query-plan rationale. candidate_where_sql supplies the WHOLE
+    # predicate (including the guest guard), so include_guests is not passed —
+    # it only applies to _es_weighted_user_pick's other (candidate_exists_sql)
+    # branch.
     picked_user_id = await _es_weighted_user_pick(
         session,
-        candidate_exists_sql="""
+        candidate_where_sql="""
+            (u.is_guest = false AND EXISTS (
                 SELECT 1 FROM games g
                 WHERE g.user_id = u.id
-                  AND (
-                    (u.is_guest = false
-                     AND g.full_evals_completed_at IS NULL
-                     AND g.lichess_evals_at IS NULL)
-                    OR
-                    (g.full_pv_completed_at IS NULL
-                     AND g.lichess_evals_at IS NOT NULL)
-                  )
+                  AND g.full_evals_completed_at IS NULL
+                  AND g.lichess_evals_at IS NULL
+            ))
+            OR
+            EXISTS (
+                SELECT 1 FROM games g
+                WHERE g.user_id = u.id
+                  AND g.full_pv_completed_at IS NULL
+                  AND g.lichess_evals_at IS NOT NULL
+            )
         """,
         recency_col_sql="u.last_activity",
         tau_seconds=tau_seconds,
         floor=floor_val,
-        include_guests=True,
     )
     if picked_user_id is None:
         return None
