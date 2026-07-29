@@ -17,7 +17,7 @@ import {
 } from '@/components/ui/accordion';
 import { cn } from '@/lib/utils';
 import { FLAWCHESS_ENGINE_ACCENT } from '@/lib/theme';
-import { Search, Scale, Filter, TrophyIcon, Timer, Compass, Loader2, UserPlus, DoorOpen, ChessKnight } from 'lucide-react';
+import { Search, Scale, Dumbbell, TrophyIcon, Timer, Compass, Loader2, UserPlus, DoorOpen, ChessKnight } from 'lucide-react';
 import type { LucideIcon } from 'lucide-react';
 
 // Feature sections — the first entry is rendered in the hero (desktop right column +
@@ -59,6 +59,19 @@ const FEATURES: {
     imagePosition: 'left',
   },
   {
+    slug: 'train',
+    icon: Dumbbell,
+    heading: 'Personalized Puzzle Training',
+    desc: [
+        'Every puzzle is built from your own blunders, not a generic puzzle set.',
+        'One critical move, or several fine moves? Commit before you play. Quiet positions are mixed in, so there isn\'t always a tactic waiting.',
+        'Spaced repetition brings each position back next session, then after three days, then ten, until you\'ve solved it three times.',
+        'Pick your training days and build a session streak.',
+    ],
+    screenshot: { src: '/screenshots/train.png', alt: 'Train session reveal screen showing the guess verdict, the move played, the best move, and the blunder from the original game' },
+    imagePosition: 'right',
+  },
+  {
     slug: 'opening-explorer',
     icon: Compass,
     heading: 'Opening Explorer & Insights',
@@ -69,7 +82,7 @@ const FEATURES: {
         'Scout your opponent\'s repertoire before a match.',
     ],
     screenshot: { src: '/screenshots/opening-explorer.png', alt: 'Board with move explorer showing win/draw/loss rate and stockfish evaluation per candidate move' },
-    imagePosition: 'right',
+    imagePosition: 'left',
   },
   {
     slug: 'endgame-analytics',
@@ -81,7 +94,7 @@ const FEATURES: {
       'Get personalized feedback on what your stats mean.',
     ],
     screenshot: { src: '/screenshots/endgame-metrics-and-elo-llm-badge.png', alt: 'Endgame metrics and Endgame ELO timeline over time' },
-    imagePosition: 'left',
+    imagePosition: 'right',
   },
   {
     slug: 'time-management',
@@ -93,7 +106,7 @@ const FEATURES: {
         'Compare your flag rate to your opponents\' per time control.',
     ],
     screenshot: { src: '/screenshots/time-management-stats.png', alt: 'Average clock difference over time and time-pressure-vs-performance charts' },
-    imagePosition: 'right',
+    imagePosition: 'left',
   },
   {
     slug: 'opening-comparison',
@@ -105,21 +118,140 @@ const FEATURES: {
         'Filter by time control to find which openings work best where.',
     ],
     screenshot: { src: '/screenshots/opening-comparison.png', alt: 'Win rate trends over time for multiple openings' },
-    imagePosition: 'left',
-  },
-  {
-    slug: 'system-openings',
-    icon: Filter,
-    heading: 'System Opening Filter',
-    desc: [
-        'Group system openings (like the London) across all variations.',
-        'Filter by your pieces only, ignoring opponents\' responses.',
-        'Get win/draw/loss rates for the entire system, not scattered names.',
-    ],
-    screenshot: { src: '/screenshots/system-openings.png', alt: 'Opening bookmarks grouping system opening variations' },
     imagePosition: 'right',
   },
 ];
+
+// ─── FAQ ──────────────────────────────────────────────────────────────────────
+
+// Single source for both the rendered accordion and the JSON-LD FAQPage schema.
+//
+// Why the schema is needed at all: Radix's AccordionContent is not rendered while
+// collapsed, so the prerendered HTML (vite-prerender-plugin, see src/prerender.tsx)
+// contains only the questions — every answer body is invisible to crawlers. The
+// JSON-LD block below is what actually gets the answers indexed, and it makes the
+// page eligible for FAQ rich results.
+//
+// `answer` is plain text and is ALWAYS the schema source of truth. `richAnswer` is
+// only for the few entries that need inline links; when present it supersedes
+// `answer` in the UI, so its prose must mirror `answer` or the two will drift.
+const FAQ_ITEMS: {
+  value: string;
+  question: string;
+  answer: string;
+  richAnswer?: React.ReactNode;
+}[] = [
+  {
+    value: 'improve',
+    question: 'How can I improve my chess with FlawChess?',
+    answer:
+      'In three ways. First, analysis finds the flaws: Stockfish runs over your whole chess.com and lichess history and tags mistakes with missed and allowed tactics. Second, training helps you fix them: your own blunders come back as puzzles on a spaced-repetition schedule, mixed with quiet positions where several moves are fine, until the patterns stick. Third, you can practise against human-like bots powered by the FlawChess Engine: 24 named opponents with different ELO ratings and playing style. Every game you finish becomes an analyzable game in your library like any other.',
+  },
+  {
+    value: 'flawchess-engine',
+    question: 'How does the FlawChess Engine work?',
+    answer:
+      'It combines Stockfish with Maia, a human-like neural network, to score each move by how likely you are to find it and convert the resulting position against an opponent at your level, instead of assuming perfect play from both sides. Read the full deep-dive in "FlawChess Engine explained" on GitHub.',
+    richAnswer: (
+      <>
+        It combines Stockfish with Maia, a human-like neural network, to score each move by how
+        likely you are to find it and convert the resulting position against an opponent at your
+        level, instead of assuming perfect play from both sides. Read the full deep-dive in{' '}
+        <a
+          href="https://github.com/flawchess/flawchess/blob/main/docs/flawchess-engine-explained-2026-07-06.md"
+          className="text-primary underline-offset-4 hover:underline"
+          target="_blank"
+          rel="noopener noreferrer"
+        >
+          FlawChess Engine explained
+        </a>
+        .
+      </>
+    ),
+  },
+  {
+    value: 'data',
+    question: 'What data do you access from my chess.com or lichess account?',
+    answer:
+      'Only your games — no passwords or personal information. Your games are publicly accessible via their APIs, and FlawChess reads them just like any other analysis tool.',
+  },
+  {
+    value: 'free',
+    question: 'Is it free?',
+    answer: 'Yes, FlawChess is completely free to use.',
+  },
+  {
+    value: 'mobile',
+    question: 'Can I use it on mobile?',
+    answer:
+      'Yes. FlawChess is a Progressive Web App — install it from your browser for a native-like experience on iPhone and Android.',
+  },
+  {
+    value: 'endgames',
+    question: 'What endgame analytics does FlawChess offer?',
+    answer:
+      'FlawChess tracks your win/draw/loss rates by Endgame Type (rook, minor piece, pawn, queen, and more), plus conversion rates when you enter the endgame ahead and recovery rates when you enter behind, scored against Stockfish evaluation. All statistics are filterable by time control, color, and recency.',
+  },
+  {
+    value: 'requests',
+    question: 'Where can I make feature requests?',
+    answer:
+      'Open an issue on GitHub (https://github.com/flawchess/flawchess). Contributions and feedback are welcome.',
+    richAnswer: (
+      <>
+        Open an issue on{' '}
+        <a
+          href="https://github.com/flawchess/flawchess"
+          className="text-primary underline-offset-4 hover:underline"
+          target="_blank"
+          rel="noopener noreferrer"
+        >
+          GitHub
+        </a>
+        . Contributions and feedback are welcome.
+      </>
+    ),
+  },
+  {
+    value: 'who',
+    question: 'Who develops FlawChess?',
+    answer:
+      'FlawChess is an open source project developed independently. Find the code on GitHub (https://github.com/flawchess/flawchess), contribute, or reach out at support@flawchess.com.',
+    richAnswer: (
+      <>
+        FlawChess is an open source project developed independently. Find the code on{' '}
+        <a
+          href="https://github.com/flawchess/flawchess"
+          className="text-primary underline-offset-4 hover:underline"
+          target="_blank"
+          rel="noopener noreferrer"
+        >
+          GitHub
+        </a>
+        , contribute, or reach out at{' '}
+        <a
+          href="mailto:support@flawchess.com"
+          className="text-primary underline-offset-4 hover:underline"
+        >
+          support@flawchess.com
+        </a>
+        .
+      </>
+    ),
+  },
+];
+
+// schema.org FAQPage. `<` is escaped so a future answer containing "</script>"
+// cannot break out of the inline script tag.
+const FAQ_JSON_LD = JSON.stringify({
+  '@context': 'https://schema.org',
+  '@type': 'FAQPage',
+  mainEntity: FAQ_ITEMS.map(({ question, answer }) => ({
+    '@type': 'Question',
+    name: question,
+    acceptedAnswer: { '@type': 'Answer', text: answer },
+  })),
+}).replace(/</g, '\\u003c');
 
 // ─── Homepage content (unauthenticated) ───────────────────────────────────────
 
@@ -385,91 +517,14 @@ export function HomePageContent() {
       {/* FAQ */}
       <section id="faq" className="max-w-2xl mx-auto px-4 py-12 scroll-mt-16">
         <h2 className="text-xl font-bold mb-6">Frequently asked questions</h2>
+        <script type="application/ld+json" dangerouslySetInnerHTML={{ __html: FAQ_JSON_LD }} />
         <Accordion type="single" collapsible data-testid="faq-accordion">
-          <AccordionItem value="flawchess-engine" data-testid="faq-item-flawchess-engine">
-            <AccordionTrigger>How does the FlawChess Engine work?</AccordionTrigger>
-            <AccordionContent>
-              It combines Stockfish with Maia, a human-like neural network, to score each move by
-              how likely you are to find it and convert the resulting position against an opponent
-              at your level, instead of assuming perfect play from both sides. Read the full
-              deep-dive in{' '}
-              <a
-                href="https://github.com/flawchess/flawchess/blob/main/docs/flawchess-engine-explained-2026-07-06.md"
-                className="text-primary underline-offset-4 hover:underline"
-                target="_blank"
-                rel="noopener noreferrer"
-              >
-                FlawChess Engine explained
-              </a>
-              .
-            </AccordionContent>
-          </AccordionItem>
-          <AccordionItem value="data" data-testid="faq-item-data">
-            <AccordionTrigger>
-              What data do you access from my chess.com or lichess account?
-            </AccordionTrigger>
-            <AccordionContent>
-              Only your games &mdash; no passwords or personal information. Your games are publicly
-              accessible via their APIs, and FlawChess reads them just like any other analysis tool.
-            </AccordionContent>
-          </AccordionItem>
-          <AccordionItem value="free" data-testid="faq-item-free">
-            <AccordionTrigger>Is it free?</AccordionTrigger>
-            <AccordionContent>Yes, FlawChess is completely free to use.</AccordionContent>
-          </AccordionItem>
-          <AccordionItem value="mobile" data-testid="faq-item-mobile">
-            <AccordionTrigger>Can I use it on mobile?</AccordionTrigger>
-            <AccordionContent>
-              Yes. FlawChess is a Progressive Web App &mdash; install it from your browser for a
-              native-like experience on iPhone and Android.
-            </AccordionContent>
-          </AccordionItem>
-          <AccordionItem value="endgames" data-testid="faq-item-endgames">
-            <AccordionTrigger>What endgame analytics does FlawChess offer?</AccordionTrigger>
-            <AccordionContent>
-              FlawChess tracks your win/draw/loss rates by Endgame Type (rook, minor piece, pawn,
-              queen, and more), plus conversion rates when you enter the endgame ahead and recovery
-              rates when you enter behind, scored against Stockfish evaluation. All statistics are
-              filterable by time control, color, and recency.
-            </AccordionContent>
-          </AccordionItem>
-          <AccordionItem value="requests" data-testid="faq-item-requests">
-            <AccordionTrigger>Where can I make feature requests?</AccordionTrigger>
-            <AccordionContent>
-              Open an issue on{' '}
-              <a
-                href="https://github.com/flawchess/flawchess"
-                className="text-primary underline-offset-4 hover:underline"
-                target="_blank"
-                rel="noopener noreferrer"
-              >
-                GitHub
-              </a>
-              . Contributions and feedback are welcome.
-            </AccordionContent>
-          </AccordionItem>
-          <AccordionItem value="who" data-testid="faq-item-who">
-            <AccordionTrigger>Who develops FlawChess?</AccordionTrigger>
-            <AccordionContent>
-              FlawChess is an open source project developed independently. Find the code on{' '}
-              <a
-                href="https://github.com/flawchess/flawchess"
-                className="text-primary underline-offset-4 hover:underline"
-                target="_blank"
-                rel="noopener noreferrer"
-              >
-                GitHub
-              </a>, contribute,
-              or reach out at{' '}
-              <a
-                href="mailto:support@flawchess.com"
-                className="text-primary underline-offset-4 hover:underline"
-              >
-                support@flawchess.com
-              </a>
-              .
-            </AccordionContent>
-          </AccordionItem>
+          {FAQ_ITEMS.map(({ value, question, answer, richAnswer }) => (
+            <AccordionItem key={value} value={value} data-testid={`faq-item-${value}`}>
+              <AccordionTrigger>{question}</AccordionTrigger>
+              <AccordionContent>{richAnswer ?? answer}</AccordionContent>
+            </AccordionItem>
+          ))}
         </Accordion>
       </section>
 
