@@ -80,6 +80,25 @@ requires the **Asyncify** build (`ort-wasm-simd-threaded.asyncify.{mjs,wasm}`) i
 pair is used by other bundles (`ort.min.js`, `ort.all.min.js`), not this one. The asyncify pair is
 vendored here; the JSEP pair was never added (unused by this worker's chosen bundle).
 
+## Cache headers
+
+`deploy/Caddyfile` caches this directory's binaries (the `.onnx` model, `ort.wasm.min.js`,
+`ort.webgpu.min.js`, and the `ort-wasm-simd-threaded*` `.mjs`/`.wasm` pairs) at
+`Cache-Control: public, max-age=2592000` (30 days) — long enough that a returning mobile
+visitor never re-downloads the 43.6 MB model on a slow link, short enough that bumping
+`onnxruntime-web` here is picked up within 30 days with **no rename required**. This is
+deliberately NOT `immutable`: these filenames are not content-hashed, and onnxruntime-web
+resolves its own `.wasm`/`.mjs` filenames by appending them to `ort.env.wasm.wasmPaths =
+'/maia/'` (`maia-worker.js`), so renaming a file without also versioning the directory would
+break asset resolution.
+
+`maia-worker.js` itself is the one exception: it is `Cache-Control: no-cache`, not 30-day
+cached, because it is OUR source (not vendored) and its message protocol changes alongside
+the content-hashed app bundle on every deploy — caching it long would let a fresh
+`useMaiaEngine`/`maiaQueue` on a new deploy talk to a stale worker that has never heard of a
+newer protocol message. See `deploy/Caddyfile`'s `@maiaworker`/`@vendored_runtime` matchers
+for the exact rule (quick 260729-sod, FIX 4).
+
 ## PWA precache
 
 `vite.config.ts` `workbox.globIgnores` excludes both `**/*.onnx` and `**/*.wasm` so neither the

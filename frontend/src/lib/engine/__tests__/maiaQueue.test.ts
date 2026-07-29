@@ -1,84 +1,120 @@
 // @vitest-environment jsdom
 /**
- * maiaQueue.ts mock-Worker unit tests.
+ * maiaQueue.ts unit tests, driven via a mocked `maiaWorkerHost` lease
+ * (quick 260729-sod, FIX 3 — this module no longer constructs a Worker
+ * directly; it acquires a `priority: false` lease from the shared host).
  *
  * Task 1 covers the requestPolicy pipeline (POOL-03/D-04): dedup, batching,
  * the (fen,elo)-keyed cache, SAN->UCI entry-count parity (Pitfall 4), and the
  * no-drop async FIFO queue (Open Question 2).
  *
- * Task 2 covers worker lifecycle (lazy spawn, terminate), Sentry error
- * forwarding under a distinct tag, and graceful degradation (POOL-04/D-02).
+ * Task 2 covered worker lifecycle (lazy spawn, terminate) and graceful
+ * degradation (POOL-04/D-02) — Sentry error forwarding + webgpu-unavailable
+ * respawn are now entirely owned by `maiaWorkerHost.ts` (see
+ * maiaWorkerHost.test.ts); this module's own remaining self-heal contract is
+ * the `onFatal` callback settling every stranded pending request to `{}`.
  */
 
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
-import * as Sentry from '@sentry/react';
-import { createMaiaQueue, ENGINE_PATH, MAIA_CACHE_MAX, type MaiaQueue } from '../maiaQueue';
+import { createMaiaQueue, MAIA_CACHE_MAX, type MaiaQueue } from '../maiaQueue';
+import { acquireMaiaWorker, ENGINE_PATH } from '../maiaWorkerHost';
+import type { AcquireMaiaWorkerOptions, MaiaAnalyzeResult, MaiaWorkerLease } from '../maiaWorkerHost';
 import type { EngineProviders } from '../types';
 import { maskAndSoftmax, POLICY_VOCAB_SIZE } from '@/lib/maiaEncoding';
 
-// @sentry/react's ESM module namespace is not configurable, so vi.spyOn cannot
-// redefine captureException on the real module — mock the module instead.
-vi.mock('@sentry/react', () => ({ captureException: vi.fn() }));
+vi.mock('../maiaWorkerHost', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../maiaWorkerHost')>();
+  return { ...actual, acquireMaiaWorker: vi.fn() };
+});
 
-// ─── Mock Worker ─────────────────────────────────────────────────────────────
+// ─── Fake lease ────────────────────────────────────────────────────────────
 
-interface WorkerMessageLike {
-  type: string;
-  [key: string]: unknown;
+interface FakeAnalyzeCall {
+  fen: string;
+  eloInputs: number[];
+  resolve: (result: MaiaAnalyzeResult) => void;
+  reject: (err: Error) => void;
 }
 
-class MockWorker {
-  onmessage: ((e: MessageEvent<WorkerMessageLike>) => void) | null = null;
-  onerror: ((e: unknown) => void) | null = null;
-  messages: WorkerMessageLike[] = [];
-  terminated = false;
+class FakeLease implements MaiaWorkerLease {
+  analyzeCalls: FakeAnalyzeCall[] = [];
+  released = false;
+  opts: AcquireMaiaWorkerOptions;
+  private readyResolve: ((backend: 'webgpu' | 'wasm') => void) | null = null;
+  private readyReject: ((err: Error) => void) | null = null;
 
-  postMessage(msg: WorkerMessageLike): void {
-    this.messages.push(msg);
+  constructor(opts: AcquireMaiaWorkerOptions) {
+    this.opts = opts;
   }
 
-  terminate(): void {
-    this.terminated = true;
+  analyze(fen: string, eloInputs: number[]): Promise<MaiaAnalyzeResult> {
+    return new Promise<MaiaAnalyzeResult>((resolve, reject) => {
+      this.analyzeCalls.push({ fen, eloInputs, resolve, reject });
+    });
   }
 
-  /** Fire the onmessage handler with a synthetic structured message. */
-  simulateMessage(data: WorkerMessageLike): void {
-    this.onmessage?.(new MessageEvent('message', { data }));
+  whenReady(): Promise<'webgpu' | 'wasm'> {
+    return new Promise<'webgpu' | 'wasm'>((resolve, reject) => {
+      this.readyResolve = resolve;
+      this.readyReject = reject;
+    });
   }
 
-  /** Fire the onerror handler — simulates an asynchronous Worker script-load failure (404/CSP/syntax error), which `new Worker(...)` never throws for synchronously. */
-  simulateError(): void {
-    this.onerror?.(new Event('error'));
+  getBackend(): 'webgpu' | 'wasm' | null {
+    return null;
+  }
+
+  release(): void {
+    this.released = true;
+  }
+
+  /** Resolves whenReady() and lets the queue's own microtask hop dispatch. */
+  simulateReady(backend: 'webgpu' | 'wasm' = 'wasm'): void {
+    this.readyResolve?.(backend);
+  }
+
+  simulateReadyRejected(err: Error): void {
+    this.readyReject?.(err);
+  }
+
+  simulateFatal(): void {
+    this.opts.onFatal?.();
   }
 }
 
-let createdWorkers: MockWorker[];
+let createdLeases: FakeLease[];
 
-function stubWorkerCtor(): void {
-  createdWorkers = [];
-  vi.stubGlobal(
-    'Worker',
-    vi.fn(function (this: unknown) {
-      const w = new MockWorker();
-      createdWorkers.push(w);
-      return w;
-    }),
-  );
+function stubHost(): void {
+  createdLeases = [];
+  vi.mocked(acquireMaiaWorker).mockImplementation((opts: AcquireMaiaWorkerOptions) => {
+    const lease = new FakeLease(opts);
+    createdLeases.push(lease);
+    return lease;
+  });
 }
 
-function driveReady(worker: MockWorker, backend: 'webgpu' | 'wasm' = 'wasm'): void {
-  worker.simulateMessage({ type: 'ready', backend });
+/** Drives the head lease to ready and flushes the microtask that lets `processQueue` dispatch. */
+async function driveReady(lease: FakeLease, backend: 'webgpu' | 'wasm' = 'wasm'): Promise<void> {
+  lease.simulateReady(backend);
+  await Promise.resolve();
 }
 
-function analyzeMessages(worker: MockWorker): WorkerMessageLike[] {
-  return worker.messages.filter((m) => m.type === 'analyze');
+function analyzeMessages(lease: FakeLease): { fen: string; eloInputs: number[] }[] {
+  return lease.analyzeCalls.map((c) => ({ fen: c.fen, eloInputs: c.eloInputs }));
 }
 
-/** Builds a synthetic worker 'result' message for the given FEN/ELOs (all-zero logits). */
-function buildResultMessage(fen: string, elos: number[]): WorkerMessageLike {
+/** Builds a synthetic host analyze() result for the given FEN/ELOs (all-zero logits). */
+function buildResultMessage(fen: string, elos: number[]): MaiaAnalyzeResult {
   const rawPolicyByElo = elos.map((elo) => ({ elo, policy: new Float32Array(POLICY_VOCAB_SIZE) }));
   const wdlByElo = elos.map((elo) => ({ elo, wdl: Float32Array.from([0, 0, 0]) }));
-  return { type: 'result', fen, rawPolicyByElo, wdlByElo, backend: 'wasm' };
+  return { fen, rawPolicyByElo, wdlByElo, backend: 'wasm' };
+}
+
+/** Resolves the latest still-unsettled analyze() call on `lease` with a synthetic result. */
+async function resolveLatest(lease: FakeLease, fen: string, elos: number[]): Promise<void> {
+  const call = lease.analyzeCalls[lease.analyzeCalls.length - 1];
+  call?.resolve(buildResultMessage(fen, elos));
+  await Promise.resolve();
 }
 
 // ─── Fixtures ────────────────────────────────────────────────────────────────
@@ -101,49 +137,49 @@ function fenVariant(n: number): string {
 
 describe('createMaiaQueue', () => {
   beforeEach(() => {
-    stubWorkerCtor();
+    stubHost();
   });
 
   afterEach(() => {
-    vi.unstubAllGlobals();
     vi.restoreAllMocks();
     vi.clearAllMocks();
   });
 
   // ─── D-02: lazy spawn ──────────────────────────────────────────────────
 
-  it('does not construct a Worker until the first policy() call', () => {
+  it('does not acquire a lease until the first policy() call', () => {
     createMaiaQueue();
-    expect(createdWorkers).toHaveLength(0);
+    expect(createdLeases).toHaveLength(0);
   });
 
-  it('constructs the worker at ENGINE_PATH on the first policy() call', () => {
+  it('acquires a priority:false lease with source maia-queue-worker on the first policy() call', () => {
     const queue = createMaiaQueue();
     void queue.policy(TEST_FEN, 1500, 'w');
-    expect(createdWorkers).toHaveLength(1);
-    expect(vi.mocked(Worker)).toHaveBeenCalledWith(ENGINE_PATH);
+    expect(createdLeases).toHaveLength(1);
+    expect(acquireMaiaWorker).toHaveBeenCalledWith(
+      expect.objectContaining({ source: 'maia-queue-worker', priority: false }),
+    );
+  });
+
+  it('ENGINE_PATH now lives on maiaWorkerHost (D-04 reversal)', () => {
+    expect(ENGINE_PATH).toBe('/maia/maia-worker.js');
   });
 
   // ─── Prewarm (Phase 169.5, SC5) ────────────────────────────────────────
 
-  it("warm() constructs the worker and posts {type:'init'} without enqueueing an analyze", () => {
+  it('warm() acquires the lease without enqueueing an analyze', () => {
     const queue = createMaiaQueue();
     queue.warm();
 
-    expect(createdWorkers).toHaveLength(1);
-    expect(vi.mocked(Worker)).toHaveBeenCalledWith(ENGINE_PATH);
-    const worker = createdWorkers[0]!;
-    // The ONNX weight load begins...
-    expect(worker.messages).toContainEqual({ type: 'init' });
-    // ...but no policy request was made, so nothing is queued to analyze.
-    expect(analyzeMessages(worker)).toHaveLength(0);
+    expect(createdLeases).toHaveLength(1);
+    expect(analyzeMessages(createdLeases[0]!)).toHaveLength(0);
   });
 
   it('warm() is idempotent', () => {
     const queue = createMaiaQueue();
     queue.warm();
     queue.warm();
-    expect(createdWorkers).toHaveLength(1);
+    expect(createdLeases).toHaveLength(1);
   });
 
   // ─── D-04: dedup + narrow ELOs ─────────────────────────────────────────
@@ -152,12 +188,12 @@ describe('createMaiaQueue', () => {
     const queue = createMaiaQueue();
     const p1 = queue.policy(TEST_FEN, 1500, 'w');
     const p2 = queue.policy(TEST_FEN, 1500, 'b');
-    const worker = createdWorkers[0]!;
-    driveReady(worker);
-    worker.simulateMessage(buildResultMessage(TEST_FEN, [1500]));
+    const lease = createdLeases[0]!;
+    await driveReady(lease);
+    await resolveLatest(lease, TEST_FEN, [1500]);
     await Promise.all([p1, p2]);
 
-    const calls = analyzeMessages(worker);
+    const calls = analyzeMessages(lease);
     expect(calls).toHaveLength(1);
     expect(calls[0]?.eloInputs).toEqual([1500]);
   });
@@ -166,12 +202,12 @@ describe('createMaiaQueue', () => {
     const queue = createMaiaQueue();
     const p1 = queue.policy(TEST_FEN, 1200, 'w');
     const p2 = queue.policy(TEST_FEN, 1800, 'b');
-    const worker = createdWorkers[0]!;
-    driveReady(worker);
-    worker.simulateMessage(buildResultMessage(TEST_FEN, [1200, 1800]));
+    const lease = createdLeases[0]!;
+    await driveReady(lease);
+    await resolveLatest(lease, TEST_FEN, [1200, 1800]);
     await Promise.all([p1, p2]);
 
-    const calls = analyzeMessages(worker);
+    const calls = analyzeMessages(lease);
     expect(calls).toHaveLength(1);
     expect(calls[0]?.eloInputs).toEqual([1200, 1800]);
   });
@@ -185,9 +221,9 @@ describe('createMaiaQueue', () => {
   ])('has the same entry count as maskAndSoftmax for a %s position', async (_label, fen) => {
     const queue = createMaiaQueue();
     const promise = queue.policy(fen, 1500, 'w');
-    const worker = createdWorkers[0]!;
-    driveReady(worker);
-    worker.simulateMessage(buildResultMessage(fen, [1500]));
+    const lease = createdLeases[0]!;
+    await driveReady(lease);
+    await resolveLatest(lease, fen, [1500]);
     const uciPolicy = await promise;
 
     const sanPolicy = maskAndSoftmax(new Float32Array(POLICY_VOCAB_SIZE), fen);
@@ -199,50 +235,50 @@ describe('createMaiaQueue', () => {
   it('resolves a repeated (fen, elo) request from cache with no second analyze call', async () => {
     const queue = createMaiaQueue();
     const p1 = queue.policy(TEST_FEN, 1500, 'w');
-    const worker = createdWorkers[0]!;
-    driveReady(worker);
-    worker.simulateMessage(buildResultMessage(TEST_FEN, [1500]));
+    const lease = createdLeases[0]!;
+    await driveReady(lease);
+    await resolveLatest(lease, TEST_FEN, [1500]);
     const result1 = await p1;
 
     const result2 = await queue.policy(TEST_FEN, 1500, 'w');
     expect(result2).toEqual(result1);
-    expect(analyzeMessages(worker)).toHaveLength(1);
+    expect(analyzeMessages(lease)).toHaveLength(1);
   });
 
   it('does not cache-hit across different ELOs for the same FEN (separate fen|elo keys)', async () => {
     const queue = createMaiaQueue();
     const p1 = queue.policy(TEST_FEN, 1500, 'w');
-    const worker = createdWorkers[0]!;
-    driveReady(worker);
-    worker.simulateMessage(buildResultMessage(TEST_FEN, [1500]));
+    const lease = createdLeases[0]!;
+    await driveReady(lease);
+    await resolveLatest(lease, TEST_FEN, [1500]);
     await p1;
 
     const p2 = queue.policy(TEST_FEN, 1600, 'w');
-    worker.simulateMessage(buildResultMessage(TEST_FEN, [1600]));
+    await resolveLatest(lease, TEST_FEN, [1600]);
     await p2;
 
-    expect(analyzeMessages(worker)).toHaveLength(2);
+    expect(analyzeMessages(lease)).toHaveLength(2);
   });
 
   it('caps the cache at MAIA_CACHE_MAX entries (FIFO eviction)', async () => {
     const queue = createMaiaQueue();
-    const worker0 = (): MockWorker => createdWorkers[0]!;
+    const lease = (): FakeLease => createdLeases[0]!;
     // Seed one more than the cap, each a distinct (fen, elo) key.
     for (let i = 0; i < MAIA_CACHE_MAX + 1; i++) {
       const fen = fenVariant(i);
       const p = queue.policy(fen, 1500, 'w');
-      if (i === 0) driveReady(worker0());
-      worker0().simulateMessage(buildResultMessage(fen, [1500]));
+      if (i === 0) await driveReady(lease());
+      await resolveLatest(lease(), fen, [1500]);
       await p;
     }
     // The very first (fen=fenVariant(0), elo=1500) entry should have been
     // evicted — re-requesting it must issue a NEW analyze call, not resolve
     // from cache.
-    const analyzeCountBefore = analyzeMessages(worker0()).length;
+    const analyzeCountBefore = analyzeMessages(lease()).length;
     const pAgain = queue.policy(fenVariant(0), 1500, 'w');
-    worker0().simulateMessage(buildResultMessage(fenVariant(0), [1500]));
+    await resolveLatest(lease(), fenVariant(0), [1500]);
     await pAgain;
-    expect(analyzeMessages(worker0()).length).toBe(analyzeCountBefore + 1);
+    expect(analyzeMessages(lease()).length).toBe(analyzeCountBefore + 1);
   });
 
   // ─── No-drop async FIFO (Open Question 2) ──────────────────────────────
@@ -255,110 +291,75 @@ describe('createMaiaQueue', () => {
     const p1 = queue.policy(fenA, 1000, 'w');
     const p2 = queue.policy(fenB, 1200, 'w');
     const p3 = queue.policy(fenC, 1400, 'w');
-    const worker = createdWorkers[0]!;
-    driveReady(worker);
+    const lease = createdLeases[0]!;
+    await driveReady(lease);
 
     // One ONNX inference in flight at a time: each result triggers dispatch
-    // of the next batch synchronously, so these can be simulated in sequence.
-    worker.simulateMessage(buildResultMessage(fenA, [1000]));
-    worker.simulateMessage(buildResultMessage(fenB, [1200]));
-    worker.simulateMessage(buildResultMessage(fenC, [1400]));
+    // of the next batch, so these are simulated in sequence.
+    await resolveLatest(lease, fenA, [1000]);
+    await resolveLatest(lease, fenB, [1200]);
+    await resolveLatest(lease, fenC, [1400]);
 
     await expect(Promise.all([p1, p2, p3])).resolves.toBeDefined();
-    expect(analyzeMessages(worker)).toHaveLength(3);
+    expect(analyzeMessages(lease)).toHaveLength(3);
   });
 
   // ─── D-02: terminate + re-spawn ─────────────────────────────────────────
 
-  it('terminate() posts {type:terminate} and calls worker.terminate(); a later policy() re-spawns', () => {
+  it('terminate() releases the lease; a later policy() acquires a fresh one', async () => {
     const queue = createMaiaQueue();
     void queue.policy(TEST_FEN, 1500, 'w');
-    const worker = createdWorkers[0]!;
-    driveReady(worker);
+    const lease = createdLeases[0]!;
+    await driveReady(lease);
 
     queue.terminate();
-    expect(worker.messages.some((m) => m.type === 'terminate')).toBe(true);
-    expect(worker.terminated).toBe(true);
+    expect(lease.released).toBe(true);
 
     void queue.policy(TEST_FEN, 1500, 'w');
-    expect(createdWorkers).toHaveLength(2);
+    expect(createdLeases).toHaveLength(2);
   });
 
-  it('terminate() resolves any still-pending or in-flight promise rather than hanging it', async () => {
+  it('terminate() resolves any still-pending request rather than hanging it', async () => {
     const queue = createMaiaQueue();
-    const p1 = queue.policy(TEST_FEN, 1500, 'w'); // never gets a worker response
+    const p1 = queue.policy(TEST_FEN, 1500, 'w'); // never gets a lease response
     queue.terminate();
     await expect(p1).resolves.toEqual({});
   });
 
-  // ─── Sentry error forwarding ────────────────────────────────────────────
+  // ─── Worker death self-heal (onFatal) — Sentry capture itself now lives in maiaWorkerHost.test.ts ──
 
-  it('drains pending and drops the dead worker on a PRE-READY error, so a later policy() re-spawns a fresh Worker (CR-03)', async () => {
+  it('onFatal (worker death) resolves every stranded pending() request to {}, and the SAME lease self-heals on the next policy()', async () => {
     const queue = createMaiaQueue();
     const p1 = queue.policy(TEST_FEN, 1500, 'w');
-    const worker = createdWorkers[0]!;
-    // Deliberately do NOT driveReady() — this is a worker-init failure
-    // (e.g. onnx session/model-load) arriving before the worker ever became
-    // ready, so `currentBatch` is still null and the request is sitting in
-    // `pending`.
-    worker.simulateMessage({ type: 'error', message: 'onnx init failure' });
+    const lease = createdLeases[0]!;
+    // Deliberately do NOT driveReady() — a pre-ready init failure strands the
+    // request in this queue's own `pending` backlog (never dispatched to the
+    // lease at all).
+    lease.simulateFatal();
 
     await expect(p1).resolves.toEqual({});
 
-    // The dead worker must be dropped so the next policy() call re-spawns a
-    // fresh Worker rather than queuing forever behind the dead one.
-    void queue.policy(TEST_FEN, 1500, 'w');
-    expect(createdWorkers).toHaveLength(2);
+    // The host's own self-heal contract is "the SAME lease's next analyze()
+    // re-spawns" (the lease persists — only the underlying Worker died) —
+    // this queue does NOT acquire a second lease.
+    const p2 = queue.policy(TEST_FEN, 1500, 'w');
+    expect(createdLeases).toHaveLength(1);
+    await driveReady(lease);
+    await resolveLatest(lease, TEST_FEN, [1500]);
+    await expect(p2).resolves.toBeDefined();
   });
 
-  it('forwards a worker error message to Sentry with the distinct maia-queue-worker tag and settles the in-flight promise', async () => {
+  it('a lease rejection mid-batch (e.g. release() racing a fatal worker) resolves the whole batch to {}', async () => {
     const queue = createMaiaQueue();
     const p1 = queue.policy(TEST_FEN, 1500, 'w');
-    const worker = createdWorkers[0]!;
-    driveReady(worker);
-    worker.simulateMessage({ type: 'error', message: 'onnx runtime failure' });
+    const lease = createdLeases[0]!;
+    await driveReady(lease);
+
+    const call = lease.analyzeCalls[0]!;
+    call.reject(new Error('lease released'));
+    await Promise.resolve();
 
     await expect(p1).resolves.toEqual({});
-    expect(Sentry.captureException).toHaveBeenCalledWith(
-      expect.any(Error),
-      expect.objectContaining({ tags: expect.objectContaining({ source: 'maia-queue-worker' }) }),
-    );
-  });
-
-  it('forwards a Worker construction failure to Sentry and resolves pending requests instead of hanging', async () => {
-    vi.stubGlobal(
-      'Worker',
-      vi.fn(function () {
-        throw new Error('simulated construction failure');
-      }),
-    );
-    const queue = createMaiaQueue();
-    const p1 = queue.policy(TEST_FEN, 1500, 'w');
-
-    await expect(p1).resolves.toEqual({});
-    expect(Sentry.captureException).toHaveBeenCalledWith(
-      expect.any(Error),
-      expect.objectContaining({ tags: expect.objectContaining({ source: 'maia-queue-worker' }) }),
-    );
-  });
-
-  it('captures an asynchronous worker.onerror (script-load failure) to Sentry, settles the pending promise, and re-spawns on the next policy() call (WR-03)', async () => {
-    const queue = createMaiaQueue();
-    const p1 = queue.policy(TEST_FEN, 1500, 'w');
-    const worker = createdWorkers[0]!;
-    // `new Worker(...)` never throws synchronously for a script-load
-    // failure (404/CSP/syntax error) — it fires `onerror` asynchronously.
-    // Deliberately no driveReady().
-    worker.simulateError();
-
-    await expect(p1).resolves.toEqual({});
-    expect(Sentry.captureException).toHaveBeenCalledWith(
-      expect.any(Error),
-      expect.objectContaining({ tags: expect.objectContaining({ source: 'maia-queue-worker' }) }),
-    );
-
-    void queue.policy(TEST_FEN, 1500, 'w');
-    expect(createdWorkers).toHaveLength(2);
   });
 
   // ─── Contract shape ─────────────────────────────────────────────────────

@@ -16,6 +16,7 @@ import { FlawStatsPanel } from '@/components/library/FlawStatsPanel';
 import { EvalCoverageBadge } from '@/components/library/EvalCoverageBadge';
 import { GlobalStatsCharts } from '@/components/stats/GlobalStatsCharts';
 import { EvalCoverageHeader } from '@/components/EvalCoverageHeader';
+import { useEvalCoverage } from '@/hooks/useEvalCoverage';
 import { RatingChart } from '@/components/stats/RatingChart';
 import { useUserProfile } from '@/hooks/useUserProfile';
 import type { FilterState } from '@/components/filters/FilterPanel';
@@ -50,13 +51,26 @@ export function GlobalStatsPage() {
     isError: flawStatsError,
   } = useLibraryFlawStats(filters, DEFAULT_FLAW_FILTER);
 
-  // ── EvalCoverageBadge error state ───────────────────────────────────────────
-  // The badge's numbers come from useLibraryFlawStats (analyzed_n / total_n), so
-  // its error signal must come from the SAME query (flawStatsError) — not a
-  // separate useEvalCoverage() call. Decoupling them let the badge render a
-  // full-width "failed to load" error while valid numbers were available, or
-  // mask a real failure. This page does not consume analyzedCount/totalCount
-  // from useEvalCoverage(), so the hook is dropped here entirely.
+  // ── EvalCoverageBadge source ────────────────────────────────────────────────
+  // Repointed from useLibraryFlawStats (analyzed_n / total_n) to useEvalCoverage,
+  // the SAME source the Games and Flaws subtab badges use. The flaw-stats numbers
+  // are filter-scoped (and drop flawchess bot-practice games via
+  // DEFAULT_EXCLUDED_PLATFORMS), so the identical-looking badge read "2845 of
+  // 2847" here while the sibling tabs read "2848 of 2848".
+  //
+  // Numbers and error signal still come from ONE query, which is the invariant
+  // the previous comment protected: decoupling them let the badge render a
+  // full-width "failed to load" while valid numbers were available, or mask a
+  // real failure. flawStatsError now only drives FlawStatsPanel.
+  //
+  // trackFullAnalysis mirrors the Games/Flaws tabs so the count ticks up live as
+  // the background drain works through the backlog.
+  const {
+    analyzedCount,
+    totalCount,
+    isError: isCoverageError,
+  } = useEvalCoverage({ trackFullAnalysis: true });
+
   const { data: profile } = useUserProfile();
   const isGuest = profile?.is_guest ?? false;
 
@@ -120,14 +134,12 @@ export function GlobalStatsPage() {
       <section data-testid="flaw-stats-section">
         <div className="flex flex-wrap items-center justify-between gap-3">
           <h2 className="text-lg font-semibold text-foreground mt-2">Flaw Stats</h2>
-          {flawStatsData !== undefined && (
-            <EvalCoverageBadge
-              analyzedN={flawStatsData.analyzed_n}
-              totalN={flawStatsData.total_n}
-              isGuest={isGuest}
-              isCoverageError={flawStatsError}
-            />
-          )}
+          <EvalCoverageBadge
+            analyzedN={analyzedCount}
+            totalN={totalCount}
+            isGuest={isGuest}
+            isCoverageError={isCoverageError}
+          />
         </div>
         {/* Shared filters, empty severity (severity is scoped to Games tab) */}
         <FlawStatsPanel

@@ -20,7 +20,7 @@ from typing import Any, Literal
 import chess
 from sqlalchemy import Select, Subquery, and_, case, exists, func, not_, or_, select, true
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy.orm import aliased
+from sqlalchemy.orm import InstrumentedAttribute, aliased, defer
 from sqlalchemy.sql.elements import ColumnElement
 
 from app.models.eval_jobs import EvalJob
@@ -716,7 +716,12 @@ def flaw_exists_from_table(
     # EXISTS so the SQL gate has access to eval_cp/eval_mate. LEFT JOIN so ply 0/1
     # flaws (no prior position) keep null eval → fail open (T-bdt-01: join is user-
     # scoped + game-correlated, no cross-user rows can attach).
-    PositionBefore = aliased(GamePosition, name="pos_before_exists")  # noqa: N806
+    # LATERAL rather than a plain outerjoin on `ply == GameFlaw.ply - 1` for the
+    # same planner reason as query_flaws — see _flaw_position_lateral. Here the
+    # bad shape cost ~7.8s on a Games-tab page load with a tactic filter active
+    # (the decided-lost gate is what makes this join live; without it Postgres
+    # removes the join entirely, which is why unfiltered loads looked fine).
+    PositionBefore = _flaw_position_lateral("pos_before_exists", GameFlaw.ply - 1)  # noqa: N806
     dl = decided_lost_sql(PositionBefore.eval_cp, PositionBefore.eval_mate, Game.user_color)
 
     clauses = build_flaw_filter_clauses(
@@ -737,12 +742,7 @@ def flaw_exists_from_table(
     # Game.id is the outer correlating column (correlated EXISTS pattern).
     return exists(
         select(GameFlaw.ply)
-        .outerjoin(
-            PositionBefore,
-            (PositionBefore.game_id == GameFlaw.game_id)
-            & (PositionBefore.user_id == GameFlaw.user_id)
-            & (PositionBefore.ply == GameFlaw.ply - 1),
-        )
+        .outerjoin(PositionBefore, true())
         .where(
             GameFlaw.game_id == Game.id,
             GameFlaw.user_id == user_id,
@@ -1004,6 +1004,39 @@ def _build_flaw_item(
     )
 
 
+def _flaw_position_lateral(
+    name: str, ply_expr: InstrumentedAttribute[int] | ColumnElement[int]
+) -> type[GamePosition]:
+    """LEFT-JOIN-able LATERAL alias for the game_positions row at `ply_expr`.
+
+    Perf fix (dev Library/Flaws timeout, 2026-07-29): these used to be plain
+    `outerjoin(aliased(GamePosition), ...)` with the ply predicate written as
+    `alias.ply == GameFlaw.ply - N`. Because `ply - N` is not a plain column
+    equality, the planner could not use it as a merge key and fell back to
+    `Merge Left Join` on `game_id` alone with the ply test demoted to a Join
+    Filter. That degenerates into a per-game cartesian product (every flaw in a
+    game x every position in that game), scanning the user's whole
+    `game_positions` slice (~200k rows) once per alias — three times over. On a
+    user with ~18k flaws the query never finished.
+
+    A LATERAL with `LIMIT 1` cannot be flattened back into a mergeable join, so
+    the planner is forced into a nested loop doing one `game_positions_pkey`
+    lookup per output row (20 per page instead of 600k). `LIMIT 1` is
+    semantically free: (user_id, game_id, ply) is the primary key.
+    """
+    sub = (
+        select(GamePosition)
+        .where(
+            GamePosition.game_id == GameFlaw.game_id,
+            GamePosition.user_id == GameFlaw.user_id,
+            GamePosition.ply == ply_expr,
+        )
+        .limit(1)
+        .lateral(name)
+    )
+    return aliased(GamePosition, sub, name=name)
+
+
 async def query_flaws(
     session: AsyncSession,
     *,
@@ -1055,9 +1088,10 @@ async def query_flaws(
     # Decided-lost SQL expression uses the PositionBefore alias (ply N-1, already
     # LEFT-JOINed below) to access pre-move eval. Built here so it can be passed
     # to both build_flaw_filter_clauses (SQL gate) and the row serialization loop
-    # (Python gate via is_decided_lost). The alias name must match the outerjoin below.
-    PositionBefore = aliased(GamePosition, name="pos_before")  # noqa: N806
-    PositionTwoBefore = aliased(GamePosition, name="pos_two_before")  # noqa: N806
+    # (Python gate via is_decided_lost). Each alias carries its own join predicate
+    # inside the LATERAL, so the outerjoin() calls below only need `true()`.
+    PositionBefore = _flaw_position_lateral("pos_before", GameFlaw.ply - 1)  # noqa: N806
+    PositionTwoBefore = _flaw_position_lateral("pos_two_before", GameFlaw.ply - 2)  # noqa: N806
     dl_sql = decided_lost_sql(PositionBefore.eval_cp, PositionBefore.eval_mate, Game.user_color)
 
     flaw_clauses = build_flaw_filter_clauses(
@@ -1079,30 +1113,29 @@ async def query_flaws(
     # User-scoped on all joins (T-112-02: no cross-user position rows can attach).
     # NOTE: PositionBefore and PositionTwoBefore are declared above (before flaw_clauses)
     # so dl_sql can reference the same alias objects. Only PositionAt is declared here.
-    PositionAt = aliased(GamePosition, name="pos_at")  # noqa: N806
+    PositionAt = _flaw_position_lateral("pos_at", GameFlaw.ply)  # noqa: N806
 
-    # Base: game_flaws JOIN games + three LEFT JOINs on game_positions scoped to user
+    # Base: game_flaws JOIN games + three LATERAL LEFT JOINs on game_positions.
+    # The join predicates live inside each lateral (see _flaw_position_lateral),
+    # so the ON clause is a constant true.
+    #
+    # defer(): pgn and the two PV-line JSONB blobs are never read by
+    # _build_flaw_item, but they are the widest columns in the row (~23 MB of
+    # blobs + ~2 KB of PGN per game for a heavy user). Left in the select list
+    # they get detoasted and carried through the ORDER BY sort for every matched
+    # flaw, only to be discarded by the LIMIT — which is what pushed this query's
+    # sort onto disk once the tier-4 blob backfill populated *_pv_lines.
     base_stmt = (
         select(GameFlaw, Game, PositionAt, PositionBefore, PositionTwoBefore)
+        .options(
+            defer(GameFlaw.allowed_pv_lines),
+            defer(GameFlaw.missed_pv_lines),
+            defer(Game.pgn),
+        )
         .join(Game, Game.id == GameFlaw.game_id)
-        .outerjoin(
-            PositionAt,
-            (PositionAt.game_id == GameFlaw.game_id)
-            & (PositionAt.user_id == GameFlaw.user_id)
-            & (PositionAt.ply == GameFlaw.ply),
-        )
-        .outerjoin(
-            PositionBefore,
-            (PositionBefore.game_id == GameFlaw.game_id)
-            & (PositionBefore.user_id == GameFlaw.user_id)
-            & (PositionBefore.ply == GameFlaw.ply - 1),
-        )
-        .outerjoin(
-            PositionTwoBefore,
-            (PositionTwoBefore.game_id == GameFlaw.game_id)
-            & (PositionTwoBefore.user_id == GameFlaw.user_id)
-            & (PositionTwoBefore.ply == GameFlaw.ply - 2),
-        )
+        .outerjoin(PositionAt, true())
+        .outerjoin(PositionBefore, true())
+        .outerjoin(PositionTwoBefore, true())
         .where(
             GameFlaw.user_id == user_id,
             # D-04: player-only gate — after Phase 113 game_flaws contains both sides;
@@ -1813,21 +1846,37 @@ async def count_filtered_and_analyzed(
     """Return (total_n, analyzed_n) over the filtered Games-surface set (LIBG-09).
 
     total_n   = count of games matching the filter set.
-    analyzed_n = subset with full-game move-quality analysis (Game.is_analyzed,
-                 i.e. white_blunders IS NOT NULL — currently Lichess games with
-                 computer analysis enabled). The cheap is_analyzed column check
-                 replaces the old per-ply eval-coverage subquery: coarser, but it
-                 matches the product's notion of "analyzed" (move-quality columns
-                 present) and is far cheaper.
+    analyzed_n = subset that is all-ply eval-complete, i.e. present in
+                 _analyzed_game_ids_subquery (full_evals_completed_at IS NOT NULL).
+
+    BUGFIX (badge/denominator mismatch): analyzed_n used to be Game.is_analyzed
+    (white_blunders IS NOT NULL). That column is set at IMPORT time for lichess
+    games shipping a computer-analysis block, so it counted games our engine has
+    never touched. Two things broke:
+
+    1. The Stats-tab coverage badge read "2845 of 2847" while the Games/Flaws
+       badges read "2848 of 2848" — those use full_evals_completed_at
+       (game_repository.count_fully_analyzed_games), as do the per-game cards'
+       Analyze button. Degenerate games (drain-stamped, no move-quality columns)
+       were missing from is_analyzed.
+    2. Worse, analyzed_n is the rate denominator in get_flaw_stats and the gate in
+       get_flaw_comparison / get_tactic_comparison, but every numerator there is
+       aggregated over _analyzed_game_ids_subquery. Denominator and numerator sat
+       on different populations, understating flaw rates for users with lichess
+       %eval games (prod user 269: 5958 vs 1800, a ~3.3x skew).
+
+    Both counts now derive from the same subquery the aggregates join on, so they
+    cannot drift again. See .planning/notes/eval-completion-columns.md for why
+    is_analyzed is not an "our engine analyzed this" signal.
 
     flaw_severity defaults to None so the COVERAGE badge (get_flaw_stats) gets a
     true "x of y" denominator: when it is None the base spans the whole filtered
     game set, so total_n counts unanalyzed games too and analyzed_n <= total_n.
     Passing a flaw_severity (the you-vs-opponent comparison gate does) restricts
     BOTH counts to games with a matching flaw via the base EXISTS, so analyzed_n
-    there matches the set the comparison bullets aggregate over. With a flaw
-    EXISTS on the base, total_n necessarily equals analyzed_n (every flawed game
-    is analyzed) — which is why the badge caller must NOT pass flaw_severity.
+    there matches the set the comparison bullets aggregate over — which is why the
+    badge caller must NOT pass flaw_severity (the EXISTS would collapse the
+    denominator onto flawed games only).
 
     Both are user-scoped.
     """
@@ -1851,8 +1900,9 @@ async def count_filtered_and_analyzed(
     if total_n == 0:
         return 0, 0
 
+    analyzed_subq = _analyzed_game_ids_subquery(user_id)
     analyzed_stmt = select(func.count()).select_from(
-        select(Game.id).where(Game.id.in_(select(base_subq.c.id)), Game.is_analyzed).subquery()
+        select(base_subq.c.id).where(base_subq.c.id.in_(select(analyzed_subq.c.game_id))).subquery()
     )
     analyzed_n = (await session.execute(analyzed_stmt)).scalar_one()
     return total_n, analyzed_n

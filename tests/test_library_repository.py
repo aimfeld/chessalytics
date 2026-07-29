@@ -775,12 +775,11 @@ class TestAnalyzedDenominator:
     ) -> None:
         """One analyzed game + one unanalyzed game: total_n==2, analyzed_n==1.
 
-        count_filtered_and_analyzed keys analyzed_n off Game.is_analyzed (the
-        cheap white_blunders detector); analyzed_game_ids uses the authoritative
-        full_evals_completed_at column (reversal of per-ply coverage recompute,
-        quick-task 260617-pu4). The seeded "analyzed" game satisfies BOTH (it
-        carries move-quality counts AND full_evals_completed_at IS NOT NULL),
-        mirroring a real Lichess game with Stockfish eval drain completed.
+        count_filtered_and_analyzed and analyzed_game_ids both key analyzed_n off
+        the authoritative full_evals_completed_at column (via
+        _analyzed_game_ids_subquery). The seeded "analyzed" game carries
+        move-quality counts AND full_evals_completed_at, mirroring a real Lichess
+        game with the Stockfish eval drain completed.
         """
         # Analyzed game: move-quality counts (is_analyzed) AND full_evals_completed_at set.
         _now = datetime.datetime.now(tz=datetime.timezone.utc)
@@ -919,10 +918,18 @@ class TestAnalyzedDenominator:
         """total_n counts chess.com games too; only the analyzed lichess game is analyzed_n.
 
         Regression: the coverage badge denominator must NOT be platform- or
-        flaw-restricted. An unanalyzed chess.com game (white_blunders NULL) is in
-        total_n but not analyzed_n, so the badge reads "1 of 2", not "1 of 1".
+        flaw-restricted. An unanalyzed chess.com game (full_evals_completed_at
+        NULL) is in total_n but not analyzed_n, so the badge reads "1 of 2", not
+        "1 of 1".
         """
-        lichess = await _seed_game(db_session, user_id=99999, platform="lichess", white_blunders=0)
+        _now = datetime.datetime.now(tz=datetime.timezone.utc)
+        lichess = await _seed_game(
+            db_session,
+            user_id=99999,
+            platform="lichess",
+            white_blunders=0,
+            full_evals_completed_at=_now,
+        )
         await _seed_position(db_session, game=lichess, ply=0, eval_cp=0)
         chesscom = await _seed_game(db_session, user_id=99999, platform="chess.com")
         await _seed_position(db_session, game=chesscom, ply=0, eval_cp=None)
@@ -939,6 +946,49 @@ class TestAnalyzedDenominator:
         )
         assert total_n == 2, "chess.com game must be counted in the denominator"
         assert analyzed_n == 1, "only the analyzed lichess game counts as analyzed"
+
+    @pytest.mark.asyncio
+    async def test_analyzed_n_matches_full_evals_not_is_analyzed(
+        self, db_session: AsyncSession
+    ) -> None:
+        """Regression (badge mismatch): analyzed_n keys off full_evals_completed_at.
+
+        analyzed_n used to be Game.is_analyzed (white_blunders IS NOT NULL), which
+        diverged from _analyzed_game_ids_subquery in BOTH directions. That made the
+        Stats-tab badge disagree with the Games/Flaws badges, and — worse — put the
+        get_flaw_stats rate denominator on a different population than the numerators
+        (which join analyzed_subq). Both edge cases are pinned here:
+
+        - lichess freebie: white_blunders set at IMPORT, our drain never ran
+          (full_evals_completed_at NULL) -> NOT analyzed.
+        - degenerate game: drain stamped full_evals_completed_at but wrote no
+          move-quality columns -> analyzed (its card shows no "Analyze" button).
+        """
+        _now = datetime.datetime.now(tz=datetime.timezone.utc)
+        # Lichess %eval freebie — is_analyzed would wrongly count this.
+        await _seed_game(db_session, user_id=99999, platform="lichess", white_blunders=2)
+        # Degenerate drain-stamped game — is_analyzed would wrongly skip this.
+        await _seed_game(
+            db_session,
+            user_id=99999,
+            platform="chess.com",
+            full_evals_completed_at=_now,
+        )
+
+        total_n, analyzed_n = await count_filtered_and_analyzed(
+            db_session,
+            user_id=99999,
+            time_control=None,
+            platform=None,
+            rated=None,
+            opponent_type="all",
+            from_date=None,
+            to_date=None,
+        )
+        assert total_n == 2
+        assert analyzed_n == 1, (
+            "only the full_evals_completed_at game counts; white_blunders alone does not"
+        )
 
     @pytest.mark.asyncio
     async def test_analyzed_denominator_user_scoped(self, db_session: AsyncSession) -> None:
