@@ -13,6 +13,11 @@
  * 8. Tab-hide pause: no analyze while hidden; re-analyzes on visible.
  * 9. Unmount sends terminate and terminates the Worker.
  * 10. wdl / expectedScoreAtSelectedElo derive from the ladder rung nearest selectedElo.
+ *
+ * Respawn behaviors (quick 260729-sod, FIX 1): a `webgpu-unavailable` message
+ * terminates the dead worker and constructs exactly one wasm-pinned
+ * replacement; a no-adapter device that reports `ready` directly never
+ * respawns.
  */
 
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
@@ -29,6 +34,7 @@ interface WorkerMessageLike {
 
 class MockWorker {
   onmessage: ((e: MessageEvent<WorkerMessageLike>) => void) | null = null;
+  onerror: ((e: unknown) => void) | null = null;
   messages: WorkerMessageLike[] = [];
   terminated = false;
 
@@ -44,9 +50,33 @@ class MockWorker {
   simulateMessage(data: WorkerMessageLike): void {
     this.onmessage?.(new MessageEvent('message', { data }));
   }
+
+  /** Fire the onerror handler — simulates an asynchronous Worker script-load failure. */
+  simulateError(): void {
+    this.onerror?.(new Event('error'));
+  }
 }
 
-let mockWorker: MockWorker;
+let createdWorkers: MockWorker[];
+
+/** Narrow accessor for `noUncheckedIndexedAccess` — throws if no worker exists yet. */
+function latestWorker(): MockWorker {
+  const w = createdWorkers[createdWorkers.length - 1];
+  if (!w) throw new Error('No MockWorker constructed yet');
+  return w;
+}
+
+function stubWorkerCtor(): void {
+  createdWorkers = [];
+  vi.stubGlobal(
+    'Worker',
+    vi.fn(function () {
+      const w = new MockWorker();
+      createdWorkers.push(w);
+      return w;
+    }),
+  );
+}
 
 // ─── Helpers ─────────────────────────────────────────────────────────────────
 
@@ -78,13 +108,7 @@ function buildResultMessage(fen: string): WorkerMessageLike {
 describe('useMaiaEngine', () => {
   beforeEach(() => {
     vi.useFakeTimers({ now: 0 });
-    mockWorker = new MockWorker();
-    vi.stubGlobal(
-      'Worker',
-      vi.fn(function () {
-        return mockWorker;
-      }),
-    );
+    stubWorkerCtor();
   });
 
   afterEach(() => {
@@ -94,33 +118,32 @@ describe('useMaiaEngine', () => {
 
   it('does not create a Worker until enabled', () => {
     renderHook(() => useMaiaEngine({ fen: null, enabled: false, selectedElo: 1500 }));
-    const WorkerCtor = vi.mocked(globalThis.Worker as new (url: string) => Worker);
-    expect(WorkerCtor).not.toHaveBeenCalled();
+    expect(createdWorkers).toHaveLength(0);
   });
 
   it('creates a classic Worker and sends init when enabled', () => {
     renderHook(() => useMaiaEngine({ fen: null, enabled: true, selectedElo: 1500 }));
     const WorkerCtor = vi.mocked(globalThis.Worker as new (url: string) => Worker);
     expect(WorkerCtor).toHaveBeenCalledWith('/maia/maia-worker.js');
-    expect(mockWorker.messages).toContainEqual({ type: 'init' });
+    expect(latestWorker().messages).toContainEqual({ type: 'init' });
   });
 
   it('isReady flips false->true on the ready message', () => {
     const { result } = renderHook(() => useMaiaEngine({ fen: null, enabled: true, selectedElo: 1500 }));
     expect(result.current.isReady).toBe(false);
-    driveReady(mockWorker);
+    driveReady(latestWorker());
     expect(result.current.isReady).toBe(true);
   });
 
   it('settled FEN fires analyze with the full ELO ladder once ready', async () => {
     vi.advanceTimersByTime(200); // Date.now() >> 0 so the first FEN is a "settled move".
     renderHook(() => useMaiaEngine({ fen: TEST_FEN, enabled: true, selectedElo: 1500 }));
-    driveReady(mockWorker);
+    driveReady(latestWorker());
     await act(async () => {
       await vi.advanceTimersByTimeAsync(200);
     });
 
-    const msgs = analyzeMessages(mockWorker);
+    const msgs = analyzeMessages(latestWorker());
     expect(msgs).toHaveLength(1);
     expect(msgs[0]?.fen).toBe(TEST_FEN);
     expect(msgs[0]?.eloInputs).toEqual(MAIA_ELO_LADDER);
@@ -131,7 +154,7 @@ describe('useMaiaEngine', () => {
       ({ fen }: { fen: string }) => useMaiaEngine({ fen, enabled: true, selectedElo: 1500 }),
       { initialProps: { fen: TEST_FEN } },
     );
-    driveReady(mockWorker);
+    driveReady(latestWorker());
 
     await act(async () => {
       await vi.advanceTimersByTimeAsync(140); // before the 150ms debounce fires
@@ -141,7 +164,7 @@ describe('useMaiaEngine', () => {
       await vi.advanceTimersByTimeAsync(200);
     });
 
-    const msgs = analyzeMessages(mockWorker);
+    const msgs = analyzeMessages(latestWorker());
     expect(msgs).toHaveLength(1);
     expect(msgs[0]?.fen).toBe(TEST_FEN_2);
   });
@@ -151,7 +174,7 @@ describe('useMaiaEngine', () => {
       ({ fen }: { fen: string }) => useMaiaEngine({ fen, enabled: true, selectedElo: 1500 }),
       { initialProps: { fen: TEST_FEN } },
     );
-    driveReady(mockWorker);
+    driveReady(latestWorker());
     await act(async () => {
       await vi.advanceTimersByTimeAsync(200);
     });
@@ -165,7 +188,7 @@ describe('useMaiaEngine', () => {
 
     // Stale result for the OLD fen arrives — must be discarded.
     act(() => {
-      mockWorker.simulateMessage(buildResultMessage(TEST_FEN));
+      latestWorker().simulateMessage(buildResultMessage(TEST_FEN));
     });
     expect(result.current.perElo).toHaveLength(0);
   });
@@ -175,16 +198,16 @@ describe('useMaiaEngine', () => {
       ({ fen }: { fen: string }) => useMaiaEngine({ fen, enabled: true, selectedElo: 1500 }),
       { initialProps: { fen: TEST_FEN } },
     );
-    driveReady(mockWorker);
+    driveReady(latestWorker());
     await act(async () => {
       await vi.advanceTimersByTimeAsync(200);
     });
     act(() => {
-      mockWorker.simulateMessage(buildResultMessage(TEST_FEN));
+      latestWorker().simulateMessage(buildResultMessage(TEST_FEN));
     });
     expect(result.current.perElo.length).toBe(MAIA_ELO_LADDER.length);
 
-    const countBefore = analyzeMessages(mockWorker).length;
+    const countBefore = analyzeMessages(latestWorker()).length;
 
     // Navigate away, then back to TEST_FEN (now cached).
     rerender({ fen: TEST_FEN_2 });
@@ -197,7 +220,7 @@ describe('useMaiaEngine', () => {
     });
 
     // Only ONE new analyze was sent (for TEST_FEN_2) — the TEST_FEN revisit is a cache hit.
-    expect(analyzeMessages(mockWorker)).toHaveLength(countBefore + 1);
+    expect(analyzeMessages(latestWorker())).toHaveLength(countBefore + 1);
     expect(result.current.perElo.length).toBe(MAIA_ELO_LADDER.length);
   });
 
@@ -210,13 +233,13 @@ describe('useMaiaEngine', () => {
       ({ fen }: { fen: string }) => useMaiaEngine({ fen, enabled: true, selectedElo: 1500 }),
       { initialProps: { fen: TEST_FEN } },
     );
-    driveReady(mockWorker);
+    driveReady(latestWorker());
     await act(async () => {
       await vi.advanceTimersByTimeAsync(0);
     });
     // TEST_FEN analyzed and cached.
     act(() => {
-      mockWorker.simulateMessage(buildResultMessage(TEST_FEN));
+      latestWorker().simulateMessage(buildResultMessage(TEST_FEN));
     });
     expect(result.current.perElo.length).toBe(MAIA_ELO_LADDER.length);
 
@@ -241,12 +264,12 @@ describe('useMaiaEngine', () => {
       ({ fen }: { fen: string }) => useMaiaEngine({ fen, enabled: true, selectedElo: 1500 }),
       { initialProps: { fen: TEST_FEN } },
     );
-    driveReady(mockWorker);
+    driveReady(latestWorker());
     await act(async () => {
       await vi.advanceTimersByTimeAsync(0);
     });
     // TEST_FEN is analyzing (worker "busy"), no result yet.
-    expect(analyzeMessages(mockWorker)).toHaveLength(1);
+    expect(analyzeMessages(latestWorker())).toHaveLength(1);
 
     // Move to a new settled position while TEST_FEN is still in flight.
     rerender({ fen: TEST_FEN_2 });
@@ -254,13 +277,13 @@ describe('useMaiaEngine', () => {
       await vi.advanceTimersByTimeAsync(200);
     });
     // No second request queued behind the running one.
-    expect(analyzeMessages(mockWorker)).toHaveLength(1);
+    expect(analyzeMessages(latestWorker())).toHaveLength(1);
 
     // TEST_FEN result lands -> worker free -> analyze the current FEN (TEST_FEN_2).
     act(() => {
-      mockWorker.simulateMessage(buildResultMessage(TEST_FEN));
+      latestWorker().simulateMessage(buildResultMessage(TEST_FEN));
     });
-    const msgs = analyzeMessages(mockWorker);
+    const msgs = analyzeMessages(latestWorker());
     expect(msgs).toHaveLength(2);
     expect(msgs[1]?.fen).toBe(TEST_FEN_2);
   });
@@ -275,12 +298,12 @@ describe('useMaiaEngine', () => {
     });
     vi.advanceTimersByTime(200); // Date.now() >> 0 so the first FEN settles immediately.
     renderHook(() => useMaiaEngine({ fen: TEST_FEN, enabled: true, selectedElo: 1500 }));
-    driveReady(mockWorker);
+    driveReady(latestWorker());
     await act(async () => {
       await vi.advanceTimersByTimeAsync(200);
     });
     // Hidden: the debounce committed but analyze() bailed — no worker round-trip.
-    expect(analyzeMessages(mockWorker)).toHaveLength(0);
+    expect(analyzeMessages(latestWorker())).toHaveLength(0);
 
     act(() => {
       Object.defineProperty(document, 'visibilityState', {
@@ -291,8 +314,8 @@ describe('useMaiaEngine', () => {
       document.dispatchEvent(new Event('visibilitychange'));
     });
     // On return the current FEN is analyzed.
-    expect(analyzeMessages(mockWorker)).toHaveLength(1);
-    expect(analyzeMessages(mockWorker)[0]?.fen).toBe(TEST_FEN);
+    expect(analyzeMessages(latestWorker())).toHaveLength(1);
+    expect(analyzeMessages(latestWorker())[0]?.fen).toBe(TEST_FEN);
   });
 
   it('resultFen reports the FEN the held curve belongs to, and clears with it (163-REVIEW WR-03)', async () => {
@@ -301,7 +324,7 @@ describe('useMaiaEngine', () => {
       ({ fen }: { fen: string }) => useMaiaEngine({ fen, enabled: true, selectedElo: 1500 }),
       { initialProps: { fen: TEST_FEN } },
     );
-    driveReady(mockWorker);
+    driveReady(latestWorker());
     await act(async () => {
       await vi.advanceTimersByTimeAsync(200);
     });
@@ -309,7 +332,7 @@ describe('useMaiaEngine', () => {
     expect(result.current.resultFen).toBeNull();
 
     act(() => {
-      mockWorker.simulateMessage(buildResultMessage(TEST_FEN));
+      latestWorker().simulateMessage(buildResultMessage(TEST_FEN));
     });
     expect(result.current.resultFen).toBe(TEST_FEN);
 
@@ -326,13 +349,13 @@ describe('useMaiaEngine', () => {
   it('unmount sends terminate and terminates the Worker (no leak)', () => {
     const { unmount } = renderHook(() => useMaiaEngine({ fen: null, enabled: true, selectedElo: 1500 }));
     unmount();
-    expect(mockWorker.messages).toContainEqual({ type: 'terminate' });
-    expect(mockWorker.terminated).toBe(true);
+    expect(latestWorker().messages).toContainEqual({ type: 'terminate' });
+    expect(latestWorker().terminated).toBe(true);
   });
 
   it('wdl / expectedScoreAtSelectedElo derive from the ladder rung nearest selectedElo', async () => {
     const { result } = renderHook(() => useMaiaEngine({ fen: TEST_FEN, enabled: true, selectedElo: 1550 }));
-    driveReady(mockWorker);
+    driveReady(latestWorker());
     await act(async () => {
       await vi.advanceTimersByTimeAsync(200);
     });
@@ -345,10 +368,60 @@ describe('useMaiaEngine', () => {
       entry.elo === 1500 ? { ...entry, wdl: Float32Array.from([0, 0, 10]) } : entry,
     );
     act(() => {
-      mockWorker.simulateMessage(msg);
+      latestWorker().simulateMessage(msg);
     });
 
     expect(result.current.wdl?.win).toBeGreaterThan(0.9);
     expect(result.current.expectedScoreAtSelectedElo).toBeGreaterThan(0.9);
+  });
+
+  // ─── Respawn (quick 260729-sod, FIX 1) ────────────────────────────────────
+
+  it('webgpu-unavailable terminates worker #1 and constructs exactly one replacement', () => {
+    renderHook(() => useMaiaEngine({ fen: null, enabled: true, selectedElo: 1500 }));
+    expect(createdWorkers).toHaveLength(1);
+    const worker1 = latestWorker();
+
+    act(() => {
+      worker1.simulateMessage({ type: 'webgpu-unavailable', message: 'RangeError: Out of memory' });
+    });
+
+    expect(worker1.terminated).toBe(true);
+    expect(createdWorkers).toHaveLength(2);
+  });
+
+  it('the replacement receives {type:init, backend:wasm}', () => {
+    renderHook(() => useMaiaEngine({ fen: null, enabled: true, selectedElo: 1500 }));
+    const worker1 = latestWorker();
+    act(() => {
+      worker1.simulateMessage({ type: 'webgpu-unavailable', message: 'boom' });
+    });
+
+    expect(latestWorker()).not.toBe(worker1);
+    expect(latestWorker().messages).toContainEqual({ type: 'init', backend: 'wasm' });
+  });
+
+  it("after the replacement's ready, a normal analyze/result round-trip works", async () => {
+    vi.advanceTimersByTime(200);
+    renderHook(() => useMaiaEngine({ fen: TEST_FEN, enabled: true, selectedElo: 1500 }));
+    const worker1 = latestWorker();
+    act(() => {
+      worker1.simulateMessage({ type: 'webgpu-unavailable', message: 'boom' });
+    });
+    const replacement = latestWorker();
+    driveReady(replacement);
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(200);
+    });
+
+    const msgs = analyzeMessages(replacement);
+    expect(msgs).toHaveLength(1);
+    expect(msgs[0]?.fen).toBe(TEST_FEN);
+  });
+
+  it('a worker that reports ready directly (no adapter) constructs exactly one Worker', () => {
+    renderHook(() => useMaiaEngine({ fen: null, enabled: true, selectedElo: 1500 }));
+    driveReady(latestWorker());
+    expect(createdWorkers).toHaveLength(1);
   });
 });

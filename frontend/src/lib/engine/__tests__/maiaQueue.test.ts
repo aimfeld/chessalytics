@@ -18,7 +18,7 @@ import { maskAndSoftmax, POLICY_VOCAB_SIZE } from '@/lib/maiaEncoding';
 
 // @sentry/react's ESM module namespace is not configurable, so vi.spyOn cannot
 // redefine captureException on the real module — mock the module instead.
-vi.mock('@sentry/react', () => ({ captureException: vi.fn() }));
+vi.mock('@sentry/react', () => ({ captureException: vi.fn(), addBreadcrumb: vi.fn() }));
 
 // ─── Mock Worker ─────────────────────────────────────────────────────────────
 
@@ -359,6 +359,42 @@ describe('createMaiaQueue', () => {
 
     void queue.policy(TEST_FEN, 1500, 'w');
     expect(createdWorkers).toHaveLength(2);
+  });
+
+  // ─── Respawn (quick 260729-sod, FIX 1) ──────────────────────────────────
+
+  it('webgpu-unavailable terminates worker #1 and constructs exactly one wasm-pinned replacement', () => {
+    const queue = createMaiaQueue();
+    void queue.policy(TEST_FEN, 1500, 'w');
+    const worker1 = createdWorkers[0]!;
+
+    worker1.simulateMessage({ type: 'webgpu-unavailable', message: 'RangeError: Out of memory' });
+
+    expect(worker1.terminated).toBe(true);
+    expect(createdWorkers).toHaveLength(2);
+    const replacement = createdWorkers[1]!;
+    expect(replacement.messages).toContainEqual({ type: 'init', backend: 'wasm' });
+  });
+
+  it('a policy() queued before the fallback still resolves from the replacement worker (nothing stranded)', async () => {
+    const queue = createMaiaQueue();
+    const p1 = queue.policy(TEST_FEN, 1500, 'w');
+    const worker1 = createdWorkers[0]!;
+
+    worker1.simulateMessage({ type: 'webgpu-unavailable', message: 'boom' });
+
+    const replacement = createdWorkers[1]!;
+    driveReady(replacement);
+    replacement.simulateMessage(buildResultMessage(TEST_FEN, [1500]));
+
+    await expect(p1).resolves.toBeDefined();
+  });
+
+  it('a worker that reports ready directly (no adapter) constructs exactly one Worker', () => {
+    const queue = createMaiaQueue();
+    void queue.policy(TEST_FEN, 1500, 'w');
+    driveReady(createdWorkers[0]!);
+    expect(createdWorkers).toHaveLength(1);
   });
 
   // ─── Contract shape ─────────────────────────────────────────────────────

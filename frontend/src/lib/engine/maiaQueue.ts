@@ -92,7 +92,8 @@ interface WorkerResultMessage {
 type WorkerMessage =
   | { type: 'ready'; backend: 'webgpu' | 'wasm' }
   | WorkerResultMessage
-  | { type: 'error'; message: string };
+  | { type: 'error'; message: string }
+  | { type: 'webgpu-unavailable'; message: string };
 
 // ─── Factory ────────────────────────────────────────────────────────────────
 
@@ -206,6 +207,37 @@ export function createMaiaQueue(): MaiaQueue {
       handleResult(msg);
       return;
     }
+    if (msg.type === 'webgpu-unavailable') {
+      // Terminal for the dead worker (quick 260729-sod, FIX 1): the WebGPU
+      // session/warmup failed and the worker deliberately did NOT double-load
+      // a second ORT runtime into its own heap. Detach handlers, terminate,
+      // and re-spawn pinned to wasm — a fresh Worker is the only reliable way
+      // to reclaim the ~226 MB heap #1 left alive.
+      //
+      // `currentBatch` is provably null here: `processQueue` only dispatches
+      // once `isReady`, and this message only ever arrives pre-ready (the
+      // worker never reached the `ready` postMessage) — so there is nothing
+      // in-flight to settle, unlike `settleAllAndDropWorker`'s "nothing will
+      // ever service this queue" path below.
+      if (worker) {
+        worker.onmessage = null;
+        worker.onerror = null;
+        worker.terminate();
+      }
+      worker = null;
+      isReady = false;
+      Sentry.addBreadcrumb({
+        category: 'maia',
+        level: 'info',
+        message: 'Maia queue WebGPU session failed — respawning worker pinned to wasm',
+        data: { rawMessage: msg.message },
+      });
+      // `pending` is left intact — the fresh worker services it, this is a
+      // recoverable condition (unlike settleAllAndDropWorker's permanent-death
+      // path, which resolves everything to {} because nothing will ever run).
+      ensureSpawned('wasm');
+      return;
+    }
     // msg.type === 'error': the Maia worker is a classic Worker with no
     // Sentry init, and onnxruntime-web's native failures never throw a
     // catchable JS exception on the main thread — so they reach Sentry ONLY
@@ -235,8 +267,14 @@ export function createMaiaQueue(): MaiaQueue {
     processQueue();
   }
 
-  /** Lazily spawns the worker on the first policy() call (D-02) — never eagerly. */
-  function ensureSpawned(): void {
+  /**
+   * Lazily spawns the worker on the first policy() call (D-02) — never
+   * eagerly. `mode: 'wasm'` is used exactly once, for the respawn after a
+   * `webgpu-unavailable` message (quick 260729-sod, FIX 1) — it pins the
+   * fresh worker to the WASM-only path so it never loads the WebGPU bundle
+   * that failed in the dead one.
+   */
+  function ensureSpawned(mode: 'auto' | 'wasm' = 'auto'): void {
     if (worker) return;
     try {
       const w = new Worker(ENGINE_PATH);
@@ -254,7 +292,9 @@ export function createMaiaQueue(): MaiaQueue {
         });
         settleAllAndDropWorker();
       };
-      w.postMessage({ type: 'init' });
+      // Auto mode probes WebGPU worker-side; a post-fallback respawn is
+      // pinned to wasm.
+      w.postMessage(mode === 'wasm' ? { type: 'init', backend: 'wasm' } : { type: 'init' });
     } catch (err) {
       // Graceful-degradation floor (Pitfall 1): a construction failure must
       // not leave every pending policy() promise hanging forever.

@@ -103,7 +103,8 @@ interface WorkerResultMessage {
 type WorkerMessage =
   | { type: 'ready'; backend: 'webgpu' | 'wasm' }
   | WorkerResultMessage
-  | { type: 'error'; message: string };
+  | { type: 'error'; message: string }
+  | { type: 'webgpu-unavailable'; message: string };
 
 // ─── Helpers ─────────────────────────────────────────────────────────────────
 
@@ -250,78 +251,122 @@ export function useMaiaEngine({ fen, enabled, selectedElo }: UseMaiaEngineOption
   useEffect(() => {
     if (!enabled) return;
 
-    // Classic (non-module) Worker — mirrors the Stockfish precedent; the Maia
-    // Worker uses importScripts() to load onnxruntime-web's UMD-style bundles.
-    const worker = new Worker(ENGINE_PATH);
-    workerRef.current = worker;
+    // `current` (not workerRef, which the analyze()/cleanup callbacks below
+    // still read) is the worker THIS closure owns across a possible respawn —
+    // `disposed` guards against a webgpu-unavailable message arriving after
+    // this effect has already been cleaned up (unmount/enabled toggle raced
+    // the worker's async init).
+    let current: Worker | null = null;
+    let disposed = false;
 
-    worker.onmessage = (e: MessageEvent<WorkerMessage>) => {
-      const msg = e.data;
-      if (msg.type === 'ready') {
-        setIsReady(true);
-        isReadyRef.current = true;
-        backendRef.current = msg.backend;
-        return;
-      }
-      if (msg.type === 'result') {
-        // Cache every completed inference, even one whose position was already
-        // superseded — the result is valid for msg.fen, so caching it makes a
-        // later revisit (a slider scrub back) an instant cache hit instead of a
-        // recompute, and keeps the debounce-effect cache restore below effective.
-        const result = buildMaiaResult(msg.fen, msg);
-        cacheResult(msg.fen, result);
-        // Only paint it if it still matches the on-screen position (stale guard).
-        if (msg.fen === currentFenRef.current) setLatestResult(result);
-        // Clear the in-flight flag only when the result we were waiting on lands —
-        // a superseded result must not stop the spinner for a request still running.
-        if (msg.fen === pendingFenRef.current) {
-          pendingFenRef.current = null;
-          setIsAnalyzing(false);
-          // The worker is free again — converge on the live position. If the user
-          // moved on (slider drag/scrub) while this ran, analyze where they are
-          // now, skipping the intermediate positions we deliberately never queued.
-          const current = currentFenRef.current;
-          if (current && current !== msg.fen && !cacheRef.current.has(current)) {
-            analyzeRef.current(current);
-          }
+    /**
+     * Spawns a fresh Worker and wires its handlers. `mode: 'wasm'` is used
+     * exactly once, for the respawn after a `webgpu-unavailable` message
+     * (quick 260729-sod, FIX 1) — it pins the fresh worker to the WASM-only
+     * path so it never loads the WebGPU bundle that failed in the dead one.
+     */
+    function spawn(mode: 'auto' | 'wasm'): void {
+      // Classic (non-module) Worker — mirrors the Stockfish precedent; the Maia
+      // Worker uses importScripts() to load onnxruntime-web's UMD-style bundles.
+      const worker = new Worker(ENGINE_PATH);
+      current = worker;
+      workerRef.current = worker;
+
+      worker.onmessage = (e: MessageEvent<WorkerMessage>) => {
+        const msg = e.data;
+        if (msg.type === 'ready') {
+          setIsReady(true);
+          isReadyRef.current = true;
+          backendRef.current = msg.backend;
+          return;
         }
-        return;
-      }
-      // msg.type === 'error': surfaced as isAnalyzing=false (no partial UI state).
-      // The worker is a classic Worker with no Sentry init, and onnxruntime-web's
-      // native failures (e.g. the Firefox/Windows `Clip` WebGPU shader error) print to
-      // console but never throw a catchable JS exception — so they reach Sentry ONLY by
-      // being forwarded here. Routed through captureMaiaWorkerError (quick 260729-sod,
-      // FIX 2) for bounded classification + stable grouping instead of embedding the raw
-      // worker text in the error message (CLAUDE.md frontend Sentry rules).
-      captureMaiaWorkerError(msg.message, { source: 'maia-worker', backend: backendRef.current });
-      pendingFenRef.current = null;
-      setIsAnalyzing(false);
-    };
+        if (msg.type === 'result') {
+          // Cache every completed inference, even one whose position was already
+          // superseded — the result is valid for msg.fen, so caching it makes a
+          // later revisit (a slider scrub back) an instant cache hit instead of a
+          // recompute, and keeps the debounce-effect cache restore below effective.
+          const result = buildMaiaResult(msg.fen, msg);
+          cacheResult(msg.fen, result);
+          // Only paint it if it still matches the on-screen position (stale guard).
+          if (msg.fen === currentFenRef.current) setLatestResult(result);
+          // Clear the in-flight flag only when the result we were waiting on lands —
+          // a superseded result must not stop the spinner for a request still running.
+          if (msg.fen === pendingFenRef.current) {
+            pendingFenRef.current = null;
+            setIsAnalyzing(false);
+            // The worker is free again — converge on the live position. If the user
+            // moved on (slider drag/scrub) while this ran, analyze where they are
+            // now, skipping the intermediate positions we deliberately never queued.
+            const current2 = currentFenRef.current;
+            if (current2 && current2 !== msg.fen && !cacheRef.current.has(current2)) {
+              analyzeRef.current(current2);
+            }
+          }
+          return;
+        }
+        if (msg.type === 'webgpu-unavailable') {
+          // Terminal for the dead worker (quick 260729-sod, FIX 1): the WebGPU
+          // session/warmup failed and the worker deliberately did NOT double-load
+          // a second ORT runtime into its own heap. A fresh Worker is the only
+          // reliable way to reclaim that ~226 MB — respawn pinned to wasm.
+          if (disposed) return;
+          worker.onmessage = null;
+          worker.onerror = null;
+          worker.terminate();
+          Sentry.addBreadcrumb({
+            category: 'maia',
+            level: 'info',
+            message: 'Maia WebGPU session failed — respawning worker pinned to wasm',
+            data: { rawMessage: msg.message },
+          });
+          pendingFenRef.current = null;
+          setIsReady(false);
+          isReadyRef.current = false;
+          spawn('wasm');
+          return;
+        }
+        // msg.type === 'error': surfaced as isAnalyzing=false (no partial UI state).
+        // The worker is a classic Worker with no Sentry init, and onnxruntime-web's
+        // native failures (e.g. the Firefox/Windows `Clip` WebGPU shader error) print to
+        // console but never throw a catchable JS exception — so they reach Sentry ONLY by
+        // being forwarded here. Routed through captureMaiaWorkerError (quick 260729-sod,
+        // FIX 2) for bounded classification + stable grouping instead of embedding the raw
+        // worker text in the error message (CLAUDE.md frontend Sentry rules).
+        captureMaiaWorkerError(msg.message, { source: 'maia-worker', backend: backendRef.current });
+        pendingFenRef.current = null;
+        setIsAnalyzing(false);
+      };
 
-    // CR-03 (Phase 172, SEED-106): mirror workerPool.createSlot — an async
-    // script-load failure (404, CSP block, importScripts failure) never throws a
-    // catchable JS exception on the main thread; it only surfaces here (the
-    // onmessage `type: 'error'` path only covers inference failures AFTER the
-    // worker booted). Without this handler a dead worker never reports `ready`,
-    // so a gem-sweep candidate on the Maia stage hangs forever. Capture to
-    // Sentry and surface `hasFailed` so the sweep can abandon it.
-    worker.onerror = () => {
-      Sentry.captureException(new Error('Maia worker: worker load failure'), {
-        tags: { source: 'maia-worker', backend: backendRef.current ?? 'unknown', maia_failure: 'load' },
-      });
-      setHasFailed(true);
-      setIsReady(false);
-      isReadyRef.current = false;
-      pendingFenRef.current = null;
-      setIsAnalyzing(false);
-    };
+      // CR-03 (Phase 172, SEED-106): mirror workerPool.createSlot — an async
+      // script-load failure (404, CSP block, importScripts failure) never throws a
+      // catchable JS exception on the main thread; it only surfaces here (the
+      // onmessage `type: 'error'` path only covers inference failures AFTER the
+      // worker booted). Without this handler a dead worker never reports `ready`,
+      // so a gem-sweep candidate on the Maia stage hangs forever. Capture to
+      // Sentry and surface `hasFailed` so the sweep can abandon it.
+      worker.onerror = () => {
+        Sentry.captureException(new Error('Maia worker: worker load failure'), {
+          tags: { source: 'maia-worker', backend: backendRef.current ?? 'unknown', maia_failure: 'load' },
+        });
+        setHasFailed(true);
+        setIsReady(false);
+        isReadyRef.current = false;
+        pendingFenRef.current = null;
+        setIsAnalyzing(false);
+      };
 
-    worker.postMessage({ type: 'init' });
+      // Auto mode probes WebGPU worker-side; a post-fallback respawn is pinned
+      // to wasm. No `backend` key in auto mode keeps the existing test
+      // assertion (`toContainEqual({ type: 'init' })`) valid.
+      worker.postMessage(mode === 'wasm' ? { type: 'init', backend: 'wasm' } : { type: 'init' });
+    }
+
+    spawn('auto');
 
     return () => {
-      worker.postMessage({ type: 'terminate' });
-      worker.terminate();
+      disposed = true;
+      current?.postMessage({ type: 'terminate' });
+      current?.terminate();
       workerRef.current = null;
     };
   }, [enabled, cacheResult]);

@@ -10,10 +10,20 @@
  * a global `ort` — the same reason the Stockfish worker glue is not an ES module.
  *
  * Message protocol (structured objects, not UCI text — this is not Stockfish):
- *   in:  { type: 'init' }
+ *   in:  { type: 'init', backend?: 'wasm' }   // absent/any-other-value = auto (probe WebGPU);
+ *                                              // 'wasm' skips the probe entirely — this is the
+ *                                              // mode a respawned worker is sent (see below)
  *        { type: 'analyze', fen: string, eloInputs: number[] }
  *        { type: 'terminate' }
  *   out: { type: 'ready', backend: 'webgpu' | 'wasm' }
+ *        { type: 'webgpu-unavailable', message: string }   // TERMINAL for this worker instance:
+ *                                                            a WebGPU session/warmup failure was
+ *                                                            caught WITHOUT falling through to a
+ *                                                            second importScripts (quick
+ *                                                            260729-sod, FIX 1) — the main thread
+ *                                                            owner must terminate this worker and
+ *                                                            spawn a fresh one with
+ *                                                            { type: 'init', backend: 'wasm' }
  *        { type: 'result', fen, rawPolicyByElo: {elo, policy: Float32Array}[],
  *                           wdlByElo: {elo, wdl: Float32Array}[], backend }
  *        { type: 'error', message: string }
@@ -119,14 +129,51 @@ let session = null;
 let backend = null;
 
 /**
- * Feature-detects WebGPU and attempts a WebGPU session; falls back to single-thread
- * WASM on ANY failure (no GPU adapter, session-create failure, or an unsupported op
- * — Pitfall 4). `ort.env.wasm.numThreads` is forced to 1 on EVERY path before any
- * session is created: this site ships no cross-origin-isolation headers (locked
- * Phase 136 D-3, CI-guarded), so multi-thread WASM (which needs SharedArrayBuffer)
- * must never be attempted, regardless of which execution provider ends up active.
+ * Loads the WASM-only runtime and creates the session. Shared by both the
+ * `mode: 'wasm'` respawn path and the auto-mode no-adapter path — in both
+ * cases this is the ONLY importScripts this worker instance will ever make,
+ * so there is never a second ORT build competing for the same wasm heap.
  */
-async function initSession() {
+async function initWasmOnlySession() {
+  importScripts(WASM_ONLY_RUNTIME_PATH);
+  ort.env.wasm.numThreads = 1; // NEVER > 1 — no cross-origin isolation (Phase 136 D-3)
+  ort.env.wasm.wasmPaths = WASM_ASSET_PREFIX;
+  session = await ort.InferenceSession.create(MODEL_PATH, { executionProviders: ['wasm'] });
+  backend = 'wasm';
+}
+
+/**
+ * Initializes the ONNX session for this worker instance and returns an
+ * outcome instead of silently falling through to a second `importScripts`
+ * on failure (quick 260729-sod, FIX 1 — the double-load-into-one-worker-
+ * global bug: `session = null` frees nothing, WASM linear memory never
+ * shrinks, and a second `importScripts` overwrites the `ort` global while
+ * leaving the first runtime's ~226 MB heap alive and reachable, so a WebGPU
+ * failure used to leave 452 MB committed in one worker — see
+ * 260729-sod-FINDINGS.md §2-3).
+ *
+ * `mode: 'wasm'` is the path a RESPAWNED worker takes: no adapter probe, no
+ * WebGPU bundle ever loaded into this heap — this is why a respawn is cheap.
+ * Any other mode ("auto") probes for a GPU adapter and either loads WASM-only
+ * directly (no adapter — must NOT report a failure outcome, since no dirty
+ * heap exists yet and doing so would force a needless respawn+double worker
+ * boot for every non-WebGPU browser) or attempts WebGPU with a warmup
+ * inference and reports `{ ok: false, message }` on ANY throw — the caller
+ * (self.onmessage) is responsible for turning that into a terminal
+ * `webgpu-unavailable` message instead of a second `importScripts`.
+ *
+ * `ort.env.wasm.numThreads` is forced to 1 on EVERY path before any session
+ * is created: this site ships no cross-origin-isolation headers (locked
+ * Phase 136 D-3, CI-guarded), so multi-thread WASM (which needs
+ * SharedArrayBuffer) must never be attempted, regardless of which execution
+ * provider ends up active.
+ */
+async function initSession(mode) {
+  if (mode === 'wasm') {
+    await initWasmOnlySession();
+    return { ok: true };
+  }
+
   let gpuAdapter = null;
   try {
     gpuAdapter = self.navigator && self.navigator.gpu ? await navigator.gpu.requestAdapter() : null;
@@ -145,22 +192,34 @@ async function initSession() {
       // sequential_executor.cc ExecuteKernel) fails only at run time, so wrapping create()
       // alone let a broken webgpu session slip through — the first real analyze() then threw
       // and Maia died with no WASM fallback. A warmup run inside this try surfaces the shader
-      // failure here so the catch below falls through to WASM.
+      // failure here so the catch below can report it (KEEP this call — do not remove or move
+      // it outside the try; it is the thing that detects the failure at all).
       await analyze(WARMUP_FEN, [WARMUP_ELO]);
       backend = 'webgpu';
-      return;
-    } catch {
-      // WebGPU session-create, op-support, or lazy shader-compile failure (Pitfall 4) —
-      // fall through to WASM.
+      return { ok: true };
+    } catch (err) {
+      // ANY throw inside the WebGPU block (session-create, op-support, or lazy
+      // shader-compile failure — Pitfall 4): release best-effort (optional-chained
+      // for ORT version/backend safety) — this will NOT reclaim the wasm linear
+      // heap, that's what the caller's respawn is for, but dropping a session
+      // without releasing it is wrong regardless. Do NOT importScripts the WASM
+      // bundle here — that second load into this same worker global is the bug.
+      try {
+        await session?.release?.();
+      } catch {
+        // best-effort: a session that failed to construct fully may not be
+        // releasable at all — swallow and proceed to report the outcome.
+      }
       session = null;
+      return { ok: false, message: err && err.message ? err.message : String(err) };
     }
   }
 
-  importScripts(WASM_ONLY_RUNTIME_PATH);
-  ort.env.wasm.numThreads = 1; // NEVER > 1 — no cross-origin isolation (Phase 136 D-3)
-  ort.env.wasm.wasmPaths = WASM_ASSET_PREFIX;
-  session = await ort.InferenceSession.create(MODEL_PATH, { executionProviders: ['wasm'] });
-  backend = 'wasm';
+  // No GPU adapter at all: no ORT build has been loaded yet, so there is no
+  // dirty heap to escape — load WASM-only directly, exactly as the auto path
+  // always has. This must NOT report a failure outcome (see doc comment).
+  await initWasmOnlySession();
+  return { ok: true };
 }
 
 /**
@@ -219,16 +278,36 @@ async function analyze(fen, eloInputs) {
 
 // ─── Message handling ───────────────────────────────────────────────────────────────────
 
+/**
+ * Holds the in-flight (or last-settled) `initSession()` promise so a
+ * concurrently-arriving `analyze` can await session init instead of racing
+ * it (FLAWCHESS-95 fix, folded into this task: `self.onmessage` is `async`,
+ * so without this an `analyze` arriving while `init` is still running would
+ * execute concurrently and see `session === null`).
+ */
+let initPromise = null;
+
 self.onmessage = async (e) => {
   const msg = e.data || {};
   try {
     if (msg.type === 'init') {
-      await initSession();
+      initPromise = initSession(msg.backend === 'wasm' ? 'wasm' : 'auto');
+      const outcome = await initPromise;
+      if (!outcome.ok) {
+        // Terminal for THIS worker instance — do not fall through to a second
+        // importScripts. Do NOT call self.close(): the main thread owns
+        // termination, and racing it here risks losing this message before the
+        // main thread's onmessage handler processes it. The worker just sits
+        // idle until the owner terminates it and spawns a fresh wasm-pinned one.
+        self.postMessage({ type: 'webgpu-unavailable', message: outcome.message });
+        return;
+      }
       self.postMessage({ type: 'ready', backend });
       return;
     }
 
     if (msg.type === 'analyze') {
+      if (initPromise) await initPromise;
       if (!session) {
         throw new Error('maia-worker: analyze received before session init completed');
       }
