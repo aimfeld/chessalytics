@@ -5,10 +5,10 @@ milestone_name: Train — Spaced-Repetition Blunder Drills
 current_phase: 193
 current_phase_name: session-tick-streak-shield
 status: verifying
-stopped_at: "Completed quick 260728-tgc: Train Scored today is server-derived, fixing the cross-device zero-score bug"
-last_updated: "2026-07-29T04:08:37.810Z"
-last_activity: 2026-07-28
-last_activity_desc: "Completed quick task 260728-tgc: Train's \\\"Scored today\\\" is server-derived (solved_results on the session response), fixing the cross-device \\\"0 of 18\\\" bug"
+stopped_at: "Completed quick 260729-sod: Maia WASM OOM fixes (respawn + Sentry tag + shared worker + cache headers)"
+last_updated: "2026-07-29T19:24:22.265Z"
+last_activity: 2026-07-29
+last_activity_desc: "Completed quick task 260729-a86: tier-3 Step-1 user picker rewritten as two correlated EXISTS (prod 360ms → 2.4ms, 71,612 → 1,443 buffers); no migration, the partial indexes already existed"
 progress:
   total_phases: 6
   completed_phases: 6
@@ -27,7 +27,7 @@ Status: Phase complete — ready for verification
 passed with 2 warnings, both closed at plan time. Two blocking gates are built in: a
 `checkpoint:decision` on the `herring_pool` surrogate PK (192-01) and a second on the
 `drill_solves.game_id` nullability migration (192-02, one-way door).
-Last activity: 2026-07-29 — Completed quick task 260729-a86: tier-3 Step-1 user picker rewritten as two correlated EXISTS (prod 360ms → 2.4ms, 71,612 → 1,443 buffers); no migration, the partial indexes already existed
+Last activity: 2026-07-29 — Completed quick task 260729-sod: fixed the iOS Maia WASM OOM (WebGPU fallback was loading a second ORT runtime into the same worker instead of respawning), shared one Maia worker across /analysis, distinct Sentry grouping for Maia failures, cache headers for /maia + /engine
 
 Phase 192 fixes a correctness defect in Phase 189's red herrings: they were sourced from
 non-gem `game_best_moves` rows, which does not actually mean "several fine moves". It replaces
@@ -569,6 +569,7 @@ v1.29 Live-Engine Analysis Page shipped 2026-06-29 — 5 phases (136–140), 14 
 - [Phase ?]: 193-02: Settle-first mutation check confirmed load-bearing by manual revert-and-rerun (skip-guard test failed without the settle_streak_snapshot call, passed with it restored)
 - [Phase ?]: Phase 193 SCHD-02 window-expiry ruling (user, not executor): an open unfinished session's badge does NOT survive its window expiring — no code change; accepted trade-off is that record_solve has no expiry check so a late completion can still net a shield pip against the miss, and the user will never be cued toward that recovery path
 - [Phase ?]: quick 260728-pgp: capped Train session composition at 1 puzzle/game/session (shared per_game_counts Counter over due + fresh pool), uniform-random within-game pool pick via pick_one_per_game
+- [Phase ?]: 260729-sod: shared maiaWorkerHost singleton (lease refcounting, one-in-flight priority dispatch) collapses /analysis's up-to-3 Maia workers to 1, reversing Phase 154 D-04's separate-Worker decision
 
 ### Pending Todos
 
@@ -623,6 +624,7 @@ None active.
 | 260728-tgc | Train's "Scored today" is now server-derived instead of a device-local localStorage tally, fixing a reproduced prod bug where the same completed session read "14 of 18 points" on the solving desktop and "0 of 18 points" on mobile (user 28, session 27). The score was a `train_score:<session_id>` localStorage entry accumulated from solve responses, so any device that never saw those responses seeded 0 — the `max` stayed right because it came from the server's `puzzle_count`, which is what made it read as a real zero rather than missing data. Option B: `TrainSessionResponse` gains `solved_results` (one `correct_guess`/`move_quality` entry per `solved_at IS NOT NULL` row, in `position` order) and the client aggregates via the `scorePuzzle` + `aggregateSessionScore` pair it already owns — deliberately NOT a server-computed score int, which would have ported the formula into Python against `DrillMoveQuality`'s own docstring and needed a CI drift check. `_resume_session`'s `func.count()` widened into a row select (still one query, no extra round-trip); `solved_count` derived as `len(solved_results)`. Legacy pre-SEED-119 NULL `move_quality` reuses `record_solve`'s existing fallback, extracted to `_resolve_move_quality_tier` so the rule lives once. Also fixes the in-loop "N / M pts" denominator: `sessionSolvedCount` now bases off `solved_results.length` so numerator and denominator share one source, and `solvedPositions` is cleared on each session response so the 191-06 settings-saved re-fire can't double-count. Regression mutation-proven independently: neutering the seed fails both the cross-device test (expected "14 of 18", got "0 of 18") and the resumed-score test. Backend 3923 passed, frontend 2823 passed, ruff/ty/tsc clean | 2026-07-28 | 3f374c15 | [260728-tgc-make-train-scored-today-fully-server-sid](./quick/260728-tgc-make-train-scored-today-fully-server-sid/) |
 | 39 | Bots: larger desktop board (600px) with viewport-height fit + tighter page padding | 2026-07-29 | 2ae6aabc | — |
 | 260729-a86 | `_claim_tier3_derived` Step 1 — the remaining picker hotspot after 260728-soo, at 89.8% of all prod DB time (10,376 calls x 221ms mean over 7.5h, 71k buffers/call). NOT an index problem: `ix_games_needs_engine_full_evals` and `ix_games_lichess_pv_backfill_pending` already exist and are already `btree(user_id)` partials, so there is no migration here. The defect was query SHAPE — both branches sat inside ONE `EXISTS` containing an `OR`, and because `u.is_guest` was correlated inside it, Postgres BitmapOr'd the two partials (cheap, 22ms/1.3k buffers) and then heap-fetched all 255,218 matching game rows (70,274 heap blocks) into a Hash Right Semi Join just to evaluate the guest guard, to select 21 users out of 418 — O(backlog), re-paid every call. Distributing the OR into two correlated `EXISTS` with the guest guard hoisted to an outer conjunct of branch (a) is logically identical (`u.is_guest` does not depend on `g`) and gives per-user Index Only Scan probes on both partials: prod-measured 360ms → 2.4ms and 71,612 → 1,443 buffers, cost now O(users). Equivalence proven on prod with EXCEPT both directions (21 = 21, 0 rows either way), and the shipped code's literally-emitted SQL re-EXPLAIN'd on prod rather than a hand-written approximation. `_es_weighted_user_pick` gained a mutually-exclusive `candidate_where_sql` param so the ES key stays single-sourced while tier-4 blob/bestmove SQL stays byte-identical (test-pinned). Gap found and closed during review: the executor's 7 tests ALL passed with the fix fully reverted (semantically identical shapes, and the dev DB is too small for a plan assertion), so an 8th test pins the emitted Step-1 shape — mutation-proven to fail on re-collapse. Backend 3931 passed, ruff/ty clean. Prod re-verification of pg_stat_statements is HUMAN-UAT after deploy | 2026-07-29 | 62c9e2b9 | [260729-a86-user-id-leading-partial-indexes-for-the-](./quick/260729-a86-user-id-leading-partial-indexes-for-the-/) |
+| 260729-sod | Fixed the iOS Maia WASM OOM behind reported random crashes during bot play. Root cause found in Sentry (FLAWCHESS-92, iPhone/Mobile Safari on `/bots`): `no available backend found. ERR: [wasm] RangeError: Out of memory` — a literal WASM heap allocation failure on an 8 GB device, so NOT an old-device capacity problem. `maia-worker.js`'s WebGPU→WASM fallback did `importScripts` a SECOND ORT runtime into the same worker global after the WebGPU attempt failed, while `session = null` freed nothing (ORT needs an explicit `release()`, and WASM linear memory never shrinks) — two full heaps in one worker, plus the 43.6 MB model fetched twice. iOS 18.2+ ships WebGPU on iPhone, so modern iPhones ENTER that branch, which is why this hit a 16 Pro Max. Measured with instrumented `WebAssembly.Memory` on the real vendored model: **226 MB of WASM heap per Maia session**, identical at batch 1 and batch 21 (so the 21-rung ELO ladder is NOT a factor) and flat across repeated inferences (the SEED-113 dispose fix holds — no leak); `enableCpuMemArena`/`enableMemPattern` move nothing. Four fixes: (1) the worker now reports `webgpu-unavailable` and the main thread respawns a fresh WASM-pinned worker — a new worker is the only way to reclaim heap #1 — with the Firefox lazy-`Clip`-shader warmup deliberately KEPT; (2) distinct `maia_failure` Sentry tag so the OOM stops hiding inside FLAWCHESS-92's `Load failed` events; (3) new `maiaWorkerHost.ts` shares ONE Maia worker across `/analysis`'s three consumers (live chart, gem sweep, FlawChess engine), reversing Phase 154 D-04 on memory grounds — 2 workers/~452 MB on mobile, up to 3/~678 MB on desktop, now 1/~226 MB; both consumer disciplines (drop-and-reissue vs no-drop FIFO) stay above the host, which owns transport only and adds a priority flag so the chart isn't starved behind MCTS/sweep calls; (4) 30-day cache headers for `/maia/*` + `/engine/*` (NOT `immutable` — ORT resolves its own wasm/mjs filenames from `wasmPaths`, so renaming would break resolution), with `maia-worker.js` carved out to `no-cache` since its protocol changed. Frontend 2840/2840 passed, lint/knip/`tsc -b` clean; the singleton guard mutation-proven (4 tests fail when disabled). Real-device iOS confirmation is HUMAN-UAT after deploy — no unit test allocates a real WASM heap | 2026-07-29 | 01f5e425 | [260729-sod-fix-maia-wasm-oom-on-ios-worker-respawn-](./quick/260729-sod-fix-maia-wasm-oom-on-ios-worker-respawn-/) |
 
 ## Deferred Items
 
@@ -675,9 +677,9 @@ Items acknowledged and deferred at **v1.29 milestone close on 2026-06-29** (user
 
 ## Session Continuity
 
-**Stopped at:** Completed quick 260728-pgp: cap Train drill items at 1 per game per session
+**Stopped at:** Completed quick 260729-sod: Maia WASM OOM fixes (respawn + Sentry tag + shared worker + cache headers)
 
-**Last session:** 2026-07-28T16:56:37.250Z
+**Last session:** 2026-07-29T19:24:12.759Z
 
 **Resume file:**
 
@@ -769,6 +771,7 @@ None
 | Phase 193 P02 | ~30min | 2 tasks | 8 files |
 | Phase 193 P03 | ~15min | 3 tasks | 5 files |
 | Phase quick-260728-pgp P01 | 50min | 3 tasks | 5 files |
+| Phase quick-260729-sod P01 | ~2h | 4 tasks | 14 files |
 
 ## Performance Metrics
 
