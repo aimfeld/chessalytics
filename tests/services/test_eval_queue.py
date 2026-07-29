@@ -2852,7 +2852,9 @@ class TestTier3Step1PredicateShape:
         now = datetime.now(timezone.utc)
 
         async with queue_session_maker() as session:
-            await session.execute(sa_update(User).where(User.id == guest_id).values(last_activity=now))
+            await session.execute(
+                sa_update(User).where(User.id == guest_id).values(last_activity=now)
+            )
             await session.commit()
 
         guest_needs_engine_game = await _insert_game(
@@ -2894,7 +2896,9 @@ class TestTier3Step1PredicateShape:
         now = datetime.now(timezone.utc)
 
         async with queue_session_maker() as session:
-            await session.execute(sa_update(User).where(User.id == guest_id).values(last_activity=now))
+            await session.execute(
+                sa_update(User).where(User.id == guest_id).values(last_activity=now)
+            )
             await session.commit()
 
         guest_lichess_game = await _insert_game(
@@ -2939,7 +2943,9 @@ class TestTier3Step1PredicateShape:
         now = datetime.now(timezone.utc)
 
         async with queue_session_maker() as session:
-            await session.execute(sa_update(User).where(User.id == user_id).values(last_activity=now))
+            await session.execute(
+                sa_update(User).where(User.id == user_id).values(last_activity=now)
+            )
             await session.commit()
 
         needs_engine_game = await _insert_game(
@@ -2984,7 +2990,9 @@ class TestTier3Step1PredicateShape:
         now = datetime.now(timezone.utc)
 
         async with queue_session_maker() as session:
-            await session.execute(sa_update(User).where(User.id == user_id).values(last_activity=now))
+            await session.execute(
+                sa_update(User).where(User.id == user_id).values(last_activity=now)
+            )
             await session.commit()
 
         lichess_pending_game = await _insert_game(
@@ -3031,7 +3039,9 @@ class TestTier3Step1PredicateShape:
         now = datetime.now(timezone.utc)
 
         async with queue_session_maker() as session:
-            await session.execute(sa_update(User).where(User.id == user_id).values(last_activity=now))
+            await session.execute(
+                sa_update(User).where(User.id == user_id).values(last_activity=now)
+            )
             await session.commit()
 
         complete_game = await _insert_game(
