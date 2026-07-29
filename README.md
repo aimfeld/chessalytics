@@ -31,17 +31,18 @@ A free, open-source chess analysis platform. Import your games from chess.com an
 
 ## Features
 
-- **FlawChess Engine** — an in-browser engine that ranks your moves by expected practical score: the best move you'll actually pull off against an opponent who defends like a real player at your level. Fuses Stockfish's objective evaluation with Maia's human move-prediction (expectimax inside an MCTS budget allocator), and surfaces the traps and swindles a conventional engine ignores.
-- **Game & tactic analysis** — Stockfish over your entire game history, with every mistake tagged by the tactic behind it (fork, pin, skewer, and 20+ motifs), blunder-rate trends over time, and gem-move detection for the only good move most players at your rating would miss.
-- **Personalized puzzle training** — a spaced-repetition drill built from your own blunders rather than a generic puzzle set. Each session mixes real blunders with quiet positions where several moves are fine, so you commit to "one critical move or several fine moves?" before playing; missed positions return next session, then after three days, then ten, until solved three times and retired.
-- **Endgame analytics** — WDL by endgame type (rook, minor piece, pawn, queen, mixed), conversion rates when up material and recovery rates when down, Endgame ELO timeline per platform/time control, and LLM-narrated personalized feedback explaining what your stats mean.
-- **Opening explorer & insights** — step through any position and see your WDL per candidate move; an automatic 16-half-move scan surfaces opening strengths and weaknesses with deep-links into the explorer; works for scouting opponents too.
-- **Time management stats** — clock advantage/deficit at endgame entry, performance under matching time pressure vs opponents, flag rates per time control.
-- **Opening comparison & tracking** — bookmark openings and compare WDL trends over time, filter by time control to see what works where.
-- **System opening filter** — filter by your pieces only to analyze system openings like the London across all opponent variations.
-- **Cross-platform import** — combine chess.com and lichess games, filter by color, time control, opponent type, and recency.
-- **Mobile-friendly PWA** — installable on Android and iOS, optimized for touch.
-- **Open source** — self-hostable, AGPL-3.0 licensed.
+- **FlawChess Engine**: an in-browser engine that ranks your moves by expected practical score: the best move you'll actually pull off against an opponent who defends like a real player at your level. Fuses Stockfish's objective evaluation with Maia's human move-prediction (expectimax inside an MCTS budget allocator), and surfaces the traps and swindles a conventional engine ignores.
+- **Human-like bots**: 24 named opponents driven by the FlawChess Engine, spanning four playing styles (Attacker, Trickster, Grinder, Wall) across six approximate rating rungs from 800 to 1800, each a fully pinned personality with its own opening book, resign and draw-offer policy, and bio. Clocked play, and every finished game lands in your library as an analyzable game like any other.
+- **Game & tactic analysis**: Stockfish over your entire game history, with every mistake tagged by the tactic behind it (fork, pin, skewer, and 20+ motifs), blunder-rate trends over time, and gem-move detection for the only good move most players at your rating would miss.
+- **Personalized puzzle training**: a spaced-repetition drill built from your own blunders rather than a generic puzzle set. Each session mixes real blunders with quiet positions where several moves are fine, so you commit to "one critical move or several fine moves?" before playing; missed positions return next session, then after three days, then ten, until solved three times and retired.
+- **Endgame analytics**: WDL by endgame type (rook, minor piece, pawn, queen, mixed), conversion rates when up material and recovery rates when down, Endgame ELO timeline per platform/time control, and LLM-narrated personalized feedback explaining what your stats mean.
+- **Opening explorer & insights**: step through any position and see your WDL per candidate move; an automatic 16-half-move scan surfaces opening strengths and weaknesses with deep-links into the explorer; works for scouting opponents too.
+- **Time management stats**: clock advantage/deficit at endgame entry, performance under matching time pressure vs opponents, flag rates per time control.
+- **Opening comparison & tracking**: bookmark openings and compare WDL trends over time, filter by time control to see what works where.
+- **System opening filter**: filter by your pieces only to analyze system openings like the London across all opponent variations.
+- **Cross-platform import**: combine chess.com and lichess games, filter by color, time control, opponent type, and recency.
+- **Mobile-friendly PWA**: installable on Android and iOS, optimized for touch.
+- **Open source**: self-hostable, AGPL-3.0 licensed.
 
 ## Tech Stack
 
