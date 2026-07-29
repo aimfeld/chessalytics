@@ -32,6 +32,7 @@
 import * as Sentry from '@sentry/react';
 import { maskAndSoftmax } from '@/lib/maiaEncoding';
 import { sanToUci } from '@/lib/sanToSquares';
+import { captureMaiaWorkerError } from '@/lib/maiaWorkerErrors';
 import type { Side } from './types';
 
 // ─── Constants ───────────────────────────────────────────────────────────────
@@ -208,12 +209,13 @@ export function createMaiaQueue(): MaiaQueue {
     // msg.type === 'error': the Maia worker is a classic Worker with no
     // Sentry init, and onnxruntime-web's native failures never throw a
     // catchable JS exception on the main thread — so they reach Sentry ONLY
-    // by being forwarded here. Distinct 'maia-queue-worker' source tag keeps
-    // this filterable separately from the chart's 'maia-worker' tag
-    // (CLAUDE.md: use tags for filterable dimensions).
-    Sentry.captureException(new Error(`Maia queue worker error: ${msg.message}`), {
-      tags: { source: 'maia-queue-worker', backend: backend ?? 'unknown' },
-    });
+    // by being forwarded here. Routed through captureMaiaWorkerError (quick
+    // 260729-sod, FIX 2) for bounded classification + stable grouping
+    // instead of embedding the raw worker text in the error message
+    // (CLAUDE.md: never embed variables in error messages). Distinct
+    // 'maia-queue-worker' source tag keeps this filterable separately from
+    // the chart's 'maia-worker' tag.
+    captureMaiaWorkerError(msg.message, { source: 'maia-queue-worker', backend });
     if (!isReady) {
       // Pre-ready init failure (e.g. onnx session/model-load — CR-03): the
       // worker never got to dispatch, so `currentBatch` is still null and
@@ -248,7 +250,7 @@ export function createMaiaQueue(): MaiaQueue {
       // the dead worker so the next policy() re-spawns.
       w.onerror = (): void => {
         Sentry.captureException(new Error('Maia queue worker failed to load'), {
-          tags: { source: 'maia-queue-worker', backend: backend ?? 'unknown' },
+          tags: { source: 'maia-queue-worker', backend: backend ?? 'unknown', maia_failure: 'load' },
         });
         settleAllAndDropWorker();
       };
@@ -257,7 +259,7 @@ export function createMaiaQueue(): MaiaQueue {
       // Graceful-degradation floor (Pitfall 1): a construction failure must
       // not leave every pending policy() promise hanging forever.
       Sentry.captureException(err instanceof Error ? err : new Error(String(err)), {
-        tags: { source: 'maia-queue-worker', backend: 'unknown' },
+        tags: { source: 'maia-queue-worker', backend: 'unknown', maia_failure: 'load' },
       });
       const failed = pending.splice(0, pending.length);
       for (const req of failed) req.resolve({});

@@ -22,6 +22,7 @@ import { useRef, useState, useCallback, useEffect, useMemo } from 'react';
 import * as Sentry from '@sentry/react';
 import { maskAndSoftmax, softmaxWdl, expectedScore, MAIA_ELO_LADDER } from '../lib/maiaEncoding';
 import type { WdlVector } from '../lib/maiaEncoding';
+import { captureMaiaWorkerError } from '../lib/maiaWorkerErrors';
 
 // ─── Constants ───────────────────────────────────────────────────────────────
 
@@ -290,10 +291,10 @@ export function useMaiaEngine({ fen, enabled, selectedElo }: UseMaiaEngineOption
       // The worker is a classic Worker with no Sentry init, and onnxruntime-web's
       // native failures (e.g. the Firefox/Windows `Clip` WebGPU shader error) print to
       // console but never throw a catchable JS exception — so they reach Sentry ONLY by
-      // being forwarded here. Capture manually (CLAUDE.md frontend Sentry rules).
-      Sentry.captureException(new Error(`Maia worker error: ${msg.message}`), {
-        tags: { source: 'maia-worker', backend: backendRef.current ?? 'unknown' },
-      });
+      // being forwarded here. Routed through captureMaiaWorkerError (quick 260729-sod,
+      // FIX 2) for bounded classification + stable grouping instead of embedding the raw
+      // worker text in the error message (CLAUDE.md frontend Sentry rules).
+      captureMaiaWorkerError(msg.message, { source: 'maia-worker', backend: backendRef.current });
       pendingFenRef.current = null;
       setIsAnalyzing(false);
     };
@@ -307,7 +308,7 @@ export function useMaiaEngine({ fen, enabled, selectedElo }: UseMaiaEngineOption
     // Sentry and surface `hasFailed` so the sweep can abandon it.
     worker.onerror = () => {
       Sentry.captureException(new Error('Maia worker: worker load failure'), {
-        tags: { source: 'maia-worker', backend: backendRef.current ?? 'unknown' },
+        tags: { source: 'maia-worker', backend: backendRef.current ?? 'unknown', maia_failure: 'load' },
       });
       setHasFailed(true);
       setIsReady(false);
