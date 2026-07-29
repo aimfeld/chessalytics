@@ -52,6 +52,7 @@ import { PersonaGrid } from '@/components/bots/PersonaGrid';
 import { PersonaDetailSurface } from '@/components/bots/PersonaDetailSurface';
 import { personaFor, type Persona } from '@/lib/personas/personaRegistry';
 import { useBotGame, type BotGameSettings } from '@/hooks/useBotGame';
+import { useFitBoardToViewport } from '@/hooks/useFitBoardToViewport';
 import { useWinCelebrationHold } from '@/hooks/useWinCelebrationHold';
 import { useUserProfile } from '@/hooks/useUserProfile';
 import { useBotPersonaWins, BOT_PERSONA_WINS_QUERY_KEY } from '@/hooks/useBotPersonaWins';
@@ -77,8 +78,22 @@ const DESKTOP_BREAKPOINT_PX = 800;
  * `ChessBoard maxWidth` prop and the single-column stack's `max-width` so the
  * clock strips / board controls are ALWAYS exactly the board's width: capping
  * the column at this value means the container never exceeds the board, so the
- * board (sized to `min(container, this)`) fills the column edge-to-edge. */
-const BOT_BOARD_MAX_WIDTH_PX = 400;
+ * board (sized to `min(container, this)`) fills the column edge-to-edge.
+ *
+ * 50% larger than the original 400px (UAT: the desktop play board was too
+ * small), matching TRAIN_BOARD_MAX_WIDTH_PX. On a viewport too short for it,
+ * `useFitBoardToViewport` shrinks the board below this ceiling — same
+ * measured-chrome approach as the Train solve screen. */
+const BOT_BOARD_MAX_WIDTH_PX = 600;
+
+/** Floor for the viewport-height shrink — below it the page scrolls instead of
+ * shrinking the board into unusability (mirrors TRAIN_BOARD_MIN_WIDTH_PX). */
+const BOT_BOARD_MIN_WIDTH_PX = 240;
+
+/** Space kept free between the page container's bottom edge and the viewport
+ * bottom. The container's own bottom padding (pb-20 / sm:pb-4) is already
+ * measured as chrome, so this is only visual breathing room. */
+const BOT_BOARD_BOTTOM_GUTTER_PX = 24;
 
 /** Fixed width of the desktop right column (clocks + move list + controls). */
 const DESKTOP_SIDE_COLUMN_PX = 320;
@@ -110,11 +125,12 @@ function renderMobileLayout(
   board: ReactElement,
   boardControls: ReactElement,
   controls: ReactElement,
+  boardPx: number,
 ): ReactElement {
   return (
     <div
       className="mx-auto flex w-full flex-col gap-3"
-      style={{ maxWidth: BOT_BOARD_MAX_WIDTH_PX }}
+      style={{ maxWidth: boardPx }}
     >
       {botClock}
       {board}
@@ -130,7 +146,13 @@ function renderMobileLayout(
  * flex-fills the remaining height — `items-stretch` makes the side column
  * exactly the board's height, so the move-list box bottom lines up with the
  * board's bottom. The bottom row puts the board controls under the board and
- * the game controls / result strip under the side column. */
+ * the game controls / result strip under the side column.
+ *
+ * The board column is `flex-1` capped at `boardPx` rather than a fixed width:
+ * between DESKTOP_BREAKPOINT_PX and the width the full-size board needs, it
+ * shrinks to whatever room the side column leaves instead of overflowing the
+ * page. Both rows resolve to the same width (same parent, same side column),
+ * so the board controls keep spanning exactly the board. */
 function renderDesktopLayout(
   botClock: ReactElement,
   userClock: ReactElement,
@@ -138,11 +160,12 @@ function renderDesktopLayout(
   boardControls: ReactElement,
   moveList: ReactElement,
   controls: ReactElement,
+  boardPx: number,
 ): ReactElement {
   return (
     <div className="flex flex-col gap-2">
       <div className="flex flex-row items-stretch justify-center gap-2">
-        <div className="shrink-0" style={{ width: BOT_BOARD_MAX_WIDTH_PX }}>
+        <div className="min-w-0 flex-1" style={{ maxWidth: boardPx }}>
           {board}
         </div>
         <div
@@ -155,7 +178,7 @@ function renderDesktopLayout(
         </div>
       </div>
       <div className="flex flex-row justify-center gap-2">
-        <div className="shrink-0" style={{ width: BOT_BOARD_MAX_WIDTH_PX }}>
+        <div className="min-w-0 flex-1" style={{ maxWidth: boardPx }}>
           {boardControls}
         </div>
         <div className="shrink-0" style={{ width: DESKTOP_SIDE_COLUMN_PX }}>
@@ -215,6 +238,20 @@ function BotsGame({
   const queryClient = useQueryClient();
   const isDesktop = useIsDesktop();
   const muted = useMuted();
+  // The board shrinks to whatever vertical room the viewport actually leaves
+  // (same measured-chrome approach as the Train solve screen). `pageRef` is the
+  // page container — a stable element across the desktop/mobile layout switch,
+  // and its height minus the board's is exactly the chrome (clocks, controls,
+  // draw banner, bottom padding) the board has to share the viewport with.
+  const pageRef = useRef<HTMLDivElement>(null);
+  const boardRef = useRef<HTMLDivElement>(null);
+  const boardPx = useFitBoardToViewport({
+    columnRef: pageRef,
+    boardRef,
+    maxPx: BOT_BOARD_MAX_WIDTH_PX,
+    minPx: BOT_BOARD_MIN_WIDTH_PX,
+    gutterPx: BOT_BOARD_BOTTOM_GUTTER_PX,
+  });
   // Suppress the mobile app header while the game board is on screen — the
   // board + clocks need the vertical space (ProtectedLayout reads this flag).
   useMarkPlayActive();
@@ -402,13 +439,15 @@ function BotsGame({
     />
   );
   const board = (
-    <ChessBoard
-      position={game.position}
-      onPieceDrop={game.attemptMove}
-      flipped={flipped}
-      lastMove={game.lastMove}
-      maxWidth={BOT_BOARD_MAX_WIDTH_PX}
-    />
+    <div ref={boardRef} className="w-full">
+      <ChessBoard
+        position={game.position}
+        onPieceDrop={game.attemptMove}
+        flipped={flipped}
+        lastMove={game.lastMove}
+        maxWidth={boardPx}
+      />
+    </div>
   );
   const boardControls = (
     <BoardControls
@@ -467,16 +506,19 @@ function BotsGame({
 
   return (
     <div
+      ref={pageRef}
       data-testid="bots-page"
       onPointerDown={handleFirstInteraction}
       // Bottom-nav clearance (171 UAT gap 3, Task 1) — same pb-20 sm:pb-4
       // pattern as SetupScreen.tsx's root; see that comment for the full
-      // clearance arithmetic.
-      className="mx-auto flex max-w-5xl flex-col gap-4 p-4 pb-20 sm:pb-4"
+      // clearance arithmetic. Horizontal padding is deliberately tighter than
+      // the usual p-4: every px of it comes straight off the board's width at
+      // the narrower desktop widths.
+      className="mx-auto flex max-w-5xl flex-col gap-4 px-2 py-4 pb-20 sm:pb-4"
     >
       {isDesktop
-        ? renderDesktopLayout(botClock, userClock, board, boardControls, moveList, controls)
-        : renderMobileLayout(botClock, userClock, board, boardControls, controls)}
+        ? renderDesktopLayout(botClock, userClock, board, boardControls, moveList, controls, boardPx)
+        : renderMobileLayout(botClock, userClock, board, boardControls, controls, boardPx)}
 
       {/* D-07: non-blocking — rendered as a sibling near the board/clocks,
           never a Dialog. Play continues underneath it; the hook auto-expires
@@ -486,9 +528,7 @@ function BotsGame({
       <div
         className="mx-auto w-full"
         style={{
-          maxWidth: isDesktop
-            ? BOT_BOARD_MAX_WIDTH_PX + DESKTOP_SIDE_COLUMN_PX
-            : BOT_BOARD_MAX_WIDTH_PX,
+          maxWidth: isDesktop ? boardPx + DESKTOP_SIDE_COLUMN_PX : boardPx,
         }}
       >
         <BotDrawOfferBanner

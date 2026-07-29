@@ -31,6 +31,8 @@ in `YYYY-MM-DD` (Europe/Zurich).
 
 - Train puzzles are now scored out of three instead of two. The position read is still worth one point, and the move is worth two for a clean move, one for a slightly imprecise one, and none for a mistake or blunder, so settling for a second-rate move no longer scores a perfect session. The per-puzzle points badge is now colour-coded by score. Already-recorded sessions keep their original scores. (SEED-119)
 
+- The board you play bots on is 50% larger on desktop, and now measures itself against the window: on a short screen it shrinks to keep the clocks and controls in view instead of pushing them off the bottom. The page also runs closer to the window edges so more of that width reaches the board. (quick 260729-bbd)
+
 ### Fixed
 
 - Train's "Scored today" now reads the same on every device. The score was kept only in the browser you solved in, so opening Train on your phone after finishing a session on your computer showed "0 of 18 points" instead of the score you actually earned. The score now comes from your account, so it is correct wherever you open it, and the running score during a session no longer counts against the wrong total after switching devices mid-session. (quick 260728-tgc)
