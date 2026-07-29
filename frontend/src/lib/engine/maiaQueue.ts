@@ -1,8 +1,6 @@
 /**
- * maiaQueue — a dedicated single-instance Maia policy Web Worker, fully
- * separate from the existing `useMaiaEngine` hook, that supplies per-node
- * UCI-keyed move-probability distributions for an explicit per-side ELO
- * (POOL-03).
+ * maiaQueue — a Maia policy provider supplying per-node UCI-keyed
+ * move-probability distributions for an explicit per-side ELO (POOL-03).
  *
  * This is the real implementation of the frozen `EngineProviders.policy()`
  * method (Phase 153), forking the already-shipped `useMaiaEngine.ts`
@@ -21,24 +19,35 @@
  * This module therefore uses a proper async FIFO queue: one ONNX inference in
  * flight at a time, every caller's promise resolves.
  *
- * Worker lifecycle: lazy spawn on the first `policy()` call (D-02), `{type:
- * 'error'}` messages forwarded to Sentry under a distinct source tag
- * (classic Workers never throw a catchable JS exception on the main thread),
- * and a graceful-degradation floor — a construction failure or a worker
- * error settles every affected promise instead of leaving it hanging
- * (Pitfall 1).
+ * Worker ownership (quick 260729-sod, FIX 3 — reverses Phase 154 D-04's
+ * "SEPARATE Worker() instance" decision): this module no longer constructs
+ * its own Worker. `/analysis` running up to THREE concurrent Maia workers —
+ * this queue's own, `useMaiaEngine`'s chart worker, and `useGemSweep`'s own
+ * `useMaiaEngine` instance — cost ~226 MB of WASM heap EACH: up to 3 on
+ * desktop (~678 MB) and 2 on mobile/low-power (~452 MB, the configuration
+ * that actually OOM'd mobile Safari on FLAWCHESS-92 — the gem sweep's
+ * `isLowPowerDevice()` gate keeps its instance from spawning there). This
+ * module now acquires a `priority: false` lease from the shared
+ * `maiaWorkerHost` singleton instead, which owns Worker spawn/respawn/death
+ * and guarantees every request settles. The D-04 parts that still hold are
+ * unchanged: deduped per-side ELOs instead of the full ladder, and a
+ * separate `(fen, elo)`-keyed cache.
+ *
+ * Lazy lease acquisition on the first `policy()`/`warm()` call (D-02),
+ * `type: 'error'`/`webgpu-unavailable`/worker-death Sentry reporting is now
+ * entirely owned by `maiaWorkerHost.ts`; this module's own graceful-
+ * degradation floor is the `.catch` in `processQueue` below — a lease
+ * rejection (worker death) settles every affected promise instead of leaving
+ * it hanging (Pitfall 1).
  */
 
-import * as Sentry from '@sentry/react';
 import { maskAndSoftmax } from '@/lib/maiaEncoding';
 import { sanToUci } from '@/lib/sanToSquares';
-import { captureMaiaWorkerError } from '@/lib/maiaWorkerErrors';
+import { acquireMaiaWorker } from './maiaWorkerHost';
+import type { MaiaAnalyzeResult, MaiaWorkerLease } from './maiaWorkerHost';
 import type { Side } from './types';
 
 // ─── Constants ───────────────────────────────────────────────────────────────
-
-/** Path to the vendored Maia Worker served from public/maia/ — same binary as useMaiaEngine, a SEPARATE Worker() instance (D-04). */
-export const ENGINE_PATH = '/maia/maia-worker.js';
 
 /** (fen, elo)-keyed cache cap — mirrors useMaiaEngine's MAIA_CACHE_MAX FIFO pattern, but this cache is fully separate (D-04). */
 export const MAIA_CACHE_MAX = 256;
@@ -55,20 +64,20 @@ export interface MaiaQueue {
    * (D-08).
    */
   policy(fen: string, elo: number, side: Side): Promise<Record<string, number>>;
-  /** Post `{type:'terminate'}`, `worker.terminate()`, and reset internal state so a later `policy()` re-spawns. */
+  /** Resolves every outstanding request to `{}` and releases the shared worker lease. */
   terminate(): void;
   /**
-   * Spawn the Maia worker (which posts `{type:'init'}` and begins the ONNX
-   * weight load) WITHOUT enqueueing an `analyze` request — the Phase 169.5
-   * prewarm counterpart to `WorkerPool.warm()`.
+   * Acquires the shared worker lease (which lazily spawns the Worker and
+   * begins the ONNX weight load) WITHOUT enqueueing an `analyze` request —
+   * the Phase 169.5 prewarm counterpart to `WorkerPool.warm()`.
    *
    * This exists even though the opening book's own `deps.policy()` call
    * already warms Maia by necessity on essentially every bot turn: that makes
    * "Maia is warm" a latent consequence of "the book happened to run", an
    * invariant that would break silently under a future config where the book
    * is disabled or `BOOK_PLY_CAP` is 0. It is the same one-line
-   * `ensureSpawned()` forwarding shape as `WorkerPool.warm()` and costs
-   * nothing. Idempotent — `ensureSpawned()` returns early if a worker exists.
+   * `ensureLease()` forwarding shape as `WorkerPool.warm()` and costs
+   * nothing. Idempotent.
    */
   warm(): void;
 }
@@ -80,35 +89,30 @@ interface PendingPolicyRequest {
   resolve: (result: Record<string, number>) => void;
 }
 
-/** Raw worker payload shape for a completed `analyze` (see maia-worker.js header; identical wire contract to useMaiaEngine). */
-interface WorkerResultMessage {
-  type: 'result';
-  fen: string;
-  rawPolicyByElo: { elo: number; policy: Float32Array }[];
-  wdlByElo: { elo: number; wdl: Float32Array }[];
-  backend: 'webgpu' | 'wasm';
-}
-
-type WorkerMessage =
-  | { type: 'ready'; backend: 'webgpu' | 'wasm' }
-  | WorkerResultMessage
-  | { type: 'error'; message: string }
-  | { type: 'webgpu-unavailable'; message: string };
-
 // ─── Factory ────────────────────────────────────────────────────────────────
 
 export function createMaiaQueue(): MaiaQueue {
-  let worker: Worker | null = null;
-  let isReady = false;
-  /** Active execution provider once the worker reports `ready` — tags Sentry errors. */
-  let backend: 'webgpu' | 'wasm' | null = null;
-
   /** Ephemeral (fen, elo)-keyed cache — separate from useMaiaEngine's, per D-04. */
   const cache = new Map<string, Record<string, number>>();
-  /** Requests not yet dispatched to the worker. */
+  /** Requests not yet dispatched to the shared worker lease. */
   const pending: PendingPolicyRequest[] = [];
-  /** The batch of requests currently awaiting the worker's `result` message, or null when idle. */
-  let currentBatch: PendingPolicyRequest[] | null = null;
+  /** True while a batch's `lease.analyze()` call is in flight — the local mirror of the old `currentBatch !== null` gate, so this queue never fires two concurrent analyze() calls from its own lease. */
+  let dispatching = false;
+  let lease: MaiaWorkerLease | null = null;
+  /**
+   * True once this lease's `whenReady()` has resolved at least once. Gates
+   * `processQueue` exactly like the old `isReady` check did: every
+   * `policy()` call issued synchronously before the shared worker becomes
+   * ready accumulates in `pending`, so the FIRST dispatch after `ready`
+   * naturally batches every same-FEN request that arrived in that window —
+   * without this gate, this queue's own `dispatching` flag would let the
+   * very first `policy()` call dispatch alone (a batch of one) before a
+   * second synchronous call ever gets a chance to join it, defeating D-04's
+   * same-FEN batching.
+   */
+  let leaseReady = false;
+  /** True while a `whenReady()` subscription is outstanding — prevents `ensureLease` from stacking duplicate subscriptions across repeated calls before the first one settles. */
+  let readyPromiseInFlight = false;
 
   function cacheResult(key: string, result: Record<string, number>): void {
     cache.set(key, result);
@@ -119,16 +123,42 @@ export function createMaiaQueue(): MaiaQueue {
   }
 
   /**
-   * Assigns the next batch of same-FEN pending requests to the worker, if the
-   * worker is ready and no inference is currently in flight (one ONNX
-   * inference at a time — the ONNX runtime can't run two analyses
-   * concurrently). Batches every pending request sharing the head-of-queue's
-   * FEN into one `analyze` call with the deduped distinct ELOs they need
-   * (D-04) — never the full ladder.
+   * Converts the host's raw per-ELO logits into UCI-keyed probabilities for
+   * every request in the just-completed batch, resolving each caller's own
+   * promise. `maskAndSoftmax` (single-sourced from maiaEncoding.ts) yields
+   * SAN-keyed probabilities; each key is converted to UCI via `sanToUci`,
+   * dropping only genuinely unconvertible entries (WR-07 null convention,
+   * Pitfall 4 — verified by the entry-count-parity test).
+   */
+  function handleResult(batch: PendingPolicyRequest[], msg: MaiaAnalyzeResult): void {
+    const sanByElo = new Map<number, Record<string, number>>();
+    for (const { elo, policy: rawPolicy } of msg.rawPolicyByElo) {
+      sanByElo.set(elo, maskAndSoftmax(rawPolicy, msg.fen));
+    }
+
+    for (const req of batch) {
+      const sanKeyed = sanByElo.get(req.elo) ?? {};
+      const uciKeyed: Record<string, number> = {};
+      for (const [san, prob] of Object.entries(sanKeyed)) {
+        const uci = sanToUci(msg.fen, san);
+        if (uci !== null) uciKeyed[uci] = prob;
+      }
+      cacheResult(`${req.fen}|${req.elo}`, uciKeyed);
+      req.resolve(uciKeyed);
+    }
+  }
+
+  /**
+   * Assigns the next batch of same-FEN pending requests to the lease, if the
+   * shared worker is ready and no inference is currently in flight from this
+   * queue (one ONNX inference at a time — the ONNX runtime can't run two
+   * analyses concurrently). Batches every pending request sharing the
+   * head-of-queue's FEN into one `analyze` call with the deduped distinct
+   * ELOs they need (D-04) — never the full ladder.
    */
   function processQueue(): void {
-    if (currentBatch !== null) return;
-    if (!worker || !isReady) return;
+    if (dispatching) return;
+    if (!leaseReady || !lease) return;
     const first = pending[0];
     if (!first) return;
 
@@ -139,171 +169,66 @@ export function createMaiaQueue(): MaiaQueue {
     }
 
     const dedupedElos = Array.from(new Set(batch.map((req) => req.elo)));
-    currentBatch = batch;
-    worker.postMessage({ type: 'analyze', fen: first.fen, eloInputs: dedupedElos });
+    dispatching = true;
+    lease.analyze(first.fen, dedupedElos).then(
+      (result) => {
+        dispatching = false;
+        handleResult(batch, result);
+        processQueue();
+      },
+      () => {
+        // Unconditional: this IS the no-hanging-promise invariant (Pitfall 1)
+        // — a lease rejection (worker death, or this lease being released)
+        // must not leave any request in this batch hanging forever.
+        dispatching = false;
+        for (const req of batch) req.resolve({});
+        processQueue();
+      },
+    );
   }
 
   /**
-   * Converts the worker's raw per-ELO logits into UCI-keyed probabilities for
-   * every request in the just-completed batch, resolving each caller's own
-   * promise. `maskAndSoftmax` (single-sourced from maiaEncoding.ts) yields
-   * SAN-keyed probabilities; each key is converted to UCI via `sanToUci`,
-   * dropping only genuinely unconvertible entries (WR-07 null convention,
-   * Pitfall 4 — verified by the entry-count-parity test).
+   * Worker death (async script-load failure, or a pre-ready init error):
+   * nothing will ever service a request still sitting in `pending` — resolve
+   * every stranded one to `{}` (self-heal contract, preserved at the host
+   * level for whatever this lease has in flight/queued there; `pending` is
+   * this queue's own not-yet-dispatched backlog).
    */
-  function handleResult(msg: WorkerResultMessage): void {
-    const batch = currentBatch;
-    currentBatch = null;
-    if (batch) {
-      const sanByElo = new Map<number, Record<string, number>>();
-      for (const { elo, policy: rawPolicy } of msg.rawPolicyByElo) {
-        sanByElo.set(elo, maskAndSoftmax(rawPolicy, msg.fen));
-      }
-
-      for (const req of batch) {
-        const sanKeyed = sanByElo.get(req.elo) ?? {};
-        const uciKeyed: Record<string, number> = {};
-        for (const [san, prob] of Object.entries(sanKeyed)) {
-          const uci = sanToUci(msg.fen, san);
-          if (uci !== null) uciKeyed[uci] = prob;
-        }
-        cacheResult(`${req.fen}|${req.elo}`, uciKeyed);
-        req.resolve(uciKeyed);
-      }
-    }
-    processQueue();
-  }
-
-  /**
-   * Resolves every queued (`pending`) AND in-flight (`currentBatch`) request
-   * to `{}`, terminates and drops the dead worker, and resets `isReady` so
-   * the next `policy()` call's `ensureSpawned()` re-attempts a fresh spawn
-   * instead of queuing forever behind a permanently-dead worker. Shared by
-   * the pre-ready message-error path (CR-03) and the async
-   * `worker.onerror` script-load-failure path (WR-03) — both are the same
-   * "worker is dead, nothing will ever service this queue" situation.
-   */
-  function settleAllAndDropWorker(): void {
-    const failedBatch = currentBatch;
-    currentBatch = null;
-    if (failedBatch) {
-      for (const req of failedBatch) req.resolve({});
-    }
+  function onFatal(): void {
+    leaseReady = false;
     const stranded = pending.splice(0, pending.length);
     for (const req of stranded) req.resolve({});
-    worker?.terminate();
-    worker = null;
-    isReady = false;
-  }
-
-  function handleMessage(msg: WorkerMessage): void {
-    if (msg.type === 'ready') {
-      isReady = true;
-      backend = msg.backend;
-      processQueue();
-      return;
-    }
-    if (msg.type === 'result') {
-      handleResult(msg);
-      return;
-    }
-    if (msg.type === 'webgpu-unavailable') {
-      // Terminal for the dead worker (quick 260729-sod, FIX 1): the WebGPU
-      // session/warmup failed and the worker deliberately did NOT double-load
-      // a second ORT runtime into its own heap. Detach handlers, terminate,
-      // and re-spawn pinned to wasm — a fresh Worker is the only reliable way
-      // to reclaim the ~226 MB heap #1 left alive.
-      //
-      // `currentBatch` is provably null here: `processQueue` only dispatches
-      // once `isReady`, and this message only ever arrives pre-ready (the
-      // worker never reached the `ready` postMessage) — so there is nothing
-      // in-flight to settle, unlike `settleAllAndDropWorker`'s "nothing will
-      // ever service this queue" path below.
-      if (worker) {
-        worker.onmessage = null;
-        worker.onerror = null;
-        worker.terminate();
-      }
-      worker = null;
-      isReady = false;
-      Sentry.addBreadcrumb({
-        category: 'maia',
-        level: 'info',
-        message: 'Maia queue WebGPU session failed — respawning worker pinned to wasm',
-        data: { rawMessage: msg.message },
-      });
-      // `pending` is left intact — the fresh worker services it, this is a
-      // recoverable condition (unlike settleAllAndDropWorker's permanent-death
-      // path, which resolves everything to {} because nothing will ever run).
-      ensureSpawned('wasm');
-      return;
-    }
-    // msg.type === 'error': the Maia worker is a classic Worker with no
-    // Sentry init, and onnxruntime-web's native failures never throw a
-    // catchable JS exception on the main thread — so they reach Sentry ONLY
-    // by being forwarded here. Routed through captureMaiaWorkerError (quick
-    // 260729-sod, FIX 2) for bounded classification + stable grouping
-    // instead of embedding the raw worker text in the error message
-    // (CLAUDE.md: never embed variables in error messages). Distinct
-    // 'maia-queue-worker' source tag keeps this filterable separately from
-    // the chart's 'maia-worker' tag.
-    captureMaiaWorkerError(msg.message, { source: 'maia-queue-worker', backend });
-    if (!isReady) {
-      // Pre-ready init failure (e.g. onnx session/model-load — CR-03): the
-      // worker never got to dispatch, so `currentBatch` is still null and
-      // every request is stranded in `pending`. Nothing will ever service
-      // it — settle the whole queue and drop the dead worker so a later
-      // policy() re-attempts a fresh spawn instead of hanging forever.
-      settleAllAndDropWorker();
-      return;
-    }
-    // Post-ready error: the worker is still alive, so keep serving the rest
-    // of the queue (unchanged pre-existing behavior).
-    const failedBatch = currentBatch;
-    currentBatch = null;
-    if (failedBatch) {
-      for (const req of failedBatch) req.resolve({});
-    }
-    processQueue();
   }
 
   /**
-   * Lazily spawns the worker on the first policy() call (D-02) — never
-   * eagerly. `mode: 'wasm'` is used exactly once, for the respawn after a
-   * `webgpu-unavailable` message (quick 260729-sod, FIX 1) — it pins the
-   * fresh worker to the WASM-only path so it never loads the WebGPU bundle
-   * that failed in the dead one.
+   * Lazily acquires the shared worker lease on the first policy()/warm() call
+   * (D-02) — never eagerly — and, on every call while not yet ready, (re-)
+   * subscribes to `whenReady()`. This is what makes "the next analyze()
+   * re-spawns" (the host's worker-death self-heal contract) actually happen
+   * from this queue's side: the SAME lease persists across a worker death
+   * (`onFatal` only resets `leaseReady`, it does not drop `lease`) — the
+   * lease's own `whenReady()` re-triggers the host's `ensureSpawned()` since
+   * the dead worker was already dropped there.
    */
-  function ensureSpawned(mode: 'auto' | 'wasm' = 'auto'): void {
-    if (worker) return;
-    try {
-      const w = new Worker(ENGINE_PATH);
-      worker = w;
-      w.onmessage = (e: MessageEvent<WorkerMessage>) => handleMessage(e.data);
-      // A Worker whose script fails to load (404 / CSP / syntax error) does
-      // NOT throw from `new Worker(...)` — it fires this asynchronous
-      // `error` event instead, which the try/catch below can never catch
-      // (WR-03). Same self-heal contract as the pre-ready message-error
-      // path above: capture to Sentry, settle every affected promise, drop
-      // the dead worker so the next policy() re-spawns.
-      w.onerror = (): void => {
-        Sentry.captureException(new Error('Maia queue worker failed to load'), {
-          tags: { source: 'maia-queue-worker', backend: backend ?? 'unknown', maia_failure: 'load' },
-        });
-        settleAllAndDropWorker();
-      };
-      // Auto mode probes WebGPU worker-side; a post-fallback respawn is
-      // pinned to wasm.
-      w.postMessage(mode === 'wasm' ? { type: 'init', backend: 'wasm' } : { type: 'init' });
-    } catch (err) {
-      // Graceful-degradation floor (Pitfall 1): a construction failure must
-      // not leave every pending policy() promise hanging forever.
-      Sentry.captureException(err instanceof Error ? err : new Error(String(err)), {
-        tags: { source: 'maia-queue-worker', backend: 'unknown', maia_failure: 'load' },
-      });
-      const failed = pending.splice(0, pending.length);
-      for (const req of failed) req.resolve({});
+  function ensureLease(): MaiaWorkerLease {
+    if (!lease) {
+      lease = acquireMaiaWorker({ source: 'maia-queue-worker', priority: false, onFatal });
     }
+    if (!leaseReady && !readyPromiseInFlight) {
+      readyPromiseInFlight = true;
+      lease.whenReady().then(
+        () => {
+          readyPromiseInFlight = false;
+          leaseReady = true;
+          processQueue();
+        },
+        () => {
+          readyPromiseInFlight = false;
+          // onFatal above already handles settlement for a rejected whenReady().
+        },
+      );
+    }
+    return lease;
   }
 
   function policy(fen: string, elo: number, side: Side): Promise<Record<string, number>> {
@@ -314,28 +239,22 @@ export function createMaiaQueue(): MaiaQueue {
 
     return new Promise<Record<string, number>>((resolve) => {
       pending.push({ fen, elo, resolve });
-      ensureSpawned();
+      ensureLease();
       processQueue();
     });
   }
 
   function terminate(): void {
-    if (worker) {
-      worker.postMessage({ type: 'terminate' });
-      worker.terminate();
-    }
-    worker = null;
-    isReady = false;
-    backend = null;
-    const unresolved = [...(currentBatch ?? []), ...pending];
-    currentBatch = null;
-    pending.length = 0;
+    const unresolved = pending.splice(0, pending.length);
     for (const req of unresolved) req.resolve({});
+    lease?.release();
+    lease = null;
+    leaseReady = false;
   }
 
-  /** Prewarm: spawn the worker without an analyze request. See `MaiaQueue.warm()`. */
+  /** Prewarm: acquire the shared lease without an analyze request. See `MaiaQueue.warm()`. */
   function warm(): void {
-    ensureSpawned();
+    ensureLease();
   }
 
   return { policy, terminate, warm };

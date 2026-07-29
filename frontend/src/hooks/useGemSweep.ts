@@ -22,12 +22,18 @@
  * the cursor instead of AT it — for every ply that survived the D-04 free
  * prefilter (`gemSweep.ts#selectSweepCandidates`).
  *
- * ─── Dedicated workers, never shared (the load-bearing decision) ───────────
+ * ─── Dedicated hook instances, never merged into one (the load-bearing decision) ─
  *
  * This hook calls `useMaiaEngine` and `useStockfishGradingEngine` itself,
- * driven ONLY by sweep state — two Worker instances SEPARATE from
- * `Analysis.tsx`'s `maia` / `grading` / `gemGrading` calls. Two structural
- * reasons this cannot be a shared instance:
+ * driven ONLY by sweep state — dedicated HOOK CALLS, separate from
+ * `Analysis.tsx`'s `maia` / `grading` / `gemGrading` calls, each keeping its
+ * OWN `pendingFenRef`/single-FEN discipline. (Transport is a different axis:
+ * quick 260729-sod, FIX 3 collapsed the underlying Maia WORKER to one shared
+ * instance behind `maiaWorkerHost` — this hook's `useMaiaEngine` call passes
+ * `priority: false` and gets its own lease, but on /analysis it is the SAME
+ * physical Worker the live chart uses. Stockfish grading remains fully
+ * separate; nothing below changes for it.) Two structural reasons the HOOK
+ * CALLS cannot be merged into one:
  *
  *  1. `useMaiaEngine.analyze()` keeps a SINGLE inference in flight and
  *     silently DROPS a second concurrent `analyze()` call rather than
@@ -266,6 +272,12 @@ export function useGemSweep({
     // which this hook never reads (the pinned rung comes from nearestByElo
     // against perElo directly, per D-01).
     selectedElo: maiaSelectedElo,
+    // priority: false (quick 260729-sod, FIX 3) — the background sweep shares
+    // the /analysis Maia worker host and must yield to the live chart's
+    // priority lease; a background sweep candidate queuing behind the live
+    // path is the whole point (see D-05 dispatch-gate doc comment above),
+    // never the other way around.
+    priority: false,
   });
 
   // ─── Dedicated Stockfish grading instance (expensive tier) ───────────────

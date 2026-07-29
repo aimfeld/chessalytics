@@ -824,9 +824,12 @@ export default function Analysis() {
   // current position, no server round-trip. Phase 155 D-03: gated on the Maia
   // card's own header switch (`maiaEnabled`) — MAIA-02's laziness is otherwise
   // already satisfied by the route-level React.lazy covering this whole page.
-  // Note: this is a SEPARATE Worker instance from the FlawChess Engine's own
-  // internal maiaQueue (Phase 154) — turning this switch off must not starve
-  // the FlawChess Engine's policy source (UI-SPEC Component Inventory §3).
+  // Note: this hook holds its OWN priority lease on the shared Maia worker
+  // (quick 260729-sod, FIX 3 — the underlying Worker is now shared with the
+  // FlawChess Engine's own internal maiaQueue, Phase 154, but each keeps a
+  // separate lease/cache/single-in-flight discipline) — turning this switch
+  // off releases only this lease and must not starve the FlawChess Engine's
+  // own `priority: false` policy source (UI-SPEC Component Inventory §3).
   const maia = useMaiaEngine({ fen: position, enabled: maiaEnabled, selectedElo });
 
   // Phase 159 D-08 (Thread A): session-only policy-temperature state, plain

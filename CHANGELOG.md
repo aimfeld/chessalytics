@@ -36,6 +36,8 @@ in `YYYY-MM-DD` (Europe/Zurich).
 
 - The board you play bots on is 50% larger on desktop, and now measures itself against the window: on a short screen it shrinks to keep the clocks and controls in view instead of pushing them off the bottom. The page also runs closer to the window edges so more of that width reaches the board. (quick 260729-bbd)
 
+- The analysis page now shares a single Maia engine instance across the move-probability chart, the background gem check, and the FlawChess engine instead of running up to three in parallel, cutting its peak memory use roughly in half to a third. (quick 260729-sod)
+
 ### Fixed
 
 - Fixed an iOS crash during bot play: when the Maia chess engine's GPU-accelerated path failed to start, it was loading its runtime a second time on top of the first instead of replacing it, roughly doubling memory use and crashing the tab on iPhone. The engine's model and runtime files are now also cached for a month so they aren't re-downloaded on every visit. (quick 260729-sod)

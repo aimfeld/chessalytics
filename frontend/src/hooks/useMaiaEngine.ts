@@ -1,10 +1,10 @@
 /**
- * useMaiaEngine — React hook wrapping the Maia-3 ("Chessformer") ONNX model in a
- * classic Web Worker, exposing the full per-ELO move-probability curve + WDL as
- * plain data. Structural sibling of `useStockfishEngine.ts` (Worker lifecycle,
- * mount-only effect, isReady/isAnalyzing, adaptive debounce, stale-result guard,
- * tab-hide pause) — the *protocol* differs (structured `{fen, eloInputs}` messages,
- * not UCI text), but the state-machine shape transfers directly.
+ * useMaiaEngine — React hook wrapping the Maia-3 ("Chessformer") ONNX model,
+ * exposing the full per-ELO move-probability curve + WDL as plain data.
+ * Structural sibling of `useStockfishEngine.ts` (lease lifecycle, mount-only
+ * effect, isReady/isAnalyzing, adaptive debounce, stale-result guard,
+ * tab-hide pause) — the *protocol* differs (structured `{fen, eloInputs}`
+ * messages, not UCI text), but the state-machine shape transfers directly.
  *
  * MAIA-04: full per-ELO curve + WDL computed for a known FEN, ELO ladder =
  *          maiachess.com's 600-2600 step 100 (UAT quick 260705-bm3; validated
@@ -15,19 +15,25 @@
  * maskAndSoftmax/expectedScore/softmaxWdl are single-sourced from maiaEncoding.ts
  * (the worker returns RAW policy/WDL logits only — see maia-worker.js header).
  *
+ * Worker ownership (quick 260729-sod, FIX 3): this hook no longer constructs
+ * or terminates a Worker directly — it acquires a lease from the shared
+ * `maiaWorkerHost` singleton, which owns spawn/respawn/death and guarantees
+ * every `analyze()` promise settles. This hook keeps its OWN
+ * `pendingFenRef` single-in-flight "drop and reissue" discipline (only the
+ * latest position matters for a live chart) ABOVE the host — that discipline
+ * is NOT something the host enforces, since other leases (e.g. `maiaQueue`)
+ * need every request answered.
+ *
  * Architecture: 151-RESEARCH.md Pattern 1; Confirmed contract: 151-MAIA-CONTRACT.md
  */
 
 import { useRef, useState, useCallback, useEffect, useMemo } from 'react';
-import * as Sentry from '@sentry/react';
 import { maskAndSoftmax, softmaxWdl, expectedScore, MAIA_ELO_LADDER } from '../lib/maiaEncoding';
 import type { WdlVector } from '../lib/maiaEncoding';
-import { captureMaiaWorkerError } from '../lib/maiaWorkerErrors';
+import { acquireMaiaWorker } from '../lib/engine/maiaWorkerHost';
+import type { MaiaAnalyzeResult, MaiaWorkerLease } from '../lib/engine/maiaWorkerHost';
 
 // ─── Constants ───────────────────────────────────────────────────────────────
-
-/** Path to the vendored Maia Worker served from public/maia/. */
-const ENGINE_PATH = '/maia/maia-worker.js';
 
 /** Rapid-step debounce window (ms) — mirrors useStockfishEngine's RAPID_STEP_DEBOUNCE_MS. */
 const RAPID_STEP_DEBOUNCE_MS = 150;
@@ -44,6 +50,14 @@ export interface UseMaiaEngineOptions {
   enabled: boolean;
   /** ELO used to pick the "you are here" rung for wdl/expectedScoreAtSelectedElo. */
   selectedElo: number;
+  /**
+   * Lease priority on the shared Maia worker host (quick 260729-sod, FIX 3):
+   * `true` (default) jumps queued background requests (the live chart must
+   * never be starved behind the FlawChess Engine's MCTS policy calls or the
+   * gem sweep) but never preempts whatever inference is already in flight.
+   * `false` is for background-only consumers (see `useGemSweep.ts`).
+   */
+  priority?: boolean;
 }
 
 /** One ELO rung's normalized per-legal-move probability distribution, keyed by SAN. */
@@ -59,17 +73,17 @@ export interface UseMaiaEngineState {
   expectedScoreAtSelectedElo: number | null;
   /** Full WDL vector at the ladder rung nearest `selectedElo`; null until ready. */
   wdl: WdlVector | null;
-  /** True once the Worker's ONNX session has been created. */
+  /** True once the shared worker's ONNX session has been created (this lease has seen `ready`). */
   isReady: boolean;
   /** True while a (non-cached) inference is in flight for the current FEN. */
   isAnalyzing: boolean;
   /**
-   * CR-03 (Phase 172, SEED-106): true once the Worker fired an `onerror` — an
-   * async script-load failure (404, CSP block, importScripts failure) that never
-   * throws a catchable exception on the main thread and leaves the worker dead
-   * but silent (distinct from the `type: 'error'` inference failures already
-   * forwarded via onmessage). Lets a consumer (the background gem sweep) abandon
-   * an in-flight request stuck on a worker that will never report `ready`.
+   * CR-03 (Phase 172, SEED-106): true once the shared worker host reports this
+   * lease `onFatal` — worker death (async script-load failure, or a pre-ready
+   * init error) that leaves the worker dead. Lets a consumer (the background
+   * gem sweep) abandon an in-flight request stuck on a worker that will never
+   * report `ready` again. NOT fired for a transparent webgpu-unavailable
+   * respawn (quick 260729-sod, FIX 1) — the host handles that on its own.
    */
   hasFailed: boolean;
   /**
@@ -91,25 +105,10 @@ interface MaiaResult {
   wdlByElo: { elo: number; wdl: WdlVector }[];
 }
 
-/** Raw worker payload shape for a completed `analyze` (see maia-worker.js header). */
-interface WorkerResultMessage {
-  type: 'result';
-  fen: string;
-  rawPolicyByElo: { elo: number; policy: Float32Array }[];
-  wdlByElo: { elo: number; wdl: Float32Array }[];
-  backend: 'webgpu' | 'wasm';
-}
-
-type WorkerMessage =
-  | { type: 'ready'; backend: 'webgpu' | 'wasm' }
-  | WorkerResultMessage
-  | { type: 'error'; message: string }
-  | { type: 'webgpu-unavailable'; message: string };
-
 // ─── Helpers ─────────────────────────────────────────────────────────────────
 
-/** Converts a worker's raw per-ELO payload into the hook's normalized MaiaResult. */
-function buildMaiaResult(fen: string, msg: WorkerResultMessage): MaiaResult {
+/** Converts the host's raw per-ELO payload into the hook's normalized MaiaResult. */
+function buildMaiaResult(fen: string, msg: MaiaAnalyzeResult): MaiaResult {
   const perElo = msg.rawPolicyByElo.map(({ elo, policy }) => ({
     elo,
     moveProbabilities: maskAndSoftmax(policy, fen),
@@ -128,16 +127,19 @@ function nearestByElo<T extends { elo: number }>(entries: T[], target: number): 
 
 // ─── Hook ────────────────────────────────────────────────────────────────────
 
-export function useMaiaEngine({ fen, enabled, selectedElo }: UseMaiaEngineOptions): UseMaiaEngineState {
+export function useMaiaEngine({
+  fen,
+  enabled,
+  selectedElo,
+  priority = true,
+}: UseMaiaEngineOptions): UseMaiaEngineState {
   // ─── Refs ──────────────────────────────────────────────────────────────────
 
-  const workerRef = useRef<Worker | null>(null);
+  const leaseRef = useRef<MaiaWorkerLease | null>(null);
   const isReadyRef = useRef(false);
   const currentFenRef = useRef<string | null>(null);
   /** FEN of the inference we are currently waiting on (null when nothing is in flight). */
   const pendingFenRef = useRef<string | null>(null);
-  /** Active execution provider once the worker reports `ready` — tags Sentry errors. */
-  const backendRef = useRef<'webgpu' | 'wasm' | null>(null);
 
   /** Ephemeral, board-session-scoped FIFO cache (MAIA-05) — no persistence. */
   const cacheRef = useRef<Map<string, MaiaResult>>(new Map());
@@ -173,14 +175,15 @@ export function useMaiaEngine({ fen, enabled, selectedElo }: UseMaiaEngineOption
   // ─── Analyze ───────────────────────────────────────────────────────────────
 
   /**
-   * Sends `analyze` for the given FEN, or commits a cache hit immediately without
-   * a worker round-trip. Paused while the tab is hidden (D-04-adjacent tab-hide
-   * pause pattern, mirrors useStockfishEngine's visibilitychange handling).
+   * Sends `analyze` for the given FEN via the shared worker lease, or commits
+   * a cache hit immediately without a round-trip. Paused while the tab is
+   * hidden (D-04-adjacent tab-hide pause pattern, mirrors
+   * useStockfishEngine's visibilitychange handling).
    */
   const analyze = useCallback(
     (fenToAnalyze: string) => {
-      const worker = workerRef.current;
-      if (!worker || !isReadyRef.current) return;
+      const lease = leaseRef.current;
+      if (!lease || !isReadyRef.current) return;
       if (document.visibilityState === 'hidden') return;
 
       const cached = cacheRef.current.get(fenToAnalyze);
@@ -189,20 +192,55 @@ export function useMaiaEngine({ fen, enabled, selectedElo }: UseMaiaEngineOption
         return;
       }
 
-      // Keep a single inference in flight. The Maia worker can't cancel a running
-      // ONNX inference, so posting a second `analyze` only queues it behind the
+      // Keep a single inference in flight. A running ONNX inference can't be
+      // cancelled, so posting a second `analyze` only queues it behind the
       // first — a slider drag that settles while an earlier position is still
       // computing used to wait out that whole backlog (far slower than a direct
       // click to the same position). Drop the request here; the result handler
       // re-issues for whatever position is current once the running inference
-      // completes, skipping every intermediate slider position.
+      // completes, skipping every intermediate slider position. This
+      // discipline lives ABOVE the shared maiaWorkerHost — the host itself
+      // does not drop anything (other leases need every request answered).
       if (pendingFenRef.current !== null) return;
 
       pendingFenRef.current = fenToAnalyze;
       setIsAnalyzing(true);
-      worker.postMessage({ type: 'analyze', fen: fenToAnalyze, eloInputs: MAIA_ELO_LADDER });
+      lease.analyze(fenToAnalyze, MAIA_ELO_LADDER).then(
+        (msg) => {
+          if (leaseRef.current !== lease) return; // this lease has since been released/replaced
+          // Cache every completed inference, even one whose position was already
+          // superseded — the result is valid for msg.fen, so caching it makes a
+          // later revisit (a slider scrub back) an instant cache hit instead of a
+          // recompute, and keeps the debounce-effect cache restore below effective.
+          const result = buildMaiaResult(msg.fen, msg);
+          cacheResult(msg.fen, result);
+          // Only paint it if it still matches the on-screen position (stale guard).
+          if (msg.fen === currentFenRef.current) setLatestResult(result);
+          // Clear the in-flight flag only when the result we were waiting on lands —
+          // a superseded result must not stop the spinner for a request still running.
+          if (msg.fen === pendingFenRef.current) {
+            pendingFenRef.current = null;
+            setIsAnalyzing(false);
+            // The worker is free again — converge on the live position. If the user
+            // moved on (slider drag/scrub) while this ran, analyze where they are
+            // now, skipping the intermediate positions we deliberately never queued.
+            const current = currentFenRef.current;
+            if (current && current !== msg.fen && !cacheRef.current.has(current)) {
+              analyzeRef.current(current);
+            }
+          }
+        },
+        () => {
+          // Rejected — either this lease was released (unmount/enabled toggle,
+          // no UI update needed) or the host's worker died mid-request (the
+          // `onFatal` callback below already handles that UI-state update).
+          if (leaseRef.current !== lease) return;
+          if (pendingFenRef.current === fenToAnalyze) pendingFenRef.current = null;
+          setIsAnalyzing(false);
+        },
+      );
     },
-    [], // stable — only reads refs and stable state setters
+    [cacheResult],
   );
 
   const analyzeRef = useRef(analyze);
@@ -246,130 +284,49 @@ export function useMaiaEngine({ fen, enabled, selectedElo }: UseMaiaEngineOption
     return () => clearTimeout(timer);
   }, [fen]);
 
-  // ─── Worker lifecycle ──────────────────────────────────────────────────────
+  // ─── Worker lease lifecycle (quick 260729-sod, FIX 3) ──────────────────────
 
   useEffect(() => {
     if (!enabled) return;
 
-    // `current` (not workerRef, which the analyze()/cleanup callbacks below
-    // still read) is the worker THIS closure owns across a possible respawn —
-    // `disposed` guards against a webgpu-unavailable message arriving after
-    // this effect has already been cleaned up (unmount/enabled toggle raced
-    // the worker's async init).
-    let current: Worker | null = null;
     let disposed = false;
-
-    /**
-     * Spawns a fresh Worker and wires its handlers. `mode: 'wasm'` is used
-     * exactly once, for the respawn after a `webgpu-unavailable` message
-     * (quick 260729-sod, FIX 1) — it pins the fresh worker to the WASM-only
-     * path so it never loads the WebGPU bundle that failed in the dead one.
-     */
-    function spawn(mode: 'auto' | 'wasm'): void {
-      // Classic (non-module) Worker — mirrors the Stockfish precedent; the Maia
-      // Worker uses importScripts() to load onnxruntime-web's UMD-style bundles.
-      const worker = new Worker(ENGINE_PATH);
-      current = worker;
-      workerRef.current = worker;
-
-      worker.onmessage = (e: MessageEvent<WorkerMessage>) => {
-        const msg = e.data;
-        if (msg.type === 'ready') {
-          setIsReady(true);
-          isReadyRef.current = true;
-          backendRef.current = msg.backend;
-          return;
-        }
-        if (msg.type === 'result') {
-          // Cache every completed inference, even one whose position was already
-          // superseded — the result is valid for msg.fen, so caching it makes a
-          // later revisit (a slider scrub back) an instant cache hit instead of a
-          // recompute, and keeps the debounce-effect cache restore below effective.
-          const result = buildMaiaResult(msg.fen, msg);
-          cacheResult(msg.fen, result);
-          // Only paint it if it still matches the on-screen position (stale guard).
-          if (msg.fen === currentFenRef.current) setLatestResult(result);
-          // Clear the in-flight flag only when the result we were waiting on lands —
-          // a superseded result must not stop the spinner for a request still running.
-          if (msg.fen === pendingFenRef.current) {
-            pendingFenRef.current = null;
-            setIsAnalyzing(false);
-            // The worker is free again — converge on the live position. If the user
-            // moved on (slider drag/scrub) while this ran, analyze where they are
-            // now, skipping the intermediate positions we deliberately never queued.
-            const current2 = currentFenRef.current;
-            if (current2 && current2 !== msg.fen && !cacheRef.current.has(current2)) {
-              analyzeRef.current(current2);
-            }
-          }
-          return;
-        }
-        if (msg.type === 'webgpu-unavailable') {
-          // Terminal for the dead worker (quick 260729-sod, FIX 1): the WebGPU
-          // session/warmup failed and the worker deliberately did NOT double-load
-          // a second ORT runtime into its own heap. A fresh Worker is the only
-          // reliable way to reclaim that ~226 MB — respawn pinned to wasm.
-          if (disposed) return;
-          worker.onmessage = null;
-          worker.onerror = null;
-          worker.terminate();
-          Sentry.addBreadcrumb({
-            category: 'maia',
-            level: 'info',
-            message: 'Maia WebGPU session failed — respawning worker pinned to wasm',
-            data: { rawMessage: msg.message },
-          });
-          pendingFenRef.current = null;
-          setIsReady(false);
-          isReadyRef.current = false;
-          spawn('wasm');
-          return;
-        }
-        // msg.type === 'error': surfaced as isAnalyzing=false (no partial UI state).
-        // The worker is a classic Worker with no Sentry init, and onnxruntime-web's
-        // native failures (e.g. the Firefox/Windows `Clip` WebGPU shader error) print to
-        // console but never throw a catchable JS exception — so they reach Sentry ONLY by
-        // being forwarded here. Routed through captureMaiaWorkerError (quick 260729-sod,
-        // FIX 2) for bounded classification + stable grouping instead of embedding the raw
-        // worker text in the error message (CLAUDE.md frontend Sentry rules).
-        captureMaiaWorkerError(msg.message, { source: 'maia-worker', backend: backendRef.current });
-        pendingFenRef.current = null;
-        setIsAnalyzing(false);
-      };
-
-      // CR-03 (Phase 172, SEED-106): mirror workerPool.createSlot — an async
-      // script-load failure (404, CSP block, importScripts failure) never throws a
-      // catchable JS exception on the main thread; it only surfaces here (the
-      // onmessage `type: 'error'` path only covers inference failures AFTER the
-      // worker booted). Without this handler a dead worker never reports `ready`,
-      // so a gem-sweep candidate on the Maia stage hangs forever. Capture to
-      // Sentry and surface `hasFailed` so the sweep can abandon it.
-      worker.onerror = () => {
-        Sentry.captureException(new Error('Maia worker: worker load failure'), {
-          tags: { source: 'maia-worker', backend: backendRef.current ?? 'unknown', maia_failure: 'load' },
-        });
+    const lease = acquireMaiaWorker({
+      source: 'maia-worker',
+      priority,
+      // CR-03 (Phase 172, SEED-106): worker death (async script-load failure,
+      // or a pre-ready init error) — NOT fired for a transparent
+      // webgpu-unavailable respawn, which the host handles on its own and
+      // this hook never observes as a state transition.
+      onFatal: () => {
+        if (disposed) return;
         setHasFailed(true);
         setIsReady(false);
         isReadyRef.current = false;
         pendingFenRef.current = null;
         setIsAnalyzing(false);
-      };
+      },
+    });
+    leaseRef.current = lease;
 
-      // Auto mode probes WebGPU worker-side; a post-fallback respawn is pinned
-      // to wasm. No `backend` key in auto mode keeps the existing test
-      // assertion (`toContainEqual({ type: 'init' })`) valid.
-      worker.postMessage(mode === 'wasm' ? { type: 'init', backend: 'wasm' } : { type: 'init' });
-    }
-
-    spawn('auto');
+    lease.whenReady().then(
+      (backendResult) => {
+        if (disposed) return;
+        void backendResult; // backend is exposed via the host, not surfaced on this hook's own state
+        setIsReady(true);
+        isReadyRef.current = true;
+      },
+      () => {
+        // Rejected — the onFatal callback above already covers the UI-state
+        // update for worker death; nothing further to do here.
+      },
+    );
 
     return () => {
       disposed = true;
-      current?.postMessage({ type: 'terminate' });
-      current?.terminate();
-      workerRef.current = null;
+      lease.release();
+      leaseRef.current = null;
     };
-  }, [enabled, cacheResult]);
+  }, [enabled, priority]);
 
   // ─── Debounced FEN -> analyze ───────────────────────────────────────────────
 

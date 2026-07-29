@@ -1,81 +1,95 @@
 // @vitest-environment jsdom
 /**
- * useMaiaEngine mock-Worker unit tests.
+ * useMaiaEngine unit tests, driven via a mocked `maiaWorkerHost` lease
+ * (quick 260729-sod, FIX 3 — this hook no longer constructs a Worker
+ * directly; it acquires a lease from the shared host).
  *
- * Behaviors verified (151-04-PLAN.md Task 3):
- * 1. Idle (no Worker) until enabled.
- * 2. Classic Worker instantiation + init message.
- * 3. isReady flips false->true on the 'ready' message.
+ * Behaviors verified (151-04-PLAN.md Task 3, + FIX 3 rewiring):
+ * 1. Idle (no lease) until enabled.
+ * 2. Lease acquisition with source 'maia-worker' and the requested priority.
+ * 3. isReady flips false->true once the lease's whenReady() resolves.
  * 4. Adaptive debounce: settled FEN fires analyze with the full MAIA_ELO_LADDER.
  * 5. Rapid successive FEN changes coalesce to one analyze for the final FEN.
  * 6. Stale-result discard: a result for a superseded FEN is ignored.
- * 7. Cache hit for a previously-seen FEN skips a second worker round-trip.
+ * 7. Cache hit for a previously-seen FEN skips a second lease round-trip.
  * 8. Tab-hide pause: no analyze while hidden; re-analyzes on visible.
- * 9. Unmount sends terminate and terminates the Worker.
+ * 9. Unmount releases the lease.
  * 10. wdl / expectedScoreAtSelectedElo derive from the ladder rung nearest selectedElo.
- *
- * Respawn behaviors (quick 260729-sod, FIX 1): a `webgpu-unavailable` message
- * terminates the dead worker and constructs exactly one wasm-pinned
- * replacement; a no-adapter device that reports `ready` directly never
- * respawns.
+ * 11. onFatal (worker death, quick 260729-sod FIX 3) sets hasFailed and resets isReady.
  */
 
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { renderHook, act } from '@testing-library/react';
 import { useMaiaEngine } from '../useMaiaEngine';
 import { MAIA_ELO_LADDER, POLICY_VOCAB_SIZE } from '../../lib/maiaEncoding';
+import { acquireMaiaWorker } from '../../lib/engine/maiaWorkerHost';
+import type { AcquireMaiaWorkerOptions, MaiaAnalyzeResult, MaiaWorkerLease } from '../../lib/engine/maiaWorkerHost';
 
-// ─── Mock Worker ─────────────────────────────────────────────────────────────
+vi.mock('../../lib/engine/maiaWorkerHost', () => ({
+  acquireMaiaWorker: vi.fn(),
+}));
 
-interface WorkerMessageLike {
-  type: string;
-  [key: string]: unknown;
+// ─── Fake lease ────────────────────────────────────────────────────────────
+
+interface FakeAnalyzeCall {
+  fen: string;
+  eloInputs: number[];
+  resolve: (result: MaiaAnalyzeResult) => void;
+  reject: (err: Error) => void;
 }
 
-class MockWorker {
-  onmessage: ((e: MessageEvent<WorkerMessageLike>) => void) | null = null;
-  onerror: ((e: unknown) => void) | null = null;
-  messages: WorkerMessageLike[] = [];
-  terminated = false;
+class FakeLease implements MaiaWorkerLease {
+  analyzeCalls: FakeAnalyzeCall[] = [];
+  released = false;
+  opts: AcquireMaiaWorkerOptions;
+  private readyResolve: ((backend: 'webgpu' | 'wasm') => void) | null = null;
+  private readyReject: ((err: Error) => void) | null = null;
 
-  postMessage(msg: WorkerMessageLike): void {
-    this.messages.push(msg);
+  constructor(opts: AcquireMaiaWorkerOptions) {
+    this.opts = opts;
   }
 
-  terminate(): void {
-    this.terminated = true;
+  analyze(fen: string, eloInputs: number[]): Promise<MaiaAnalyzeResult> {
+    return new Promise<MaiaAnalyzeResult>((resolve, reject) => {
+      this.analyzeCalls.push({ fen, eloInputs, resolve, reject });
+    });
   }
 
-  /** Fire the onmessage handler with a synthetic structured message. */
-  simulateMessage(data: WorkerMessageLike): void {
-    this.onmessage?.(new MessageEvent('message', { data }));
+  whenReady(): Promise<'webgpu' | 'wasm'> {
+    return new Promise<'webgpu' | 'wasm'>((resolve, reject) => {
+      this.readyResolve = resolve;
+      this.readyReject = reject;
+    });
   }
 
-  /** Fire the onerror handler — simulates an asynchronous Worker script-load failure. */
-  simulateError(): void {
-    this.onerror?.(new Event('error'));
+  getBackend(): 'webgpu' | 'wasm' | null {
+    return null;
+  }
+
+  release(): void {
+    this.released = true;
+  }
+
+  simulateReady(backend: 'webgpu' | 'wasm' = 'wasm'): void {
+    this.readyResolve?.(backend);
+  }
+
+  simulateFatal(): void {
+    this.opts.onFatal?.();
+  }
+
+  latestAnalyzeCall(): FakeAnalyzeCall | undefined {
+    return this.analyzeCalls[this.analyzeCalls.length - 1];
   }
 }
 
-let createdWorkers: MockWorker[];
+let currentLease: FakeLease;
 
-/** Narrow accessor for `noUncheckedIndexedAccess` — throws if no worker exists yet. */
-function latestWorker(): MockWorker {
-  const w = createdWorkers[createdWorkers.length - 1];
-  if (!w) throw new Error('No MockWorker constructed yet');
-  return w;
-}
-
-function stubWorkerCtor(): void {
-  createdWorkers = [];
-  vi.stubGlobal(
-    'Worker',
-    vi.fn(function () {
-      const w = new MockWorker();
-      createdWorkers.push(w);
-      return w;
-    }),
-  );
+function stubHost(): void {
+  vi.mocked(acquireMaiaWorker).mockImplementation((opts: AcquireMaiaWorkerOptions) => {
+    currentLease = new FakeLease(opts);
+    return currentLease;
+  });
 }
 
 // ─── Helpers ─────────────────────────────────────────────────────────────────
@@ -83,24 +97,33 @@ function stubWorkerCtor(): void {
 const TEST_FEN = 'rnbqkbnr/pppppppp/8/8/4P3/8/PPPP1PPP/RNBQKBNR b KQkq e3 0 1';
 const TEST_FEN_2 = 'rnbqkbnr/pppppppp/8/8/3P4/8/PPP1PPPP/RNBQKBNR b KQkq d3 0 1';
 
-function driveReady(worker: MockWorker): void {
-  act(() => {
-    worker.simulateMessage({ type: 'ready', backend: 'wasm' });
+async function driveReady(lease: FakeLease): Promise<void> {
+  await act(async () => {
+    lease.simulateReady('wasm');
+    await Promise.resolve();
   });
 }
 
-function analyzeMessages(worker: MockWorker): WorkerMessageLike[] {
-  return worker.messages.filter((m) => m.type === 'analyze');
+function analyzeMessages(lease: FakeLease): { fen: string; eloInputs: number[] }[] {
+  return lease.analyzeCalls.map((c) => ({ fen: c.fen, eloInputs: c.eloInputs }));
 }
 
-/** Builds a synthetic worker 'result' message for the given FEN (all-zero logits). */
-function buildResultMessage(fen: string): WorkerMessageLike {
+/** Builds a synthetic host analyze() result for the given FEN (all-zero logits). */
+function buildResultMessage(fen: string): MaiaAnalyzeResult {
   const rawPolicyByElo = MAIA_ELO_LADDER.map((elo) => ({
     elo,
     policy: new Float32Array(POLICY_VOCAB_SIZE),
   }));
   const wdlByElo = MAIA_ELO_LADDER.map((elo) => ({ elo, wdl: Float32Array.from([0, 0, 0]) }));
-  return { type: 'result', fen, rawPolicyByElo, wdlByElo, backend: 'wasm' };
+  return { fen, rawPolicyByElo, wdlByElo, backend: 'wasm' };
+}
+
+/** Resolves the latest analyze() call with a synthetic result, flushing the resulting microtask. */
+async function resolveLatest(lease: FakeLease, fen: string): Promise<void> {
+  await act(async () => {
+    lease.latestAnalyzeCall()?.resolve(buildResultMessage(fen));
+    await Promise.resolve();
+  });
 }
 
 // ─── Tests ───────────────────────────────────────────────────────────────────
@@ -108,42 +131,48 @@ function buildResultMessage(fen: string): WorkerMessageLike {
 describe('useMaiaEngine', () => {
   beforeEach(() => {
     vi.useFakeTimers({ now: 0 });
-    stubWorkerCtor();
+    stubHost();
   });
 
   afterEach(() => {
     vi.useRealTimers();
     vi.unstubAllGlobals();
+    vi.clearAllMocks();
   });
 
-  it('does not create a Worker until enabled', () => {
+  it('does not acquire a lease until enabled', () => {
     renderHook(() => useMaiaEngine({ fen: null, enabled: false, selectedElo: 1500 }));
-    expect(createdWorkers).toHaveLength(0);
+    expect(acquireMaiaWorker).not.toHaveBeenCalled();
   });
 
-  it('creates a classic Worker and sends init when enabled', () => {
+  it('acquires a lease with source maia-worker and priority=true by default when enabled', () => {
     renderHook(() => useMaiaEngine({ fen: null, enabled: true, selectedElo: 1500 }));
-    const WorkerCtor = vi.mocked(globalThis.Worker as new (url: string) => Worker);
-    expect(WorkerCtor).toHaveBeenCalledWith('/maia/maia-worker.js');
-    expect(latestWorker().messages).toContainEqual({ type: 'init' });
+    expect(acquireMaiaWorker).toHaveBeenCalledWith(
+      expect.objectContaining({ source: 'maia-worker', priority: true }),
+    );
   });
 
-  it('isReady flips false->true on the ready message', () => {
+  it('honors priority: false (e.g. useGemSweep, quick 260729-sod FIX 3)', () => {
+    renderHook(() => useMaiaEngine({ fen: null, enabled: true, selectedElo: 1500, priority: false }));
+    expect(acquireMaiaWorker).toHaveBeenCalledWith(expect.objectContaining({ priority: false }));
+  });
+
+  it('isReady flips false->true once whenReady() resolves', async () => {
     const { result } = renderHook(() => useMaiaEngine({ fen: null, enabled: true, selectedElo: 1500 }));
     expect(result.current.isReady).toBe(false);
-    driveReady(latestWorker());
+    await driveReady(currentLease);
     expect(result.current.isReady).toBe(true);
   });
 
   it('settled FEN fires analyze with the full ELO ladder once ready', async () => {
     vi.advanceTimersByTime(200); // Date.now() >> 0 so the first FEN is a "settled move".
     renderHook(() => useMaiaEngine({ fen: TEST_FEN, enabled: true, selectedElo: 1500 }));
-    driveReady(latestWorker());
+    await driveReady(currentLease);
     await act(async () => {
       await vi.advanceTimersByTimeAsync(200);
     });
 
-    const msgs = analyzeMessages(latestWorker());
+    const msgs = analyzeMessages(currentLease);
     expect(msgs).toHaveLength(1);
     expect(msgs[0]?.fen).toBe(TEST_FEN);
     expect(msgs[0]?.eloInputs).toEqual(MAIA_ELO_LADDER);
@@ -154,7 +183,7 @@ describe('useMaiaEngine', () => {
       ({ fen }: { fen: string }) => useMaiaEngine({ fen, enabled: true, selectedElo: 1500 }),
       { initialProps: { fen: TEST_FEN } },
     );
-    driveReady(latestWorker());
+    await driveReady(currentLease);
 
     await act(async () => {
       await vi.advanceTimersByTimeAsync(140); // before the 150ms debounce fires
@@ -164,7 +193,7 @@ describe('useMaiaEngine', () => {
       await vi.advanceTimersByTimeAsync(200);
     });
 
-    const msgs = analyzeMessages(latestWorker());
+    const msgs = analyzeMessages(currentLease);
     expect(msgs).toHaveLength(1);
     expect(msgs[0]?.fen).toBe(TEST_FEN_2);
   });
@@ -174,11 +203,12 @@ describe('useMaiaEngine', () => {
       ({ fen }: { fen: string }) => useMaiaEngine({ fen, enabled: true, selectedElo: 1500 }),
       { initialProps: { fen: TEST_FEN } },
     );
-    driveReady(latestWorker());
+    await driveReady(currentLease);
     await act(async () => {
       await vi.advanceTimersByTimeAsync(200);
     });
     expect(result.current.isAnalyzing).toBe(true);
+    const staleCall = currentLease.latestAnalyzeCall();
 
     // FEN changes (immediate-fire path — sinceLast > 150ms) before TEST_FEN's result arrives.
     rerender({ fen: TEST_FEN_2 });
@@ -187,27 +217,26 @@ describe('useMaiaEngine', () => {
     });
 
     // Stale result for the OLD fen arrives — must be discarded.
-    act(() => {
-      latestWorker().simulateMessage(buildResultMessage(TEST_FEN));
+    await act(async () => {
+      staleCall?.resolve(buildResultMessage(TEST_FEN));
+      await Promise.resolve();
     });
     expect(result.current.perElo).toHaveLength(0);
   });
 
-  it('a cache hit for a previously-seen FEN skips a second worker round-trip', async () => {
+  it('a cache hit for a previously-seen FEN skips a second lease round-trip', async () => {
     const { rerender, result } = renderHook(
       ({ fen }: { fen: string }) => useMaiaEngine({ fen, enabled: true, selectedElo: 1500 }),
       { initialProps: { fen: TEST_FEN } },
     );
-    driveReady(latestWorker());
+    await driveReady(currentLease);
     await act(async () => {
       await vi.advanceTimersByTimeAsync(200);
     });
-    act(() => {
-      latestWorker().simulateMessage(buildResultMessage(TEST_FEN));
-    });
+    await resolveLatest(currentLease, TEST_FEN);
     expect(result.current.perElo.length).toBe(MAIA_ELO_LADDER.length);
 
-    const countBefore = analyzeMessages(latestWorker()).length;
+    const countBefore = analyzeMessages(currentLease).length;
 
     // Navigate away, then back to TEST_FEN (now cached).
     rerender({ fen: TEST_FEN_2 });
@@ -220,7 +249,7 @@ describe('useMaiaEngine', () => {
     });
 
     // Only ONE new analyze was sent (for TEST_FEN_2) — the TEST_FEN revisit is a cache hit.
-    expect(analyzeMessages(latestWorker())).toHaveLength(countBefore + 1);
+    expect(analyzeMessages(currentLease)).toHaveLength(countBefore + 1);
     expect(result.current.perElo.length).toBe(MAIA_ELO_LADDER.length);
   });
 
@@ -233,14 +262,12 @@ describe('useMaiaEngine', () => {
       ({ fen }: { fen: string }) => useMaiaEngine({ fen, enabled: true, selectedElo: 1500 }),
       { initialProps: { fen: TEST_FEN } },
     );
-    driveReady(latestWorker());
+    await driveReady(currentLease);
     await act(async () => {
       await vi.advanceTimersByTimeAsync(0);
     });
     // TEST_FEN analyzed and cached.
-    act(() => {
-      latestWorker().simulateMessage(buildResultMessage(TEST_FEN));
-    });
+    await resolveLatest(currentLease, TEST_FEN);
     expect(result.current.perElo.length).toBe(MAIA_ELO_LADDER.length);
 
     // Scrub away and straight back inside the debounce window so the intermediate
@@ -264,12 +291,12 @@ describe('useMaiaEngine', () => {
       ({ fen }: { fen: string }) => useMaiaEngine({ fen, enabled: true, selectedElo: 1500 }),
       { initialProps: { fen: TEST_FEN } },
     );
-    driveReady(latestWorker());
+    await driveReady(currentLease);
     await act(async () => {
       await vi.advanceTimersByTimeAsync(0);
     });
     // TEST_FEN is analyzing (worker "busy"), no result yet.
-    expect(analyzeMessages(latestWorker())).toHaveLength(1);
+    expect(analyzeMessages(currentLease)).toHaveLength(1);
 
     // Move to a new settled position while TEST_FEN is still in flight.
     rerender({ fen: TEST_FEN_2 });
@@ -277,13 +304,11 @@ describe('useMaiaEngine', () => {
       await vi.advanceTimersByTimeAsync(200);
     });
     // No second request queued behind the running one.
-    expect(analyzeMessages(latestWorker())).toHaveLength(1);
+    expect(analyzeMessages(currentLease)).toHaveLength(1);
 
     // TEST_FEN result lands -> worker free -> analyze the current FEN (TEST_FEN_2).
-    act(() => {
-      latestWorker().simulateMessage(buildResultMessage(TEST_FEN));
-    });
-    const msgs = analyzeMessages(latestWorker());
+    await resolveLatest(currentLease, TEST_FEN);
+    const msgs = analyzeMessages(currentLease);
     expect(msgs).toHaveLength(2);
     expect(msgs[1]?.fen).toBe(TEST_FEN_2);
   });
@@ -298,14 +323,14 @@ describe('useMaiaEngine', () => {
     });
     vi.advanceTimersByTime(200); // Date.now() >> 0 so the first FEN settles immediately.
     renderHook(() => useMaiaEngine({ fen: TEST_FEN, enabled: true, selectedElo: 1500 }));
-    driveReady(latestWorker());
+    await driveReady(currentLease);
     await act(async () => {
       await vi.advanceTimersByTimeAsync(200);
     });
-    // Hidden: the debounce committed but analyze() bailed — no worker round-trip.
-    expect(analyzeMessages(latestWorker())).toHaveLength(0);
+    // Hidden: the debounce committed but analyze() bailed — no round-trip.
+    expect(analyzeMessages(currentLease)).toHaveLength(0);
 
-    act(() => {
+    await act(async () => {
       Object.defineProperty(document, 'visibilityState', {
         value: 'visible',
         configurable: true,
@@ -314,8 +339,8 @@ describe('useMaiaEngine', () => {
       document.dispatchEvent(new Event('visibilitychange'));
     });
     // On return the current FEN is analyzed.
-    expect(analyzeMessages(latestWorker())).toHaveLength(1);
-    expect(analyzeMessages(latestWorker())[0]?.fen).toBe(TEST_FEN);
+    expect(analyzeMessages(currentLease)).toHaveLength(1);
+    expect(analyzeMessages(currentLease)[0]?.fen).toBe(TEST_FEN);
   });
 
   it('resultFen reports the FEN the held curve belongs to, and clears with it (163-REVIEW WR-03)', async () => {
@@ -324,16 +349,14 @@ describe('useMaiaEngine', () => {
       ({ fen }: { fen: string }) => useMaiaEngine({ fen, enabled: true, selectedElo: 1500 }),
       { initialProps: { fen: TEST_FEN } },
     );
-    driveReady(latestWorker());
+    await driveReady(currentLease);
     await act(async () => {
       await vi.advanceTimersByTimeAsync(200);
     });
     // No result held yet — no FEN to attribute.
     expect(result.current.resultFen).toBeNull();
 
-    act(() => {
-      latestWorker().simulateMessage(buildResultMessage(TEST_FEN));
-    });
+    await resolveLatest(currentLease, TEST_FEN);
     expect(result.current.resultFen).toBe(TEST_FEN);
 
     // Navigating to an uncached FEN clears the curve AND its attribution —
@@ -346,82 +369,47 @@ describe('useMaiaEngine', () => {
     expect(result.current.resultFen).toBeNull();
   });
 
-  it('unmount sends terminate and terminates the Worker (no leak)', () => {
+  it('unmount releases the lease (no leak)', () => {
     const { unmount } = renderHook(() => useMaiaEngine({ fen: null, enabled: true, selectedElo: 1500 }));
+    const lease = currentLease;
     unmount();
-    expect(latestWorker().messages).toContainEqual({ type: 'terminate' });
-    expect(latestWorker().terminated).toBe(true);
+    expect(lease.released).toBe(true);
   });
 
   it('wdl / expectedScoreAtSelectedElo derive from the ladder rung nearest selectedElo', async () => {
     const { result } = renderHook(() => useMaiaEngine({ fen: TEST_FEN, enabled: true, selectedElo: 1550 }));
-    driveReady(latestWorker());
+    await driveReady(currentLease);
     await act(async () => {
       await vi.advanceTimersByTimeAsync(200);
     });
 
     const msg = buildResultMessage(TEST_FEN);
-    const wdlByElo = msg.wdlByElo as { elo: number; wdl: Float32Array }[];
     // Give the 1500 rung (nearest to selectedElo=1550, ties broken toward the
     // lower/earlier rung) a clearly winning WDL logit set.
-    msg.wdlByElo = wdlByElo.map((entry) =>
+    msg.wdlByElo = msg.wdlByElo.map((entry) =>
       entry.elo === 1500 ? { ...entry, wdl: Float32Array.from([0, 0, 10]) } : entry,
     );
-    act(() => {
-      latestWorker().simulateMessage(msg);
+    await act(async () => {
+      currentLease.latestAnalyzeCall()?.resolve(msg);
+      await Promise.resolve();
     });
 
     expect(result.current.wdl?.win).toBeGreaterThan(0.9);
     expect(result.current.expectedScoreAtSelectedElo).toBeGreaterThan(0.9);
   });
 
-  // ─── Respawn (quick 260729-sod, FIX 1) ────────────────────────────────────
+  // ─── Worker death (quick 260729-sod, FIX 3 — onFatal replaces the old onerror handler) ──
 
-  it('webgpu-unavailable terminates worker #1 and constructs exactly one replacement', () => {
-    renderHook(() => useMaiaEngine({ fen: null, enabled: true, selectedElo: 1500 }));
-    expect(createdWorkers).toHaveLength(1);
-    const worker1 = latestWorker();
+  it('onFatal sets hasFailed and resets isReady', async () => {
+    const { result } = renderHook(() => useMaiaEngine({ fen: null, enabled: true, selectedElo: 1500 }));
+    await driveReady(currentLease);
+    expect(result.current.isReady).toBe(true);
 
     act(() => {
-      worker1.simulateMessage({ type: 'webgpu-unavailable', message: 'RangeError: Out of memory' });
+      currentLease.simulateFatal();
     });
 
-    expect(worker1.terminated).toBe(true);
-    expect(createdWorkers).toHaveLength(2);
-  });
-
-  it('the replacement receives {type:init, backend:wasm}', () => {
-    renderHook(() => useMaiaEngine({ fen: null, enabled: true, selectedElo: 1500 }));
-    const worker1 = latestWorker();
-    act(() => {
-      worker1.simulateMessage({ type: 'webgpu-unavailable', message: 'boom' });
-    });
-
-    expect(latestWorker()).not.toBe(worker1);
-    expect(latestWorker().messages).toContainEqual({ type: 'init', backend: 'wasm' });
-  });
-
-  it("after the replacement's ready, a normal analyze/result round-trip works", async () => {
-    vi.advanceTimersByTime(200);
-    renderHook(() => useMaiaEngine({ fen: TEST_FEN, enabled: true, selectedElo: 1500 }));
-    const worker1 = latestWorker();
-    act(() => {
-      worker1.simulateMessage({ type: 'webgpu-unavailable', message: 'boom' });
-    });
-    const replacement = latestWorker();
-    driveReady(replacement);
-    await act(async () => {
-      await vi.advanceTimersByTimeAsync(200);
-    });
-
-    const msgs = analyzeMessages(replacement);
-    expect(msgs).toHaveLength(1);
-    expect(msgs[0]?.fen).toBe(TEST_FEN);
-  });
-
-  it('a worker that reports ready directly (no adapter) constructs exactly one Worker', () => {
-    renderHook(() => useMaiaEngine({ fen: null, enabled: true, selectedElo: 1500 }));
-    driveReady(latestWorker());
-    expect(createdWorkers).toHaveLength(1);
+    expect(result.current.hasFailed).toBe(true);
+    expect(result.current.isReady).toBe(false);
   });
 });
