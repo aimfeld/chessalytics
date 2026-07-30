@@ -8,6 +8,10 @@ in `YYYY-MM-DD` (Europe/Zurich).
 
 ## [Unreleased]
 
+### Fixed
+
+- Train: pressing Next no longer briefly requests the solution for the puzzle you are about to solve. The reveal panel kept the previous puzzle's verdict for a moment after the transition, which fired a rejected request (and flashed the old solution) on every Next press. (FLAWCHESS-64)
+
 ## [v2.9] Train — Spaced-Repetition Blunder Drills — 2026-07-30
 
 ### Added
