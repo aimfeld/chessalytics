@@ -113,13 +113,73 @@
 
 | Requirement | Phase | Status |
 |-------------|-------|--------|
-| _(filled by roadmap)_ | | |
+| JANK-01 | Phase 194 | Pending |
+| JANK-02 | Phase 194 | Pending |
+| JANK-03 | Phase 194 | Pending |
+| JANK-04 | Phase 194 | Pending |
+| JANK-05 | Phase 194 | Pending |
+| ABORT-01 | Phase 194 | Pending |
+| ABORT-02 | Phase 194 | Pending |
+| ABORT-03 | Phase 194 | Pending |
+| CACHE-01 | Phase 194 | Pending |
+| CACHE-02 | Phase 194 | Pending |
+| CACHE-03 | Phase 194 | Pending |
+| CACHE-04 | Phase 194 | Pending |
+| CACHE-05 | Phase 194 | Pending |
+| CACHE-06 | Phase 194 | Pending |
+| LADDER-01 | Phase 195 | Pending |
+| LADDER-02 | Phase 195 | Pending |
+| LADDER-03 | Phase 195 | Pending |
+| LADDER-04 | Phase 195 | Pending |
+| LADDER-05 | Phase 195 | Pending |
+| INJECT-01 | Phase 196 | Pending |
+| INJECT-02 | Phase 196 | Pending |
+| INJECT-03 | Phase 196 | Pending |
+| INJECT-04 | Phase 196 | Pending |
+| INJECT-05 | Phase 196 | Pending |
+| INJECT-06 | Phase 196 | Pending |
+| INJECT-07 | Phase 196 | Pending |
+| LEAF-01 | Phase 197 | Pending |
+| LEAF-02 | Phase 197 | Pending |
+| LEAF-03 | Phase 197 | Pending |
+| LEAF-04 | Phase 197 | Pending |
+| LEAF-05 | Phase 197 | Pending |
+| LEAF-06 | Phase 197 | Pending |
+| LEAF-07 | Phase 197 | Pending |
+| DISPATCH-01 | Phase 198 | Pending |
+| DISPATCH-02 | Phase 198 | Pending |
+| DISPATCH-03 | Phase 198 | Pending |
+| DISPATCH-04 | Phase 198 | Pending |
+| DISPATCH-05 | Phase 198 | Pending |
+| DISPATCH-06 | Phase 198 | Pending |
+| DISPATCH-07 | Phase 198 | Pending |
+| DISPATCH-08 | Phase 198 | Pending |
+| DISPATCH-09 | Phase 198 | Pending |
+| DISPATCH-10 | Phase 198 | Pending |
+| DISPATCH-11 | Phase 198 | Pending |
+| RECAL-01 | Phase 199 | Pending |
+| RECAL-02 | Phase 199 | Pending |
+| RECAL-03 | Phase 199 | Pending |
+| RECAL-04 | Phase 199 | Pending |
+| RECAL-05 | Phase 199 | Pending |
 
 **Coverage:**
 
-- v1 requirements: 42 total
-- Mapped to phases: _(pending roadmap)_
-- Unmapped: _(pending roadmap)_
+- v1 requirements: 49 total (this document's original Coverage block said "42" — a stale placeholder written before the requirement list above was finalized; 49 is the actual count of `[ ]` requirement IDs in this file)
+- Mapped to phases: 49/49
+- Unmapped: 0
+
+**Phase mapping (per the 2026-07-30 milestone-start decision, not re-derived by the roadmapper):**
+
+| Phase | Source | Requirement IDs |
+|-------|--------|------------------|
+| 194 — Engine main-thread + cache hygiene | SEED-126 Phases 2–5 | JANK-01..05, ABORT-01..03, CACHE-01..06 |
+| 195 — Depth-scaled grading ladder | SEED-126 Phase 1 | LADDER-01..05 |
+| 196 — Analysis-board Stockfish root injection | SEED-118 | INJECT-01..07 |
+| 197 — Maia WDL leaf values | SEED-126 Phase 6 | LEAF-01..07 |
+| 198 — mctsSearch continuous dispatch | SEED-127 | DISPATCH-01..11 |
+| 199 — Bot re-calibration sweep + strength curve refit | combined, final | RECAL-01..05 |
 
 ---
 *Requirements defined: 2026-07-30*
+*Roadmap mapping added: 2026-07-30*
