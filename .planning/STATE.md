@@ -1,30 +1,26 @@
 ---
 gsd_state_version: 1.0
-milestone: v2.9
-milestone_name: Train — Spaced-Repetition Blunder Drills
-status: Awaiting next milestone
-stopped_at: "Completed quick 260729-sod: Maia WASM OOM fixes (respawn + Sentry tag + shared worker + cache headers)"
-last_updated: "2026-07-30T11:56:30.957Z"
+milestone: v2.10
+milestone_name: FlawChess Engine Improvements
+status: planning
+last_updated: "2026-07-30T12:14:24.928Z"
 last_activity: 2026-07-30
-last_activity_desc: Milestone v2.9 completed and archived
 progress:
-  total_phases: 6
-  completed_phases: 6
-  total_plans: 31
-  completed_plans: 31
-  percent: 100
-current_phase: 193
-current_phase_name: session-tick-streak-shield
+  total_phases: 0
+  completed_phases: 0
+  total_plans: 0
+  completed_plans: 0
+  percent: 0
 ---
 
 # Project State: FlawChess
 
 ## Current Position
 
-Phase: Milestone v2.9 complete
+Phase: Not started (defining requirements)
 Plan: —
-Status: Awaiting next milestone
-Last activity: 2026-07-30 — Milestone v2.9 completed and archived
+Status: Defining requirements
+Last activity: 2026-07-30 — Milestone v2.10 started
 
 ## Project Reference
 
