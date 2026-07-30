@@ -125,12 +125,14 @@ of pending grades, per its own comment).
 
 ## Suggested approach
 
-1. **Measurement spike first.** Instrument today's baseline (the appendix in
-   [[SEED-126]] has the method: instrumented providers over the headless harness
-   plumbing, `policy peak in-flight` as the key telltale). Model the theoretical
-   ceiling before building anything — if overlapping only recovers a fraction of
-   the 22–39% because grade latency dominates post-ladder, the risk may not be
-   worth it, and that is worth knowing cheaply.
+1. **Measurement spike first.** Re-baseline AFTER the ladder lands:
+   `scripts/engine-grading-depth-ab.mjs` reports per-depth grade CPU and wall
+   clock, which is what sets the post-ladder ceiling on this seed's payoff. The
+   policy/grade wall split and `policy peak in-flight` telltale need a small
+   instrumented-provider wrapper (method described in [[SEED-126]]'s appendix; the
+   one-off script was not committed). Model the ceiling before building anything —
+   if overlapping only recovers a fraction of the 22–39% because grade latency
+   dominates post-ladder, the risk may not be worth it, and that is cheap to learn.
 2. **Settle the apply-order/determinism design on paper** and get it reviewed
    before implementation. This is the phase most likely to need a
    `/gsd-review` cross-AI pass.

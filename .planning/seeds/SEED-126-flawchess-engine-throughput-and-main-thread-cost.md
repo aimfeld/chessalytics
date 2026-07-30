@@ -395,6 +395,10 @@ phase in its own right with its own eval and calibration.
   pattern to mirror; `FLAWCHESS_ENGINE_MAX_NODES = 400`
 - `frontend/src/lib/engine/leafScore.ts` — root-relative frame invariant Phase 6
   must respect
+- `scripts/engine-grading-depth-ab.mjs` — Phase 1's decision harness (committed;
+  see the appendix)
+- `scripts/engine-mainthread-cost.mjs` — Phase 2's before/after harness
+  (committed; carries a transient prototype to delete once Phase 2 ships)
 - `scripts/calibration-harness.mjs`, `scripts/lib/calibration-providers.mjs` —
   the depth-only/no-movetime harness divergence; Phase 1's re-run target
 - `docs/flawchess-engine-explained-2026-07-06.md` §2 — the "Stockfish is the
@@ -415,13 +419,33 @@ phase in its own right with its own eval and calibration.
 
 Driven headlessly through the existing harness plumbing
 (`scripts/lib/node-engine-providers.mjs` + `stockfish-pool.mjs`) with
-instrumented providers, plus targeted microbenchmarks. Scripts were scratchpad-only
-(`micro.mjs`, `micro2.mjs`, `micro3.mjs`, `profile.mjs`, `depth.mjs`,
-`depthab.mjs`, `batch.mjs`, `mainthread.mjs`) — **not committed; re-derive if
-needed.** The `mainthread.mjs` technique is the reusable one: record every
-provider answer in pass 1, then replay the identical search with zero-latency
-providers that still perform the real main-thread post-processing, so pass 2's
-wall clock IS the main-thread cost.
+instrumented providers, plus targeted microbenchmarks.
+
+**Two of the measurement scripts are committed and are the tools to re-run:**
+
+- **`scripts/engine-grading-depth-ab.mjs`** — the Phase 1 decision harness.
+  Whole-search wall clock + three agreement measures (same top move, same full
+  ranked order, mean |Δ practicalScore|) per depth, with the reference depth's
+  top-2 gap alongside so a "changed top move" can be read as tie-or-real. Mirrors
+  `workerPool.ts`'s exact `go` shape (movetime cap, no Clear Hash), NOT the
+  harness's `nodeGrade`. Supports `--depths`, `--nodes`, `--openings N`,
+  `--fens <file>`, and TSV output. **Use `--openings 20` / `--fens` to widen the
+  set before committing to a ladder** — the built-in 4 positions are the ones
+  behind the numbers below and are too thin on their own.
+- **`scripts/engine-mainthread-cost.mjs`** — the reusable technique: pass 1
+  records every provider answer, pass 2 replays the identical search with
+  zero-latency providers that still do the real main-thread post-processing, so
+  pass 2's wall clock IS the main-thread cost. Replay cache misses fail the run
+  (a miss means the replay diverged, invalidating the measurement).
+  `--candidate fast` times a Phase 2 prototype against a mandatory bit-identity
+  parity assertion; **delete that prototype and the flag once Phase 2 ships** —
+  the baseline pass then measures shipped code, which is what confirms the win.
+
+The remaining one-off microbenchmarks were scratchpad-only and not committed
+(`micro*.mjs` per-call chess.js costs, `profile.mjs` policy/grade wall split,
+`batch.mjs` Maia batch scaling, `injection.mjs` the [[SEED-118]] hard-cap
+repro). Their results are recorded here and in [[SEED-118]]; re-derive if a
+number needs challenging.
 
 **Transferability caveats:**
 - Stockfish is the same vendored WASM binary the browser loads → grade timings
