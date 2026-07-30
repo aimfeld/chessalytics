@@ -2,113 +2,50 @@
 gsd_state_version: 1.0
 milestone: v2.9
 milestone_name: Train — Spaced-Repetition Blunder Drills
-current_phase: 193
-current_phase_name: session-tick-streak-shield
-status: verifying
+status: Awaiting next milestone
 stopped_at: "Completed quick 260729-sod: Maia WASM OOM fixes (respawn + Sentry tag + shared worker + cache headers)"
-last_updated: "2026-07-29T19:24:22.265Z"
-last_activity: 2026-07-29
-last_activity_desc: "Completed quick task 260729-a86: tier-3 Step-1 user picker rewritten as two correlated EXISTS (prod 360ms → 2.4ms, 71,612 → 1,443 buffers); no migration, the partial indexes already existed"
+last_updated: "2026-07-30T11:56:30.957Z"
+last_activity: 2026-07-30
+last_activity_desc: Milestone v2.9 completed and archived
 progress:
   total_phases: 6
   completed_phases: 6
   total_plans: 31
   completed_plans: 31
   percent: 100
+current_phase: 193
+current_phase_name: session-tick-streak-shield
 ---
 
 # Project State: FlawChess
 
 ## Current Position
 
-Phase: 193 (session-tick-streak-shield) — EXECUTING
-Plan: 3 of 3
-Status: Phase complete — ready for verification
-passed with 2 warnings, both closed at plan time. Two blocking gates are built in: a
-`checkpoint:decision` on the `herring_pool` surrogate PK (192-01) and a second on the
-`drill_solves.game_id` nullability migration (192-02, one-way door).
-Last activity: 2026-07-29 — Completed quick task 260729-sod: fixed the iOS Maia WASM OOM (WebGPU fallback was loading a second ORT runtime into the same worker instead of respawning), shared one Maia worker across /analysis, distinct Sentry grouping for Maia failures, cache headers for /maia + /engine
-
-Phase 192 fixes a correctness defect in Phase 189's red herrings: they were sourced from
-non-gem `game_best_moves` rows, which does not actually mean "several fine moves". It replaces
-that source with a precomputed, globally shared `herring_pool` table sampled from all signed-up
-users' `game_positions`, phase-balanced, confirmed by a MultiPV-5 Stockfish search whose raw
-5-move ladder is stored on the row, with the qualifier thresholds applied at **query** time so
-they are retunable without re-analysis.
-
-Waves: **1** — 192-01 tracer (pool table + `evaluate_nodes_multipv5` + generator + `herring_stmt`
-swap, one real row proven end to end). **2** — 192-02 (D-05 nullability migration + all three
-INNER→OUTER join fixes + D-06 owner-scoped reveal) and 192-03 (generator completion + the
-measurement that pins D-15/D-17), no `files_modified` overlap. **3** — 192-04 (query-time tight
-gate, degenerate exclusion, replacement herring tests, empty-pool regression) and 192-05 (reveal
-frontend gates + the four spec amendments).
-
-Notes carried into execution:
-
-- **The planner contradicted RESEARCH.md assumption A2, deliberately.** After
-  `drill_solves.game_id` becomes `ondelete="SET NULL"`, an orphaned **SR** row survives forever
-  with `solved_at IS NULL` and pins `remaining` above zero — reproducing exactly the stuck-session
-  bug WR-02 fixed via CASCADE. SR and herring orphans need *opposite* treatment in
-  `_mark_session_complete_if_done`; 192-02 specifies and tests both together.
-
-- **`herring_pool` uses a surrogate `id` PK, not SEED-120's `(user_id, game_id, ply)` triple** — a
-  PK column cannot be NULL, so `SET NULL` makes the seed's literal wording unimplementable. The
-  triple becomes a UNIQUE constraint, still doing its real job (generation dedup + `ON CONFLICT`
-  top-up idempotency). Recorded as a `checkpoint:decision`, not a silent derivation.
-
-- **Recency ordering deviates from "unchanged".** SEED-120 keeps `Game.played_at` ordering, but
-  that needs a `games` join D-01 lets null out; `source_played_at` is copied onto the pool row at
-  generation instead, same survivability logic D-03 applies to FEN and arriving move.
-
-- **D-15/D-17 constants are deliberately unset.** 192-01 ships `HERRING_LOOSE_BAND_ES` marked
-  PROVISIONAL; 192-03 measures the first run's qualifying-rate distribution and re-pins both from
-  the histogram, then grep-asserts `PROVISIONAL` is gone.
-
-Phase 191 remains COMPLETE (verified 2026-07-27, 5/5 criteria, squash-merged to `main`). All
-earlier v2.9 phases (189, 190, 190.1, 191) are done; the v2.9 `main → production` release PR is
-still outstanding and independent of this phase.
-
-The blocking human gate on plan 06 returned five real defects (nav-badge clipping,
-inconsistent schedule pickers, wrong Train defaults, centered start-screen text, and a
-session that kept its old size after `puzzles_per_session` changed). All were fixed in-branch,
-two of them needing backend changes plus additive migrations (`train_settings` new defaults,
-`drill_sessions.requested_count`). One deliberate copy deviation: the parked chip shipped as
-`{N} parked`, dropping the UI-SPEC's `— too hard for now` suffix (`191-UI-SPEC.md:106`/`:135`
-are now stale on that string). Dev-clock tooling (`app/core/dev_clock.py`, `TrainDevClock`,
-`scripts/reset_train_state.py`) was built during the gate to make the calendar-shaped
-behavior testable in one sitting; it is inert outside `ENVIRONMENT == "development"`.
-
-Phase 191 turns the Phase 189/190 mechanics into a habit loop: weekly schedule config,
-nav badge / dashboard surfacing, ad-hoc "train now", weekly streak, honest mastered/parked
-counts, celebrations, and cold/empty states. Mastered/parked/waiting counts and `pool_state`
-compute at request time from existing tables; the streak/flame uses a persisted settled
-snapshot per **D-18** (one additive Alembic migration: `streak_count`, `flame_state`,
-`streak_settled_through` on `train_settings`).
-
-Notes carried into execution:
-
-- **A1 RESOLVED by D-18** (user decision 2026-07-27): settled weeks are frozen forever —
-  lazy settlement on `GET /train/progress`, settle-before-mutate on `PUT /train/settings`
-  (old mask/timezone judges elapsed weeks). Only the in-progress week is judged live.
-
-- `streak_lost_last_week` derives from the snapshot state, so the reset notice survives a
-  reload and self-clears once the user trains again (planner choice, accepted).
-
-- The folded delete-all copy ("also resets your Train progress") is true for mastered/parked
-  (they cascade from `games`) but NOT for the weekly streak — `drill_sessions` FKs only to
-  `users` per locked Phase 189 D-04, and the D-18 snapshot on `train_settings` also survives.
-  Plan 04 forbids "fixing" this with a cascade.
-
-Phase 190.1 remains COMPLETE (verified, squash-merged to `main` 2026-07-26); the v2.9
-release to `production` is still a separate `main → production` PR.
+Phase: Milestone v2.9 complete
+Plan: —
+Status: Awaiting next milestone
+Last activity: 2026-07-30 — Milestone v2.9 completed and archived
 
 ## Project Reference
 
-See: .planning/PROJECT.md (updated 2026-07-14 after Phase 170)
+See: .planning/PROJECT.md (updated 2026-07-30 after the v2.9 milestone close)
 Core value: Position-precise WDL across openings + endgames + time pressure on top of users' actual chess.com / lichess games, with personalized LLM commentary and an auto-generated opening-strengths/weaknesses report.
-Current focus: **v2.7 Bot Personas & Playstyle Layer CLOSED 2026-07-24.** Shipped a roster of 24 named bot personas (4 styles × 6 ELO rungs, 800–1800) on the Bots page, each a complete pinned opponent (preset, calibrated ELO, style params, opening book, resign/draw-offer policy, avatar, bio). Phases: **182 Style Levers**, **183 Persona Registry & Bots Page**, **184 Persona Calibration & Strength Honesty** (measured labels, `PERSONA_CALIBRATION_MEASURED=true`), **185 Bots Roster Transpose + Win Stars**. Deployed to production incrementally (PRs through #275). Next: `/gsd-new-milestone`.
+Current focus: **v2.9 Train — Spaced-Repetition Blunder Drills CLOSED 2026-07-30.** The import-gated `/train` page turns the user's own blunders into spaced-repetition puzzles end to end. Phases: **189 Pool + Scheduler Backend**, **190 Train Page + Solve Loop**, **190.1 Train Reveal Redesign** (inserted from 190 UAT), **191 Schedule + Progress Surface**, **192 Precomputed Red-Herring Position Pool** (SEED-120, correctness defect), **193 Session-Tick Streaks with a Depletable Shield** (SEED-121). All 27 requirements complete, all six phases verified `passed`, deployed to production incrementally through release #290. Next: `/gsd-new-milestone`.
 
 ## Deferred Items
+
+Items acknowledged and deferred at milestone close on 2026-07-30 (v2.9, `override_closeout` on artifacts only). All six v2.9 phases (189, 190, 190.1, 191, 192, 193) are complete and verified `passed` — Phase 193's three browser-only UAT items (dev-clock multi-day drain/reset, 7-pip density at 360px, off-day badge at both nav sites) were operator-confirmed at close, clearing the last verification gap. The items below are cross-milestone carryover, not v2.9 gaps:
+
+| Category | Count | Notes |
+|----------|-------|-------|
+| Debug sessions | 2 | `entry-submit-n-plus-1` (fixed_awaiting_deploy), `insights-diskfull-shm` (awaiting_human_verify) — both benign, unchanged since v2.6 |
+| Quick tasks | 19 | Same stale 2026-05-31 → 2026-06-16 set as at v2.7/v2.8 close — the known gsd-sdk audit miscount (missing SUMMARY artifacts, not unfinished work; see `project_stale_gsd_sdk_audit_bug`) |
+| Pending todos | 3 | `172-deferred-review-findings`, bitboard-storage note, WR-01 Tailwind axis label |
+| Dormant seeds | 7 | SEED-042/067/077/114/118/126/127 — all intentionally dormant, surfaced at `/gsd-new-milestone`. SEED-037 (the milestone itself) plus SEED-119/120/121/122/123/124/125 were closed during v2.9 |
+
+No v2.9 milestone audit doc was generated (`/gsd-audit-milestone` not run): all six phases carry a passing VERIFICATION.md, all 27 REQUIREMENTS.md rows are checked off, and Phases 190/191 both ran blocking human UAT gates whose findings were fixed in-branch.
+
+### Earlier: items deferred at the v2.7 close (2026-07-24)
 
 Items acknowledged and deferred at milestone close on 2026-07-24 (v2.7, `override_closeout`). All four v2.7 phases (182–185) are complete + verified; these are cross-milestone carryover items, not v2.7 gaps:
 
@@ -124,7 +61,11 @@ No v2.7 milestone audit doc was generated (`/gsd-audit-milestone` not run): the 
 
 ## Milestone Progress
 
-Forty milestones complete (v1.0–v2.7). **v2.7 Bot Personas & Playstyle Layer closed 2026-07-24.**
+Forty-two milestones complete (v1.0–v2.9). **v2.9 Train — Spaced-Repetition Blunder Drills closed 2026-07-30.**
+
+v2.9 Train — Spaced-Repetition Blunder Drills closed 2026-07-30 — 6 phases (189, 190, 190.1, 191, 192, 193), 31 plans, 107 commits over 6 days (309 files, +68,178 / −2,386 since `v2.8`). FlawChess stopped being only an analysis tool: the import-gated `/train` page re-presents the user's own blunders as spaced-repetition puzzles until the patterns stick. **Phase 189 (SEED-037)** built the backend substrate — four CASCADE-FK tables (`drill_items`, `drill_sessions`, `drill_solves`, `train_settings`), a pure streak-keyed interval ladder (0 → next session / 1 → ~3d / 2 → ~10d; FSRS rejected), pool entry gated on the user's own out-of-book blunders clearing the winnability floor with a complete stored answer key (named total-operator predicates rejecting both SQL NULL and the eval pipeline's empty-array `missed_pv_lines` sentinel — the phase's one verification gap, closed by a mutation-tested gap-closure plan), a sharp-vs-avoid-the-blunder classifier, exactly-N session composition (~75/25 SR/herring), and solve/reveal/settings endpoints with **zero server-side grading**. **Phase 190** shipped the `/train` page and the full solve loop against those endpoints — nav on all three surfaces, six landing states, binary position read → single-move attempt graded entirely in-browser on the vendored Stockfish WASM at a *measured* movetime budget, auto-opening reveal, opt-in tactic stepper, resume, score screen; its blocking live-browser UAT found and fixed three real defects including a 21–27s pool-query planner pathology (LATERAL rewrite, 22s → 40ms). **Phase 190.1** (inserted from that UAT) rebuilt the reveal into a self-contained study surface: puzzle-type-capped green good-move arrows + played-move arrow + thin white game-move arrow, answer-stating verdict rows, and three coincidence-merged steppable line boxes, every eval from one MultiPV-4 client search so no two numbers can contradict the verdict. **Phase 191** turned the mechanics into a habit loop — auto-saving weekday/session-size pickers, numeric waiting-count nav badge, honest mastered/parked counts, reduced-motion-safe confetti + "Flaw fixed!" banner, two tailored cold/exhausted states — with a human UAT round that surfaced five issues (all fixed in-branch) and produced the dev-clock time-travel tooling (`app/core/dev_clock.py`, `TrainDevClock`, `scripts/reset_train_state.py`) that makes calendar-shaped behavior testable in one sitting. **Phase 192 (SEED-120)** fixed a real correctness defect: red herrings were sourced from non-gem `game_best_moves` rows, which does not mean "several fine moves" — replaced by a globally shared, phase-balanced, MultiPV-5-confirmed `herring_pool` whose raw 5-move ladder is stored on the row so the qualifiers apply at **query** time and stay retunable without re-analysis, plus the one-way `drill_solves.game_id` nullability door (`SET NULL`) letting a herring outlive its source game, with deliberately opposite orphan treatment for SR vs herring items. **Phase 193 (SEED-121)** replaced the weekly streak, `required_sessions_per_week`, and the 3-rung flame ladder with one `_judge_one_day`/`tick_days` machine: +1 pip (cap 7) and +1 count on a completed scheduled-day session, −1 per missed scheduled day, count resets when the shield empties, settled days frozen forever, a `pool_eligible_since` watermark protecting new users mid-import, and a server-computed `badge_visible` so neither nav site does client weekday math; the verifier independently mutation-tested the settle-before-layer guard. Archived to milestones/v2.9-ROADMAP.md + v2.9-REQUIREMENTS.md, phases to milestones/v2.9-phases/, CHANGELOG promoted, tagged v2.9. **Deployed to production** incrementally through releases #286–#290 (`origin/production` and `main` are identical across `app/`, `frontend/src/`, `alembic/` at close). Closed `override_closeout` on artifacts only — all six phases verified `passed` (Phase 193's three browser-only UAT items operator-confirmed at close); 31 cross-milestone carryover items (2 benign debug sessions, 19 stale quick-task miscounts, 3 todos, 7 dormant seeds) acknowledged as deferred.
+
+v2.8 Import Filters and Guest Data Cleanup closed 2026-07-24 — 3 phases (186, 187, 188), 6 plans. User-facing import filters on the Import tab (time-control multiselect + per-platform game cap, backward backfill on upgrades, existing users grandfathered; SEED-117), a daily background job pruning game data for guests inactive ≥30 days while keeping the guest account + auth (SEED-116), and import/eval pipeline cleanup archiving 7 completed backfill scripts while keeping `resweep_holed_games` and tiers 4/4b as permanent safety nets (SEED-115). Archived to milestones/v2.8-ROADMAP.md, phases to milestones/v2.8-phases/, tagged v2.8. Closed `override_closeout` — Phase 187's D-06 backstop (a ~5M-row `game_positions` cascade delete under live prod traffic) abstains by design and was deferred to prod observation.
 
 v2.7 Bot Personas & Playstyle Layer closed 2026-07-24 — 4 phases (182, 183, 184, 185), 19 plans. A roster of 24 named bot personas (4 styles × 6 ELO rungs, 800–1800) on the Bots page, each a complete pinned opponent with no persona × strength picker. **Phase 182 (SEED-098)** added the engine-only style levers — curated per-style×color opening books (`styleOpeningLines.ts`), signed draw contempt + hysteresis-gated resign policy (`botDrawGate.ts`), Maia-policy prior reweighting by a cheap chess.js move classifier on the Human rungs, and additive score shaping + a `childScoreSpread` variance preference on the Light/Deep rungs — all new bot-only fields, `botSampling.ts` kept pure, byte-identical with no style set. **Phase 183** shipped the typed 24-slot persona registry + Bots page grid/card/detail UI + placeholder avatars/bios, one-action Play, unchanged Custom mode, and in-game persona presence (clock avatar+name, draw-offer banner, persona-named result copy, Rematch/New opponent). **Phase 184** ran the operator overnight calibration sweep (24 cells, supervised resume-on-crash) and refit measured ELO labels from the real ledger, flipping `PERSONA_CALIBRATION_MEASURED` true with the D-07 ~1800 ceiling clamp, D-06 floor-acknowledgment popover, and D-04 within-style monotonicity; the CAL-04b gap-fill (`813acd0a`) closed the ~800/~1200 rungs. **Phase 185** re-laid-out the grid as a rung ladder (6 rung rows × 4 style columns, accent header row) and added server-tracked per-persona win stars (nullable `games.persona_id` + aggregation endpoint + min(wins,3) gold stars). Archived to milestones/v2.7-ROADMAP.md + v2.7-REQUIREMENTS.md, phases to milestones/v2.7-phases/, CHANGELOG promoted, tagged v2.7, SEED-098 closed. **Deployed to production** incrementally (PRs through #275). Closed `override_closeout` — cross-milestone carryover (2 benign debug sessions, 19 stale quick-task miscounts, 3 todos, 8 dormant seeds) acknowledged as deferred; 3 Phase-183 UI fast-follows (WR-01/IN-02/AVAT-01) tracked. Phase 184's `184-04` SUMMARY + phase VERIFICATION were reconstructed at close from the committed measured artifacts.
 
@@ -167,6 +108,8 @@ v1.29 Live-Engine Analysis Page shipped 2026-06-29 — 5 phases (136–140), 14 
 ## Accumulated Context
 
 ### Roadmap Evolution
+
+- v2.9 Train — Spaced-Repetition Blunder Drills closed 2026-07-30 (Phases 189–193 incl. 190.1; tag v2.9). Two phases were added mid-milestone as corrections rather than polish: **190.1** (inserted from Phase 190's blocking UAT — the reveal mixed stored server evals with live client evals, so displayed numbers could contradict the verdict) and **192** (SEED-120 — the red-herring source was structurally incapable of producing a "several fine moves" position, a correctness defect in Phase 189's design, not a bug in its implementation). **193** (SEED-121) then replaced Phase 191's just-shipped weekly streak wholesale, which was only cheap because streaks had never reached production — verified against `origin/production` before planning. Roadmap + requirements archived to `milestones/v2.9-*`, phases to `milestones/v2.9-phases/`. `override_closeout` on artifacts only; all six phases verified `passed`. Reset for the next milestone.
 
 - Phase 188 added 2026-07-24 (explicit user request after reviewing SEED-115): **Import/eval pipeline cleanup — retire completed backfill machinery** (SEED-115 base scope) with two locked amendments over the seed: (a) KEEP `resweep_holed_games` + its script — verified that `apply_completion_decision` Path C still stamps games complete WITH residual mid-game holes at MAX_EVAL_ATTEMPTS (weak/slow remote workers recreate the holed-stamped population go-forward), so the resweep is the permanent re-arm tool, not pre-Phase-119 legacy; its docstring gets updated to say so. (b) The seed's open decision resolved as **option 1**: tiers 4/4b stay as thin permanent safety nets — no strict-complete submit semantics, no worker-protocol change, no column-drop migration (the only migration is the small `ix_games_bestmove_backfill_pending` predicate realignment). No remote-worker upgrade required. `phase.add` numbered 188 correctly (187 is the active-dir max); its truncated auto-slug dir was renamed to `.planning/phases/188-import-eval-pipeline-cleanup-seed-115/`; scope details in the ROADMAP Goal block.
 - Phase 187 added 2026-07-24 (explicit user request via `/gsd-phase 187 @SEED-116`): **Guest Game Cleanup — 30-Day Inactivity Pruning** (SEED-116). Implements the already-advertised but never-built 30-day-inactivity guest cleanup: a scheduled job deletes games (+ cascading positions/flaws/bookmarks/eval_jobs) of guest users (`is_guest=true`) whose `users.last_activity` is ≥30 days old, KEEPS the guest User row + auth, and resets the incremental import cursor so a returning guest re-imports full history. Three seed gotchas: verify `last_activity` is bumped on guest browsing (not just import), reset the `import_jobs` cursor, and confirm every game-scoped child cascades with no orphans. In the same request the v2.8 milestone was **renamed "Import Filters" → "Import Filters and Guest Data Cleanup"** (top Milestones bullet, `## v2.8` section heading + intro, STATE fields). `phase.add` numbered it 187 sequentially (186 is the active-dir max) — no manual renumber needed this time.

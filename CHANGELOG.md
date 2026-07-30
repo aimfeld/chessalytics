@@ -8,6 +8,8 @@ in `YYYY-MM-DD` (Europe/Zurich).
 
 ## [Unreleased]
 
+## [v2.9] Train — Spaced-Repetition Blunder Drills — 2026-07-30
+
 ### Added
 
 - The homepage now advertises Train: a "Personalized Puzzle Training" section sits right after Game and Tactic Analysis, and a new "How can I improve my chess with FlawChess?" FAQ entry walks through analysis, training, and bot play. The System Opening Filter section was dropped to keep the page from getting crowded, and the README gained the Train, Human-like bots, and Game & tactic analysis entries it was missing. (quick 260729)
@@ -1211,7 +1213,8 @@ bookmarks, game cards, and rating / stats pages.
 - Rating history, global stats, openings W/D/L charts.
 - Multi-user auth with data isolation.
 
-[Unreleased]: https://github.com/flawchess/flawchess/compare/v2.8...HEAD
+[Unreleased]: https://github.com/flawchess/flawchess/compare/v2.9...HEAD
+[v2.9]: https://github.com/flawchess/flawchess/compare/v2.8...v2.9
 [v2.8]: https://github.com/flawchess/flawchess/compare/v2.7...v2.8
 [v2.7]: https://github.com/flawchess/flawchess/compare/v2.6...v2.7
 [v2.6]: https://github.com/flawchess/flawchess/compare/v2.5...v2.6
