@@ -8,10 +8,23 @@ in `YYYY-MM-DD` (Europe/Zurich).
 
 ## [Unreleased]
 
+### Changed
+
+- Bot moves and analysis-board searches are faster: positions deep in the engine's search tree are now graded at a shallower Stockfish depth, chosen from measurement so move quality is preserved, instead of every position at full depth. A follow-up measurement tightened the ladder further, landing at roughly 1.4× faster searches end to end. (Phase 195)
+
+- The FlawChess engine wastes less work behind the scenes: move probabilities are converted in a single pass instead of re-parsed per move, board snapshots are built only when something reads them, and abandoning a search (moving on, flipping positions) now actually stops the queued Stockfish grading instead of letting it run to completion. The engine's caches were also right-sized so long analysis sessions stop evicting results they are about to need again. (Phase 194)
+
 ### Fixed
 
 - Train: pressing Next no longer briefly requests the solution for the puzzle you are about to solve. The reveal panel kept the previous puzzle's verdict for a moment after the transition, which fired a rejected request (and flashed the old solution) on every Next press. (FLAWCHESS-64)
 
+- The analysis board's FlawChess verdict now reliably evaluates Stockfish's recommended move. The move was supposed to always be among the candidates the practical engine considers, but it could be silently dropped twice: once by the probability mass cut and once by the root candidate cap, so the "what would the engine play instead" comparison could be missing exactly when the disagreement mattered most. (Phase 196)
+
+- The Moves-by-Rating chart no longer leaks its engine results past the shared cache's size limit; its lookups now share the same bounded cache as the rest of the analysis page. (Phase 197)
+
+### Tests
+
+- Two engine ideas were measured end to end and deliberately not shipped, with the measurements committed: using Maia's own win/draw/loss estimate as the value of deep search-tree leaves (rejected at a pre-declared move-quality gate: it goes blind to forced tactics) (Phase 197), and rewriting the engine's dispatch loop for continuous policy/grade overlap (a modelled 29–35% speedup, closed as measured-not-shipped after the determinism design failed two independent reviews and surfaced that browser grades were never bit-reproducible to begin with — SEED-130) (Phase 198).
 ## [v2.9] Train — Spaced-Repetition Blunder Drills — 2026-07-30
 
 ### Added

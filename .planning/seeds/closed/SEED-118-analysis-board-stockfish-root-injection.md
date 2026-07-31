@@ -1,6 +1,6 @@
 ---
 id: SEED-118
-status: dormant
+status: closed (2026-07-31 — implemented by v2.10 Phase 196, analysis-board Stockfish root injection)
 planted: 2026-07-25
 planted_during: v2.9 Train planning (engine code review discussion)
 trigger_when: when improving the FlawChess engine card's SF-disagreement UX, or as the validation step before SEED-114's bot-preset injection

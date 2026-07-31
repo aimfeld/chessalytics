@@ -4,33 +4,33 @@ milestone: v2.10
 milestone_name: FlawChess Engine Improvements
 current_phase: 198
 current_phase_name: mctsSearch continuous dispatch
-status: planning
-stopped_at: Completed 197-01-PLAN.md
-last_updated: "2026-07-31T11:12:17.175Z"
+status: phase_closed
+stopped_at: Phase 198 closed as measured-not-shipped (2026-07-31, operator risk judgement)
+last_updated: "2026-07-31T18:00:00.000Z"
 last_activity: 2026-07-31
-last_activity_desc: Phase 197 complete, transitioned to Phase 198
+last_activity_desc: Phase 198 closed measured-not-shipped; phases 194-198 integrated to main
 progress:
   total_phases: 6
-  completed_phases: 4
-  total_plans: 17
-  completed_plans: 17
-  percent: 67
+  completed_phases: 5
+  total_plans: 25
+  completed_plans: 22
+  percent: 88
 ---
 
 # Project State: FlawChess
 
 ## Current Position
 
-Phase: 198 — mctsSearch continuous dispatch
-Plan: Not started
-Status: Ready to plan
-Last activity: 2026-07-31 — Phase 197 complete, transitioned to Phase 198
+Phase: 198 (mctsSearch continuous dispatch) — CLOSED, measured not shipped (2026-07-31)
+Plan: closed after wave 5 of 8 (waves 6–8 cancelled, zero `frontend/` changes)
+Status: Phase closed by operator risk judgement — see `reports/continuous-dispatch/report.md` §8
+Last activity: 2026-07-31 — Phase 198 closed; stacked phase branches 194–198 integrated into main
 
 ## Project Reference
 
 See: .planning/PROJECT.md (updated 2026-07-30 after Phase 194)
 Core value: Position-precise WDL across openings + endgames + time pressure on top of users' actual chess.com / lichess games, with personalized LLM commentary and an auto-generated opening-strengths/weaknesses report.
-Current focus: **v2.10 FlawChess Engine Improvements — ROADMAP CREATED 2026-07-30.** Six phases (194–199), committed order 194 → 195 → 196 → 197 → 198 → 199 (all five source units edit `dispatchExpansion`): **194 Engine main-thread + cache hygiene** (SEED-126 Phases 2–5), **195 Depth-scaled grading ladder** (SEED-126 Phase 1), **196 Analysis-board Stockfish root injection** (SEED-118), **197 Maia WDL leaf values** (SEED-126 Phase 6), **198 mctsSearch continuous dispatch** (SEED-127), **199 Bot re-calibration sweep + strength curve refit** (combined, final). Sourced entirely from three seeds carrying measured wall-clock data — no project-level research pass. All 49 requirements mapped 1:1, 100% coverage. **Phase 194 complete 2026-07-30** (4 plans, 14/14 requirements, verification `passed`, UAT 3 passed / 1 acknowledged gap on the CACHE-01 eviction-free claim). **Phase 195 complete** (6 plans). **Phase 196 complete 2026-07-31** (3 plans, INJECT-01..07, verification `passed`, security `threats_open: 0`, code review 3 Warnings all fixed). Two carry-forwards for 197-199: (a) INJECT-05's measurement CONTRADICTS the roadmap's cache-replay prediction — the production disagreement re-run is a fresh recompute (~4.5% hit-rate ceiling), not the harness's 79.1% replay, so do not inherit the cheap-re-run premise; (b) UAT test 1 (WR-01 browser confirmation) passed on automated evidence with the live-browser check explicitly WAIVED. Next: `/gsd-plan-phase 197`.
+Current focus: **v2.10 FlawChess Engine Improvements — ROADMAP CREATED 2026-07-30.** Six phases (194–199), committed order 194 → 195 → 196 → 197 → 198 → 199 (all five source units edit `dispatchExpansion`): **194 Engine main-thread + cache hygiene** (SEED-126 Phases 2–5), **195 Depth-scaled grading ladder** (SEED-126 Phase 1), **196 Analysis-board Stockfish root injection** (SEED-118), **197 Maia WDL leaf values** (SEED-126 Phase 6), **198 mctsSearch continuous dispatch** (SEED-127), **199 Bot re-calibration sweep + strength curve refit** (combined, final). Sourced entirely from three seeds carrying measured wall-clock data — no project-level research pass. All 49 requirements mapped 1:1, 100% coverage. **Phase 194 complete 2026-07-30** (4 plans, 14/14 requirements, verification `passed`, UAT 3 passed / 1 acknowledged gap on the CACHE-01 eviction-free claim). **Phase 195 complete** (6 plans). **Phase 196 complete 2026-07-31** (3 plans, INJECT-01..07, verification `passed`, security `threats_open: 0`, code review 3 Warnings all fixed). Two carry-forwards for 197-199: (a) INJECT-05's measurement CONTRADICTS the roadmap's cache-replay prediction — the production disagreement re-run is a fresh recompute (~4.5% hit-rate ceiling), not the harness's 79.1% replay, so do not inherit the cheap-re-run premise; (b) UAT test 1 (WR-01 browser confirmation) passed on automated evidence with the live-browser check explicitly WAIVED. **Phase 197 complete 2026-07-31, measured-not-shipped** (4 plans; LEAF-01 Rejected at the pre-declared move-quality gate — no handoff depth was both fast and safe on the Maia-blindness fixture; mechanism stripped in `b1764a83`, LEAF-02..07 genuinely Complete; post-close the grading ladder was overridden to `[14,14]`/floor-10 in `02fe44f2`). **Phase 198 CLOSED 2026-07-31, measured-not-shipped by operator risk judgement** (waves 1–5 of 8; the DISPATCH-02 measurement CLEARED the build line at 34.84% bot / 28.61% analysis, but the apply-order design failed two independent reviews and surfaced SEED-130 — browser grades are not bit-deterministic (uncleared Stockfish hash) and DISPATCH-08's parity gate cannot see it; DISPATCH-01/02 Complete, DISPATCH-03..11 Rejected; decision record in `reports/continuous-dispatch/report.md` §8; SEED-130 stays open). **Consequence: Phase 199's combined-sweep premise changed** — of the three strength changes it was scoped to absorb, only the ladder shipped (195 + the `[14,14]` override); re-scope 199 before planning. Next: re-scope and `/gsd-plan-phase 199`.
 
 ## Deferred Items
 
@@ -538,6 +538,10 @@ v1.29 Live-Engine Analysis Page shipped 2026-06-29 — 5 phases (136–140), 14 
 - [Phase ?]: 196-03: OPENING_BOOK + Phase 195 ladder FENs yielded only 3 disagreement survivors (below the floor of 5); widened the candidate pool with scripts/data/root-injection-fens.txt sampled from the existing Kaggle brilliant-move corpus rather than loosening the pre-filter
 - [Phase 197-01]: wdlLeafExpectedScore is a sibling to leafExpectedScore, not an overload; WDL_LEAF_HANDOFF_DEPTH=3 is a pre-declared candidate for Plan 02's measurement, not a chosen answer
 - [Phase 197-01]: The WDL cache is co-located in the policy cache's own fen|elo entry (not a separate cache) so a policy hit can never be a WDL miss for that rung
+- [Phase 198-01]: maiaCpuStats/maiaInflightStats and the app-faithful Maia FIFO are module-scoped (not per-makeNodeProviders-call), mirroring maiaInferenceStats and the harness's one-shared-session-per-process shape
+- [Phase 198-01]: A1 (RESEARCH.md Open Question 1) settled empirically via --real-session — the real ONNX WASM session already serialises concurrent session.run calls in dispatch order even without the FIFO (peak=4, call order matches resolve order); FIFO changes latency attribution only, never sweep output
+- [Phase ?]: 198-02: DISPATCH-02 accept rule pre-declares N=16 position width and the lower-band-governs rule when bot/analysis budgets disagree
+- [Phase ?]: 198-02: D-08's stop-rule distribution gets a single committed TSV + report table, not its own accept-rule-style gate (RESEARCH.md Open Question 3 resolved as anticipated)
 
 ### Pending Todos
 
@@ -645,9 +649,9 @@ Items acknowledged and deferred at **v1.29 milestone close on 2026-06-29** (user
 
 ## Session Continuity
 
-**Stopped at:** Completed 197-01-PLAN.md
+**Stopped at:** Phase 198 closed (measured, not shipped) — phases 194–198 integrated into main
 
-**Last session:** 2026-07-31T06:45:59.387Z
+**Last session:** 2026-07-31T13:23:48.685Z
 
 **Resume file:**
 
@@ -752,6 +756,8 @@ None
 | Phase 196 P02 | 17min | 3 tasks | 5 files |
 | Phase 196 P03 | 35min | 3 tasks | 6 files |
 | Phase 197 P01 | 25min | 3 tasks | 15 files |
+| Phase 198 P01 | 32min | 3 tasks | 3 files |
+| Phase 198 P02 | 13min | 3 tasks | 3 files |
 
 ## Performance Metrics
 
@@ -851,6 +857,8 @@ Items acknowledged and deferred at v2.8 milestone close on 2026-07-24 (override 
 | debug | entry-submit-n-plus-1 | fixed_awaiting_deploy | Fix landed; awaiting deploy verification. |
 | debug | insights-diskfull-shm | awaiting_human_verify | shm_size fix in place (see CLAUDE.md); confirmed benign 16 MB /dev/shm exhaustion, not disk. |
 | backlog | 19 quick tasks, 5 dormant seeds, 3 todos | deferred | Pre-existing cross-milestone backlog, not v2.8 scope; carried forward. |
+| phase closed | Phase 198 closed at wave 5 of 8 — measured, not shipped | closed_measured_not_shipped | 2026-07-31. Waves 1–4 complete (instrumentation, pre-declared accept rule, both re-baseline TSVs, ceiling model, `build` verdict at 34.84% bot / 28.61% analysis, operator disposition recorded). Wave 5's design doc **failed two independent reviews** (NOT SOUND both times); waves 6–8 cancelled, zero lines of `frontend/` touched. Blocking finding captured as SEED-130: the shipped engine is not bit-deterministic in the browser (uncleared Stockfish hash, 97% grade divergence measured in Phase 195's Stage A) and DISPATCH-08's parity gate is structurally blind to it. Closed by operator **risk judgement** (the measurement cleared the build line — this is NOT the accept rule's exit branch): confused determinism target (SEED-130), twice-failed design review, and the win's contingency on WASM-speed Maia (a WebGPU policy drops the model below the build line). Decision record: `reports/continuous-dispatch/report.md` §8. DISPATCH-01/02 Complete, DISPATCH-03..11 Rejected. SEED-130 stays open; SEED-127 closed. |
+| gate override | Phase 198 decision-coverage gate | proceeded_on_manual_check | 2026-07-31, `/gsd-plan-phase 198 --chain`. `check.decision-coverage-plan` returned `passed:false, reason:could-not-parse` (parsed 3 of 15 bullets, `uncovered: []`) — its parser expects single-line `- **D-NN: … — …**` bullets and 198-CONTEXT.md's decisions span multiple lines each. Verified manually instead: all 15 D-NN decisions and all 5 U-NN premise updates are referenced across the 8 plans. Not a coverage gap; re-surface at verify-phase if the parser is fixed. |
 
 ## Operator Next Steps
 

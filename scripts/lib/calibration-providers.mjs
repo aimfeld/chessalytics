@@ -17,10 +17,21 @@
  * converts each `maskAndSoftmax` SAN key to UCI via `sanToUci` — mirrors
  * `frontend/src/lib/engine/maiaQueue.ts`'s SAN->UCI conversion step.
  *
- * The harness fixes `SearchBudget.concurrency = 1` (168-RESEARCH.md
- * Pitfall 3: one spawned Stockfish process, no worker pool), so only ONE
+ * STALE CLAIM, CORRECTED (198-DISPATCH-02, 2026-07-31): this paragraph used
+ * to assert "the harness fixes `SearchBudget.concurrency = 1` ... so only ONE
  * `policy()`/`grade()` call is ever in flight at a time — no async queue is
- * needed here, unlike the browser's `maiaQueue.ts`/`workerPool.ts`.
+ * needed here". That has been false since Phase 168.5:
+ * `scripts/calibration-harness.mjs:593` pins `concurrency: FLAWCHESS_BOT_CONCURRENCY`
+ * (currently 4) against a `STOCKFISH_POOL_DEFAULT_SIZE`-sized Stockfish pool,
+ * so up to `FLAWCHESS_BOT_CONCURRENCY` `policy()`/`grade()` calls CAN be
+ * concurrently in flight from `mctsSearch`'s dispatch loop. The app, by
+ * contrast, serialises Maia strictly to one inference in flight through
+ * `maiaWorkerHost`'s lease (`maiaQueue.ts`'s `dispatching` gate) — this module
+ * does NOT mirror that by default. `maiaInflightStats` below is the committed
+ * instrument that replaces this paragraph's old assertion with a measurement,
+ * and `makeNodeProviders`'s opt-in `{ maiaFifo: true }` option (Phase 198,
+ * D-03) is what actually reproduces the app's single-in-flight discipline
+ * when a measurement pass needs to be app-faithful.
  *
  * Pitfall 2 (168-RESEARCH.md): a shared Stockfish process (or, since Plan 03,
  * ANY process drawn from the `stockfish-pool.mjs` pool) also serves the
@@ -127,6 +138,37 @@ const MAIA_MEMO_MAX_ENTRIES = 5000;
 export const maiaInferenceStats = { count: 0 };
 
 /**
+ * Module-level accumulator of REAL `session.run` wall-clock elapsed time
+ * (ms), summed across every real inference this process has made —
+ * incremented ONLY inside `runMaia`'s try block, at the same point
+ * `maiaInferenceStats.count` is incremented, never on a memo hit (a cached
+ * result costs no new `session.run` call, so it must not inflate this sum).
+ * Module-level rather than a return value for the same reason
+ * `maiaInferenceStats` is: `nodePolicy`'s caller never sees an individual
+ * position's own timing, only the UCI-keyed probability map, so an aggregate
+ * observed here is the only way a harness pass can measure its own Maia wall
+ * share (DISPATCH-02, 198-RESEARCH.md § "measurement subsystem").
+ */
+export const maiaCpuStats = { totalMs: 0 };
+
+/**
+ * Module-level gauge of concurrent REAL `session.run` calls in flight from
+ * this shared ONNX session — `current` is incremented immediately before
+ * `session.run(feeds)` and decremented in the same `finally` block that
+ * already disposes the call's tensors (co-located with the resource-lifetime
+ * code it measures); `peak` is raised to `Math.max(peak, current)` at the
+ * same increment point and never lowered except by
+ * `resetMaiaInstrumentationStats`. A memo hit touches neither field — it
+ * makes no `session.run` call, so it has nothing to be "in flight" for. This
+ * is the committed replacement for SEED-126's `profile.mjs`-quoted
+ * "policy peak in-flight" telltale (that script was scratchpad-only and never
+ * committed, 198-RESEARCH.md U-05) — with `maiaFifo: false` (the default,
+ * see `makeNodeProviders` below) concurrent `policy()` calls can drive `peak`
+ * above 1; with `maiaFifo: true` it stays at exactly 1.
+ */
+export const maiaInflightStats = { current: 0, peak: 0 };
+
+/**
  * Clears the (fen, elo) inference memo. Cross-pass reuse is correct behavior
  * in general (Maia inference is a pure function of its input), but it
  * deflates a per-pass `maiaInferenceStats.count` DELTA to a misleadingly
@@ -136,6 +178,23 @@ export const maiaInferenceStats = { count: 0 };
  */
 export function resetMaiaRunMemo() {
   maiaRunMemo.clear();
+}
+
+/**
+ * Zeroes `maiaCpuStats.totalMs`, `maiaInflightStats.current`, and
+ * `maiaInflightStats.peak` for per-pass isolation — the same reasoning
+ * `resetMaiaRunMemo` above states for the inference memo, generalised to
+ * these two instruments. A reset helper is required rather than a
+ * delta-read (the way `maiaInferenceStats.count` is sometimes differenced
+ * across a pass) because `peak` is a gauge: a running max has no meaningful
+ * delta between two points in time, only a value, so a stale peak from an
+ * earlier pass would silently survive into a new pass's numbers unless
+ * explicitly zeroed here first.
+ */
+export function resetMaiaInstrumentationStats() {
+  maiaCpuStats.totalMs = 0;
+  maiaInflightStats.current = 0;
+  maiaInflightStats.peak = 0;
 }
 
 /**
@@ -168,9 +227,17 @@ async function runMaia(session, ort, fen, elo) {
       elo_oppo: new ort.Tensor('float32', eloInput, [1]), // symmetric self/oppo ELO — BOT-03
     };
     let result;
+    // maiaInflightStats (198-DISPATCH-02): raised BEFORE the real inference
+    // call, lowered in the same `finally` that disposes this call's tensors —
+    // co-located with the resource lifetime it measures, exactly like the
+    // tensor-dispose `finally` below is co-located with tensor creation.
+    maiaInflightStats.current++;
+    maiaInflightStats.peak = Math.max(maiaInflightStats.peak, maiaInflightStats.current);
+    const startedAt = performance.now();
     try {
       result = await session.run(feeds);
       maiaInferenceStats.count++;
+      maiaCpuStats.totalMs += performance.now() - startedAt;
       // `.slice()` copies the head out of wasm memory so the output tensors
       // can be disposed in `finally` below without invalidating what we return.
       return {
@@ -185,6 +252,7 @@ async function runMaia(session, ort, fen, elo) {
       // stay safe across ORT backends/versions that may not expose dispose().
       for (const t of Object.values(feeds)) t.dispose?.();
       if (result) for (const t of Object.values(result)) t.dispose?.();
+      maiaInflightStats.current--;
     }
   })();
 
@@ -198,16 +266,85 @@ async function runMaia(session, ort, fen, elo) {
   return promise;
 }
 
+// ─── Opt-in app-faithful Maia FIFO (Phase 198, D-03) ───────────────────────
+//
+// Mirrors `frontend/src/lib/engine/maiaQueue.ts`'s `dispatching` gate: by
+// default this harness's `runMaia` calls fire concurrently (U-05 — up to
+// `FLAWCHESS_BOT_CONCURRENCY` at once), which the shipped app never does —
+// `maiaWorkerHost`'s lease serialises every Maia inference to exactly one in
+// flight. Passing `{ maiaFifo: true }` to `makeNodeProviders` below routes
+// every `policy()` call through this queue instead, reproducing that
+// discipline so a measurement pass can be app-faithful. No Sentry (this file
+// has no telemetry sink) and no same-FEN batching (`runMaia`'s own
+// `(fen, elo)` memo above already collapses duplicates — a batching layer on
+// top would be redundant machinery whose only effect is to make this FIFO
+// diverge from the property it mirrors). Module-scoped rather than
+// per-`makeNodeProviders`-call because this harness only ever opens ONE
+// shared Maia session per process (`createMaiaSession`'s own doc comment) —
+// there is exactly one queue to mirror, matching `maiaQueue.ts`'s own
+// single-queue-per-session shape.
+
+/** One `policy()` call awaiting FIFO dispatch or currently in flight. */
+const maiaFifoPending = [];
+/** True while ONE `nodePolicy(...)` call is in flight from this queue — the local mirror of `maiaQueue.ts`'s own `dispatching` gate. */
+let maiaFifoDispatching = false;
+
+/**
+ * Dispatches the next queued request if none is currently in flight.
+ * Re-entered inside BOTH the fulfilment and rejection handlers below — the
+ * exact same shape as `maiaQueue.ts`'s `processQueue()` calling itself again
+ * once its in-flight `lease.analyze()` call settles.
+ */
+function maiaFifoProcess() {
+  if (maiaFifoDispatching) return;
+  const next = maiaFifoPending.shift();
+  if (next === undefined) return;
+
+  maiaFifoDispatching = true;
+  nodePolicy(next.session, next.ort, next.fen, next.elo, next.side).then(
+    (result) => {
+      maiaFifoDispatching = false;
+      next.resolve(result);
+      maiaFifoProcess();
+    },
+    () => {
+      // Providers degrade by resolving, never hanging (`maiaQueue.ts` Pitfall
+      // 1, and this module's own header) — an unexpected `nodePolicy`
+      // rejection settles the caller with `{}` instead of propagating.
+      maiaFifoDispatching = false;
+      next.resolve({});
+      maiaFifoProcess();
+    },
+  );
+}
+
+/** FIFO-gated `policy()` — never more than one `nodePolicy` call in flight from this queue at a time. */
+function maiaFifoPolicy(session, ort, fen, elo, side) {
+  return new Promise((resolve) => {
+    maiaFifoPending.push({ session, ort, fen, elo, side, resolve });
+    maiaFifoProcess();
+  });
+}
+
 /**
  * Builds the Node `EngineProviders` adapter `{ policy, grade }` over one
  * shared Maia ONNX session + a `grade` function. `gradeFn` is
  * `(fen, candidateUcis) => Promise<Map<string, MoveGrade>>` — the caller
  * supplies either `pool.grade` (Plan 03, the pool-backed path) or a
  * single-engine-bound `nodeGrade` closure; this module never assumes which.
+ *
+ * `options.maiaFifo` (Phase 198, D-03) defaults to `false`: every existing
+ * caller that passes only three arguments keeps today's non-serialized
+ * `policy` path byte-for-byte, so no existing calibration sweep's output can
+ * change (see the module-level FIFO doc comment above). Passing
+ * `{ maiaFifo: true }` routes `policy()` through that FIFO instead.
  */
-export function makeNodeProviders(session, ort, gradeFn) {
+export function makeNodeProviders(session, ort, gradeFn, options = {}) {
+  const { maiaFifo = false } = options;
   return {
-    policy: (fen, elo, side) => nodePolicy(session, ort, fen, elo, side),
+    policy: maiaFifo
+      ? (fen, elo, side) => maiaFifoPolicy(session, ort, fen, elo, side)
+      : (fen, elo, side) => nodePolicy(session, ort, fen, elo, side),
     grade: gradeFn,
   };
 }

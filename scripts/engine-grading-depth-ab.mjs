@@ -68,7 +68,7 @@
  *   node --import ./scripts/lib/frontend-alias-hook.mjs scripts/engine-grading-depth-ab.mjs \
  *     [--nodes 50] [--depths 14,12,10] [--procs 4] [--plies 8] [--elo 1500] \
  *     [--ladder] [--hash-probe 10] [--openings 0] [--fens path/to/fens.txt] \
- *     [--out-dir reports/data]
+ *     [--maia-fifo] [--out-dir reports/data]
  *
  *   --nodes         node-expansion budget (50 = FLAWCHESS_BOT_MAX_NODES, 400 = analysis board)
  *   --depths        comma-separated; the FIRST is the reference every other is compared against
@@ -77,6 +77,9 @@
  *   --hash-probe    N > 0: probe every Nth grading call for D-07's warm-vs-cleared-hash question (default 0 = off)
  *   --openings      additionally draw N positions from `calibration-openings.mjs`'s OPENING_BOOK
  *   --fens          newline-delimited FEN file (`#` comments allowed) REPLACING the built-in set
+ *   --maia-fifo     (Phase 198, D-03) serialise Maia to one inference in flight, mirroring the
+ *                   app's `maiaWorkerHost` lease; OFF by default, which preserves the historical
+ *                   (non-serialized, concurrent) measurement regime every prior TSV was produced under
  *   --out-dir       emit a TSV here; omit to print only
  *
  * SEED-126 warns that the built-in 4-position set is too thin to justify a
@@ -92,7 +95,10 @@ import { createMaiaSession } from './lib/node-engine-providers.mjs';
 import {
   makeNodeProviders,
   maiaInferenceStats,
+  maiaCpuStats,
+  maiaInflightStats,
   resetMaiaRunMemo,
+  resetMaiaInstrumentationStats,
 } from './lib/calibration-providers.mjs';
 import { OPENING_BOOK } from './lib/calibration-openings.mjs';
 
@@ -198,6 +204,7 @@ export function parseArgs(argv) {
     hashProbe: 0,
     openings: 0,
     fens: null,
+    maiaFifo: false,
     outDir: null,
   };
   for (let i = 0; i < argv.length; i++) {
@@ -215,6 +222,7 @@ export function parseArgs(argv) {
       case 'plies': args.plies = parsePositiveIntFlag(value, key); i++; break;
       case 'elo': args.elo = parsePositiveIntFlag(value, key); i++; break;
       case 'ladder': args.ladder = true; break; // boolean, consumes no value
+      case 'maia-fifo': args.maiaFifo = true; break; // boolean, consumes no value
       case 'hash-probe': args.hashProbe = parsePositiveIntFlag(value, key, 0); i++; break;
       case 'openings': args.openings = parsePositiveIntFlag(value, key, 0); i++; break;
       case 'fens': args.fens = requireFlagValue(value, key); i++; break;
@@ -540,9 +548,10 @@ async function main() {
     for (const depth of args.depths) {
       await pool.resetAll();
       resetMaiaRunMemo(); // Phase 197 LEAF-02: isolate this pass's own inference cost, see doc comment.
+      resetMaiaInstrumentationStats(); // Phase 198 DISPATCH-02: co-located with resetMaiaRunMemo above, same per-pass isolation reasoning.
       const stats = makeGradeStats();
       const inferencesBefore = maiaInferenceStats.count;
-      const providers = makeNodeProviders(session, ort, pool.gradeAtDepth(depth, stats));
+      const providers = makeNodeProviders(session, ort, pool.gradeAtDepth(depth, stats), { maiaFifo: args.maiaFifo });
       const budget = {
         maxNodes: args.nodes,
         maxPlies: args.plies,
@@ -553,6 +562,8 @@ async function main() {
       const snapshot = await mctsSearch(fen, budget, providers, () => {}, new AbortController().signal);
       const wallMs = performance.now() - startedAt;
       const inferences = maiaInferenceStats.count - inferencesBefore;
+      const maiaCpuMs = maiaCpuStats.totalMs;
+      const maiaPeakInflight = maiaInflightStats.peak;
 
       wallByDepth.set(depth, wallByDepth.get(depth) + wallMs);
       snapshotByDepth.set(depth, snapshot);
@@ -578,6 +589,13 @@ async function main() {
         // pass's own inference cost against another pass's, for the same
         // position, without a separate baseline run.
         maia_inferences: inferences,
+        // Phase 198 DISPATCH-02: the Maia wall share (maia_cpu_ms), the
+        // policy-peak-in-flight telltale (maia_peak_inflight), and which
+        // serialisation regime produced this row (maia_fifo) — so a TSV can
+        // never be mistaken for a run of the other regime.
+        maia_cpu_ms: maiaCpuMs.toFixed(1),
+        maia_peak_inflight: maiaPeakInflight,
+        maia_fifo: args.maiaFifo,
       });
     }
 
@@ -588,9 +606,10 @@ async function main() {
     if (args.ladder) {
       await pool.resetAll();
       resetMaiaRunMemo();
+      resetMaiaInstrumentationStats(); // Phase 198 DISPATCH-02: co-located with resetMaiaRunMemo above.
       const stats = makeGradeStats();
       const inferencesBefore = maiaInferenceStats.count;
-      const providers = makeNodeProviders(session, ort, pool.gradeAtLadder(stats));
+      const providers = makeNodeProviders(session, ort, pool.gradeAtLadder(stats), { maiaFifo: args.maiaFifo });
       const budget = {
         maxNodes: args.nodes,
         maxPlies: args.plies,
@@ -601,6 +620,8 @@ async function main() {
       ladderSnapshot = await mctsSearch(fen, budget, providers, () => {}, new AbortController().signal);
       const wallMs = performance.now() - startedAt;
       const inferences = maiaInferenceStats.count - inferencesBefore;
+      const maiaCpuMs = maiaCpuStats.totalMs;
+      const maiaPeakInflight = maiaInflightStats.peak;
 
       console.log(
         `   ladder  wall ${(wallMs / 1000).toFixed(1)}s   ` +
@@ -620,6 +641,9 @@ async function main() {
         ladder_table: LADDER_TABLE_STAMP,
         ...hashProbeRowFields(stats, args.hashProbe),
         maia_inferences: inferences,
+        maia_cpu_ms: maiaCpuMs.toFixed(1),
+        maia_peak_inflight: maiaPeakInflight,
+        maia_fifo: args.maiaFifo,
       });
     }
 
@@ -681,7 +705,7 @@ async function main() {
       'nodes_evaluated', 'top_move', 'top_score', 'same_top_move', 'same_full_order',
       'mean_abs_score_diff', 'reference_top2_gap', 'ladder_table',
       'hash_probes', 'hash_probes_divergent', 'hash_probe_max_abs_cp', 'hash_probe_mean_abs_score_diff',
-      'maia_inferences',
+      'maia_inferences', 'maia_cpu_ms', 'maia_peak_inflight', 'maia_fifo',
     ];
     // Timestamp is read once here, AFTER all measurement, so it never influences a run.
     const stamp = new Date().toISOString().replace(/[:.]/g, '-');

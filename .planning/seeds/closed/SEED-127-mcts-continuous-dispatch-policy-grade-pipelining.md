@@ -1,6 +1,6 @@
 ---
 id: SEED-127
-status: dormant
+status: closed (2026-07-31 — Phase 198 closed measured-not-shipped; throughput win measured 34.8%/28.6% but not built — see reports/continuous-dispatch/report.md §8; follow-up: SEED-130)
 planted: 2026-07-30
 planted_during: v2.9 Train planning (FlawChess Engine performance review)
 trigger_when: after SEED-126 Phase 1 (the depth ladder) has landed and its calibration is recorded — the ladder changes grade latencies and therefore this seed's entire cost model

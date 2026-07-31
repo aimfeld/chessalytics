@@ -1,6 +1,6 @@
 ---
 id: SEED-126
-status: dormant
+status: closed (2026-07-31 — consumed by v2.10 Phases 194 (main-thread+caches), 195 (grading ladder), 197 (WDL leaves, measured and rejected — see reports/leaf-wdl/report.md))
 planted: 2026-07-30
 planted_during: v2.9 Train planning (FlawChess Engine performance review)
 trigger_when: when a milestone can absorb a bot ELO re-calibration sweep (~hours), or when engine latency / analysis-board responsiveness becomes a user-facing complaint

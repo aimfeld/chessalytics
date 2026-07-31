@@ -75,8 +75,9 @@
 
 ### Continuous Dispatch (SEED-127)
 
-- [ ] **DISPATCH-01**: A written apply-order/determinism design is produced and reviewed **before** implementation, resolving the central tension: how much apply-order freedom can be given up while keeping bit-identical reproducibility at a fixed concurrency
-- [ ] **DISPATCH-02**: A post-ladder re-baseline measures the policy/grade wall split and the `policy peak in-flight` telltale, and models the achievable ceiling before any code is written — if grade latency dominates post-ladder, that is a cheap thing to learn early
+- [x] **DISPATCH-01**: A written apply-order/determinism design is produced and reviewed **before** implementation, resolving the central tension: how much apply-order freedom can be given up while keeping bit-identical reproducibility at a fixed concurrency
+  - **Outcome (2026-07-31):** produced and reviewed 3× — and the review is what stopped the phase. Two independent reviews each returned NOT SOUND (3 confirmed highs each); the second surfaced SEED-130 (the bit-identity being preserved does not hold in the shipped browser). The requirement's purpose — design-first catches the problems before code — was fulfilled; no sign-off was ever granted.
+- [x] **DISPATCH-02**: A post-ladder re-baseline measures the policy/grade wall split and the `policy peak in-flight` telltale, and models the achievable ceiling before any code is written — if grade latency dominates post-ladder, that is a cheap thing to learn early
 - [ ] **DISPATCH-03**: `mctsSearch` keeps `budget.concurrency` expansions permanently in flight, starting a new selection the moment one completes, instead of draining and refilling in lockstep rounds behind a `Promise.all` barrier
 - [ ] **DISPATCH-04**: Output remains deterministic per concurrency level (ENGINE-07/D-03) — repeated runs at the same `budget.concurrency` are bit-identical regardless of provider resolution jitter
 - [ ] **DISPATCH-05**: `isPending`, `isClosed` (WR-01 closure propagation) and `selectPath`'s null return are re-verified for a long-lived heterogeneous pending set, including the case where "nothing selectable" now means "the tree is saturated with in-flight work" rather than "this round is full"
@@ -157,17 +158,30 @@
 > evaluated on its own terms (that evaluation is what rejected it), the ELO question answered in
 > writing, the engine doc updated, and Phase 196's headline datum re-verified as unchanged.
 > Evidence: `reports/leaf-wdl/report.md`. Follow-up: `.planning/seeds/SEED-128-wdl-leaf-backup-reweighting.md`.
-| DISPATCH-01 | Phase 198 | Pending |
-| DISPATCH-02 | Phase 198 | Pending |
-| DISPATCH-03 | Phase 198 | Pending |
-| DISPATCH-04 | Phase 198 | Pending |
-| DISPATCH-05 | Phase 198 | Pending |
-| DISPATCH-06 | Phase 198 | Pending |
-| DISPATCH-07 | Phase 198 | Pending |
-| DISPATCH-08 | Phase 198 | Pending |
-| DISPATCH-09 | Phase 198 | Pending |
-| DISPATCH-10 | Phase 198 | Pending |
-| DISPATCH-11 | Phase 198 | Pending |
+| DISPATCH-01 | Phase 198 | Complete |
+| DISPATCH-02 | Phase 198 | Complete |
+| DISPATCH-03 | Phase 198 | Rejected |
+| DISPATCH-04 | Phase 198 | Rejected |
+| DISPATCH-05 | Phase 198 | Rejected |
+| DISPATCH-06 | Phase 198 | Rejected |
+| DISPATCH-07 | Phase 198 | Rejected |
+| DISPATCH-08 | Phase 198 | Rejected |
+| DISPATCH-09 | Phase 198 | Rejected |
+| DISPATCH-10 | Phase 198 | Rejected |
+| DISPATCH-11 | Phase 198 | Rejected |
+
+> **`Rejected` (DISPATCH-03..11), 2026-07-31.** Phase 198 was closed as **measured, not shipped** —
+> the same first-class outcome Phase 197 established, with one honest difference: the pre-declared
+> accept rule's measurement CLEARED the 25% build line at both budgets (34.84% bot / 28.61%
+> analysis), so this close is a **risk judgement by the operator, not the rule's exit branch**. The
+> apply-order design failed two independent reviews (NOT SOUND, 3 confirmed highs each), and the
+> second surfaced SEED-130: the bit-identity the design exists to preserve does not hold in the
+> shipped browser (uncleared Stockfish hash, 97% warm-vs-cleared grade divergence), and DISPATCH-08's
+> parity gate is structurally blind to it. Not one line under `frontend/` was modified. DISPATCH-01
+> and DISPATCH-02 are genuinely Complete: the design-first mandate is what caught the problem, and
+> the re-baseline measurement stands. Evidence: `reports/continuous-dispatch/report.md` (§8 records
+> the decision). Follow-up: `.planning/seeds/SEED-130-browser-grade-nondeterminism-uncleared-stockfish-hash.md`
+> (stays open).
 | RECAL-01 | Phase 199 | Pending |
 | RECAL-02 | Phase 199 | Pending |
 | RECAL-03 | Phase 199 | Pending |

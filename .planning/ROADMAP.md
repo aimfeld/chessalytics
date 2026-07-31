@@ -153,10 +153,10 @@
 | 192. Precomputed Red-Herring Position Pool (SEED-120, v2.9) | 5/5 | Complete | 2026-07-28 |
 | 193. Session-Tick Streaks with a Depletable Shield (SEED-121, v2.9) | 3/3 | Complete | 2026-07-28 |
 | 194. Engine main-thread + cache hygiene (SEED-126 Phases 2–5, v2.10) | 4/4 | Complete | 2026-07-30 |
-| 195. Depth-scaled grading ladder (SEED-126 Phase 1, v2.10) | 6/6 | Complete | - |
+| 195. Depth-scaled grading ladder (SEED-126 Phase 1, v2.10) | 6/6 | Complete | 2026-07-31 |
 | 196. Analysis-board Stockfish root injection (SEED-118, v2.10) | 3/3 | Complete | 2026-07-31 |
-| 197. Maia WDL leaf values (SEED-126 Phase 6, v2.10) | 0/TBD | Not started | - |
-| 198. mctsSearch continuous dispatch (SEED-127, v2.10) | 0/TBD | Not started | - |
+| 197. Maia WDL leaf values (SEED-126 Phase 6, v2.10) | 4/4 | Complete (measured, not shipped — LEAF-01 rejected) | 2026-07-31 |
+| 198. mctsSearch continuous dispatch (SEED-127, v2.10) | 5/8 | Closed (measured, not shipped — operator risk judgement) | 2026-07-31 |
 | 199. Bot re-calibration sweep + strength curve refit (v2.10) | 0/TBD | Not started | - |
 
 ## v2.10 FlawChess Engine Improvements (In Progress)
@@ -338,7 +338,52 @@ Plans:
   4. `isPending`/`isClosed`/`selectPath`'s null-return semantics, node-budget accounting against `budget.maxNodes`, and the `earlyStop`/`stopRuleSatisfied` rolling `stableCheckCount` are all re-verified to behave defensibly under the new long-lived heterogeneous pending set — including the case where "nothing selectable" now means "the tree is saturated with in-flight work," not "this round is full" — with the stop rule's changed behaviour recorded explicitly as a calibration input (DISPATCH-05, DISPATCH-06, DISPATCH-07).
   5. `scripts/lib/calibration-determinism.check.mjs` passes — the shipped app and `calibration-harness.mjs` agree bit-for-bit at `FLAWCHESS_BOT_CONCURRENCY = 4`; the `workerPool` priority queue is activated with real priority-from-`practicalScore` / depth-tie-break values now that requests genuinely queue; and both Phase 196's `extraRootMoves` union / hard-cap exemption and `fallbackExpectimax.ts`'s ENGINE-06 independence story survive the rewrite unchanged (DISPATCH-08, DISPATCH-09, DISPATCH-10, DISPATCH-11).
 
-**Plans**: TBD
+**Plans**: 8 plans in 8 strictly sequential waves — parallelism is zero by construction, because D-15 fixes the step order and steps 5-7 do not start until the step-4 exit checkpoint clears.
+
+Plans:
+**Wave 1**
+
+- [x] 198-01-PLAN.md — Wave 1. Harness instrumentation prerequisite: `maia_cpu_ms` accumulator, `maia_peak_inflight` gauge, opt-in app-faithful Maia FIFO, stale `concurrency = 1` header correction, and the three new TSV columns behind `--maia-fifo` (DISPATCH-02)
+
+**Wave 2** *(blocked on Wave 1 completion)*
+
+- [x] 198-02-PLAN.md — Wave 2. The pre-declared accept rule committed alone before any measurement, plus the new `engine-dispatch-stop-rule.mjs` harness and its pre-rewrite `round` TSV (DISPATCH-02, DISPATCH-07)
+
+**Wave 3** *(blocked on Wave 2 completion)*
+
+- [x] 198-03-PLAN.md — Wave 3. Post-ladder re-baseline passes at both budgets on a Maia-FIFO-faithful provider over 16 positions; the analysis-budget pass is a long foreground-only run (DISPATCH-02)
+
+**Wave 4** *(blocked on Wave 3 completion)*
+
+- [x] 198-04-PLAN.md — Wave 4. Ceiling model, `c`-sweep and saturation point, SEED-126 reconciliation, mechanically-derived band verdict, and the D-15 step-4 exit-or-continue `checkpoint:decision` (DISPATCH-02)
+
+**Wave 5** *(blocked on Wave 4 completion)*
+
+- [x] 198-05-PLAN.md — Wave 5. The apply-order/determinism design doc and its cross-AI review with written dispositions; runs on BOTH branches of the exit checkpoint (DISPATCH-01) — **partial: design written and reviewed 3×, sign-off gate never cleared (two independent NOT SOUND verdicts)**
+
+**Wave 6** *(blocked on Wave 5 completion)*
+
+- [ ] ~~198-06-PLAN.md — Wave 6. Red tests first, then the in-place continuous-dispatch rewrite of `mctsSearch.ts` (DISPATCH-03, -04, -05, -06, -07)~~ **CANCELLED at phase close**
+
+**Wave 7** *(blocked on Wave 6 completion)*
+
+- [ ] ~~198-07-PLAN.md — Wave 7. Priority-queue activation with real values plus a reachability test at concurrency above pool size, the `dispatchExpansion` extraction diff, and the frozen `SearchRunner` contract assertion (DISPATCH-09, -10, -11)~~ **CANCELLED at phase close**
+
+**Wave 8** *(blocked on Wave 7 completion)*
+
+- [ ] ~~198-08-PLAN.md — Wave 8. Real-engine determinism parity gate at concurrency 4, the `continuous` stop-rule TSV and before/after table, the finished report, and honest requirement statuses (DISPATCH-02, -07, -08)~~ **CANCELLED at phase close**
+
+> **Phase 198 closed 2026-07-31 as measured, not shipped — by operator risk judgement, not the
+> accept rule's exit branch** (the measurement CLEARED the 25% build line at both budgets: 34.84%
+> bot / 28.61% analysis). The apply-order design failed two independent reviews (NOT SOUND, 3
+> confirmed highs each); the second surfaced SEED-130 — the browser never clears the Stockfish hash,
+> so the bit-identity (ENGINE-07) the design exists to preserve is a harness-only property and
+> DISPATCH-08's parity gate cannot detect its absence. Waves 6–8 were cancelled with zero `frontend/`
+> changes. Decision record: `reports/continuous-dispatch/report.md` §8. Follow-up: SEED-130 (open).
+> **Consequence for Phase 199:** of the three strength changes its combined sweep was scoped to
+> absorb (ladder + Maia WDL leaves + continuous dispatch), only the ladder shipped (including the
+> post-197 `[14,14]`/floor-10 override) — 197's leaf value was rejected and 198 was not built.
+> Re-scope 199 before planning it.
 
 ### Phase 199: Bot re-calibration sweep + strength curve refit
 

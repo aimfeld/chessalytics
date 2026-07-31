@@ -1,0 +1,17 @@
+position	fen	dispatch_mode	nodes_evaluated_at_stop	stop_reason	wall_ms	maia_cpu_ms	maia_peak_inflight	maia_fifo	concurrency	max_nodes
+italian	r1bqkb1r/pppp1ppp/2n2n2/4p3/2B1P3/5N2/PPPP1PPP/RNBQK2R w KQkq - 4 4	round	12	early-stop	2849	1285.3	1	true	4	50
+middlegame	r2q1rk1/pp1nbppp/2p1bn2/3p4/3P1B2/2N1PN2/PPQ1BPPP/R4RK1 w - - 6 11	round	50	budget	8366	4146.6	1	true	4	50
+sharp	r1bq1r1k/pp1nbppp/2p1p3/3pP3/3P4/2NB1N2/PPPQ1PPP/R3K2R w KQ - 2 11	round	15	early-stop	3353	1389.6	1	true	4	50
+endgame	8/2p5/3p4/KP5r/1R3p1k/8/4P1P1/8 w - - 0 1	round	8	early-stop	1670	892.7	1	true	4	50
+C50	r1bqk1nr/pppp1ppp/2n5/2b1p3/2B1P3/5N2/PPPP1PPP/RNBQK2R w KQkq - 4 4	round	9	early-stop	1862	889.2	1	true	4	50
+C60	r1bqkbnr/pppp1ppp/2n5/1B2p3/4P3/5N2/PPPP1PPP/RNBQK2R b KQkq - 3 3	round	50	budget	6106	3982.5	1	true	4	50
+C70	r1bqkbnr/1ppp1ppp/p1n5/4p3/B3P3/5N2/PPPP1PPP/RNBQK2R b KQkq - 1 4	round	11	early-stop	2803	1145.6	1	true	4	50
+C45	r1bqkbnr/pppp1ppp/2n5/4p3/3PP3/5N2/PPP2PPP/RNBQKB1R b KQkq - 0 3	round	8	early-stop	1500	894.4	1	true	4	50
+C42	rnbqkb1r/pppp1ppp/5n2/4p3/4P3/5N2/PPPP1PPP/RNBQKB1R w KQkq - 2 3	round	24	early-stop	2987	2051.7	1	true	4	50
+C47	r1bqkb1r/pppp1ppp/2n2n2/4p3/4P3/2N2N2/PPPP1PPP/R1BQKB1R w KQkq - 4 4	round	50	budget	5614	4069.1	1	true	4	50
+C25	rnbqkbnr/pppp1ppp/8/4p3/4P3/2N5/PPPP1PPP/R1BQKBNR b KQkq - 1 2	round	50	budget	5968	3907.6	1	true	4	50
+C30	rnbqkbnr/pppp1ppp/8/4p3/4PP2/8/PPPP2PP/RNBQKBNR b KQkq - 0 2	round	12	early-stop	2496	1120.5	1	true	4	50
+B50	rnbqkbnr/pp2pppp/3p4/2p5/4P3/5N2/PPPP1PPP/RNBQKB1R w KQkq - 0 3	round	50	budget	5846	3980.6	1	true	4	50
+B90	rnbqkb1r/1p2pppp/p2p1n2/8/3NP3/2N5/PPP2PPP/R1BQKB1R w KQkq - 0 6	round	16	early-stop	3669	1386.4	1	true	4	50
+B70	rnbqkb1r/pp2pp1p/3p1np1/8/3NP3/2N5/PPP2PPP/R1BQKB1R w KQkq - 0 6	round	50	budget	6658	3764.5	1	true	4	50
+C00	rnbqkbnr/pppp1ppp/4p3/8/4P3/8/PPPP1PPP/RNBQKBNR w KQkq - 0 2	round	50	budget	6843	4059.6	1	true	4	50
