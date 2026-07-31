@@ -1,0 +1,48 @@
+# maia-blindness.tsv — Phase 197 LEAF-04 blocking fixture.
+#
+# Purpose: Maia's simplified ONNX export carries zero history planes, so it
+# cannot condition on "you just played this exact sacrifice" — a forced-
+# sacrifice follow-up gets an unconditional prior, as if a random player at
+# the search ELO were teleported cold into the position (verified on game
+# 687537 ply 46, `.planning/notes/2026-07-10-flawchess-engine-self-execution-
+# analysis.md`; confirmed NOT a sign bug). At a WDL leaf the value comes from
+# the SAME network as the priors, so the search loses its only external check
+# on this known blind spot (D-03). A REGRESSION HERE BLOCKS PHASE 197 — see
+# `reports/leaf-wdl/accept-rule.md` Gate A. Do not retune this fixture to make
+# a failing Gate A pass (T-197-08).
+#
+# Columns (tab-separated):
+#   id            short identifier
+#   fen           the position to move from
+#   correct_move  the objectively-best move in UCI, independently verified
+#                 (below) to be Stockfish's own top MultiPV choice at depth 20
+#   eval_gap_cp   |eval(correct_move) - eval(runner_up)| at that same depth,
+#                 in mover-POV cp-equivalent units (mate scores substituted at
+#                 MATE_CP_EQUIVALENT=1000 per `flawThresholds.ts`) — recorded
+#                 so a near-tie position can never silently weaken the gate
+#   note          why Maia's history-blind policy is expected to underrate
+#                 this move or its follow-up
+#   source        provenance: either the verified game-687537 anchor, or a
+#                 lichess CC0 puzzle already committed at
+#                 fixtures/tagger/*.csv (PuzzleId, source file, rating)
+#
+# Every FEN below parses as a legal position and every recorded move is legal
+# in it (verified by `scripts/engine-wdl-leaf-quality.mjs`'s fixture-loader,
+# never by eye — Gate A §4a). Every recorded move was additionally confirmed
+# to be Stockfish's own depth-20 MultiPV top choice (not merely "a" sacrifice)
+# via a one-off headless-Stockfish verification pass over this exact file,
+# 2026-07-31 — see `reports/leaf-wdl/report.md`'s LEAF-04 section for the
+# command and full output.
+id	fen	correct_move	eval_gap_cp	note	source
+g687537-p46	3r2k1/1pb2ppp/p2r3q/8/1PB5/2P2Q2/PB3PPP/3R1RK1 b - - 3 24	h6h2	408	Queen sac (Qxh2+) starts a forced perpetual (Rh6+, Bh2+, Bg3+...); Maia-2600 rates the required follow-up Rh6+ only 28% raw / 31% post-truncation with no move-history conditioning, vs 56% for the losing Rxd1 line — verified project note 2026-07-10, confirmed not a sign bug.	game 687537 ply 46 (chess.com import); FEN reconstructed via python-chess replay of the game PGN and cross-checked against `.planning/notes/2026-07-10-flawchess-engine-self-execution-analysis.md`, which independently matched the shipped Maia encoding to 0.01% against the UI (game not present in local dev DB; production DB access unavailable in this execution session, so the anchor position is taken from that already-published, independently-verified note rather than re-queried)
+g687537-p48	3r2k1/1pb2ppp/p2r4/8/1PB5/2P2Q2/PB3PPK/3R1R2 b - - 0 25	d6h6	595	The critical follow-up itself, one ply after the sac (after 24...Qxh2+ 25.Kxh2): Rh6+ is the only move that keeps the perpetual alive. This is exactly the node where Maia's lack of history planes bites — it has no way to know the queen sac two plies ago was the *point* of this rook lift.	game 687537 ply 48 (chess.com import); same provenance as g687537-p46 above, one further ply of the verified PGN replay
+qFkqJ	5rk1/p5pp/b1p1p3/2p1N3/3Pp1Qq/N1P5/PP4PP/R5K1 b - - 6 18	h4f2	1160	Non-capturing queen walk (Qh4-f2) into an attacked square whose point (a back-rank mating net) resolves 3 plies later; a history-blind policy has no signal that the queen offering itself for no immediate material gain is the winning idea.	lichess puzzle DB (CC0), fixtures/tagger/detector_fixture_train.csv PuzzleId=qFkqJ, rating 1338, themes: backRankMate mateIn3 sacrifice
+3pyT9	2k4r/ppq4p/5p2/2N2bp1/2PPr3/PQ2B3/P3nPPP/R4R1K b - - 7 20	c7h2	884	Queen sac (Qxh2) trading the queen for forced mate two moves later (Anastasia's-mate pattern, rook-lift follow-up); the point only appears once the h-file rook lift is seen, which a no-history policy cannot anticipate.	lichess puzzle DB (CC0), fixtures/tagger/detector_fixture_train.csv PuzzleId=3pyT9, rating 1618, themes: anastasiaMate attraction mateIn2 sacrifice
+Mhfvi	2k4r/ppp4p/1b2p3/1Nq4r/2P3n1/2Q3B1/PP4PP/R4R1K b - - 5 22	c5g1	889	Non-capturing queen sac (Qc5-g1) walking in front of the king to set up a smothered mate three plies later; Maia's policy has no mechanism to condition on the sacrificer's own follow-up intent.	lichess puzzle DB (CC0), fixtures/tagger/detector_fixture_train.csv PuzzleId=Mhfvi, rating 2175, themes: kingsideAttack mateIn3 sacrifice smotheredMate
+qRvUi	2r2r1k/p4Pp1/7p/1n1p4/7B/qP3N1B/P1p3PP/2Q4K w - - 1 32	c1h6	1535	Queen sac (Qxh6) that only pays off via a kingside mating attack three plies later; a history-blind policy is prone to preferring a quieter developing or defensive move instead of surrendering the queen.	lichess puzzle DB (CC0), fixtures/tagger/detector_fixture_train.csv PuzzleId=qRvUi, rating 1671, themes: kingsideAttack mateIn3 sacrifice
+mWhzd	2kr1b1r/1p1n1pp1/1Rn1p1p1/3p4/3P1BP1/2P1PP2/3N3P/4KB1R w K - 1 20	b6c6	910	Rook sac (Rxc6) that only wins via a Boden's-mate-style two-bishop net two moves later; giving up the exchange for a mating pattern is exactly the kind of delayed payoff a no-history policy underrates.	lichess puzzle DB (CC0), fixtures/tagger/detector_fixture_train.csv PuzzleId=mWhzd, rating 1398, themes: bodenMate mateIn2 queensideAttack sacrifice
+I3vZ1	r6k/1b2pR1p/4Q1p1/p1pq4/8/2PB4/P1P3PP/7K w - - 1 22	f7h7	1117	Rook sac (Rxh7) starting a forced mating attack three plies later (attraction pattern — the king is dragged to h7); Maia lacks the history context that would explain why the rook is worth giving up here.	lichess puzzle DB (CC0), fixtures/tagger/detector_fixture_train.csv PuzzleId=I3vZ1, rating 1831, themes: attraction mateIn3 sacrifice
+WwKKM	3r1r2/4Bpk1/p3b3/7Q/7P/2p5/qPP2PP1/2K4R w - - 2 26	e7f6	1000	Bishop sac (Be7-f6, non-capture) blocking an escape square to force a dovetail mate two moves later; the point is invisible without seeing the mating net the bishop enables.	lichess puzzle DB (CC0), fixtures/tagger/detector_fixture_train.csv PuzzleId=WwKKM, rating 2002, themes: attraction dovetailMate mateIn2 sacrifice
+cBFTV	3rk2r/2q2pp1/p4b1p/1pp5/4B1b1/1P6/P3QRPP/4R2K w k - 0 24	e4c6	1099	Non-capturing bishop sac (Be4-c6) offering itself to enable a double-check mate three plies later; a policy net with no move history has no way to see the delayed payoff.	lichess puzzle DB (CC0), fixtures/tagger/detector_fixture_train.csv PuzzleId=cBFTV, rating 1324, themes: doubleCheck mateIn3 sacrifice
+RKFRP	r5kr/5Nqp/3NpQp1/p2bPp1P/2p5/1n4P1/1P2K3/8 w - - 6 29	f7h6	1543	Non-capturing knight sac (Nf7-h6) clearing a square for a mating attack two moves later (clearance pattern); the point only appears once the follow-up is played, which a no-history policy cannot anticipate.	lichess puzzle DB (CC0), fixtures/tagger/detector_fixture_train.csv PuzzleId=RKFRP, rating 1527, themes: clearance kingsideAttack mateIn2 sacrifice
+zskVk	1r1q1rk1/pb1p1Npp/1p6/3Q4/4R3/8/PP3PPP/4R1K1 w - - 1 19	f7h6	964	Non-capturing knight sac (Nf7-h6) setting up a discovered/double-check smothered mate three plies later; Maia's no-history policy is likely to underrate offering the knight for no immediate gain.	lichess puzzle DB (CC0), fixtures/tagger/detector_fixture_test.csv PuzzleId=zskVk, rating 1456, themes: discoveredCheck doubleCheck mateIn3 sacrifice smotheredMate

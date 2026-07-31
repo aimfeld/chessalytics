@@ -32,6 +32,13 @@
  * argument (not a closed-over shared instance) so `stockfish-pool.mjs` can
  * route each call through a freshly-ACQUIRED pool engine (Plan 03, Task 1) —
  * `makeNodeProviders` closes over `pool.grade` directly, not a single engine.
+ *
+ * `runMaia` is the shared private helper `nodePolicy` reads from, memoized
+ * per (fen, elo) so repeat calls for the same position never re-run the
+ * model. This mirrors the app's own co-located `maiaPolicyCache.ts` cache
+ * shape one level down, at the raw-inference layer rather than the
+ * softmaxed-result layer, because the harness (unlike the app) has no
+ * persistent cross-search cache to co-locate into.
  */
 import { sanToUci } from '@/lib/sanToSquares';
 import { parseBestmove } from '@/hooks/uciParser';
@@ -101,6 +108,97 @@ export const ADJUDICATION_WATCHDOG_TIMEOUT_MS = 20_000;
 export const adjudicationFallbackStats = { neutralFallbackCount: 0 };
 
 /**
+ * Bounds the per-(fen, elo) inference memo below so a long harness run cannot
+ * grow it without limit. Sized generously above any single bounded
+ * measurement pass's distinct-position count — this harness measures search
+ * cost over a handful of positions in minutes, never a multi-hour
+ * calibration sweep (this file's own module header).
+ */
+const MAIA_MEMO_MAX_ENTRIES = 5000;
+
+/**
+ * Module-level counter of REAL `session.run` calls this process has made —
+ * incremented ONLY inside `runMaia`'s try block, never on a memo hit. General
+ * Maia-inference instrumentation: any harness pass that wants to measure its
+ * own inference cost (e.g. `scripts/engine-grading-depth-ab.mjs`'s
+ * `maia_inferences` column) reads this counter directly rather than trusting
+ * code inspection.
+ */
+export const maiaInferenceStats = { count: 0 };
+
+/**
+ * Clears the (fen, elo) inference memo. Cross-pass reuse is correct behavior
+ * in general (Maia inference is a pure function of its input), but it
+ * deflates a per-pass `maiaInferenceStats.count` DELTA to a misleadingly
+ * small number whenever an earlier, unrelated pass already warmed the memo
+ * for the same (fen, elo). Callers measuring one pass's own inference cost in
+ * isolation call this immediately before that pass.
+ */
+export function resetMaiaRunMemo() {
+  maiaRunMemo.clear();
+}
+
+/**
+ * Per-(fen, elo) memo of the ONE Maia inference `nodePolicy` needs. Reusing a
+ * cached result across two different tree nodes (or two different callers)
+ * sharing a (fen, elo) is CORRECT, not stale — Maia inference is a pure
+ * function of (fen, elo), exactly like the app's own `maiaPolicyCache.ts`
+ * co-located cache relies on. Values are plain `Float32Array` slices already
+ * copied out of wasm memory, never live tensors, so nothing here holds
+ * wasm-heap memory past `runMaia`'s own `finally` block.
+ */
+const maiaRunMemo = new Map();
+
+/**
+ * ONE Maia inference per distinct (fen, elo) — the harness's version of the
+ * co-located caching the app enforces. Returns the raw policy-vocab slice,
+ * copied out of wasm memory with `.slice()` before the tensors are disposed.
+ */
+async function runMaia(session, ort, fen, elo) {
+  const memoKey = `${fen}|${elo}`;
+  const cached = maiaRunMemo.get(memoKey);
+  if (cached) return cached;
+
+  const promise = (async () => {
+    const boardTokens = encodeBoard(fen);
+    const eloInput = Float32Array.of(eloToInput(elo));
+    const feeds = {
+      tokens: new ort.Tensor('float32', boardTokens, [1, NUM_SQUARES, PLANES_PER_SQUARE]),
+      elo_self: new ort.Tensor('float32', eloInput, [1]),
+      elo_oppo: new ort.Tensor('float32', eloInput, [1]), // symmetric self/oppo ELO — BOT-03
+    };
+    let result;
+    try {
+      result = await session.run(feeds);
+      maiaInferenceStats.count++;
+      // `.slice()` copies the head out of wasm memory so the output tensors
+      // can be disposed in `finally` below without invalidating what we return.
+      return {
+        policySlice: result.logits_move.data.slice(0, POLICY_VOCAB_SIZE),
+      };
+    } finally {
+      // BUG FIX (SEED-113, 2026-07-21): onnxruntime-web ort.Tensor buffers live in the
+      // wasm linear heap and MUST be disposed, or every inference leaks them. Over
+      // ~270k policy calls (~8.5-9h of a blend>0 sweep) the heap hit its bound and
+      // threw "memory access out of bounds" mid-run; only a fresh process cleared it.
+      // Disposing inputs + outputs per call keeps the heap flat. Optional-chained to
+      // stay safe across ORT backends/versions that may not expose dispose().
+      for (const t of Object.values(feeds)) t.dispose?.();
+      if (result) for (const t of Object.values(result)) t.dispose?.();
+    }
+  })();
+
+  maiaRunMemo.set(memoKey, promise);
+  // A failed inference must not poison the memo for a retry.
+  promise.catch(() => maiaRunMemo.delete(memoKey));
+  if (maiaRunMemo.size > MAIA_MEMO_MAX_ENTRIES) {
+    const oldestKey = maiaRunMemo.keys().next().value;
+    maiaRunMemo.delete(oldestKey);
+  }
+  return promise;
+}
+
+/**
  * Builds the Node `EngineProviders` adapter `{ policy, grade }` over one
  * shared Maia ONNX session + a `grade` function. `gradeFn` is
  * `(fen, candidateUcis) => Promise<Map<string, MoveGrade>>` — the caller
@@ -116,42 +214,20 @@ export function makeNodeProviders(session, ort, gradeFn) {
 
 /**
  * UCI-keyed Maia move-probability distribution at `elo` for `side` to move
- * (`EngineProviders.policy` contract, D-08). One un-batched forward pass —
- * the harness only ever has one `policy()` call in flight (concurrency 1).
+ * (`EngineProviders.policy` contract, D-08). Reads from the shared `runMaia`
+ * memo, so repeat calls for the same (fen, elo) cost no second inference.
  */
 async function nodePolicy(session, ort, fen, elo, side) {
   void side; // side-to-move is implicit in fen's own 'w'/'b' field (D-08), mirrors maiaQueue.ts's convention.
-  const boardTokens = encodeBoard(fen);
-  const eloInput = Float32Array.of(eloToInput(elo));
-  const feeds = {
-    tokens: new ort.Tensor('float32', boardTokens, [1, NUM_SQUARES, PLANES_PER_SQUARE]),
-    elo_self: new ort.Tensor('float32', eloInput, [1]),
-    elo_oppo: new ort.Tensor('float32', eloInput, [1]), // symmetric self/oppo ELO — BOT-03
-  };
-  let result;
-  try {
-    result = await session.run(feeds);
-    // `.slice()` copies the logits out of wasm memory so the output tensors can be
-    // disposed in `finally` below without invalidating what we return.
-    const policySlice = result.logits_move.data.slice(0, POLICY_VOCAB_SIZE);
-    const sanProbs = maskAndSoftmax(policySlice, fen);
+  const { policySlice } = await runMaia(session, ort, fen, elo);
+  const sanProbs = maskAndSoftmax(policySlice, fen);
 
-    const uciProbs = {};
-    for (const [san, prob] of Object.entries(sanProbs)) {
-      const uci = sanToUci(fen, san);
-      if (uci !== null) uciProbs[uci] = prob;
-    }
-    return uciProbs;
-  } finally {
-    // BUG FIX (SEED-113, 2026-07-21): onnxruntime-web ort.Tensor buffers live in the
-    // wasm linear heap and MUST be disposed, or every inference leaks them. Over
-    // ~270k policy calls (~8.5-9h of a blend>0 sweep) the heap hit its bound and
-    // threw "memory access out of bounds" mid-run; only a fresh process cleared it.
-    // Disposing inputs + outputs per call keeps the heap flat. Optional-chained to
-    // stay safe across ORT backends/versions that may not expose dispose().
-    for (const t of Object.values(feeds)) t.dispose?.();
-    if (result) for (const t of Object.values(result)) t.dispose?.();
+  const uciProbs = {};
+  for (const [san, prob] of Object.entries(sanProbs)) {
+    const uci = sanToUci(fen, san);
+    if (uci !== null) uciProbs[uci] = prob;
   }
+  return uciProbs;
 }
 
 /**

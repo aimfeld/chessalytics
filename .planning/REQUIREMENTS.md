@@ -65,13 +65,13 @@
 
 ### Maia WDL Leaf Values (SEED-126 Phase 6)
 
-- [ ] **LEAF-01**: The Maia WDL head already computed and transferred on every `policy()` call is consumed as the leaf value for deep tree nodes, eliminating the Stockfish grade call at those nodes
-- [ ] **LEAF-02**: The handoff depth between Stockfish-graded and Maia-WDL leaves is chosen from measurement and stated explicitly against the Phase 195 ladder (the shallowest rung is the natural candidate for replacement)
-- [ ] **LEAF-03**: The Maia WDL leaf value respects `leafScore.ts`'s root-relative frame invariant (D-06) — verified, not assumed, since `softmaxWdl`/`expectedScore` are root-relative-agnostic
-- [ ] **LEAF-04**: Move quality under Maia WDL leaves is evaluated on its own terms before the change is accepted — **this is an engine-design change, not an optimization**, and a speed win alone does not satisfy this requirement
-- [ ] **LEAF-05**: The ELO-conditioning question is answered in writing: whether an ELO-conditioned leaf value is more correct for a practical-score engine, or double-counts the human modelling the expectimax averaging already does
-- [ ] **LEAF-06**: `docs/flawchess-engine-explained-2026-07-06.md` §2's "Stockfish is the sole quality axis" claim is revised to match the shipped design
-- [ ] **LEAF-07**: SEED-118's headline datum (a practical score for the injected Stockfish move) is re-validated after this change, with a large shift read as a signal about this phase rather than about injection
+- [x] **LEAF-01** *(REJECTED — not shipped)*: The Maia WDL head already computed and transferred on every `policy()` call is consumed as the leaf value for deep tree nodes, eliminating the Stockfish grade call at those nodes
+- [x] **LEAF-02**: The handoff depth between Stockfish-graded and Maia-WDL leaves is chosen from measurement and stated explicitly against the Phase 195 ladder (the shallowest rung is the natural candidate for replacement)
+- [x] **LEAF-03**: The Maia WDL leaf value respects `leafScore.ts`'s root-relative frame invariant (D-06) — verified, not assumed, since `softmaxWdl`/`expectedScore` are root-relative-agnostic
+- [x] **LEAF-04**: Move quality under Maia WDL leaves is evaluated on its own terms before the change is accepted — **this is an engine-design change, not an optimization**, and a speed win alone does not satisfy this requirement
+- [x] **LEAF-05**: The ELO-conditioning question is answered in writing: whether an ELO-conditioned leaf value is more correct for a practical-score engine, or double-counts the human modelling the expectimax averaging already does
+- [x] **LEAF-06**: `docs/flawchess-engine-explained-2026-07-06.md` §2's "Stockfish is the sole quality axis" claim is revised to match the shipped design
+- [x] **LEAF-07**: SEED-118's headline datum (a practical score for the injected Stockfish move) is re-validated after this change, with a large shift read as a signal about this phase rather than about injection
 
 ### Continuous Dispatch (SEED-127)
 
@@ -140,13 +140,23 @@
 | INJECT-05 | Phase 196 | Complete |
 | INJECT-06 | Phase 196 | Complete |
 | INJECT-07 | Phase 196 | Complete |
-| LEAF-01 | Phase 197 | Pending |
-| LEAF-02 | Phase 197 | Pending |
-| LEAF-03 | Phase 197 | Pending |
-| LEAF-04 | Phase 197 | Pending |
-| LEAF-05 | Phase 197 | Pending |
-| LEAF-06 | Phase 197 | Pending |
-| LEAF-07 | Phase 197 | Pending |
+| LEAF-01 | Phase 197 | Rejected |
+| LEAF-02 | Phase 197 | Complete |
+| LEAF-03 | Phase 197 | Complete |
+| LEAF-04 | Phase 197 | Complete |
+| LEAF-05 | Phase 197 | Complete |
+| LEAF-06 | Phase 197 | Complete |
+| LEAF-07 | Phase 197 | Complete |
+
+> **`Rejected` (LEAF-01)** is a status this table did not previously use. Phase 197 built the
+> Maia-WDL leaf-value mechanism end to end, measured it, and rejected it at a pre-declared blocking
+> move-quality gate: no handoff depth was both fast and safe (depths 2 and 3 miss a forced mate-in-3
+> on the committed Maia-blindness fixture; depth 4 passes only by being behaviourally inert).
+> `WDL_LEAF_HANDOFF_DEPTH` is `null` — the production path does not run. LEAF-02..07 are genuinely
+> Complete: the depth was chosen from measurement, the frame invariant verified, move quality
+> evaluated on its own terms (that evaluation is what rejected it), the ELO question answered in
+> writing, the engine doc updated, and Phase 196's headline datum re-verified as unchanged.
+> Evidence: `reports/leaf-wdl/report.md`. Follow-up: `.planning/seeds/SEED-128-wdl-leaf-backup-reweighting.md`.
 | DISPATCH-01 | Phase 198 | Pending |
 | DISPATCH-02 | Phase 198 | Pending |
 | DISPATCH-03 | Phase 198 | Pending |

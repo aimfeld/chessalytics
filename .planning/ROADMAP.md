@@ -301,7 +301,24 @@ and is verified before any expansion work builds on it.
   4. The ELO-conditioning question is answered in writing: whether an ELO-conditioned leaf value is more correct for a practical-score engine, or double-counts the human modelling the expectimax averaging already does (LEAF-05).
   5. `docs/flawchess-engine-explained-2026-07-06.md` §2's "Stockfish is the sole quality axis" claim is revised to match the shipped design (LEAF-06), and SEED-118's headline practical-score-for-the-injected-move datum from Phase 196 is re-measured after this change, with a large shift read and recorded as a signal about this phase, not about Phase 196's injection mechanics (LEAF-07).
 
-**Plans**: TBD
+**Plans**: 4 plans in 4 waves
+
+Plans:
+**Wave 1**
+
+- [x] 197-01-PLAN.md — Wave 1. Tracer: the WDL leaf value end to end (`wdlLeafExpectedScore` + its frame fixture, `usesWdlLeaf`/`WDL_LEAF_HANDOFF_DEPTH`, the optional `EngineProviders.wdl` member, a co-located policy+WDL cache entry, the `dispatchExpansion`/`applyExpansion` handoff branch), the ENGINE-06 mirror in `fallbackExpectimax.ts`, and `backup.ts`'s third value provenance (LEAF-01, LEAF-03, LEAF-05 seed)
+
+**Wave 2** *(blocked on Wave 1 completion)*
+
+- [x] 197-02-PLAN.md — Wave 2. Harness WDL plumbing (`nodeWdl` + `makeNodeProviders`, a `--wdl-leaf` arm on `engine-grading-depth-ab.mjs`), the handoff-depth measurement against Phase 195's POST-ladder baseline, and a blocking developer decision including an explicit "measured, not worth shipping" early exit (LEAF-02)
+
+**Wave 3** *(blocked on Wave 2 completion)*
+
+- [x] 197-03-PLAN.md — Wave 3. Lock the measured depth, declare the three-part LEAF-04 instrument before running it, build the committed Maia-blindness fixture as a hard blocking gate, run the head-to-head quality arm, and gate acceptance on a blocking human review (LEAF-02, LEAF-04)
+
+**Wave 4** *(blocked on Wave 3 completion)*
+
+- [x] 197-04-PLAN.md — Wave 4. The LEAF-05 ELO-conditioning answer in writing, the `docs/flawchess-engine-explained-2026-07-06.md` §2 revision with a recorded §5 decision, and the re-measurement of Phase 196's headline practical-score datum (LEAF-05, LEAF-06, LEAF-07)
 
 ### Phase 198: mctsSearch continuous dispatch
 
@@ -316,7 +333,7 @@ and is verified before any expansion work builds on it.
 **Success Criteria** (what must be TRUE):
 
   1. A written apply-order/determinism design — resolving how much apply-order freedom can be given up while keeping bit-identical reproducibility at a fixed concurrency — is produced and cross-AI reviewed BEFORE any implementation code is written (DISPATCH-01).
-  2. A post-ladder re-baseline measures the policy/grade wall split and the `policy peak in-flight` telltale and models the achievable ceiling before implementation begins, so a grade-latency-dominated post-ladder profile can justify an early exit from this phase rather than building a redesign that can't pay for its own risk (DISPATCH-02).
+  2. A post-ladder re-baseline measures the policy/grade wall split and the `policy peak in-flight` telltale and models the achievable ceiling before implementation begins, so a grade-latency-dominated post-ladder profile can justify an early exit from this phase rather than building a redesign that can't pay for its own risk (DISPATCH-02). **Prerequisite instrumentation (found during Phase 197, 2026-07-31): the harness cannot currently measure this split at all.** `scripts/lib/calibration-providers.mjs` tracks only `maiaInferenceStats.count` (a count of `session.run` calls, `:138`/`:190`) with no companion time accumulator, and `grade_cpu_ms` is aggregate CPU across all four Stockfish procs, so it is not a wall-clock share either (at the 400-node reference it reads 97.6 s against 108.7 s wall). Add a `maia_cpu_ms` accumulator beside the existing counter and emit it as a TSV column before the re-baseline runs. Until then the Maia share can only be *bounded* by differencing arms — Phase 197's depth-1 arm (2 grade calls, 1.2 s grade CPU of 64.6 s wall) puts "Maia + tree overhead" at ~95% of analysis-board wall clock post-197 and ~78% at the bot budget, but that is one combined bucket, and DISPATCH-02's early-exit judgement turns on exactly the Maia-versus-tree-overhead split it cannot resolve. Reconcile SEED-126's quoted 123.5 ms/inference at the same time: the same arm implies ≤86 ms in the harness, ~30% below the figure D-01's economics argument rests on (it still clears the 82 ms grade being eliminated, so the conclusion holds, but the margin is thin rather than comfortable).
   3. `mctsSearch` keeps `budget.concurrency` expansions permanently in flight, starting a new selection the moment one completes, instead of draining and refilling in lockstep `Promise.all`-barriered rounds — and repeated runs at the same `budget.concurrency` remain bit-identical regardless of provider resolution jitter (DISPATCH-03, DISPATCH-04).
   4. `isPending`/`isClosed`/`selectPath`'s null-return semantics, node-budget accounting against `budget.maxNodes`, and the `earlyStop`/`stopRuleSatisfied` rolling `stableCheckCount` are all re-verified to behave defensibly under the new long-lived heterogeneous pending set — including the case where "nothing selectable" now means "the tree is saturated with in-flight work," not "this round is full" — with the stop rule's changed behaviour recorded explicitly as a calibration input (DISPATCH-05, DISPATCH-06, DISPATCH-07).
   5. `scripts/lib/calibration-determinism.check.mjs` passes — the shipped app and `calibration-harness.mjs` agree bit-for-bit at `FLAWCHESS_BOT_CONCURRENCY = 4`; the `workerPool` priority queue is activated with real priority-from-`practicalScore` / depth-tie-break values now that requests genuinely queue; and both Phase 196's `extraRootMoves` union / hard-cap exemption and `fallbackExpectimax.ts`'s ENGINE-06 independence story survive the rewrite unchanged (DISPATCH-08, DISPATCH-09, DISPATCH-10, DISPATCH-11).

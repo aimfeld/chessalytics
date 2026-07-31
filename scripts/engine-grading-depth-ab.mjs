@@ -67,16 +67,17 @@
  * Usage:
  *   node --import ./scripts/lib/frontend-alias-hook.mjs scripts/engine-grading-depth-ab.mjs \
  *     [--nodes 50] [--depths 14,12,10] [--procs 4] [--plies 8] [--elo 1500] \
- *     [--ladder] [--hash-probe 10] [--openings 0] [--fens path/to/fens.txt] [--out-dir reports/data]
+ *     [--ladder] [--hash-probe 10] [--openings 0] [--fens path/to/fens.txt] \
+ *     [--out-dir reports/data]
  *
- *   --nodes       node-expansion budget (50 = FLAWCHESS_BOT_MAX_NODES, 400 = analysis board)
- *   --depths      comma-separated; the FIRST is the reference every other is compared against
- *   --procs       Stockfish process pool size; also used as SearchBudget.concurrency
- *   --ladder      additionally run one ladder-mode pass per position (LADDER-05)
- *   --hash-probe  N > 0: probe every Nth grading call for D-07's warm-vs-cleared-hash question (default 0 = off)
- *   --openings    additionally draw N positions from `calibration-openings.mjs`'s OPENING_BOOK
- *   --fens        newline-delimited FEN file (`#` comments allowed) REPLACING the built-in set
- *   --out-dir     emit a TSV here; omit to print only
+ *   --nodes         node-expansion budget (50 = FLAWCHESS_BOT_MAX_NODES, 400 = analysis board)
+ *   --depths        comma-separated; the FIRST is the reference every other is compared against
+ *   --procs         Stockfish process pool size; also used as SearchBudget.concurrency
+ *   --ladder        additionally run one ladder-mode pass per position (LADDER-05)
+ *   --hash-probe    N > 0: probe every Nth grading call for D-07's warm-vs-cleared-hash question (default 0 = off)
+ *   --openings      additionally draw N positions from `calibration-openings.mjs`'s OPENING_BOOK
+ *   --fens          newline-delimited FEN file (`#` comments allowed) REPLACING the built-in set
+ *   --out-dir       emit a TSV here; omit to print only
  *
  * SEED-126 warns that the built-in 4-position set is too thin to justify a
  * calibration re-run. Widen with `--openings 20` and/or `--fens` before
@@ -88,7 +89,11 @@ import fs from 'node:fs';
 
 import { spawnStockfish, STOCKFISH_INIT_TIMEOUT_MS } from './lib/node-engine-providers.mjs';
 import { createMaiaSession } from './lib/node-engine-providers.mjs';
-import { makeNodeProviders } from './lib/calibration-providers.mjs';
+import {
+  makeNodeProviders,
+  maiaInferenceStats,
+  resetMaiaRunMemo,
+} from './lib/calibration-providers.mjs';
 import { OPENING_BOOK } from './lib/calibration-openings.mjs';
 
 import { mctsSearch } from '@/lib/engine/mctsSearch';
@@ -181,6 +186,7 @@ function parsePositiveIntFlag(value, key, min = 1) {
  * must come from a separate unprobed run. This flag exists to answer D-07,
  * not to time anything.
  */
+
 export function parseArgs(argv) {
   const args = {
     nodes: DEFAULT_NODES,
@@ -533,7 +539,9 @@ async function main() {
 
     for (const depth of args.depths) {
       await pool.resetAll();
+      resetMaiaRunMemo(); // Phase 197 LEAF-02: isolate this pass's own inference cost, see doc comment.
       const stats = makeGradeStats();
+      const inferencesBefore = maiaInferenceStats.count;
       const providers = makeNodeProviders(session, ort, pool.gradeAtDepth(depth, stats));
       const budget = {
         maxNodes: args.nodes,
@@ -544,6 +552,7 @@ async function main() {
       const startedAt = performance.now();
       const snapshot = await mctsSearch(fen, budget, providers, () => {}, new AbortController().signal);
       const wallMs = performance.now() - startedAt;
+      const inferences = maiaInferenceStats.count - inferencesBefore;
 
       wallByDepth.set(depth, wallByDepth.get(depth) + wallMs);
       snapshotByDepth.set(depth, snapshot);
@@ -565,6 +574,10 @@ async function main() {
         top_score: snapshot.rankedLines[0]?.practicalScore?.toFixed(6) ?? '',
         ladder_table: LADDER_TABLE_STAMP,
         ...hashProbeRowFields(stats, args.hashProbe),
+        // General Maia-inference instrumentation: lets a caller compare this
+        // pass's own inference cost against another pass's, for the same
+        // position, without a separate baseline run.
+        maia_inferences: inferences,
       });
     }
 
@@ -574,7 +587,9 @@ async function main() {
     let ladderSnapshot = null;
     if (args.ladder) {
       await pool.resetAll();
+      resetMaiaRunMemo();
       const stats = makeGradeStats();
+      const inferencesBefore = maiaInferenceStats.count;
       const providers = makeNodeProviders(session, ort, pool.gradeAtLadder(stats));
       const budget = {
         maxNodes: args.nodes,
@@ -585,6 +600,7 @@ async function main() {
       const startedAt = performance.now();
       ladderSnapshot = await mctsSearch(fen, budget, providers, () => {}, new AbortController().signal);
       const wallMs = performance.now() - startedAt;
+      const inferences = maiaInferenceStats.count - inferencesBefore;
 
       console.log(
         `   ladder  wall ${(wallMs / 1000).toFixed(1)}s   ` +
@@ -603,6 +619,7 @@ async function main() {
         top_score: ladderSnapshot.rankedLines[0]?.practicalScore?.toFixed(6) ?? '',
         ladder_table: LADDER_TABLE_STAMP,
         ...hashProbeRowFields(stats, args.hashProbe),
+        maia_inferences: inferences,
       });
     }
 
@@ -664,6 +681,7 @@ async function main() {
       'nodes_evaluated', 'top_move', 'top_score', 'same_top_move', 'same_full_order',
       'mean_abs_score_diff', 'reference_top2_gap', 'ladder_table',
       'hash_probes', 'hash_probes_divergent', 'hash_probe_max_abs_cp', 'hash_probe_mean_abs_score_diff',
+      'maia_inferences',
     ];
     // Timestamp is read once here, AFTER all measurement, so it never influences a run.
     const stamp = new Date().toISOString().replace(/[:.]/g, '-');

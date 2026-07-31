@@ -31,6 +31,8 @@ The engine does not judge positions itself. It orchestrates two existing chess m
 
 **Stockfish — the quality axis.** Given a position and a handful of candidate moves, Stockfish returns a shallow evaluation of each ("this leaves you +1.2", "this one is dead lost"). This is the *objective* truth about the position.
 
+> *A note on a road not taken:* Phase 197 built and measured an alternative where, deep in a line, the leaf's quality signal would come from Maia's own calibrated win/draw/loss head instead of a fresh Stockfish evaluation — priced per your rating rather than objectively. It was measured against a committed Maia-blindness fixture and **rejected**: the value and the move-probabilities it would draw on share the same network, so the search lost its only independent check on lines Maia's policy misjudges (it missed a forced mate the Stockfish-scored version found). Stockfish remains the sole quality axis in the shipped engine. See `reports/leaf-wdl/report.md` for the measurement and `.planning/seeds/SEED-128-wdl-leaf-backup-reweighting.md` for why the idea was kept rather than discarded.
+
 **Maia — the probability axis.** Maia is a neural network trained on millions of human games *at specific rating levels*. Given a position and a rating, it returns a **probability distribution over moves**: "at 1400, players play Nf3 here 45% of the time, Bc4 25%, ..." This is the *human behavior* model — it is what lets the engine reason about what a real player would actually do, not what is theoretically best.
 
 The crucial design choice is that the engine queries Maia **asymmetrically**:

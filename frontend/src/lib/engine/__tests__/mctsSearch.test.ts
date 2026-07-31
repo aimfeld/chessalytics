@@ -728,10 +728,14 @@ describe('mctsSearch — abort', () => {
   it('LADDER-02: every providers.grade() call receives a resolved grading-depth 4th argument, never undefined', async () => {
     const controller = new AbortController();
     // Budget sized so the tree actually descends past the ladder table's
-    // length: the shipped table is [14, 14, 14] with floor 10, so a search
-    // that only reaches tree depth 2 grades everything at 14 and cannot
-    // demonstrate variation. 64 nodes / 6 plies is the point at which this
-    // fixture's descent first reaches the floor rung (measured, 195-06 Task 2).
+    // length: the shipped table is [14, 14] with floor 10, so a search that
+    // only reaches tree depth 1 grades everything at 14 and cannot demonstrate
+    // variation. 64 nodes / 6 plies is the point at which this fixture's
+    // descent first reached the floor rung under the older, longer [14, 14, 14]
+    // table (measured, 195-06 Task 2); the 2026-07-31 override moved the floor
+    // one ply shallower, so this budget now reaches it strictly sooner and the
+    // assertions below only get easier to satisfy — kept as-is rather than
+    // re-tightened, since a smaller budget would weaken the other calls' cover.
     const budget: SearchBudget = { maxNodes: 64, elo: NEUTRAL_BUDGET_ELO, maxPlies: 6, concurrency: 1 };
     const gradeSpy = vi.fn(makeFixedGrade({ [SIMPLE_WHITE_FEN]: SIMPLE_WHITE_GRADES }));
     const providers: EngineProviders = {

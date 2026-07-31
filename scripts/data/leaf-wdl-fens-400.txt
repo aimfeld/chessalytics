@@ -1,0 +1,15 @@
+# leaf-wdl-fens-400.txt — a 2-position subset of Phase 195's declared
+# scripts/data/grading-ladder-fens-400.txt (both lines below appear verbatim
+# in that file), used for Phase 197 LEAF-02's 400-node WDL-leaf handoff-depth
+# sweep (reports/leaf-wdl/report.md).
+#
+# Subset size: exactly 2 FENs (middlegame + rook/pawn endgame), chosen to
+# bound wall-clock for a sweep that also multiplies by candidate handoff
+# depth (1,2,3,4) and an ELO rung — a 400-node WDL-leaf-sweep pass costs
+# roughly 30-90s depending on the position (measured directly before this
+# sweep ran), so the full 6-position set across 5 passes/position would be a
+# multi-hour run. Per the plan's own bounded-measurement guidance, the set is
+# reduced here rather than left running unbounded.
+
+r2q1rk1/pp1nbppp/2p1bn2/3p4/3P1B2/2N1PN2/PPQ1BPPP/R4RK1 w - - 6 11 # middlegame (built-in)
+8/2p5/3p4/KP5r/1R3p1k/8/4P1P1/8 w - - 0 1 # endgame (built-in, rook/pawn)

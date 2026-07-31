@@ -285,3 +285,137 @@ read as context, not as a pass/fail signal.
   alternative specifically, not verified to be the largest possible gap against any organic
   alternative. This was not re-measured or re-run to correct -- flagged here as an honest disclosure
   of what the existing committed TSV actually captured (code review 196-REVIEW.md WR-03).
+
+---
+
+## Phase 197 addendum — LEAF-07 regression check, 2026-07-31
+
+**Requirement:** LEAF-07. **This is a regression check, not a before/after comparison of a shipped
+change.** Phase 197 built a Maia-WDL leaf-value mechanism, measured it, and **rejected it** at its
+own LEAF-04 move-quality gate (`reports/leaf-wdl/report.md`); `WDL_LEAF_HANDOFF_DEPTH` is `null` and
+the mechanism is inert for every production caller. So there is no "after the leaf-value change" to
+re-measure against in the sense the original roadmap language assumed. The question this section
+answers instead is the one that actually matters given that outcome: **is the retained-but-disabled
+mechanism genuinely inert**, or did shipping it (even switched off) perturb this datum some other
+way? Confirming "unchanged" here is direct evidence for "genuinely inert," which the code comment in
+`gradingLadder.ts` asserts but had not been tested against this specific evidence surface.
+
+**Baseline, stated before any number below:** the comparison is against this report's own **derived
+~4.5% real-path ceiling** (see "Why the framing changed" above), *not* the 79.1%
+full-search-versus-full-search harness figure. The 79.1% number describes two complete searches
+sharing a warm cache, which the browser's actual ~2 s aborted-prefix disagreement path never
+produces; re-measuring against 79.1% would be comparing this run to the wrong baseline entirely.
+
+**Magnitude threshold, stated before the result:** Stockfish evals are not bit-reproducible across
+machines (this report's own Limits section; `project_eval_nondeterminism` project memory), and
+Phase 195's D-07 warm-hash measurement puts this evidence surface's own cross-run reproducibility
+floor at **0.013984 expected-score units** (`reports/grading-ladder/report.md`, reused as the
+LEAF-04 tie-break floor in `reports/leaf-wdl/report.md`). A practical-score delta smaller than that
+floor is not reported as a shift below — it is noise, and this section says so rather than narrating
+it. Only a delta clearly outside that floor would be read as a signal that the retained mechanism is
+not, in fact, fully inert.
+
+### The re-measured headline row
+
+Re-run command (foreground; see "Methodology deviation" below for why the position set is a curated
+5-position subset rather than the original 8), 2026-07-31, 10:29:46-10:34:06 UTC (4m20s wall). Raw
+data: `reports/data/engine-root-injection-2026-07-31T10-34-06-714Z.tsv`, row `fen31` — the FEN is
+byte-identical to the original run's `fen44` row
+(`6k1/4rp2/2Bp2p1/3Pbq1p/2Q1R3/6P1/5P2/6K1 b - - 3 31`):
+
+```
+node --import ./scripts/lib/frontend-alias-hook.mjs scripts/engine-root-injection.mjs \
+  --fens reports/data/root-injection-fens-197-subset.txt --positions 5 --nodes 400 --elo 1500 \
+  --plies 8 --procs 4 --out-dir reports/data
+```
+
+| | original (2026-07-30) `fen44` | re-measured (2026-07-31) `fen31`, same FEN | delta |
+|---|---|---|---|
+| injected move (`e5g3`) practical score | 0.987382 | 0.987422 | +0.000040 |
+| injected visits | 436 | 444 | +8 |
+| top-organic move (`f5h3`) practical score | 0.747761 | 0.733811 | -0.013950 |
+| top-organic visits | 11 | 11 | 0 |
+| baseline top move | `e7a7` (0.721012) | `e7a7` (0.715562) | -0.005450 |
+| grade-cache hit rate (injected pass) | 104/400 = 26.0% | 103/400 = 25.75% | -0.25 pp |
+| baseline wall (this machine, this run) | 57.4s | 55.2s | -2.2s |
+| injected wall (this machine, this run) | 35.9s | 27.4s | -8.5s |
+
+**`0.987` appears twice above** (0.987382 and 0.987422), matching the original report's headline
+sentence: "its FlawChess practical score is **0.987**."
+
+### Interpretation
+
+**Every practical-score delta is inside the 0.013984 floor.** The injected move's score is
+unchanged to four decimal places (+0.000040). The top-organic move's score moved by -0.013950 —
+numerically just under the floor, i.e. at the edge of what this harness's own reproducibility can
+produce between two runs of the *identical* engine on the *same* machine; it is not read as a shift.
+The chosen moves themselves are identical in both runs: injected arm still plays `e5g3`, the top
+organic candidate is still `f5h3`, the baseline-pass top choice is still `e7a7`. Visit counts move by
+single digits (+8 injected, 0 organic) against a 400-node budget — noise, not a reallocation.
+Grade-cache hit rate is unchanged to two significant figures. Wall-clock times differ by several
+seconds in both directions, consistent with ordinary machine-load variance across two separate runs
+five days apart, not with a code-path change (the search code touched by this phase — `mctsSearch.ts`,
+`backup.ts`, `maiaQueue.ts` — is the same code whether `WDL_LEAF_HANDOFF_DEPTH` is `null` or a number,
+and it is `null`, so no different branch executes here than executed on 2026-07-30).
+
+**Per LEAF-07's own framing, this is a signal about this phase, not about Phase 196's injection
+mechanics: the signal is "unchanged," which is exactly what "genuinely inert" predicts.** Cross-
+referencing the LEAF-04 blindness-fixture result (`reports/leaf-wdl/report.md`): that gate found a
+real, large behavioral difference (-0.931895, two orders of magnitude past its own margin) when the
+WDL-leaf mechanism was *actively enabled* at the shipped depth. This section finds no difference at
+all with the mechanism *disabled*, on an unrelated evidence surface. The two results are consistent
+with a single underlying fact: the mechanism does something (and something bad, per LEAF-04) when
+switched on, and does nothing measurable when switched off, which is what `null` is supposed to
+guarantee. A clean result here alongside a blocking failure there is exactly the pairing named in
+D-03 as the phase's two canaries for the same risk, read correctly: one canary shows the risk is
+real when the mechanism runs; the other shows the risk is absent when it does not.
+
+**Visit-allocation comparison.** The original report's ratio for this position was 436:11
+(39.6x, "the single clearest example in this run of D-03's predicted... dynamic"). The re-measured
+ratio is 444:11 (40.4x) — a 0.8x change in the ratio, driven entirely by the injected side's small
+visit-count increase noted above. This is not a meaningfully different reallocation; PUCT is still
+concentrating the overwhelming majority of the 400-node budget on the injected line in both runs.
+
+### Methodology deviation — why 5 curated positions, not the original 8
+
+**Foreground-execution constraint.** Re-running the original 8-position set end-to-end measures
+roughly 636s of search alone (346.8s baseline + 289.5s injected, from the original per-position
+table) plus pre-filter scan time — too close to this executor's foreground time ceiling to run
+safely as one command. Rather than shrink nodes or nondeterministically resample, this run reused
+`scripts/data/root-injection-fens.txt`'s exact FEN content for a **curated 5-position subset**
+(`reports/data/root-injection-fens-197-subset.txt`): the required headline position (originally
+`fen44`) plus the four *lowest-wall-clock* companions from the original 8 (originally `fen46`,
+`fen25`, `fen14`, and — see below — a substitution for `fen17`), chosen specifically to minimize
+total run time while still satisfying `engine-root-injection.mjs`'s own
+`MIN_DISAGREEMENT_POSITIONS = 5` floor. Total wall clock for this run was 4m20s.
+
+**A genuine pre-filter drift was found, and is reported rather than papered over.** The originally-
+surviving position labelled `fen17` (`r6r/1pp2kpp/p1n2p2/3n4/2PP4/B2B1N1q/P2Q1P2/R4RK1 w - - 0 18`)
+did **not** reproduce as an out-of-mass disagreement on this run: its Stockfish top move's raw Maia
+probability came back at 0.0933, just inside the truncated ~90%-mass kept set this time, versus
+falling outside it in the original run. This is **not attributable to the WDL-leaf mechanism or its
+rejection** — the pre-filter calls only `policy()` and an unrestricted Stockfish probe, code paths
+`mctsSearch.ts`'s handoff branch never touches, and the mechanism is disabled in both runs regardless.
+The likely cause is ordinary cross-run floating-point variance in the Maia inference backend (the
+position's raw probability, 0.0933, sits close enough to the ~90%-mass truncation boundary that a
+small numerical difference flips its inclusion) — the same class of non-reproducibility this report's
+Limits section already documents for Stockfish evals, here showing up in Maia's policy instead. A
+second, unused position (originally `fen22`) and two further backups (`fen36`, `fen40`) were added to
+the same subset file as a margin against exactly this kind of drift; the pre-filter found its 5th
+confirmed survivor at `fen22` before needing them. This drift is recorded as an honest finding about
+the evidence surface's own reproducibility, not smoothed over by silently substituting a different
+position for the required `fen44` row (which reproduced without issue).
+
+### Limits of this addendum
+
+- **5 positions, not 8.** A smaller sample than the original evidence base; see "Methodology
+  deviation" above for why. The headline-row comparison above is what LEAF-07's precondition actually
+  requires (comparing the exact `fen44`/`fen31` FEN like with like) and is unaffected by the smaller N.
+- **One run, one machine, no repeats** — same limitation the original report already states for
+  itself. The 0.013984 floor this section leans on is itself a point estimate from a single Phase 195
+  measurement, not a confidence interval.
+- **The `fen17` pre-filter drift (above) means this run's candidate set is not byte-identical to the
+  original's** — 4 of 5 measured positions match the original 8 exactly by FEN; the 5th slot is filled
+  by a different original survivor (`fen22`/`fen33` in this run's labels) rather than by `fen17`. This
+  does not affect the headline `fen44`/`fen31` comparison, which is unaffected by which other positions
+  round out the set.

@@ -2,29 +2,29 @@
 gsd_state_version: 1.0
 milestone: v2.10
 milestone_name: FlawChess Engine Improvements
-current_phase: 197
-current_phase_name: Maia WDL leaf values
+current_phase: 198
+current_phase_name: mctsSearch continuous dispatch
 status: planning
-stopped_at: Completed 196-03-PLAN.md
-last_updated: "2026-07-31T05:09:35.864Z"
+stopped_at: Completed 197-01-PLAN.md
+last_updated: "2026-07-31T11:12:17.175Z"
 last_activity: 2026-07-31
-last_activity_desc: Phase 196 complete, transitioned to Phase 197
+last_activity_desc: Phase 197 complete, transitioned to Phase 198
 progress:
   total_phases: 6
-  completed_phases: 3
-  total_plans: 13
-  completed_plans: 13
-  percent: 50
+  completed_phases: 4
+  total_plans: 17
+  completed_plans: 17
+  percent: 67
 ---
 
 # Project State: FlawChess
 
 ## Current Position
 
-Phase: 197 — Maia WDL leaf values
+Phase: 198 — mctsSearch continuous dispatch
 Plan: Not started
 Status: Ready to plan
-Last activity: 2026-07-31 — Phase 196 complete, transitioned to Phase 197
+Last activity: 2026-07-31 — Phase 197 complete, transitioned to Phase 198
 
 ## Project Reference
 
@@ -536,6 +536,8 @@ v1.29 Live-Engine Analysis Page shipped 2026-06-29 — 5 phases (136–140), 14 
 - [Phase ?]: useState+useEffect (not useMemo) for extraRootMoves — the derivation reads flawChessEngine.rankedLines, the hook's own output, a feedback edge useMemo can't express
 - [Phase ?]: 196-03: harness's baseline pass runs to full completion (per Task 2 spec), measuring a different, more optimistic scenario (79.1% hit rate) than the browser's real ~2s-aborted-restart, which the report bounds at ~4.5% from the same data — the honest INJECT-05 finding for production is CONTEXT.md's original low-hit-rate prediction
 - [Phase ?]: 196-03: OPENING_BOOK + Phase 195 ladder FENs yielded only 3 disagreement survivors (below the floor of 5); widened the candidate pool with scripts/data/root-injection-fens.txt sampled from the existing Kaggle brilliant-move corpus rather than loosening the pre-filter
+- [Phase 197-01]: wdlLeafExpectedScore is a sibling to leafExpectedScore, not an overload; WDL_LEAF_HANDOFF_DEPTH=3 is a pre-declared candidate for Plan 02's measurement, not a chosen answer
+- [Phase 197-01]: The WDL cache is co-located in the policy cache's own fen|elo entry (not a separate cache) so a policy hit can never be a WDL miss for that rung
 
 ### Pending Todos
 
@@ -643,9 +645,9 @@ Items acknowledged and deferred at **v1.29 milestone close on 2026-06-29** (user
 
 ## Session Continuity
 
-**Stopped at:** Completed 196-03-PLAN.md
+**Stopped at:** Completed 197-01-PLAN.md
 
-**Last session:** 2026-07-31T00:02:31.110Z
+**Last session:** 2026-07-31T06:45:59.387Z
 
 **Resume file:**
 
@@ -749,6 +751,7 @@ None
 | Phase 196 P01 | 25min | 3 tasks | 6 files |
 | Phase 196 P02 | 17min | 3 tasks | 5 files |
 | Phase 196 P03 | 35min | 3 tasks | 6 files |
+| Phase 197 P01 | 25min | 3 tasks | 15 files |
 
 ## Performance Metrics
 
