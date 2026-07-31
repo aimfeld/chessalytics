@@ -45,16 +45,22 @@ import {
 } from '@/lib/maiaEncoding';
 import { parseInfoLine } from '@/hooks/uciParser';
 import { MATE_CP_EQUIVALENT } from '@/generated/flawThresholds';
+import { buildGradeGoCommand, GRADING_ROOT_DEPTH } from '@/lib/engine/gradingLadder';
 
-// ─── Constants (mirror frontend/src/lib/engine/workerPool.ts lines 36, 39) ────
-
-/** Grading search depth target — matches the app's own `EngineProviders.grade` depth (D-11). */
-export const GRADING_TARGET_DEPTH = 14;
+// ─── Constants ──────────────────────────────────────────────────────────────
+//
+// D-08: the grading `go` line itself is no longer mirrored by hand here — it
+// is composed by the single shared `buildGradeGoCommand` builder imported
+// above, the same one `frontend/src/lib/engine/workerPool.ts`'s `sendGo`
+// calls. Hand-mirroring a comment describing "lines 36, 39" of that file was
+// exactly the kind of manual duplication that let this harness's grading `go`
+// drift from the shipped browser's; it is now a real import instead.
 
 /**
  * Adjudication search depth target (D-10 cutoff 2) — deliberately SHALLOWER
- * than `GRADING_TARGET_DEPTH` because adjudication runs after EVERY ply of
- * EVERY game (far more often than bot-move grading), so its Clear-Hash cost
+ * than the grading root rung (`GRADING_ROOT_DEPTH`) because adjudication runs
+ * after EVERY ply of EVERY game (far more often than bot-move grading), so
+ * its Clear-Hash cost
  * compounds fastest (168.5-RESEARCH.md Open Question 2). Value confirmed by
  * the Task 3 bounded-run measurement (see 168.5-02-SUMMARY.md).
  */
@@ -154,10 +160,18 @@ async function nodePolicy(session, ort, fen, elo, side) {
  * `workerPool.ts`'s `sendGo`/`handleLine`: `searchmoves`-restricted MultiPV,
  * keyed by `parsed.pv[0]` — NEVER the `multipv` rank field (SC5 landmine) —
  * filtered to `bound === 'exact'` only.
+ *
+ * `depth` is caller-supplied (Phase 195, LADDER-01/D-08) and defaults to the
+ * pinned root rung `GRADING_ROOT_DEPTH` when omitted, mirroring
+ * `workerPool.ts`'s `grade()`'s own `gradingDepth ?? GRADING_ROOT_DEPTH`
+ * default. The `go` line is composed exclusively through the shared
+ * `buildGradeGoCommand` builder — no hand-written grading `go` string exists
+ * in this function.
  */
-export async function nodeGrade(stockfish, fen, candidateUcis) {
+export async function nodeGrade(stockfish, fen, candidateUcis, depth) {
   if (candidateUcis.length === 0) return new Map(); // mirror workerPool.ts WR-05
 
+  const resolvedDepth = depth ?? GRADING_ROOT_DEPTH;
   const whitePovSign = fen.split(' ')[1] === 'b' ? -1 : 1;
   const grades = new Map();
 
@@ -189,8 +203,9 @@ export async function nodeGrade(stockfish, fen, candidateUcis) {
   // after searchmoves are silently swallowed by the UCI parser, 158-01
   // landmine). D-11: the watchdog timeout below is now an independent,
   // generously-sized constant, NOT derived from a movetime value that no
-  // longer exists in this command.
-  stockfish.send(`go depth ${GRADING_TARGET_DEPTH} searchmoves ${candidateUcis.join(' ')}`);
+  // longer exists in this command. D-08: the line itself comes from the
+  // single shared builder, identical to what the shipped browser sends.
+  stockfish.send(buildGradeGoCommand(resolvedDepth, candidateUcis));
   try {
     await stockfish.waitFor((line) => line.startsWith('bestmove'), GRADING_WATCHDOG_TIMEOUT_MS);
   } finally {

@@ -153,7 +153,7 @@
 | 192. Precomputed Red-Herring Position Pool (SEED-120, v2.9) | 5/5 | Complete | 2026-07-28 |
 | 193. Session-Tick Streaks with a Depletable Shield (SEED-121, v2.9) | 3/3 | Complete | 2026-07-28 |
 | 194. Engine main-thread + cache hygiene (SEED-126 Phases 2–5, v2.10) | 4/4 | Complete | 2026-07-30 |
-| 195. Depth-scaled grading ladder (SEED-126 Phase 1, v2.10) | 0/TBD | Not started | - |
+| 195. Depth-scaled grading ladder (SEED-126 Phase 1, v2.10) | 6/6 | Complete | - |
 | 196. Analysis-board Stockfish root injection (SEED-118, v2.10) | 0/TBD | Not started | - |
 | 197. Maia WDL leaf values (SEED-126 Phase 6, v2.10) | 0/TBD | Not started | - |
 | 198. mctsSearch continuous dispatch (SEED-127, v2.10) | 0/TBD | Not started | - |
@@ -225,7 +225,28 @@ Wave 3 safely: their `files_modified` sets do not intersect.
   4. The `GRADING_MOVETIME_SAFETY_CAP_MS` divergence between the shipped `go` shape and the depth-only calibration harness is resolved one way or the other (cap removed, or the harness adopts it), so delivered search depth stops being device-dependent and the shipped engine and the calibrated engine grade identically (LADDER-04).
   5. End-to-end search wall clock at both the 50-node and 400-node budgets is measurably faster than the flat depth-14 baseline, reported alongside top-move and full-ranked-order agreement against that baseline, so a changed top move can be read as tie-perturbation or a real strength change (LADDER-05).
 
-**Plans**: TBD
+**Plans:** 6 plans
+
+Plans:
+**Wave 1**
+
+- [x] 195-01-PLAN.md — Tracer: `gradingLadder.ts` + end-to-end depth threading, movetime removal, D-06 watchdog (ladder table provisionally flat, so delivered depth is unchanged)
+- [x] 195-02-PLAN.md — Measurement inputs: the curated >=20-position FEN set, its declared 6-position 400-node subset, and the rung-selection accept rule, all committed before any data exists
+
+**Wave 2** *(blocked on Wave 1 completion)*
+
+- [x] 195-03-PLAN.md — `(fen, depth)` grade-cache rekey with the ENGINE-07 both-visit-orders determinism test and both LRU touch sites pinned
+- [x] 195-04-PLAN.md — Harness parity: shared `go` builder across every call site, the `stockfish-pool.mjs` silent depth-drop fix, ladder mode, and the D-07 hash probe
+
+**Wave 3** *(blocked on Wave 2 completion)*
+
+- [x] 195-05-PLAN.md — Stage A widened flat-depth run (14/12/10/8/6) + D-07 measurement + blocking operator checkpoint on the frontier
+
+**Wave 4** *(blocked on Wave 3 completion)*
+
+- [x] 195-06-PLAN.md — Stage B candidate-ladder runs, the rung commit, the LADDER-02 distinct-rung assertion, the 400-node confirmation, and the LADDER-05 report
+
+Waves: 1 = {01, 02} (no shared files, 02 needs no code); 2 = {03, 04} (both depend on 01, disjoint file sets); 3 = {05}; 4 = {06}. The measurement gates the rung values by construction — 01 ships a provisional flat table so no unmeasured ladder can reach production, and only 06 writes measured rungs.
 
 ### Phase 196: Analysis-board Stockfish root injection
 

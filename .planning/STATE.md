@@ -3,28 +3,28 @@ gsd_state_version: 1.0
 milestone: v2.10
 milestone_name: FlawChess Engine Improvements
 current_phase: 195
-current_phase_name: Depth-scaled grading ladder
-status: planning
-stopped_at: Completed 194-04-PLAN.md
-last_updated: "2026-07-30T16:44:37.103Z"
+status: completed
+stopped_at: Completed 195-04-PLAN.md
+last_updated: "2026-07-30T20:46:51.273Z"
 last_activity: 2026-07-30
-last_activity_desc: Phase 194 complete, transitioned to Phase 195
+last_activity_desc: Phase 195 marked complete
 progress:
   total_phases: 6
-  completed_phases: 1
-  total_plans: 4
-  completed_plans: 4
-  percent: 17
+  completed_phases: 2
+  total_plans: 10
+  completed_plans: 10
+  percent: 33
+current_phase_name: depth-scaled-grading-ladder
 ---
 
 # Project State: FlawChess
 
 ## Current Position
 
-Phase: 195 — Depth-scaled grading ladder
-Plan: Not started
-Status: Ready to plan
-Last activity: 2026-07-30 — Phase 194 complete, transitioned to Phase 195
+Phase: 195 — COMPLETE
+Plan: 5 of 6
+Status: Phase 195 complete
+Last activity: 2026-07-30 — Phase 195 marked complete
 
 ## Project Reference
 
@@ -525,6 +525,13 @@ v1.29 Live-Engine Analysis Page shipped 2026-06-29 — 5 phases (136–140), 14 
 - [Phase ?]: GRADE_CACHE_MAX = 1024 and MAIA_POLICY_CACHE_MAX = 2048, each with a derivation comment (measured 386-FEN working-set ceiling), not bare numbers.
 - [Phase ?]: 194-04: vi.spyOn cannot intercept a same-module function's self-call — used an exported modalPathBuilder object-property indirection seam instead (verified empirically before writing production code)
 - [Phase ?]: 194-04: found and fixed a second RankedLine spread in Analysis.tsx's reconciledRankedLines memo, missed by the phase research's single-line grep because the spread is split across two source lines
+- [Phase ?]: [Phase 195-01]: dispatchExpansion's providers.grade call needed a local non-exported GradeWithLadderDepth cast (not an interface edit) to pass a 4th argument through the frozen 3-param EngineProviders.grade — TS arity-checks the call against the static interface type even though a 4-optional-param implementation is structurally assignable to it
+- [Phase ?]: [Phase 195-02]: Bumped synthetic endgame FEN fullmove counters (30s-40s instead of the conventional study-diagram 1) so the widened set's early-position count (2/21) has real margin under the one-third cap, rather than passing at an exact 7/21 boundary coincidence caused by leaving them at move 1
+- [Phase ?]: [Phase 195-02]: 400-node subset's two non-built-in slots filled with the Fried Liver Attack (sharp/tactical) and a knight-and-pawns ending (minor-piece endgame), diversifying piece type against the built-in's own rook/pawn ending
+- [Phase ?]: [Phase 195-02]: Reverted requirements.mark-complete for LADDER-01/LADDER-05 — both are shared across Plans 02/04/05/06 (frontmatter); 195-02 alone only delivers the pre-registered input data + decision rule, not the actual widened A/B run or the measured end-to-end report that the requirement text describes. Left [ ] Pending with this partial-delivery note (mirrors 170-01's RESUME-01/02 precedent).
+- [Phase ?]: [Phase 195-03]: Rekeyed grade cache to composite (fen, gradingDepth) via one private cacheKey() helper, following maiaPolicyCache.ts's fen|elo idiom; both Phase 194 LRU touch sites re-pinned by dedicated mutation-verified regression tests under the new key.
+- [Phase ?]: Did not mark LADDER-01/LADDER-05 complete in REQUIREMENTS.md — this plan only builds the ladder-mode/hash-probe harness capability Plan 05's widened A/B run needs; the rung-selection and measured-report acceptance criteria for those two requirements remain Plan 05's deliverable.
+- [Phase ?]: Probe calls in engine-grading-depth-ab.mjs's --hash-probe deliberately do not increment the grading-call counter, so a probe's own extra go cannot desynchronize the deterministic every-Nth-call selection the D-07 accept rule depends on.
 
 ### Pending Todos
 
@@ -632,9 +639,9 @@ Items acknowledged and deferred at **v1.29 milestone close on 2026-06-29** (user
 
 ## Session Continuity
 
-**Stopped at:** Phase 194 complete (UAT passed 3/4, 1 acknowledged gap), ready to plan Phase 195
+**Stopped at:** Completed 195-04-PLAN.md
 
-**Last session:** 2026-07-30
+**Last session:** 2026-07-30T19:03:50.727Z
 
 **Resume file:**
 
@@ -731,6 +738,10 @@ None
 | Phase 194 P02 | 27min | 2 tasks | 9 files |
 | Phase 194 P03 | 18min | 3 tasks | 9 files |
 | Phase 194 P04 | 30min | 2 tasks | 6 files |
+| Phase 195 P01 | 9min | 3 tasks | 7 files |
+| Phase 195 P02 | ~15min | 2 tasks | 3 files |
+| Phase 195 P03 | 13min | 2 tasks | 2 files |
+| Phase 195 P04 | 22min | 3 tasks | 4 files |
 
 ## Performance Metrics
 

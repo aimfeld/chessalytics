@@ -1,0 +1,20 @@
+# grading-ladder-fens-400.txt — the DECLARED LADDER-05 400-node subset.
+#
+# Subset size: exactly 6 FENs. This is a deliberate declared subset of
+# scripts/data/grading-ladder-fens.txt (every line below appears verbatim in
+# that file), not the full 21-position set, because a 400-node search costs
+# roughly 166-223 s per (position, depth) pair (SEED-126's measured range) —
+# running the full 21-position set across multiple depths at 400 nodes would
+# be a multi-hour run. The phase deliberately spends the full set at 50 nodes
+# (LADDER-01's rung-selection data) and reserves this smaller, explicitly
+# declared 6-position subset for the 400-node LADDER-05 validation datum,
+# rather than leaving the subset size implicit in whatever a script happened
+# to sample. Every category from the widened set is represented: opening,
+# middlegame, sharp/tactical (x2), and endgame (x2).
+
+r1bqkb1r/pppp1ppp/2n2n2/4p3/2B1P3/5N2/PPPP1PPP/RNBQK2R w KQkq - 4 4 # italian (built-in)
+r2q1rk1/pp1nbppp/2p1bn2/3p4/3P1B2/2N1PN2/PPQ1BPPP/R4RK1 w - - 6 11 # middlegame (built-in)
+r1bq1r1k/pp1nbppp/2p1p3/3pP3/3P4/2NB1N2/PPPQ1PPP/R3K2R w KQ - 2 11 # sharp (built-in)
+8/2p5/3p4/KP5r/1R3p1k/8/4P1P1/8 w - - 0 1 # endgame (built-in, rook/pawn)
+r1bq1b1r/ppp3pp/2n1k3/3np3/2B5/2N2Q2/PPPP1PPP/R1B1K2R b KQ - 3 8 # fried liver attack, king forced to e6 (additional sharp)
+8/5p2/4k1p1/8/2N1P3/6P1/5PK1/8 w - - 0 38 # knight (minor-piece) ending with pawns both sides (additional endgame)

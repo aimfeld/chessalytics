@@ -17,11 +17,14 @@ import {
   DESKTOP_POOL_MAX,
   MOBILE_POOL_SIZE,
   GRADE_CACHE_MAX,
+  GRADING_WATCHDOG_TIMEOUT_MS,
   type QueuedGradeRequest,
   type WorkerPool,
   type MoveGrade,
 } from '../workerPool';
-import type { EngineProviders } from '../types';
+import type { EngineProviders, SearchBudget } from '../types';
+import { mctsSearch } from '../mctsSearch';
+import { buildGradeGoCommand, GRADING_ROOT_DEPTH } from '../gradingLadder';
 
 // @sentry/react's ESM module namespace is not configurable, so vi.spyOn cannot
 // redefine captureException on the real module — mock the module instead
@@ -109,8 +112,22 @@ const TEST_FEN_3 = 'rnbqkbnr/pppppppp/8/8/2P5/8/PP1PPPPP/RNBQKBNR b KQkq c3 0 1'
 describe('enqueue / dequeueHighestPriority', () => {
   it('dequeues the higher-priority request first, regardless of enqueue order', () => {
     const pending: QueuedGradeRequest[] = [];
-    enqueue(pending, { fen: 'FEN_A', candidateUcis: ['e2e4'], priority: 0.2, depth: 3, resolve: vi.fn() });
-    enqueue(pending, { fen: 'FEN_B', candidateUcis: ['d7d5'], priority: 0.8, depth: 3, resolve: vi.fn() });
+    enqueue(pending, {
+      fen: 'FEN_A',
+      candidateUcis: ['e2e4'],
+      priority: 0.2,
+      depth: 3,
+      gradingDepth: GRADING_ROOT_DEPTH,
+      resolve: vi.fn(),
+    });
+    enqueue(pending, {
+      fen: 'FEN_B',
+      candidateUcis: ['d7d5'],
+      priority: 0.8,
+      depth: 3,
+      gradingDepth: GRADING_ROOT_DEPTH,
+      resolve: vi.fn(),
+    });
     // FEN_A was enqueued FIRST (would win under FIFO) but has LOWER priority.
     const next = dequeueHighestPriority(pending);
     expect(next?.fen).toBe('FEN_B'); // priority wins, not arrival order
@@ -120,16 +137,44 @@ describe('enqueue / dequeueHighestPriority', () => {
 
   it('breaks a priority tie by shallower depth first', () => {
     const pending: QueuedGradeRequest[] = [];
-    enqueue(pending, { fen: 'FEN_DEEP', candidateUcis: ['e2e4'], priority: 0.5, depth: 5, resolve: vi.fn() });
-    enqueue(pending, { fen: 'FEN_SHALLOW', candidateUcis: ['d7d5'], priority: 0.5, depth: 2, resolve: vi.fn() });
+    enqueue(pending, {
+      fen: 'FEN_DEEP',
+      candidateUcis: ['e2e4'],
+      priority: 0.5,
+      depth: 5,
+      gradingDepth: GRADING_ROOT_DEPTH,
+      resolve: vi.fn(),
+    });
+    enqueue(pending, {
+      fen: 'FEN_SHALLOW',
+      candidateUcis: ['d7d5'],
+      priority: 0.5,
+      depth: 2,
+      gradingDepth: GRADING_ROOT_DEPTH,
+      resolve: vi.fn(),
+    });
     const next = dequeueHighestPriority(pending);
     expect(next?.fen).toBe('FEN_SHALLOW');
   });
 
   it('breaks a priority+depth tie by ascending candidateUcis[0] string', () => {
     const pending: QueuedGradeRequest[] = [];
-    enqueue(pending, { fen: 'FEN_LATER', candidateUcis: ['e2e4'], priority: 0.5, depth: 3, resolve: vi.fn() });
-    enqueue(pending, { fen: 'FEN_EARLIER', candidateUcis: ['a2a4'], priority: 0.5, depth: 3, resolve: vi.fn() });
+    enqueue(pending, {
+      fen: 'FEN_LATER',
+      candidateUcis: ['e2e4'],
+      priority: 0.5,
+      depth: 3,
+      gradingDepth: GRADING_ROOT_DEPTH,
+      resolve: vi.fn(),
+    });
+    enqueue(pending, {
+      fen: 'FEN_EARLIER',
+      candidateUcis: ['a2a4'],
+      priority: 0.5,
+      depth: 3,
+      gradingDepth: GRADING_ROOT_DEPTH,
+      resolve: vi.fn(),
+    });
     const next = dequeueHighestPriority(pending);
     expect(next?.fen).toBe('FEN_EARLIER'); // 'a2a4' < 'e2e4'
   });
@@ -319,6 +364,329 @@ describe('createWorkerPool: grade() dispatch', () => {
     const grades2 = await second;
     expect(grades1.get('e7e5')?.evalCp).toBe(-10);
     expect(grades2.get('d7d5')?.evalCp).toBe(10);
+  });
+});
+
+// ─── createWorkerPool + mctsSearch: LADDER-02 end-to-end depth resolution ──
+
+describe('createWorkerPool + mctsSearch: a tree node is graded at its ladder rung (LADDER-02 end-to-end)', () => {
+  beforeEach(() => {
+    stubDesktopSizing(6); // computePoolSize() -> 4 slots
+    stubWorkerCtor();
+  });
+
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  it('a real mctsSearch root expansion over a real createWorkerPool emits a go command at GRADING_ROOT_DEPTH with no wall-clock bound', async () => {
+    const pool = createWorkerPool();
+    const controller = new AbortController();
+    const budget: SearchBudget = {
+      maxNodes: 1,
+      maxPlies: 2,
+      concurrency: 1,
+      elo: { w: 1500, b: 1500 },
+    };
+    // Bound to TEST_FEN (black to move) so the root candidate set is
+    // deterministic: two real legal black replies, both surviving
+    // truncateAndRenormalize's 0.9 cumulative-mass cut (0.6 + 0.4 = 1.0).
+    const providers: EngineProviders = {
+      policy: async (fen) => (fen === TEST_FEN ? { e7e5: 0.6, c7c5: 0.4 } : {}),
+      grade: pool.grade,
+    };
+
+    const searchPromise = mctsSearch(TEST_FEN, budget, providers, () => {}, controller.signal);
+
+    await vi.waitFor(() => {
+      if (createdWorkers.length === 0) throw new Error('no worker spawned yet');
+    });
+    driveInit(createdWorkers[0]!);
+
+    await vi.waitFor(() => {
+      if (!createdWorkers[0]!.messages.some((m) => m.startsWith('go '))) {
+        throw new Error('no go message posted yet');
+      }
+    });
+
+    const worker = createdWorkers[0]!;
+    const goLines = worker.messages.filter((m) => m.startsWith('go '));
+    expect(goLines).toHaveLength(1); // maxNodes: 1 -> exactly one expansion (the root)
+
+    // Answer with one bound-exact info line per candidate, in the ORDER the
+    // pool actually received them (readable off the posted go line itself,
+    // not assumed from the policy Record's declaration order).
+    const goLine = goLines[0]!;
+    const searchmovesIdx = goLine.indexOf('searchmoves ');
+    const receivedUcis = goLine
+      .slice(searchmovesIdx + 'searchmoves '.length)
+      .trim()
+      .split(' ');
+    receivedUcis.forEach((uci, i) => {
+      worker.simulateMessage(`info depth 14 multipv ${i + 1} score cp 10 nodes 1000 pv ${uci}`);
+    });
+    worker.simulateMessage(`bestmove ${receivedUcis[0]}`);
+
+    await searchPromise;
+
+    expect(goLine).toBe(buildGradeGoCommand(GRADING_ROOT_DEPTH, receivedUcis));
+    expect(goLine).not.toMatch(/movetime/);
+  });
+});
+
+// ─── createWorkerPool: LADDER-02/04 grading-depth parameter plumbing ───────
+
+describe('createWorkerPool: gradingDepth parameter plumbing (LADDER-02/04)', () => {
+  beforeEach(() => {
+    stubDesktopSizing(6); // computePoolSize() -> 4 slots
+    stubWorkerCtor();
+  });
+
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  it('a caller-supplied gradingDepth is plumbed through to the go line\'s depth token, not clamped or ignored', async () => {
+    const pool = createWorkerPool();
+    const worker = createdWorkers[0] ?? null;
+
+    const atD10 = pool.grade(TEST_FEN, ['e7e5'], undefined, 10);
+    const w = worker ?? createdWorkers[0]!;
+    driveInit(w);
+    w.simulateMessage('info depth 10 multipv 1 score cp 5 nodes 1000 pv e7e5');
+    w.simulateMessage('bestmove e7e5');
+    await atD10;
+    const goAtD10 = w.messages.filter((m) => m.startsWith('go '))[0]!;
+    expect(goAtD10).toContain('depth 10 ');
+
+    // A distinct FEN so this second call cannot be satisfied by the first's
+    // cache entry (independent of the (fen, depth) composite key rekey —
+    // Plan 03 — which the "grade cache" describe block below covers).
+    const atD6 = pool.grade(TEST_FEN_2, ['d7d5'], undefined, 6);
+    w.simulateMessage('info depth 6 multipv 1 score cp 3 nodes 500 pv d7d5');
+    w.simulateMessage('bestmove d7d5');
+    await atD6;
+    const goAtD6 = w.messages.filter((m) => m.startsWith('go '))[1]!;
+    expect(goAtD6).toContain('depth 6 ');
+  });
+
+  it('an omitted gradingDepth (3-arg call, no signal) defaults to GRADING_ROOT_DEPTH (D-02)', async () => {
+    const pool = createWorkerPool();
+    const gradePromise = pool.grade(TEST_FEN, ['e7e5']); // 4th arg omitted entirely
+    const worker = createdWorkers[0]!;
+    driveInit(worker);
+    worker.simulateMessage('info depth 14 multipv 1 score cp 5 nodes 1000 pv e7e5');
+    worker.simulateMessage('bestmove e7e5');
+    await gradePromise;
+
+    const go = worker.messages.find((m) => m.startsWith('go '))!;
+    expect(go).toBe(buildGradeGoCommand(GRADING_ROOT_DEPTH, ['e7e5']));
+  });
+
+  it('no emitted go line ever carries a wall-clock (movetime) token, across multiple grading depths (LADDER-04)', async () => {
+    const pool = createWorkerPool();
+    const first = pool.grade(TEST_FEN, ['e7e5'], undefined, 10);
+    const worker = createdWorkers[0]!;
+    driveInit(worker);
+    worker.simulateMessage('info depth 10 multipv 1 score cp 5 nodes 1000 pv e7e5');
+    worker.simulateMessage('bestmove e7e5');
+    await first;
+
+    const second = pool.grade(TEST_FEN_2, ['d7d5'], undefined, 6);
+    worker.simulateMessage('info depth 6 multipv 1 score cp 3 nodes 500 pv d7d5');
+    worker.simulateMessage('bestmove d7d5');
+    await second;
+
+    const third = pool.grade(TEST_FEN_3, ['c7c5']); // omitted depth too
+    worker.simulateMessage('info depth 14 multipv 1 score cp 1 nodes 1000 pv c7c5');
+    worker.simulateMessage('bestmove c7c5');
+    await third;
+
+    const goLines = worker.messages.filter((m) => m.startsWith('go '));
+    expect(goLines.length).toBe(3);
+    for (const line of goLines) {
+      expect(line).not.toMatch(/movetime/);
+    }
+  });
+});
+
+// ─── createWorkerPool: D-06 grading watchdog ───────────────────────────────
+
+describe('createWorkerPool: watchdog (D-06)', () => {
+  beforeEach(() => {
+    stubDesktopSizing(6); // computePoolSize() -> 4 slots
+    stubWorkerCtor();
+    vi.useFakeTimers();
+    vi.mocked(Sentry.captureException).mockClear();
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
+    vi.unstubAllGlobals();
+  });
+
+  it('settles empty once GRADING_WATCHDOG_TIMEOUT_MS elapses with no bestmove, discarding accumulated info grades (even several of them)', async () => {
+    const pool = createWorkerPool();
+    const gradePromise = pool.grade(TEST_FEN, ['e7e5', 'c7c5']);
+    const worker = createdWorkers[0]!;
+    driveInit(worker);
+    // Two info lines accumulate — never delivered, proving the accumulator
+    // is discarded, not returned, on a watchdog fire.
+    worker.simulateMessage('info depth 10 multipv 1 score cp 10 nodes 1000 pv e7e5');
+    worker.simulateMessage('info depth 10 multipv 2 score cp 5 nodes 1000 pv c7c5');
+    // No bestmove ever arrives.
+
+    await vi.advanceTimersByTimeAsync(GRADING_WATCHDOG_TIMEOUT_MS);
+
+    const result = await gradePromise;
+    expect(result.size).toBe(0);
+  });
+
+  it('posts stop to the worker, marks the slot permanently out of service, and reports exactly one static Sentry capture tagged stockfish-worker-pool', async () => {
+    const pool = createWorkerPool();
+    const gradePromise = pool.grade(TEST_FEN, ['e7e5']);
+    const worker = createdWorkers[0]!;
+    driveInit(worker);
+
+    await vi.advanceTimersByTimeAsync(GRADING_WATCHDOG_TIMEOUT_MS);
+    await gradePromise;
+
+    expect(worker.messages).toContain('stop');
+    expect(Sentry.captureException).toHaveBeenCalledTimes(1);
+    const [err, ctx] = vi.mocked(Sentry.captureException).mock.calls[0]!;
+    expect(err).toBeInstanceOf(Error);
+    // Static message, no interpolated FEN/UCI/position data (CLAUDE.md Sentry grouping rule).
+    expect((err as Error).message).toBe('Stockfish worker pool: grading watchdog timeout');
+    expect(ctx).toEqual(
+      expect.objectContaining({ tags: expect.objectContaining({ source: 'stockfish-worker-pool' }) }),
+    );
+
+    // Slot is permanently out of service (mirrors WR-04 onerror): a later
+    // grade() call is serviced by a DIFFERENT (still-idle) slot, never
+    // re-dispatched to the dead one.
+    const second = pool.grade(TEST_FEN_2, ['d7d5']);
+    const otherWorker = createdWorkers.find((w) => w !== worker)!;
+    driveInit(otherWorker);
+    otherWorker.simulateMessage('info depth 14 multipv 1 score cp 5 nodes 1000 pv d7d5');
+    otherWorker.simulateMessage('bestmove d7d5');
+    await second;
+
+    expect(otherWorker.messages).toContain(`position fen ${TEST_FEN_2}`);
+    expect(worker.messages).not.toContain(`position fen ${TEST_FEN_2}`);
+  });
+
+  it('once every slot has gone out of service via the watchdog, still-pending requests are drained empty rather than left to hang', async () => {
+    const pool = createWorkerPool();
+    // 4 slots (stubDesktopSizing(6)) — dispatch 4 requests (one per slot) plus
+    // a 5th that can never be assigned a slot and stays genuinely pending.
+    const dispatched = [
+      pool.grade(TEST_FEN, ['e2e4']),
+      pool.grade(TEST_FEN, ['e2e4']),
+      pool.grade(TEST_FEN, ['e2e4']),
+      pool.grade(TEST_FEN, ['e2e4']),
+    ];
+    const pendingReq = pool.grade(TEST_FEN, ['e2e4']);
+    expect(createdWorkers.length).toBe(4);
+    for (const w of createdWorkers) driveInit(w); // each readyok dispatches the next queued request in turn
+
+    await vi.advanceTimersByTimeAsync(GRADING_WATCHDOG_TIMEOUT_MS);
+
+    const settled = await Promise.all([...dispatched, pendingReq]);
+    for (const m of settled) expect(m.size).toBe(0);
+  });
+
+  it('a bestmove arriving before the deadline settles the request with real grades and disarms the timer — no capture after the deadline', async () => {
+    const pool = createWorkerPool();
+    const gradePromise = pool.grade(TEST_FEN, ['e7e5']);
+    const worker = createdWorkers[0]!;
+    driveInit(worker);
+    worker.simulateMessage('info depth 14 multipv 1 score cp 20 nodes 1000 pv e7e5');
+    worker.simulateMessage('bestmove e7e5');
+    const result = await gradePromise;
+    expect(result.get('e7e5')?.evalCp).toBe(-20);
+
+    vi.mocked(Sentry.captureException).mockClear();
+    await vi.advanceTimersByTimeAsync(GRADING_WATCHDOG_TIMEOUT_MS);
+    expect(Sentry.captureException).not.toHaveBeenCalled();
+  });
+
+  it('an abort of an in-flight request clears its watchdog — no Sentry capture after the deadline', async () => {
+    const pool = createWorkerPool();
+    const controller = new AbortController();
+    const gradePromise = pool.grade(TEST_FEN, ['e7e5'], controller.signal);
+    const worker = createdWorkers[0]!;
+    driveInit(worker);
+
+    controller.abort();
+    await gradePromise;
+
+    vi.mocked(Sentry.captureException).mockClear();
+    await vi.advanceTimersByTimeAsync(GRADING_WATCHDOG_TIMEOUT_MS);
+    expect(Sentry.captureException).not.toHaveBeenCalled();
+  });
+
+  it('stopAll() clears every in-flight watchdog — no Sentry capture after the deadline', async () => {
+    const pool = createWorkerPool();
+    const gradePromise = pool.grade(TEST_FEN, ['e7e5']);
+    const worker = createdWorkers[0]!;
+    driveInit(worker);
+
+    pool.stopAll();
+    await gradePromise;
+
+    vi.mocked(Sentry.captureException).mockClear();
+    await vi.advanceTimersByTimeAsync(GRADING_WATCHDOG_TIMEOUT_MS);
+    expect(Sentry.captureException).not.toHaveBeenCalled();
+  });
+
+  it('terminate() clears every in-flight watchdog — no Sentry capture after the deadline', async () => {
+    const pool = createWorkerPool();
+    const gradePromise = pool.grade(TEST_FEN, ['e7e5']);
+    driveInit(createdWorkers[0]!);
+
+    pool.terminate();
+    await gradePromise;
+
+    vi.mocked(Sentry.captureException).mockClear();
+    await vi.advanceTimersByTimeAsync(GRADING_WATCHDOG_TIMEOUT_MS);
+    expect(Sentry.captureException).not.toHaveBeenCalled();
+  });
+
+  it('195-06 WR-01: worker.onerror clears the in-flight watchdog — no second, misleading Sentry capture after the deadline', async () => {
+    const pool = createWorkerPool();
+    const gradePromise = pool.grade(TEST_FEN, ['e7e5']);
+    const worker = createdWorkers[0]!;
+    driveInit(worker);
+
+    // onerror settles the request and marks the slot dead. It was the only
+    // exit path that left the watchdog armed, so 60s later a stale timer fired
+    // on an already-dead slot and reported a bogus "grading watchdog timeout"
+    // for a failure onerror had already captured correctly.
+    worker.simulateError();
+    await gradePromise;
+
+    vi.mocked(Sentry.captureException).mockClear();
+    await vi.advanceTimersByTimeAsync(GRADING_WATCHDOG_TIMEOUT_MS);
+    expect(Sentry.captureException).not.toHaveBeenCalled();
+  });
+
+  it('settles empty exactly at GRADING_WATCHDOG_TIMEOUT_MS; one tick earlier the request is still unsettled', async () => {
+    const pool = createWorkerPool();
+    const gradePromise = pool.grade(TEST_FEN, ['e7e5']);
+    const worker = createdWorkers[0]!;
+    driveInit(worker);
+
+    let settled = false;
+    void gradePromise.then(() => {
+      settled = true;
+    });
+
+    await vi.advanceTimersByTimeAsync(GRADING_WATCHDOG_TIMEOUT_MS - 1);
+    expect(settled).toBe(false);
+
+    await vi.advanceTimersByTimeAsync(1);
+    await gradePromise;
+    expect(settled).toBe(true);
   });
 });
 
@@ -574,6 +942,287 @@ describe('createWorkerPool: grade cache (Phase 194 CACHE-01..04)', () => {
     worker.simulateMessage('bestmove e7e5');
     await second;
   });
+
+  // ─── LADDER-03/ENGINE-07: composite (fen, gradingDepth) cache key ──────────
+  //
+  // The cache used to be keyed by `fen` alone (Phase 194). Once the ladder
+  // makes grading depth vary by tree position (Plan 05), a transposed
+  // position could be graded at depth 14 via one path and depth 10 via
+  // another, and a fen-only cache would silently serve whichever depth's
+  // grade happened to land first to the OTHER depth's request — a real
+  // ENGINE-07 determinism violation. These tests assert the composite key
+  // closes that hole in both visit orders, by `go`-message count (never by
+  // reaching into the pool's internal cache Map).
+
+  it(
+    'a depth-14 cached grade never satisfies a depth-10 request for the same FEN, regardless of visit order — depth-14-first (LADDER-03)',
+    async () => {
+      const pool = createWorkerPool();
+      const atD14 = pool.grade(TEST_FEN, [UCI], undefined, 14);
+      const worker = createdWorkers[0]!;
+      driveInit(worker);
+      worker.simulateMessage(`info depth 14 multipv 1 score cp 10 nodes 1000 pv ${UCI}`);
+      worker.simulateMessage(`bestmove ${UCI}`);
+      await atD14;
+
+      // A depth-10 request for the SAME (fen, uci) must be a MISS — the
+      // depth-14 entry does not satisfy it.
+      let goCount = worker.messages.filter((m) => m.startsWith('go ')).length;
+      const atD10 = pool.grade(TEST_FEN, [UCI], undefined, 10);
+      expect(worker.messages.filter((m) => m.startsWith('go ')).length).toBe(goCount + 1);
+      worker.simulateMessage(`info depth 10 multipv 1 score cp 8 nodes 500 pv ${UCI}`);
+      worker.simulateMessage(`bestmove ${UCI}`);
+      const result = await atD10;
+      expect(result.get(UCI)?.evalCp).toBe(-8); // the depth-10 value, not the cached depth-14 one
+
+      // Re-requesting depth 10 again is now a HIT (no new go), same value.
+      goCount = worker.messages.filter((m) => m.startsWith('go ')).length;
+      const atD10Again = await pool.grade(TEST_FEN, [UCI], undefined, 10);
+      expect(worker.messages.filter((m) => m.startsWith('go ')).length).toBe(goCount);
+      expect(atD10Again.get(UCI)?.evalCp).toBe(-8);
+    },
+  );
+
+  it(
+    'a depth-10 cached grade never satisfies a depth-14 request for the same FEN, regardless of visit order — depth-10-first (LADDER-03)',
+    async () => {
+      const pool = createWorkerPool();
+      const atD10 = pool.grade(TEST_FEN, [UCI], undefined, 10);
+      const worker = createdWorkers[0]!;
+      driveInit(worker);
+      worker.simulateMessage(`info depth 10 multipv 1 score cp 8 nodes 500 pv ${UCI}`);
+      worker.simulateMessage(`bestmove ${UCI}`);
+      await atD10;
+
+      // A depth-14 request for the SAME (fen, uci) must be a MISS — the
+      // depth-10 entry does not satisfy it.
+      let goCount = worker.messages.filter((m) => m.startsWith('go ')).length;
+      const atD14 = pool.grade(TEST_FEN, [UCI], undefined, 14);
+      expect(worker.messages.filter((m) => m.startsWith('go ')).length).toBe(goCount + 1);
+      worker.simulateMessage(`info depth 14 multipv 1 score cp 10 nodes 1000 pv ${UCI}`);
+      worker.simulateMessage(`bestmove ${UCI}`);
+      const result = await atD14;
+      expect(result.get(UCI)?.evalCp).toBe(-10); // the depth-14 value, not the cached depth-10 one
+
+      // Re-requesting depth 14 again is now a HIT (no new go), same value.
+      goCount = worker.messages.filter((m) => m.startsWith('go ')).length;
+      const atD14Again = await pool.grade(TEST_FEN, [UCI], undefined, 14);
+      expect(worker.messages.filter((m) => m.startsWith('go ')).length).toBe(goCount);
+      expect(atD14Again.get(UCI)?.evalCp).toBe(-10);
+    },
+  );
+
+  it('two different FENs at the same grading depth remain independent cache entries (unchanged by the rekey, LADDER-03)', async () => {
+    const pool = createWorkerPool();
+    const first = pool.grade(TEST_FEN, [UCI], undefined, 10);
+    const worker = createdWorkers[0]!;
+    driveInit(worker);
+    worker.simulateMessage(`info depth 10 multipv 1 score cp 10 nodes 1000 pv ${UCI}`);
+    worker.simulateMessage(`bestmove ${UCI}`);
+    await first;
+
+    // A different FEN at the SAME depth is a miss — no cross-FEN satisfaction.
+    let goCount = worker.messages.filter((m) => m.startsWith('go ')).length;
+    const second = pool.grade(TEST_FEN_2, [UCI], undefined, 10);
+    expect(worker.messages.filter((m) => m.startsWith('go ')).length).toBe(goCount + 1);
+    worker.simulateMessage(`info depth 10 multipv 1 score cp 4 nodes 1000 pv ${UCI}`);
+    worker.simulateMessage(`bestmove ${UCI}`);
+    const result = await second;
+    expect(result.get(UCI)?.evalCp).toBe(-4);
+
+    // The first FEN's depth-10 entry is untouched by the second FEN's insert.
+    goCount = worker.messages.filter((m) => m.startsWith('go ')).length;
+    const stillCached = await pool.grade(TEST_FEN, [UCI], undefined, 10);
+    expect(worker.messages.filter((m) => m.startsWith('go ')).length).toBe(goCount);
+    expect(stillCached.get(UCI)?.evalCp).toBe(-10);
+  });
+
+  it('the all-or-nothing gate still applies inside one (fen, depth) entry — a UCI absent from that entry is a miss even though other UCIs of the same entry are present (CACHE-04, composite key)', async () => {
+    const pool = createWorkerPool();
+    const first = pool.grade(TEST_FEN, [UCI], undefined, 10);
+    const worker = createdWorkers[0]!;
+    driveInit(worker);
+    worker.simulateMessage(`info depth 10 multipv 1 score cp 10 nodes 1000 pv ${UCI}`);
+    worker.simulateMessage(`bestmove ${UCI}`);
+    await first;
+
+    // Same (fen, depth) but with an additional UCI not yet in that entry -> miss.
+    const goCount = worker.messages.filter((m) => m.startsWith('go ')).length;
+    const second = pool.grade(TEST_FEN, [UCI, OTHER_UCI], undefined, 10);
+    expect(worker.messages.filter((m) => m.startsWith('go ')).length).toBe(goCount + 1);
+    worker.simulateMessage(`info depth 10 multipv 1 score cp 11 nodes 1000 pv ${UCI}`);
+    worker.simulateMessage(`info depth 10 multipv 2 score cp 6 nodes 1000 pv ${OTHER_UCI}`);
+    worker.simulateMessage(`bestmove ${UCI}`);
+    await second;
+  });
+
+  it('a grade aborted before bestmove writes nothing to the cache — a subsequent identical (fen, depth) request issues a fresh go (LADDER-03)', async () => {
+    const pool = createWorkerPool();
+    const controller = new AbortController();
+    const aborted = pool.grade(TEST_FEN, [UCI], controller.signal, 10);
+    const worker = createdWorkers[0]!;
+    driveInit(worker); // dispatches -> slot.current set, state 'thinking'
+
+    controller.abort();
+    await expect(aborted).resolves.toEqual(new Map());
+
+    // Drain the stale bestmove (the terminal response to our own `stop`,
+    // discarded by the stopPending/FLAWCHESS-7V guard) so the slot returns to
+    // idle and can dispatch the next request.
+    worker.simulateMessage(`bestmove ${UCI}`);
+
+    const goCount = worker.messages.filter((m) => m.startsWith('go ')).length;
+    const retried = pool.grade(TEST_FEN, [UCI], undefined, 10);
+    expect(worker.messages.filter((m) => m.startsWith('go ')).length).toBe(goCount + 1);
+    worker.simulateMessage(`info depth 10 multipv 1 score cp 7 nodes 1000 pv ${UCI}`);
+    worker.simulateMessage(`bestmove ${UCI}`);
+    const result = await retried;
+    expect(result.get(UCI)?.evalCp).toBe(-7);
+  });
+
+  // ─── Phase 194 WR-01 LRU touch sites, pinned under the composite key ───────
+  //
+  // The rekey is a one-expression edit at four call sites (Task 1's key
+  // helper). The specific way it breaks silently is if only ONE of the two
+  // delete-then-reinsert LRU touches gets threaded through the helper: the
+  // cache still "looks" composite-keyed (reads/writes succeed, values are
+  // correct), but eviction quietly reverts to FIFO for whichever touch site
+  // was missed. These two tests are dedicated regressions for exactly that
+  // failure mode, each verified by actually deleting the line it pins,
+  // observing the failure, and restoring it.
+
+  it(
+    'LRU regression (Task 2, read-side): the read-hit cache.delete(key)/cache.set(key, cached) touch in grade() survives the composite-key rekey — deleting it makes this test fail',
+    async () => {
+      const pool = createWorkerPool();
+      const first = pool.grade(fenFor(0), [UCI], undefined, 10);
+      const worker = createdWorkers[0]!;
+      driveInit(worker);
+      await roundTrip(worker, first, UCI, 10);
+
+      for (let i = 1; i < GRADE_CACHE_MAX; i++) {
+        const p = pool.grade(fenFor(i), [UCI], undefined, 10);
+        await roundTrip(worker, p, UCI, 10);
+      }
+      // Cache now holds exactly GRADE_CACHE_MAX entries, all at depth 10.
+
+      // Re-READ fenFor(0) at depth 10 — a cache hit, and the touch moves it
+      // to most-recently-used position.
+      let goCount = worker.messages.filter((m) => m.startsWith('go ')).length;
+      await pool.grade(fenFor(0), [UCI], undefined, 10);
+      expect(worker.messages.filter((m) => m.startsWith('go ')).length).toBe(goCount);
+
+      // One more distinct entry forces exactly one eviction.
+      const overflow = pool.grade(fenFor(GRADE_CACHE_MAX), [UCI], undefined, 10);
+      await roundTrip(worker, overflow, UCI, 10);
+
+      // The touched entry must survive as a hit.
+      goCount = worker.messages.filter((m) => m.startsWith('go ')).length;
+      await pool.grade(fenFor(0), [UCI], undefined, 10);
+      expect(worker.messages.filter((m) => m.startsWith('go ')).length).toBe(goCount);
+
+      // fenFor(1) was never touched after its initial insert — it is the
+      // true least-recently-used entry and must have been evicted instead.
+      // Without the read-hit touch's delete(key)/set(key, ...), fenFor(0)
+      // would still occupy its ORIGINAL insertion position and would be
+      // evicted here instead of fenFor(1).
+      goCount = worker.messages.filter((m) => m.startsWith('go ')).length;
+      const missPromise = pool.grade(fenFor(1), [UCI], undefined, 10);
+      expect(worker.messages.filter((m) => m.startsWith('go ')).length).toBe(goCount + 1);
+      await roundTrip(worker, missPromise, UCI, 10);
+    },
+    15000,
+  );
+
+  it(
+    "LRU regression (Task 2, write-side): cacheGrades' cache.delete(key) touch survives the composite-key rekey — deleting it makes this test fail",
+    async () => {
+      const pool = createWorkerPool();
+      const first = pool.grade(fenFor(0), [UCI], undefined, 10);
+      const worker = createdWorkers[0]!;
+      driveInit(worker);
+      await roundTrip(worker, first, UCI, 10);
+
+      for (let i = 1; i < GRADE_CACHE_MAX; i++) {
+        const p = pool.grade(fenFor(i), [UCI], undefined, 10);
+        await roundTrip(worker, p, UCI, 10);
+      }
+
+      // Re-grade fenFor(0) at the SAME depth with a DIFFERENT candidate — a
+      // cache miss (CACHE-04 all-or-nothing), so this goes through
+      // cacheGrades' merge/write path, not the read-hit touch.
+      const rewrite = pool.grade(fenFor(0), [OTHER_UCI], undefined, 10);
+      await roundTrip(worker, rewrite, OTHER_UCI, 20);
+
+      // One more distinct entry forces exactly one eviction.
+      const overflow = pool.grade(fenFor(GRADE_CACHE_MAX), [UCI], undefined, 10);
+      await roundTrip(worker, overflow, UCI, 10);
+
+      // fenFor(0) was just WRITTEN — most-recently-used — must survive as a
+      // hit, and the merge must have kept both candidates. Without
+      // cacheGrades' delete(key), fenFor(0) would still occupy its ORIGINAL
+      // insertion position and would be evicted here instead.
+      let goCount = worker.messages.filter((m) => m.startsWith('go ')).length;
+      const survived = await pool.grade(fenFor(0), [UCI, OTHER_UCI], undefined, 10);
+      expect(worker.messages.filter((m) => m.startsWith('go ')).length).toBe(goCount);
+      expect(survived.get(UCI)?.evalCp).toBe(10);
+      expect(survived.get(OTHER_UCI)?.evalCp).toBe(20);
+
+      // fenFor(1) is now the true least-recently-used entry — evicted.
+      goCount = worker.messages.filter((m) => m.startsWith('go ')).length;
+      const missPromise = pool.grade(fenFor(1), [UCI], undefined, 10);
+      expect(worker.messages.filter((m) => m.startsWith('go ')).length).toBe(goCount + 1);
+      await roundTrip(worker, missPromise, UCI, 10);
+    },
+    15000,
+  );
+
+  it(
+    'two entries for the SAME FEN at two different grading depths are independent cache slots for eviction purposes — touching one does not protect the other, and both count toward GRADE_CACHE_MAX (documents the entry-count consequence of the rekey; no capacity retune)',
+    async () => {
+      const pool = createWorkerPool();
+      const worker = createdWorkers[0] ?? null;
+
+      // Two entries for the SAME fen at two different depths.
+      const atD10 = pool.grade(fenFor(0), [UCI], undefined, 10);
+      const w = worker ?? createdWorkers[0]!;
+      driveInit(w);
+      await roundTrip(w, atD10, UCI, 10);
+      const atD14 = pool.grade(fenFor(0), [UCI], undefined, 14);
+      await roundTrip(w, atD14, UCI, 14);
+
+      // Fill the remaining GRADE_CACHE_MAX - 2 slots with distinct FENs at
+      // depth 10, so the cache holds exactly GRADE_CACHE_MAX entries:
+      // fenFor(0)@10, fenFor(0)@14, fenFor(1..GRADE_CACHE_MAX-2)@10.
+      for (let i = 1; i < GRADE_CACHE_MAX - 1; i++) {
+        const p = pool.grade(fenFor(i), [UCI], undefined, 10);
+        await roundTrip(w, p, UCI, 10);
+      }
+
+      // Touch ONLY the depth-10 entry for fenFor(0) — a hit.
+      let goCount = w.messages.filter((m) => m.startsWith('go ')).length;
+      await pool.grade(fenFor(0), [UCI], undefined, 10);
+      expect(w.messages.filter((m) => m.startsWith('go ')).length).toBe(goCount);
+
+      // One more distinct entry forces exactly one eviction.
+      const overflow = pool.grade(fenFor(GRADE_CACHE_MAX), [UCI], undefined, 10);
+      await roundTrip(w, overflow, UCI, 10);
+
+      // The touched depth-10 entry survives.
+      goCount = w.messages.filter((m) => m.startsWith('go ')).length;
+      await pool.grade(fenFor(0), [UCI], undefined, 10);
+      expect(w.messages.filter((m) => m.startsWith('go ')).length).toBe(goCount);
+
+      // The UNTOUCHED depth-14 entry for the SAME fen is NOT spared by the
+      // depth-10 touch — it is the true least-recently-used entry (the first
+      // one inserted) and must have been evicted instead.
+      goCount = w.messages.filter((m) => m.startsWith('go ')).length;
+      const missPromise = pool.grade(fenFor(0), [UCI], undefined, 14);
+      expect(w.messages.filter((m) => m.startsWith('go ')).length).toBe(goCount + 1);
+      await roundTrip(w, missPromise, UCI, 14);
+    },
+    15000,
+  );
 });
 
 // ─── createWorkerPool: lazy spawn + abort/lifecycle surface (POOL-04, D-02, D-03) ──

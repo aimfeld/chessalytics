@@ -1,0 +1,133 @@
+
+Grading-depth A/B — nodes=50 plies=8 concurrency=4 elo=1500 ladder-table=14+floor10
+positions=21  depths=14  reference=d14  +ladder pass
+
+── fen38
+   d14  wall 12.0s   grade cpu 18.4s (50 calls, avg 368ms, avg 4.1 candidates)   top=f3g5 0.531
+   ladder  wall 6.1s   grade cpu 3.3s (50 calls, avg 66ms, avg 4.1 candidates)   top=f3g5 0.540
+     ladder vs d14: same top YES  same order NO   mean |Δ score| 0.0045  (reference top-2 gap 0.0117)
+        d14: f3g5 d2d3 b1c3 d2d4 e1g1
+        ladder: f3g5 d2d4 d2d3 b1c3 e1g1
+
+── fen39
+   d14  wall 14.1s   grade cpu 22.9s (50 calls, avg 458ms, avg 5.5 candidates)   top=b7b5 0.489
+   ladder  wall 6.4s   grade cpu 3.9s (50 calls, avg 78ms, avg 5.5 candidates)   top=b7b5 0.484
+     ladder vs d14: same top YES  same order NO   mean |Δ score| 0.0029  (reference top-2 gap 0.0222)
+        d14: b7b5 f6d5 a7a6 b7b6 h7h6 d7b6 f8e8 a7a5
+        ladder: b7b5 a7a6 f6d5 b7b6 h7h6 d7b6 f8e8 a7a5
+
+── fen40
+   d14  wall 13.5s   grade cpu 23.3s (50 calls, avg 466ms, avg 5.6 candidates)   top=b8c6 0.488
+   ladder  wall 6.0s   grade cpu 3.6s (50 calls, avg 73ms, avg 5.6 candidates)   top=b8c6 0.482
+     ladder vs d14: same top YES  same order YES  mean |Δ score| 0.0029  (reference top-2 gap 0.0111)
+
+── fen44
+   d14  wall 16.4s   grade cpu 32.9s (50 calls, avg 657ms, avg 9.2 candidates)   top=f3g5 0.588
+   ladder  wall 6.6s   grade cpu 4.9s (50 calls, avg 98ms, avg 9.2 candidates)   top=f3g5 0.593
+     ladder vs d14: same top YES  same order NO   mean |Δ score| 0.0055  (reference top-2 gap 0.0317)
+        d14: f3g5 e2d3 h2h3 a2a3 a1c1 f1e1 f3e5 c2b3 a2a4 a1d1 e3e4
+        ladder: f3g5 e2d3 h2h3 a1c1 f1e1 a2a3 f3e5 c2b3 a2a4 a1d1 e3e4
+
+── fen45
+   d14  wall 21.0s   grade cpu 36.4s (50 calls, avg 727ms, avg 7.7 candidates)   top=c4b3 0.480
+   ladder  wall 6.7s   grade cpu 4.8s (50 calls, avg 95ms, avg 7.7 candidates)   top=c4b3 0.469
+     ladder vs d14: same top YES  same order YES  mean |Δ score| 0.0085  (reference top-2 gap 0.0100)
+
+── fen46
+   d14  wall 13.3s   grade cpu 18.1s (50 calls, avg 362ms, avg 6.2 candidates)   top=c2d2 0.459
+   ladder  wall 5.8s   grade cpu 2.5s (50 calls, avg 49ms, avg 6.2 candidates)   top=c2d2 0.453
+     ladder vs d14: same top YES  same order NO   mean |Δ score| 0.0079  (reference top-2 gap 0.0529)
+        d14: c2d2 e3e4 c3d1 d3g6 a1e1 e2g3 e2f4
+        ladder: c2d2 d3g6 e3e4 c3d1 a1e1 e2g3 e2f4
+
+── fen47
+   d14  wall 14.7s   grade cpu 28.4s (50 calls, avg 568ms, avg 6.7 candidates)   top=b2b4 0.575
+   ladder  wall 6.3s   grade cpu 4.3s (50 calls, avg 85ms, avg 6.7 candidates)   top=b2b4 0.578
+     ladder vs d14: same top YES  same order NO   mean |Δ score| 0.0058  (reference top-2 gap 0.0086)
+        d14: b2b4 a2a4 e1d3 a1c1 g2g4 g1h1 h2h3 e1c2
+        ladder: b2b4 e1d3 a2a4 a1c1 g2g4 g1h1 h2h3 e1c2
+
+── fen48
+   d14  wall 13.9s   grade cpu 18.5s (50 calls, avg 370ms, avg 5.5 candidates)   top=g2b7 0.637
+   ladder  wall 5.7s   grade cpu 2.6s (50 calls, avg 53ms, avg 5.5 candidates)   top=g2b7 0.642
+     ladder vs d14: same top YES  same order YES  mean |Δ score| 0.0076  (reference top-2 gap 0.0988)
+
+── fen49
+   d14  wall 12.8s   grade cpu 13.9s (50 calls, avg 277ms, avg 4.3 candidates)   top=e3e4 0.543
+   ladder  wall 5.8s   grade cpu 2.1s (50 calls, avg 42ms, avg 4.3 candidates)   top=e3e4 0.539
+     ladder vs d14: same top YES  same order NO   mean |Δ score| 0.0114  (reference top-2 gap 0.0450)
+        d14: e3e4 f3g5 d4e5 d4d5 f3e5 c1b2 d4c5 f1e1
+        ladder: e3e4 f3g5 d4d5 d4e5 f3e5 c1b2 f1e1 d4c5
+
+── fen50
+   d14  wall 11.9s   grade cpu 13.2s (50 calls, avg 265ms, avg 3.2 candidates)   top=b3d5 0.547
+   ladder  wall 5.6s   grade cpu 2.2s (50 calls, avg 43ms, avg 3.2 candidates)   top=e3e4 0.549
+     ladder vs d14: same top NO   same order NO   mean |Δ score| 0.0076  (reference top-2 gap 0.0126)
+        d14: b3d5 e3e4 c3d5
+        ladder: e3e4 b3d5 c3d5
+
+── fen54
+   d14  wall 13.8s   grade cpu 25.8s (50 calls, avg 517ms, avg 5.7 candidates)   top=h2h4 0.523
+   ladder  wall 5.8s   grade cpu 3.6s (50 calls, avg 71ms, avg 5.7 candidates)   top=h2h4 0.528
+     ladder vs d14: same top YES  same order YES  mean |Δ score| 0.0044  (reference top-2 gap 0.0073)
+
+── fen55
+   d14  wall 13.3s   grade cpu 18.4s (50 calls, avg 368ms, avg 3.8 candidates)   top=c6b4 0.518
+   ladder  wall 5.8s   grade cpu 2.6s (50 calls, avg 53ms, avg 3.9 candidates)   top=c6b4 0.503
+     ladder vs d14: same top YES  same order YES  mean |Δ score| 0.0472  (reference top-2 gap 0.1102)
+
+── fen56
+   d14  wall 9.6s   grade cpu 9.9s (50 calls, avg 198ms, avg 4.1 candidates)   top=d8h4 0.639
+   ladder  wall 5.2s   grade cpu 1.4s (50 calls, avg 29ms, avg 4.0 candidates)   top=d8h4 0.635
+     ladder vs d14: same top YES  same order YES  mean |Δ score| 0.0067  (reference top-2 gap 0.0872)
+
+── fen57
+   d14  wall 8.8s   grade cpu 8.8s (50 calls, avg 176ms, avg 3.4 candidates)   top=d8h4 0.597
+   ladder  wall 4.9s   grade cpu 1.1s (50 calls, avg 21ms, avg 3.5 candidates)   top=d8h4 0.582
+     ladder vs d14: same top YES  same order YES  mean |Δ score| 0.0128  (reference top-2 gap 0.1213)
+
+── fen58
+   d14  wall 13.4s   grade cpu 17.5s (50 calls, avg 351ms, avg 4.1 candidates)   top=f8d6 0.594
+   ladder  wall 6.0s   grade cpu 2.9s (50 calls, avg 57ms, avg 4.1 candidates)   top=f8d6 0.571
+     ladder vs d14: same top YES  same order YES  mean |Δ score| 0.0108  (reference top-2 gap 0.0517)
+
+── fen63
+   d14  wall 8.2s   grade cpu 7.1s (50 calls, avg 143ms, avg 2.9 candidates)   top=b4f4 0.641
+   ladder  wall 5.2s   grade cpu 1.6s (50 calls, avg 32ms, avg 2.9 candidates)   top=b4f4 0.621
+     ladder vs d14: same top YES  same order YES  mean |Δ score| 0.0176  (reference top-2 gap 0.1164)
+
+── fen64
+   d14  wall 5.7s   grade cpu 2.6s (50 calls, avg 52ms, avg 2.2 candidates)   top=e3d4 0.786
+   ladder  wall 4.5s   grade cpu 0.6s (50 calls, avg 11ms, avg 2.2 candidates)   top=e3d4 0.772
+     ladder vs d14: same top YES  same order YES  mean |Δ score| 0.0170  (reference top-2 gap 0.0058)
+
+── fen65
+   d14  wall 6.4s   grade cpu 4.2s (50 calls, avg 84ms, avg 4.4 candidates)   top=e3f4 0.599
+   ladder  wall 4.8s   grade cpu 1.2s (50 calls, avg 24ms, avg 4.4 candidates)   top=e3f4 0.595
+     ladder vs d14: same top YES  same order NO   mean |Δ score| 0.0018  (reference top-2 gap 0.0930)
+        d14: e3f4 e3d4 e3d3 e3f2 e3d2 e3f3 e1f1 e1d1
+        ladder: e3f4 e3d3 e3d4 e3f2 e3f3 e3d2 e1f1 e1d1
+
+── fen66
+   d14  wall 7.3s   grade cpu 6.2s (50 calls, avg 124ms, avg 2.9 candidates)   top=g2f3 0.965
+   ladder  wall 4.2s   grade cpu 0.3s (50 calls, avg 5ms, avg 2.9 candidates)   top=g2f3 0.890
+     ladder vs d14: same top YES  same order YES  mean |Δ score| 0.0723  (reference top-2 gap 0.0096)
+
+── fen67
+   d14  wall 7.4s   grade cpu 5.2s (50 calls, avg 104ms, avg 2.7 candidates)   top=e3e4 0.997
+   ladder  wall 4.3s   grade cpu 0.5s (50 calls, avg 9ms, avg 2.8 candidates)   top=e3e4 0.939
+     ladder vs d14: same top YES  same order NO   mean |Δ score| 0.0559  (reference top-2 gap 0.0078)
+        d14: e3e4 e3d4 d2d4 d2d3 b5d7
+        ladder: e3e4 e3d4 d2d3 d2d4 b5d7
+
+── fen68
+   d14  wall 7.8s   grade cpu 4.3s (50 calls, avg 86ms, avg 3.9 candidates)   top=d4c5 0.983
+   ladder  wall 4.5s   grade cpu 0.5s (50 calls, avg 10ms, avg 3.9 candidates)   top=d2g5 0.985
+     ladder vs d14: same top NO   same order NO   mean |Δ score| 0.0049  (reference top-2 gap 0.0046)
+        d14: d4c5 d2e3 d4e4 d2g5 d2a5 d2f4 d2h6 d2e2 d4c4
+        ladder: d2g5 d2e3 d4c5 d2f4 d4e4 d2a5 d2e2 d2h6 d4c4
+
+Total wall across 21 positions:
+  d14  245.2s   1.00x vs d14
+
+Wrote /home/aimfeld/Projects/Python/flawchess/reports/data/engine-grading-depth-ab-2026-07-30T19-45-29-947Z.tsv

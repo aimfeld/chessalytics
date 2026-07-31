@@ -48,6 +48,25 @@ import type { SearchRunner } from './guardrail';
 import { truncateAndRenormalize, rootExplorationPriors, selectChild, type SelectionChild } from './select';
 import { leafExpectedScore } from './leafScore';
 import { DEFAULT_POLICY_TEMPERATURE, applyPolicyTemperature } from './policyTemperature';
+import { gradingDepthForTreeDepth } from './gradingLadder';
+
+/**
+ * Local, non-exported widening of `EngineProviders.grade` used ONLY at the
+ * `dispatchExpansion` call site below, so the frozen 3-param `types.ts`
+ * interface (Phase 153) stays byte-unchanged while the resolved ladder rung
+ * (LADDER-02) still reaches any concrete provider — `WorkerPool.grade` — that
+ * accepts it. A function typed against `EngineProviders` cannot be CALLED
+ * with a 4th argument even though a 4-optional-param implementation is
+ * structurally ASSIGNABLE to that interface (Phase 194's `signal` precedent
+ * one param further); this cast bridges exactly that gap without touching
+ * the shared contract.
+ */
+type GradeWithLadderDepth = (
+  fen: string,
+  candidateUcis: string[],
+  signal?: AbortSignal,
+  gradingDepth?: number,
+) => Promise<Map<string, MoveGrade>>;
 import {
   NEUTRAL_EXPECTED_SCORE,
   type SearchTreeNode,
@@ -432,10 +451,18 @@ async function dispatchExpansion(
     };
   }
   // Phase 194 ABORT-01: forward the search's own signal so an abort reaches
-  // WorkerPool.grade's existing (previously unused) 3rd param — dequeuing an
-  // unstarted request or posting `stop` to an in-flight one instead of
-  // grinding out its full GRADING_MOVETIME_SAFETY_CAP_MS budget.
-  const grades = await providers.grade(leaf.fen, candidateUcis, signal);
+  // WorkerPool.grade's existing 3rd param — dequeuing an unstarted request or
+  // posting `stop` to an in-flight one instead of running to completion.
+  // Phase 195 LADDER-02: the grading rung is resolved HERE, not inside
+  // WorkerPool, because `leaf.depth` — the tree depth-from-root — is only
+  // known inside the search orchestrator.
+  const gradeWithDepth = providers.grade as GradeWithLadderDepth;
+  const grades = await gradeWithDepth(
+    leaf.fen,
+    candidateUcis,
+    signal,
+    gradingDepthForTreeDepth(leaf.depth),
+  );
   const rootExploration = leaf.isRoot ? rootExplorationPriors(candidateMap) : null;
   return { leaf, path, candidateMap, grades, rawPolicy, rootExploration };
 }

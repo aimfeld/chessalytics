@@ -145,8 +145,29 @@ export async function createStockfishPool({ size = STOCKFISH_POOL_DEFAULT_SIZE }
   return {
     size,
 
-    /** `EngineProviders.grade` shape (UCI-keyed, searchmoves-restricted, depth-carrying — D-08). */
-    grade: (fen, candidateUcis) => withEngine(pool, (engine) => nodeGrade(engine, fen, candidateUcis)),
+    /**
+     * `EngineProviders.grade` shape (UCI-keyed, searchmoves-restricted,
+     * depth-carrying — D-08). Declares all four parameters `mctsSearch`'s
+     * `dispatchExpansion` now passes (`fen, candidateUcis, signal,
+     * gradingDepth`) and forwards `gradingDepth` into `nodeGrade`.
+     *
+     * BUG FIX (Phase 195, T-195-09): this closure previously declared only
+     * `(fen, candidateUcis)` — two parameters. JavaScript silently discards
+     * extra arguments passed to a function with fewer declared parameters, so
+     * once Plan 01's `dispatchExpansion` started passing a 4th depth
+     * argument, this pool (the one Phase 199's recalibration sweep actually
+     * runs against) would have graded every node at one flat depth while the
+     * shipped browser ran the real ladder — with nothing in the sweep's own
+     * output showing it. Widening the closure and forwarding the depth closes
+     * that gap.
+     *
+     * `signal` is accepted but deliberately NOT acted on: the Node pool has no
+     * abort path today, and inventing one is out of scope for this fix. The
+     * parameter exists purely so a future 4th-argument caller can never be
+     * silently truncated by parameter position again.
+     */
+    grade: (fen, candidateUcis, signal, gradingDepth) =>
+      withEngine(pool, (engine) => nodeGrade(engine, fen, candidateUcis, gradingDepth)),
 
     /** Single-line white-POV cp eval for D-10 cutoff 2 (adjudication). */
     evalPosition: (fen) => withEngine(pool, (engine) => evalPositionCp(engine, fen)),

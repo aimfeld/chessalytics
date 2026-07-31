@@ -46,11 +46,11 @@
 
 ### Depth-Scaled Grading Ladder (SEED-126 Phase 1)
 
-- [ ] **LADDER-01**: A widened `engine-grading-depth-ab.mjs` run (≥20 positions via `--openings`/`--fens`) produces committed per-depth wall-clock and agreement data, and **that data selects the ladder rungs** — the 3-position 14/12/10 pilot is an input, not the answer
-- [ ] **LADDER-02**: Grading depth varies by tree depth per the selected ladder, replacing the flat `GRADING_TARGET_DEPTH`
-- [ ] **LADDER-03**: The grade cache keys strictly on `(fen, depth)`, and a deeper cached grade **never** satisfies a shallower request — so a transposed position's grade depth cannot depend on which visit order reached it first (ENGINE-07 determinism)
-- [ ] **LADDER-04**: The `GRADING_MOVETIME_SAFETY_CAP_MS` divergence between the shipped `go` shape and the depth-only calibration harness is resolved (cap removed, or harness adopts it), so the shipped engine and the calibrated engine grade identically and delivered depth stops being device-dependent
-- [ ] **LADDER-05**: End-to-end search wall clock improves measurably at both the 50-node and 400-node budgets, with top-move and full-ranked-order agreement against the flat-depth-14 baseline reported alongside — so a changed top move can be read as tie-perturbation or real
+- [x] **LADDER-01**: A widened `engine-grading-depth-ab.mjs` run (≥20 positions via `--openings`/`--fens`) produces committed per-depth wall-clock and agreement data, and **that data selects the ladder rungs** — the 3-position 14/12/10 pilot is an input, not the answer
+- [x] **LADDER-02**: Grading depth varies by tree depth per the selected ladder, replacing the flat `GRADING_TARGET_DEPTH`
+- [x] **LADDER-03**: The grade cache keys strictly on `(fen, depth)`, and a deeper cached grade **never** satisfies a shallower request — so a transposed position's grade depth cannot depend on which visit order reached it first (ENGINE-07 determinism)
+- [x] **LADDER-04**: The `GRADING_MOVETIME_SAFETY_CAP_MS` divergence between the shipped `go` shape and the depth-only calibration harness is resolved (cap removed, or harness adopts it), so the shipped engine and the calibrated engine grade identically and delivered depth stops being device-dependent
+- [x] **LADDER-05**: End-to-end search wall clock improves measurably at both the 50-node and 400-node budgets, with top-move and full-ranked-order agreement against the flat-depth-14 baseline reported alongside — so a changed top move can be read as tie-perturbation or real
 
 ### Analysis-Board Root Injection (SEED-118)
 
@@ -127,11 +127,11 @@
 | CACHE-04 | Phase 194 | Complete |
 | CACHE-05 | Phase 194 | Complete |
 | CACHE-06 | Phase 194 | Complete |
-| LADDER-01 | Phase 195 | Pending |
-| LADDER-02 | Phase 195 | Pending |
-| LADDER-03 | Phase 195 | Pending |
-| LADDER-04 | Phase 195 | Pending |
-| LADDER-05 | Phase 195 | Pending |
+| LADDER-01 | Phase 195 | Complete |
+| LADDER-02 | Phase 195 | Complete |
+| LADDER-03 | Phase 195 | Complete |
+| LADDER-04 | Phase 195 | Complete |
+| LADDER-05 | Phase 195 | Complete |
 | INJECT-01 | Phase 196 | Pending |
 | INJECT-02 | Phase 196 | Pending |
 | INJECT-03 | Phase 196 | Pending |

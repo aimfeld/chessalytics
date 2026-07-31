@@ -204,6 +204,12 @@ async function expandNode(
   // signal into grade() too, so the ENGINE-06 independent fallback path is
   // not left as the one un-abortable grade site now that EngineProviders.grade
   // carries the optional 3rd param — mirrors mctsSearch.ts's dispatchExpansion.
+  //
+  // Phase 195: deliberately NOT resolving a ladder depth here — this runner's
+  // whole purpose (module header) is to prove SearchRunner has a second,
+  // structurally independent implementation; entangling it with mctsSearch's
+  // ladder-depth resolution would undercut that proof. Inherits
+  // WorkerPool.grade's root-rung default (D-02).
   const grades = await providers.grade(node.fen, candidateUcis, signal);
 
   state.nodesEvaluated += 1;

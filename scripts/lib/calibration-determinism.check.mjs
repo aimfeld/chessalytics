@@ -42,8 +42,9 @@
  * timeout on the untouched pre-pool (Plan 02) code on the same loaded
  * machine — NOT a regression introduced by the Stockfish pool. It surfaces
  * as either a hard timeout (as above) or, more subtly, a byte-level replay
- * divergence: if a `movetime`-bounded search doesn't reach
- * `GRADING_TARGET_DEPTH` identically in both runs (because real elapsed time
+ * divergence: if a `movetime`-bounded search doesn't reach the grading target
+ * depth (the flat constant this file's era used, now `GRADING_ROOT_DEPTH`)
+ * identically in both runs (because real elapsed time
  * relative to the 2500ms cap differs run-to-run under load), the returned
  * eval can differ by a few centipawns, which `mctsSearch`'s own
  * deterministic-per-concurrency-level node-selection (mctsSearch.ts's module

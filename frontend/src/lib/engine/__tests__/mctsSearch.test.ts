@@ -52,6 +52,7 @@ import { Chess } from 'chess.js';
 import { evalToExpectedScore } from '@/lib/liveFlaw';
 import { mctsSearch } from '../mctsSearch';
 import { ROOT_CANDIDATE_HARD_CAP } from '../policyTemperature';
+import { gradingDepthForTreeDepth, GRADING_ROOT_DEPTH } from '../gradingLadder';
 import type { EngineProviders, EngineSnapshot, SearchBudget, Side, MoveGrade } from '../types';
 
 // ─── Fixtures ────────────────────────────────────────────────────────────────
@@ -628,6 +629,55 @@ describe('mctsSearch — abort', () => {
       // search's real cancel.
       expect(call[2]).toBe(controller.signal);
     }
+  });
+
+  it('LADDER-02: every providers.grade() call receives a resolved grading-depth 4th argument, never undefined', async () => {
+    const controller = new AbortController();
+    // Budget sized so the tree actually descends past the ladder table's
+    // length: the shipped table is [14, 14, 14] with floor 10, so a search
+    // that only reaches tree depth 2 grades everything at 14 and cannot
+    // demonstrate variation. 64 nodes / 6 plies is the point at which this
+    // fixture's descent first reaches the floor rung (measured, 195-06 Task 2).
+    const budget: SearchBudget = { maxNodes: 64, elo: NEUTRAL_BUDGET_ELO, maxPlies: 6, concurrency: 1 };
+    const gradeSpy = vi.fn(makeFixedGrade({ [SIMPLE_WHITE_FEN]: SIMPLE_WHITE_GRADES }));
+    const providers: EngineProviders = {
+      policy: makeFixedPolicy({ [SIMPLE_WHITE_FEN]: SIMPLE_WHITE_POLICY }),
+      grade: gradeSpy,
+    };
+
+    await mctsSearch(SIMPLE_WHITE_FEN, budget, providers, () => {}, controller.signal);
+
+    expect(gradeSpy.mock.calls.length).toBeGreaterThan(0);
+
+    // Every 4th arg must be one of the values gradingDepthForTreeDepth(d) can
+    // produce for d in [0, maxPlies], and the FIRST call (always the root
+    // expansion) must be exactly GRADING_ROOT_DEPTH.
+    //
+    // Why membership rather than per-call exact leaf-depth equality: the spy
+    // observes (fen, ucis, signal, depth) only, and this fixture drives every
+    // node from a single FEN, so a call's own tree depth is not recoverable
+    // from the spy's arguments. Membership in the ladder's exact image plus
+    // the pinned-root check plus the distinct-rung assertion below is what is
+    // provable here; a per-call equality assertion would need a fixture that
+    // varies FEN by depth.
+    const possibleDepths = new Set<number>();
+    for (let d = 0; d <= budget.maxPlies; d++) possibleDepths.add(gradingDepthForTreeDepth(d));
+
+    gradeSpy.mock.calls.forEach((call, i) => {
+      const gradingDepthArg = call[3];
+      expect(gradingDepthArg).not.toBeUndefined(); // the core always resolves a rung
+      expect(possibleDepths.has(gradingDepthArg as number)).toBe(true);
+      if (i === 0) expect(gradingDepthArg).toBe(GRADING_ROOT_DEPTH); // first call is always the root
+    });
+
+    // LADDER-02's observable claim: a real search grades at MORE THAN ONE
+    // depth. The membership assertion above is satisfied by a flat table too,
+    // so without this the requirement could pass on a ladder that never
+    // varies. Flattening GRADING_DEPTH_LADDER/GRADING_DEPTH_FLOOR to a single
+    // value must break this line (mutation-verified, 195-06 Task 2).
+    const observedDepths = new Set(gradeSpy.mock.calls.map((call) => call[3] as number));
+    expect(observedDepths.size).toBeGreaterThan(1);
+    expect(observedDepths.has(GRADING_ROOT_DEPTH)).toBe(true);
   });
 });
 
