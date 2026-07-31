@@ -8,6 +8,27 @@ in `YYYY-MM-DD` (Europe/Zurich).
 
 ## [Unreleased]
 
+### Changed
+
+- Bot moves and analysis-board searches are faster: positions deep in the engine's search tree are now graded at a shallower Stockfish depth, chosen from measurement so move quality is preserved, instead of every position at full depth. A follow-up measurement tightened the ladder further, landing at roughly 1.4× faster searches end to end. (Phase 195)
+
+- The FlawChess engine wastes less work behind the scenes: move probabilities are converted in a single pass instead of re-parsed per move, board snapshots are built only when something reads them, and abandoning a search (moving on, flipping positions) now actually stops the queued Stockfish grading instead of letting it run to completion. The engine's caches were also right-sized so long analysis sessions stop evicting results they are about to need again. (Phase 194)
+
+### Fixed
+
+- Train: pressing Next no longer briefly requests the solution for the puzzle you are about to solve. The reveal panel kept the previous puzzle's verdict for a moment after the transition, which fired a rejected request (and flashed the old solution) on every Next press. (FLAWCHESS-64)
+
+- The analysis board's FlawChess verdict now reliably evaluates Stockfish's recommended move. The move was supposed to always be among the candidates the practical engine considers, but it could be silently dropped twice: once by the probability mass cut and once by the root candidate cap, so the "what would the engine play instead" comparison could be missing exactly when the disagreement mattered most. (Phase 196)
+
+- The Moves-by-Rating chart no longer leaks its engine results past the shared cache's size limit; its lookups now share the same bounded cache as the rest of the analysis page. (Phase 197)
+
+- The Maia panel no longer stops updating after you toggle it off mid-analysis and back on. The analysis board no longer reuses one position's engine hints on a later, unrelated position after switching an engine off and back on. The engine recovers instead of hanging when its Stockfish workers die or stop responding to a request to stop. The board no longer briefly shows the previous position's engine line right after you move. (quick 260731-s0z)
+
+### Tests
+
+- Two engine ideas were measured end to end and deliberately not shipped, with the measurements committed: using Maia's own win/draw/loss estimate as the value of deep search-tree leaves (rejected at a pre-declared move-quality gate: it goes blind to forced tactics) (Phase 197), and rewriting the engine's dispatch loop for continuous policy/grade overlap (a modelled 29–35% speedup, closed as measured-not-shipped after the determinism design failed two independent reviews and surfaced that browser grades were never bit-reproducible to begin with — SEED-130) (Phase 198).
+## [v2.9] Train — Spaced-Repetition Blunder Drills — 2026-07-30
+
 ### Added
 
 - The homepage now advertises Train: a "Personalized Puzzle Training" section sits right after Game and Tactic Analysis, and a new "How can I improve my chess with FlawChess?" FAQ entry walks through analysis, training, and bot play. The System Opening Filter section was dropped to keep the page from getting crowded, and the README gained the Train, Human-like bots, and Game & tactic analysis entries it was missing. (quick 260729)
@@ -1211,7 +1232,8 @@ bookmarks, game cards, and rating / stats pages.
 - Rating history, global stats, openings W/D/L charts.
 - Multi-user auth with data isolation.
 
-[Unreleased]: https://github.com/flawchess/flawchess/compare/v2.8...HEAD
+[Unreleased]: https://github.com/flawchess/flawchess/compare/v2.9...HEAD
+[v2.9]: https://github.com/flawchess/flawchess/compare/v2.8...v2.9
 [v2.8]: https://github.com/flawchess/flawchess/compare/v2.7...v2.8
 [v2.7]: https://github.com/flawchess/flawchess/compare/v2.6...v2.7
 [v2.6]: https://github.com/flawchess/flawchess/compare/v2.5...v2.6

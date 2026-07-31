@@ -323,6 +323,48 @@ describe('Train solve loop (end-to-end tracer)', () => {
     expect(screen.getByTestId('train-progress').textContent).toBe('8 of 12');
   });
 
+  // Regression (FLAWCHESS-64): pressing Next used to leave TrainReveal mounted
+  // for one commit with the NEXT puzzle's position and the PREVIOUS puzzle's
+  // verdict (resetSolve runs in a puzzle-keyed effect, which React fires after
+  // the child's query-subscribe effect). The reveal query key flipped to the
+  // unattempted position and fetched, and the backend answered 409 "Puzzle not
+  // yet attempted" — reported in production as an AxiosError on /train with
+  // queryKey ["train-reveal", 69, 1].
+  it('Next does not fetch the reveal for the next, unattempted puzzle (FLAWCHESS-64)', async () => {
+    const NEXT_FEN = 'r1bqkbnr/pppp1ppp/2n5/4p3/4P3/5N2/PPPP1PPP/RNBQKB1R w KQkq - 2 3';
+    composeOrResumeSession.mockResolvedValueOnce({
+      session_id: 69,
+      session_date: '2026-07-25',
+      expires_on: '2026-07-26',
+      puzzle_count: 2,
+      requested_count: 2,
+      solved_count: 0,
+      blob_pending_count: 0,
+      puzzles: [
+        { position: 0, game_id: 100, ply: 20, fen: START_FEN, side_to_move: 'white', last_move_uci: 'd7d5' },
+        { position: 1, game_id: 200, ply: 30, fen: NEXT_FEN, side_to_move: 'white', last_move_uci: 'c8e6' },
+      ],
+      solved_results: [],
+    });
+    solvePuzzle.mockResolvedValueOnce({ ...SOLVE_RESPONSE, session_complete: false });
+
+    await renderTrainPage();
+    await waitFor(() => expect(screen.getByTestId('btn-train-start')).not.toBeNull());
+    fireEvent.click(screen.getByTestId('btn-train-start'));
+    await waitFor(() => expect(screen.getByTestId('chessboard')).not.toBeNull());
+    fireEvent.click(screen.getByTestId('btn-train-guess-critical'));
+    await act(async () => {
+      fireEvent.click(screen.getByTestId('test-drop-e2e4'));
+    });
+    await waitFor(() => expect(revealPuzzle).toHaveBeenCalledWith(69, 0));
+    revealPuzzle.mockClear();
+
+    fireEvent.click(screen.getByTestId('btn-train-next'));
+    await waitFor(() => expect(screen.getByTestId('train-guess-prompt')).not.toBeNull());
+    // The next puzzle has not been attempted — a reveal GET for it 409s.
+    expect(revealPuzzle.mock.calls).toEqual([]);
+  }, 15000);
+
   it('a resumed session with server-recorded solved_results shows the resumed score and max, not a restart from zero (190.1-04 D-04)', async () => {
     const REMAINING_FEN = 'r1bqkbnr/pppp1ppp/2n5/4p3/4P3/5N2/PPPP1PPP/RNBQKB1R w KQkq - 2 3';
     const RESUMED_SESSION_ID = 3;

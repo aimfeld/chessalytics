@@ -1,0 +1,13 @@
+position	fen	depth	wall_ms	grade_cpu_ms	grade_calls	nodes_evaluated	top_move	top_score	same_top_move	same_full_order	mean_abs_score_diff	reference_top2_gap	ladder_table	hash_probes	hash_probes_divergent	hash_probe_max_abs_cp	hash_probe_mean_abs_score_diff
+fen15	r1bqkb1r/pppp1ppp/2n2n2/4p3/2B1P3/5N2/PPPP1PPP/RNBQK2R w KQkq - 4 4	14	14771	22445	50	50	f3g5	0.533565					14+floor14	10	10	73.0	0.009972
+fen15	r1bqkb1r/pppp1ppp/2n2n2/4p3/2B1P3/5N2/PPPP1PPP/RNBQK2R w KQkq - 4 4	10	6147	3221	50	50	f3g5	0.542054	true	false	0.006786	0.013273	14+floor14	10	10	55.0	0.014544
+fen16	r2q1rk1/pp1nbppp/2p1bn2/3p4/3P1B2/2N1PN2/PPQ1BPPP/R4RK1 w - - 6 11	14	23231	41806	50	50	f3g5	0.587125					14+floor14	10	9	35.0	0.004342
+fen16	r2q1rk1/pp1nbppp/2p1bn2/3p4/3P1B2/2N1PN2/PPQ1BPPP/R4RK1 w - - 6 11	10	6842	5376	50	50	f3g5	0.599375	true	true	0.007293	0.030359	14+floor14	10	9	42.0	0.006650
+fen17	r1bq1r1k/pp1nbppp/2p1p3/3pP3/3P4/2NB1N2/PPPQ1PPP/R3K2R w KQ - 2 11	14	17801	31965	50	50	h2h4	0.523250					14+floor14	10	9	152.0	0.012741
+fen17	r1bq1r1k/pp1nbppp/2p1p3/3pP3/3P4/2NB1N2/PPPQ1PPP/R3K2R w KQ - 2 11	10	6152	4233	50	50	h2h4	0.529839	true	false	0.013340	0.007289	14+floor14	10	9	47.0	0.011697
+fen18	8/2p5/3p4/KP5r/1R3p1k/8/4P1P1/8 w - - 0 1	14	10147	10100	50	50	b4f4	0.644947					14+floor14	10	10	75.0	0.012304
+fen18	8/2p5/3p4/KP5r/1R3p1k/8/4P1P1/8 w - - 0 1	10	5418	1659	50	50	b4f4	0.618283	true	true	0.018069	0.117704	14+floor14	10	9	160.0	0.015407
+fen19	r1bq1b1r/ppp3pp/2n1k3/3np3/2B5/2N2Q2/PPPP1PPP/R1B1K2R b KQ - 3 8	14	20305	25869	50	50	c6b4	0.517256					14+floor14	10	10	95.0	0.021814
+fen19	r1bq1b1r/ppp3pp/2n1k3/3np3/2B5/2N2Q2/PPPP1PPP/R1B1K2R b KQ - 3 8	10	6401	3062	50	50	c6b4	0.495304	true	true	0.023426	0.111111	14+floor14	10	10	301.0	0.028633
+fen20	8/5p2/4k1p1/8/2N1P3/6P1/5PK1/8 w - - 0 38	14	7322	5317	50	50	g2f3	0.939618					14+floor14	10	10	241.0	0.019835
+fen20	8/5p2/4k1p1/8/2N1P3/6P1/5PK1/8 w - - 0 38	10	4504	350	50	50	g2f3	0.882018	true	true	0.058409	0.001174	14+floor14	10	10	84.0	0.009873

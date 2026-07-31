@@ -1,0 +1,35 @@
+# root-injection-fens-197-subset.txt — Phase 197 LEAF-07 regression-check subset.
+#
+# A curated 5-position subset of scripts/data/root-injection-fens.txt (Phase 196's
+# candidate pool), chosen to fit the LEAF-07 re-measurement inside the executor's
+# foreground-run time budget while still satisfying engine-root-injection.mjs's own
+# MIN_DISAGREEMENT_POSITIONS=5 floor and, critically, INCLUDING the exact FEN of the
+# Phase 196 headline datum (originally labelled fen44 in that run).
+#
+# All 5 FENs below were already confirmed out-of-mass-disagreement survivors in the
+# original 2026-07-30 run (reports/root-injection/report.md), so they are expected to
+# survive this harness's pre-filter again deterministically. They are the headline
+# position (fen44) plus the 4 lowest-wall-clock companions from that same run
+# (fen46, fen25, fen14, fen17), chosen to minimize total measurement time.
+#
+# Original label -> new label in this file:
+#   fen14 -> fen1
+#   fen17 -> fen2 (did NOT reproduce as a disagreement on this run's pre-filter —
+#             see the report's "pre-filter drift" note; kept in this file as a
+#             record of the attempt, superseded by the fen22/fen36/fen40 backups
+#             below when a 5th confirmed survivor was needed)
+#   fen25 -> fen3
+#   fen44 -> fen4   (the headline datum position)
+#   fen46 -> fen5
+#   fen22 -> fen6 (backup, added after fen17 failed to reproduce)
+#   fen36 -> fen7 (backup, added after fen17 failed to reproduce)
+#   fen40 -> fen8 (backup, added after fen17 failed to reproduce)
+
+2r3k1/p4ppp/q2bp3/3p4/2rN4/4P2P/P2Q1PP1/R1R3K1 b - - 0 22
+r6r/1pp2kpp/p1n2p2/3n4/2PP4/B2B1N1q/P2Q1P2/R4RK1 w - - 0 18
+1r2r2k/2RR1Qpp/q1p2b2/p1B5/3p4/4P1P1/P4P1P/6K1 w - - 6 28
+6k1/4rp2/2Bp2p1/3Pbq1p/2Q1R3/6P1/5P2/6K1 b - - 3 31
+2kr4/ppp2pp1/3p4/2bN4/4P1n1/3B3q/PPP4B/R2Q1R1K w - - 2 19
+4rrk1/6p1/2Q1p1q1/p4p2/3P1R2/P5P1/1P2N2P/5RK1 w - - 2 25
+5bk1/1r3p1p/p1q3p1/P2r4/4p3/4P2P/1B2QPP1/1R4K1 b - - 1 28
+2k2rr1/ppqb1Q2/2n1p2P/3pPn2/5P2/P1p5/2P1N1P1/R1B1KB1R w KQ - 1 16

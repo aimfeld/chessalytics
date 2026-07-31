@@ -20,9 +20,15 @@
  * a terminal/depth-capped dead end (Pitfall 6 — those never call providers
  * at all). D-10: `onSnapshot` fires after EVERY completed backup; no
  * `Date.now()`/`performance.now()` anywhere in this file. D-03/D-04: root
- * children are Maia top-k unioned with `budget.extraRootMoves` (guaranteed
- * inclusion, AFTER truncation, so a near-zero-Maia-probability Stockfish
- * candidate is never dropped by the mass cut) and, at `concurrency > 1`,
+ * children are Maia top-k unioned with `budget.extraRootMoves`, AFTER
+ * truncation, so a near-zero-Maia-probability Stockfish candidate is never
+ * dropped by the mass cut — AND (INJECT-01, 196-01) `applyRootCandidateHardCap`
+ * receives the union's own added UCIs as an exemption set, so that same
+ * candidate is never dropped by the root hard cap either. Before Phase 196
+ * this second mechanism was NOT honoured: an injected candidate was seeded
+ * with prior 0, sorted dead last by the cap's own comparator, and was the
+ * cap's first casualty whenever the root exceeded it — the union survived
+ * the mass cut but silently lost to the hard cap. And, at `concurrency > 1`,
  * multiple expansions are selected synchronously within one round (marking
  * each as `isPending` — the sole gate that keeps a later same-round
  * selection from re-picking it; visit counts increment only at APPLY time,
@@ -48,6 +54,25 @@ import type { SearchRunner } from './guardrail';
 import { truncateAndRenormalize, rootExplorationPriors, selectChild, type SelectionChild } from './select';
 import { leafExpectedScore } from './leafScore';
 import { DEFAULT_POLICY_TEMPERATURE, applyPolicyTemperature } from './policyTemperature';
+import { gradingDepthForTreeDepth } from './gradingLadder';
+
+/**
+ * Local, non-exported widening of `EngineProviders.grade` used ONLY at the
+ * `dispatchExpansion` call site below, so the frozen 3-param `types.ts`
+ * interface (Phase 153) stays byte-unchanged while the resolved ladder rung
+ * (LADDER-02) still reaches any concrete provider — `WorkerPool.grade` — that
+ * accepts it. A function typed against `EngineProviders` cannot be CALLED
+ * with a 4th argument even though a 4-optional-param implementation is
+ * structurally ASSIGNABLE to that interface (Phase 194's `signal` precedent
+ * one param further); this cast bridges exactly that gap without touching
+ * the shared contract.
+ */
+type GradeWithLadderDepth = (
+  fen: string,
+  candidateUcis: string[],
+  signal?: AbortSignal,
+  gradingDepth?: number,
+) => Promise<Map<string, MoveGrade>>;
 import {
   NEUTRAL_EXPECTED_SCORE,
   type SearchTreeNode,
@@ -58,6 +83,7 @@ import {
   buildSnapshot,
   sideMatchesMover,
   applyRootCandidateHardCap,
+  mergeExtraRootMoves,
 } from './treeCommon';
 
 /**
@@ -379,12 +405,16 @@ function applyExpansion(result: DispatchedExpansion, rootMover: MoverColor): voi
  * Expands one leaf: `policy()` -> (Phase 159 D-05/D-06/D-07, root-mover side
  * only, short-circuited at the default temperature per Pitfall 1) temperature
  * reshape -> `truncateAndRenormalize` -> (root only) union with
- * `budget.extraRootMoves` AFTER truncation (D-04 — guarantees inclusion
- * regardless of Maia mass, matching D-05's floor rationale) -> (root only)
- * `applyRootCandidateHardCap` (D-07/Pitfall 6) -> ONE batched `grade()` call
- * over the resulting candidate set. Pure with respect to the tree — does not
- * mutate anything; `applyExpansion` performs all mutation once every
- * concurrent dispatch has resolved.
+ * `budget.extraRootMoves` AFTER truncation (D-04 — never dropped by Maia's
+ * mass cut regardless of its own probability, matching D-05's floor
+ * rationale) -> (root only) `applyRootCandidateHardCap`, passed the union's
+ * own added UCIs as an exemption set (D-07/Pitfall 6, INJECT-01, 196-01 —
+ * never dropped by the root hard cap either) -> ONE batched `grade()` call
+ * over the resulting candidate set. Before Phase 196 the cap received no
+ * exemption and an injected candidate's prior was seeded at 0, so a wide
+ * root silently discarded it here despite surviving the union above. Pure
+ * with respect to the tree — does not mutate anything; `applyExpansion`
+ * performs all mutation once every concurrent dispatch has resolved.
  */
 async function dispatchExpansion(
   leaf: EngineNode,
@@ -392,7 +422,12 @@ async function dispatchExpansion(
   budget: SearchBudget,
   providers: EngineProviders,
   rootMover: MoverColor,
+  signal: AbortSignal,
 ): Promise<DispatchedExpansion> {
+  // Phase 194 ABORT-01: `policy()` is NOT signalled and never will be — an
+  // in-flight ONNX inference cannot be interrupted, and a stale resolution is
+  // unused and harmless once this expansion's result is discarded (mirrors
+  // useFlawChessEngine.ts's own Pitfall-1 comment on maiaQueue).
   const rawPolicy = await providers.policy(leaf.fen, budget.elo[leaf.side], leaf.side);
   const temperature = budget.policyTemperature ?? DEFAULT_POLICY_TEMPERATURE;
   const effectivePolicy =
@@ -400,15 +435,16 @@ async function dispatchExpansion(
       ? applyPolicyTemperature(rawPolicy, temperature)
       : rawPolicy;
   let candidateMap = truncateAndRenormalize(effectivePolicy);
+  // WR-02 (196-REVIEW.md): the union/prior-seeding merge is shared with
+  // fallbackExpectimax.ts's expandNode via treeCommon.ts's
+  // mergeExtraRootMoves, so the two SearchRunner implementations cannot
+  // silently diverge on this logic (see that function's own doc comment).
+  let injectedUcis = new Set<string>();
   if (leaf.isRoot && budget.extraRootMoves && budget.extraRootMoves.length > 0) {
-    const merged = new Map(candidateMap);
-    for (const uci of budget.extraRootMoves) {
-      if (!merged.has(uci)) merged.set(uci, 0);
-    }
-    candidateMap = merged;
+    ({ candidateMap, injectedUcis } = mergeExtraRootMoves(candidateMap, effectivePolicy, budget.extraRootMoves));
   }
   if (leaf.isRoot) {
-    candidateMap = applyRootCandidateHardCap(candidateMap);
+    candidateMap = applyRootCandidateHardCap(candidateMap, injectedUcis);
   }
   const candidateUcis = Array.from(candidateMap.keys());
   if (candidateUcis.length === 0) {
@@ -426,7 +462,19 @@ async function dispatchExpansion(
       rootExploration: null,
     };
   }
-  const grades = await providers.grade(leaf.fen, candidateUcis);
+  // Phase 194 ABORT-01: forward the search's own signal so an abort reaches
+  // WorkerPool.grade's existing 3rd param — dequeuing an unstarted request or
+  // posting `stop` to an in-flight one instead of running to completion.
+  // Phase 195 LADDER-02: the grading rung is resolved HERE, not inside
+  // WorkerPool, because `leaf.depth` — the tree depth-from-root — is only
+  // known inside the search orchestrator.
+  const gradeWithDepth = providers.grade as GradeWithLadderDepth;
+  const grades = await gradeWithDepth(
+    leaf.fen,
+    candidateUcis,
+    signal,
+    gradingDepthForTreeDepth(leaf.depth),
+  );
   const rootExploration = leaf.isRoot ? rootExplorationPriors(candidateMap) : null;
   return { leaf, path, candidateMap, grades, rawPolicy, rootExploration };
 }
@@ -509,7 +557,7 @@ export const mctsSearch: SearchRunner = async (rootFen, budget, providers, onSna
     // to an array in INPUT order regardless of which promise settles first,
     // so applying `results` in order is never raw arrival order.
     const results = await Promise.all(
-      toExpand.map(({ leaf, path }) => dispatchExpansion(leaf, path, budget, providers, rootMover)),
+      toExpand.map(({ leaf, path }) => dispatchExpansion(leaf, path, budget, providers, rootMover, signal)),
     );
 
     for (const result of results) {

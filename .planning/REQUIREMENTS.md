@@ -1,136 +1,210 @@
-# Requirements: FlawChess v2.9 Train — Spaced-Repetition Blunder Drills
+# Requirements: FlawChess v2.10 FlawChess Engine Improvements
 
-**Defined:** 2026-07-25
-**Core Value:** Position-precise WDL analysis on the user's own games; Train turns that analysis into a habit by drilling the user's own blunders on a spaced schedule until the patterns stick.
-**Source:** SEED-037 (design settled across six gsd-explore rounds, final 2026-07-25) + `.planning/research/` (4-dimension research pass, 2026-07-25).
+**Defined:** 2026-07-30
+**Core Value:** Position-precise WDL analysis on the user's own games; the FlawChess engine is what turns that into a *practical* score at the user's own ELO — this milestone makes that engine fast enough and honest enough to be used on every surface it feeds.
+**Source:** SEED-126 (throughput + main-thread cost, measured 2026-07-30), SEED-127 (continuous dispatch), SEED-118 (analysis-board root injection). No project-level research pass — the seeds carry measured wall-clock data, per-file breadcrumbs, rejected alternatives, and locked design decisions.
+
+## Scope decisions taken at milestone start (2026-07-30)
+
+- **Full chain in one milestone.** All five source units ship in v2.10: SEED-126 Phases 2–5, SEED-126 Phase 1, SEED-118, SEED-126 Phase 6, SEED-127. The three-sweep cost was raised and the full scope was reaffirmed.
+- **One combined calibration sweep at the end**, not one per strength-changing phase. **Accepted trade-off:** both SEED-126 and SEED-127 warn that a shared sweep cannot attribute a strength change to any single engine change. A post-milestone bot strength delta will therefore be a property of the milestone, not of the ladder, Maia WDL leaves, or continuous dispatch individually.
+- **SEED-126 Phases 2–5 collapse into one phase** (four independent, quick-task-sized units sharing no calibration dependency).
+- **The 14/12/10 ladder is a hypothesis, not a spec** — it was derived from 3–4 positions. A widened A/B run selects the rungs.
+- **SEED-114 (stronger bots above ~1900) stays dormant** — a bot-strength product goal, not engine performance.
+
+## Sequencing constraints (load-bearing)
+
+- All five units edit `dispatchExpansion`. SEED-118's `extraRootMoves` union lands **before** SEED-127's rewrite of that region, and SEED-127 must preserve it.
+- SEED-118's disagreement re-run is a second full search; it is gated on the ladder (cost) and on the cache work (so the re-run is a cache replay, not a recompute).
+- SEED-127's cost model depends on post-ladder grade latencies — re-baseline after the ladder, before designing.
+- Two removal candidates are deliberately **not** removed in Phase 194: the `wdlByElo` worker transfer (Phase 197 consumes it) and the `workerPool` priority queue (Phase 198 revives it).
 
 ## v1 Requirements
 
-### Drill Pool & Scheduler (backend)
+### Main-Thread Cost (SEED-126 Phases 2, 4)
 
-- [x] **POOL-01**: User's own blunders (ply parity vs `user_color` via the existing `is_opponent_expr` helper) enter the drill pool when they clear the winnability floor (expected score ≥ ~20–25% via `eval_cp_to_expected_score`, respecting the post-move eval-shift convention) and carry a stored answer key (`best_move` + `pv` + non-empty `missed_pv_lines` blob)
-- [x] **POOL-02**: Each drill item is classified sharp vs avoid-the-blunder from the `missed_pv_lines` node-0 best-vs-second expected-score gap (classifier, not entry gate)
-- [x] **POOL-03**: Red herrings are sourced from a precomputed, MultiPV-5-confirmed, phase-balanced global position pool (several genuinely fine moves within the inaccuracy threshold), winnability-floored, recency-weighted, no repeats until the source is exhausted, with no SR bookkeeping (amended Phase 192 — the original `game_best_moves` sourcing was structurally incapable of producing a several-fine-moves position; see Phase 192-CONTEXT.md)
-- [x] **POOL-04**: Per-item SR state (streak, due date, fail count, parked flag, solve log) persists per (user, flaw); the streak-keyed interval ladder (0 → next session, 1 → ~3d, 2 → ~10d) snaps due dates forward to the next scheduled session day
-- [x] **POOL-05**: An item retires as mastered after 3 correct solves in 3 separate sessions (a miss resets the counter); mastery is driven by move correctness alone, never the guess
-- [x] **POOL-06**: An item failed 3 times with zero correct solves ever is parked ("too hard for now") and leaves the queue; a single correct solve permanently zeroes the fail counter; parked items do not return in v1
-- [x] **POOL-07**: A session-composition endpoint returns exactly N puzzles while material lasts: ~75% SR items (due most-overdue first, padded by introducing new flaws recency-weighted) + ~25% red herrings
-- [x] **POOL-08**: A result-recording endpoint persists per-puzzle outcomes (guess verdict, move verdict, played move) and updates streak/due/fail/parked state; grading itself happens client-side
-- [x] **POOL-09**: Drill data stays consistent when source games are deleted (guest 30-day prune, delete-all + re-import): no orphaned drill rows, no crashes on dangling references
-- [x] **POOL-10**: The pre-attempt puzzle payload does not contain the answer key or puzzle-type ground truth (no answer leak before the attempt); reveal data is fetched or unlocked only after the attempt
+- [x] **JANK-01**: Policy results are converted to a UCI-keyed distribution in a single pass over legal moves, without constructing a `Chess` instance and replaying a move per candidate
+- [x] **JANK-02**: A parity test asserts the fast conversion path matches `moves({verbose:true})`-derived UCIs key-for-key on a fixture that includes an underpromotion position, so a chess.js version bump fails CI loudly instead of silently corrupting the policy distribution
+- [x] **JANK-03**: Search snapshots are built lazily — a consumer reading only `rootMove`/`practicalScore`/`childScoreSpread` pays nothing for `modalPath`/`modalStats` — while `onSnapshot` still fires after every completed backup (D-10 preserved exactly)
+- [x] **JANK-04**: Measured main-thread blocking per complete search drops materially at both the 50-node bot budget and the 400-node analysis budget, verified by `scripts/engine-mainthread-cost.mjs` with ranked-line output bit-identical to the baseline. **This is a jank requirement, not a latency one** — the affected work is ~1.4% of search wall clock and no success criterion may claim the search finishes sooner
+- [x] **JANK-05**: The transient `--candidate fast` prototype and flag in `engine-mainthread-cost.mjs` are deleted once the fast path ships, so the baseline pass measures shipped code
 
-### Solve Loop (frontend)
+### Abort Propagation (SEED-126 Phase 3)
 
-- [x] **SOLV-01**: Before moving, the user commits a binary guess: "one critical move" vs "several fine moves" (ground truth from the sharp/soft classifier; herrings count as "several")
-- [x] **SOLV-02**: The user then plays exactly one move, one attempt, on a lichess-minimal solve screen: board oriented to the user's color, opponent's last move animated + highlighted, side-to-move prompt, no eval bar or game metadata
-- [x] **SOLV-03**: Grading is fully client-side and uniform across puzzle types: exact match to stored `best_move` is instantly correct; any other move is evaluated by the vendored Stockfish WASM and passes if its expected-score drop vs best stays below the MISTAKE threshold (reuse `liveFlaw.ts` / `flawThresholds.ts`)
-- [x] **SOLV-04**: A session progress indicator (e.g. "4 of 12") is visible during the solve loop
-- [x] **SOLV-05**: The reveal shows guess + move verdicts, the original blunder vs the best line (steppable pv), the game card, and a deep link into the analysis board; herring reveals say the user handled the position well
-- [x] **SOLV-06**: On tactic-tagged flaws the reveal offers an opt-in "step through the line" control with the tactic ply countdown (motif name as a label), covering both missed and allowed orientations — always offered when tagged, never auto-triggered, embedded in the reveal
-- [x] **SOLV-07**: Each puzzle scores 0–2 independent points (+1 correct guess, +1 correct move); the session ends with a score screen showing total / 2N as a percentage mapped to a green/yellow/red rating (named threshold constants)
+- [x] **ABORT-01**: The abort signal is threaded from `mctsSearch` into `WorkerPool.grade` (the already-present, never-passed third parameter), so an aborted search stops in-flight Stockfish work instead of grinding for up to `GRADING_MOVETIME_SAFETY_CAP_MS`
+- [x] **ABORT-02**: All four `useBotGame` abort sites (resign, new game, unmount, deadline cut) stop Stockfish work; a `createDeadlineSearch` cut plays its move without waiting out the current round of grades
+- [x] **ABORT-03**: `WorkerPool` remains structurally assignable to the frozen 2-arg `EngineProviders.grade` contract, so the locked Phase 153 contract survives
 
-### Train Page & Navigation
+### Provider Caches (SEED-126 Phase 5)
 
-- [x] **NAV-01**: A `/train` route exists between Library and Bots on all three nav surfaces (desktop header, mobile bottom bar at six tap targets with labels intact, mobile More drawer), with route title, prefix-matched `isActive`, and convention-following test IDs
-- [x] **NAV-02**: Train is import-gated like Openings/Endgames (`/train` NOT in `IMPORT_EXEMPT_ROUTES`): greyed out until the user has games and import tier 1 is complete
+- [x] **CACHE-01**: Both provider caches are sized to hold a full search's distinct-FEN working set plus some navigation history, so a single search no longer thrashes its own cache before cross-search reuse is even possible
+- [x] **CACHE-02**: Both caches evict LRU rather than FIFO, so the root and upper tree — the nodes a PUCT selection walk re-descends most — are retained instead of dropped first
+- [x] **CACHE-03**: `cacheGrades` merges into an existing entry rather than replacing the whole map, so a same-FEN request with a shifted candidate set cannot destroy the prior entry
+- [x] **CACHE-04**: A partial cache hit grades only the missing candidate subset — **or**, if subset-graded values are empirically shown to differ from full-set-graded ones for the same `(fen, depth)` (because `searchmoves` changes what Stockfish searches), the all-or-nothing read is kept and that finding is recorded in-code
+- [x] **CACHE-05**: The analysis board's Maia ELO-ladder chart and the engine's root policy call share one cache keyed `fen|elo`, so a navigated position is not re-inferred at ~130 ms per position; `maiaWorkerHost.ts`'s "caches stay separate" header note is reversed
+- [x] **CACHE-06**: The two removal candidates SEED-126 identified are deliberately retained with in-code notes recording their downstream consumer: the `wdlByElo` worker transfer (Phase 197) and the `workerPool` priority queue (Phase 198)
 
-### Schedule & Reminders
+### Depth-Scaled Grading Ladder (SEED-126 Phase 1)
 
-- [x] **SCHD-01**: User configures a weekly training schedule: weekday picker + N puzzles per session
-- [x] **SCHD-02**: On scheduled session days, an in-app nav badge and/or dashboard card surfaces the waiting session ("12 puzzles waiting"); an already-open unfinished session keeps its badge into an unscheduled day so it isn't stranded with no cue to finish it; no push, no email
-- [x] **SCHD-03**: An ad-hoc "train now" session on an off day is allowed and draws the same queue
+- [x] **LADDER-01**: A widened `engine-grading-depth-ab.mjs` run (≥20 positions via `--openings`/`--fens`) produces committed per-depth wall-clock and agreement data, and **that data selects the ladder rungs** — the 3-position 14/12/10 pilot is an input, not the answer
+- [x] **LADDER-02**: Grading depth varies by tree depth per the selected ladder, replacing the flat `GRADING_TARGET_DEPTH`
+- [x] **LADDER-03**: The grade cache keys strictly on `(fen, depth)`, and a deeper cached grade **never** satisfies a shallower request — so a transposed position's grade depth cannot depend on which visit order reached it first (ENGINE-07 determinism)
+- [x] **LADDER-04**: The `GRADING_MOVETIME_SAFETY_CAP_MS` divergence between the shipped `go` shape and the depth-only calibration harness is resolved (cap removed, or harness adopts it), so the shipped engine and the calibrated engine grade identically and delivered depth stops being device-dependent
+- [x] **LADDER-05**: End-to-end search wall clock improves measurably at both the 50-node and 400-node budgets, with top-move and full-ranked-order agreement against the flat-depth-14 baseline reported alongside — so a changed top move can be read as tie-perturbation or real
 
-### Progress & Gamification
+### Analysis-Board Root Injection (SEED-118)
 
-- [x] **PROG-01**: A session streak counts completed scheduled-day sessions, absorbed by a depletable seven-level shield that gains a level per completed session and loses one per missed scheduled day, resetting the count only when the shield empties — the shield is forgiveness, not behavior control (competence feedback, no behavior control)
-- [x] **PROG-02**: A green-rated session ends with a confetti burst (`prefers-reduced-motion` safe, reusing the existing confetti helper)
-- [x] **PROG-03**: When an item hits 3/3 and retires, a distinct "Flaw fixed!" celebration shows with the position thumbnail
-- [x] **PROG-04**: A progress surface shows mastered and parked counts honestly ("3 parked — too hard for now", never framed as failure)
-- [x] **PROG-05**: Cold/empty states: no analyzed games → point to import/analysis; pool exhausted → celebrate, never a dead screen
+- [x] **INJECT-01**: `applyRootCandidateHardCap` no longer silently drops `extraRootMoves` when the root exceeds `ROOT_CANDIDATE_HARD_CAP`; a regression test covers a simultaneous injection at T=2.0 on a high-branching position
+- [x] **INJECT-02**: Injected root moves are seeded with a prior on the same scale as organic candidates (renormalized, or findability read from `SearchTreeNode.rawMaiaProb`) rather than `0`, so `rankScore` is not comparing incommensurable scales
+- [x] **INJECT-03**: `useFlawChessEngine` accepts `extraRootMoves`, and the analysis board supplies the free run's settled `pvLines[0..1].moves[0]` — zero extra Stockfish compute, since MultiPV=2 already runs on the same position
+- [x] **INJECT-04**: The FlawChess search re-runs once on `freeRunCommitted`, and only when Stockfish's move is not already a root candidate; first-paint instant-start behaviour (DISPLAY-01) is unchanged
+- [x] **INJECT-05**: The disagreement re-run's provider cache hit rate is **measured** and reported as this requirement's evidence, not assumed
+  - **Correction (Phase 196, 2026-07-31):** the mandate above (measure and report, don't assume) was met — see `reports/root-injection/report.md`. But this requirement was originally worded "is measured to be **largely a cache replay** rather than a recompute", and the measurement **contradicts** that prediction for production. The report's headline 79.1% hit rate describes a harness scenario where two *fully completed* searches share a cache; the browser aborts the organic search ~1.7–2s in (~2–4% of a 400-node search's life), and the report derives a **~4.5% ceiling** for that real path. In production the disagreement re-run is **essentially a fresh recompute, not a replay.** Phases 197–199 must not assume a cheap re-run.
+- [x] **INJECT-06**: On disagreement the analysis board shows a practical score for Stockfish's preferred move through the existing top-pick comparison / verdict row — no ranked-list changes, no provenance badge (findability demotion *is* the product's opinion)
+- [x] **INJECT-07**: `mctsSearch.ts`'s header claim that the union gives "guaranteed inclusion" is corrected to describe actual behaviour
 
-## v2 Requirements
+### Maia WDL Leaf Values (SEED-126 Phase 6)
 
-Deferred per SEED-037 (tracked, not in the current roadmap).
+- [x] **LEAF-01** *(REJECTED — not shipped)*: The Maia WDL head already computed and transferred on every `policy()` call is consumed as the leaf value for deep tree nodes, eliminating the Stockfish grade call at those nodes
+- [x] **LEAF-02**: The handoff depth between Stockfish-graded and Maia-WDL leaves is chosen from measurement and stated explicitly against the Phase 195 ladder (the shallowest rung is the natural candidate for replacement)
+- [x] **LEAF-03**: The Maia WDL leaf value respects `leafScore.ts`'s root-relative frame invariant (D-06) — verified, not assumed, since `softmaxWdl`/`expectedScore` are root-relative-agnostic
+- [x] **LEAF-04**: Move quality under Maia WDL leaves is evaluated on its own terms before the change is accepted — **this is an engine-design change, not an optimization**, and a speed win alone does not satisfy this requirement
+- [x] **LEAF-05**: The ELO-conditioning question is answered in writing: whether an ELO-conditioned leaf value is more correct for a practical-score engine, or double-counts the human modelling the expectimax averaging already does
+- [x] **LEAF-06**: `docs/flawchess-engine-explained-2026-07-06.md` §2's "Stockfish is the sole quality axis" claim is revised to match the shipped design
+- [x] **LEAF-07**: SEED-118's headline datum (a practical score for the injected Stockfish move) is re-validated after this change, with a large shift read as a signal about this phase rather than about injection
 
-### Pool Expansion
+### Continuous Dispatch (SEED-127)
 
-- **POOL-V2-01**: Mistakes tier — expand pool entry beyond blunders when active users run dry
-- **POOL-V2-02**: Un-parking — parked items return after a long cooldown or rating climb
+- [x] **DISPATCH-01**: A written apply-order/determinism design is produced and reviewed **before** implementation, resolving the central tension: how much apply-order freedom can be given up while keeping bit-identical reproducibility at a fixed concurrency
+  - **Outcome (2026-07-31):** produced and reviewed 3× — and the review is what stopped the phase. Two independent reviews each returned NOT SOUND (3 confirmed highs each); the second surfaced SEED-130 (the bit-identity being preserved does not hold in the shipped browser). The requirement's purpose — design-first catches the problems before code — was fulfilled; no sign-off was ever granted.
+- [x] **DISPATCH-02**: A post-ladder re-baseline measures the policy/grade wall split and the `policy peak in-flight` telltale, and models the achievable ceiling before any code is written — if grade latency dominates post-ladder, that is a cheap thing to learn early
+- [ ] **DISPATCH-03**: `mctsSearch` keeps `budget.concurrency` expansions permanently in flight, starting a new selection the moment one completes, instead of draining and refilling in lockstep rounds behind a `Promise.all` barrier
+- [ ] **DISPATCH-04**: Output remains deterministic per concurrency level (ENGINE-07/D-03) — repeated runs at the same `budget.concurrency` are bit-identical regardless of provider resolution jitter
+- [ ] **DISPATCH-05**: `isPending`, `isClosed` (WR-01 closure propagation) and `selectPath`'s null return are re-verified for a long-lived heterogeneous pending set, including the case where "nothing selectable" now means "the tree is saturated with in-flight work" rather than "this round is full"
+- [ ] **DISPATCH-06**: Node-budget accounting neither over- nor under-dispatches against `budget.maxNodes` when there is no batch to count against
+- [ ] **DISPATCH-07**: The `earlyStop`/`stopRuleSatisfied` rolling `stableCheckCount` behaves defensibly under the new apply order, and its effect on when the bot stops is recorded as a calibration input
+- [ ] **DISPATCH-08**: `scripts/lib/calibration-determinism.check.mjs` passes — the app and `calibration-harness.mjs` agree bit-for-bit at `FLAWCHESS_BOT_CONCURRENCY = 4`
+- [ ] **DISPATCH-09**: The `workerPool` priority queue is activated with real values (priority from the root ancestor's current `practicalScore`, tie-broken by depth-from-root) now that in-flight expansions exceed free slots and requests genuinely queue
+- [ ] **DISPATCH-10**: SEED-118's `extraRootMoves` union and hard-cap exemption survive the `dispatchExpansion` rewrite unchanged in behaviour
+- [ ] **DISPATCH-11**: `fallbackExpectimax.ts`'s ENGINE-06 independence story and the frozen `guardrail.ts` `SearchRunner` contract are preserved
 
-### Motif Learning Layer
+### Bot Re-Calibration (combined, final)
 
-- **MOTIF-V2-01**: Motif-aggregated progress (mastery grouped by motif)
-- **MOTIF-V2-02**: Motif-variation injection (prefer unseen positions sharing a repeatedly-failed motif)
-- **MOTIF-V2-03**: LLM one-line "why" explanation on the reveal
+- [ ] **RECAL-01**: A full `calibration-harness.mjs` sweep runs against the final engine — ladder, Maia WDL leaves, and continuous dispatch together
+- [ ] **RECAL-02**: `reports/data/bot-strength-lookup.json` and the generated `frontend/src/generated/botStrengthCurves.ts` are refit from the new sweep and pass the CI drift check
+- [ ] **RECAL-03**: The 24 persona ELO labels reflect the refit curves, keeping the D-04 within-style monotonicity and the D-07 ceiling clamp honest
+- [ ] **RECAL-04**: The sweep is resumable across crashes (the known wasm OOB failure mode on long runs), so an overnight failure does not restart from zero
+- [ ] **RECAL-05**: The combined-sweep attribution limitation is recorded in the milestone artifacts — the measured strength delta is a property of the milestone, not assignable to any single engine change
 
-### Engagement
+## Future Requirements (deferred)
 
-- **ENGA-V2-01**: Weekly leaderboard, gated on ≥10–15 weekly-active trainers (opt-in, points-earned metric)
-- **ENGA-V2-02**: Milestone counters / personal-best callouts
-- **ENGA-V2-03**: Push/email reminders (PWA push subsystem or email pipeline)
-- **ENGA-V2-04**: Half-credit / retry variants if one-attempt proves too harsh
+- **Retune `FLAWCHESS_ENGINE_MAX_NODES = 400`** — the 400-node analysis budget is effectively unreachable today (166–223 s). SEED-126 explicitly says to revisit the constant *after* the ladder lands, not as part of it
+- **`Analysis.tsx` render volume** — ~400 full re-renders of a 3100+ line component per 400-node search, because snapshots arrive every ~450 ms and clear the 150 ms `RAPID_STEP_DEBOUNCE_MS` throttle. Whether that needs its own treatment is a question SEED-126 does not answer
+- **SEED-114 stronger bots above ~1900** — needs an anchor-ladder extension (the ladder tops out at sf10) plus a raised search budget; a third calibration concern
+- **Per-ELO leaf sigmoids fit from the benchmark DB** (CAL-01, a clean ENGINE-05 swap), trap-finder / branch-point UI, time-pressure clock conditioning, SharedArrayBuffer multithreading — deferred by design at v2.0 close
 
 ## Out of Scope
 
-Explicitly excluded per SEED-037's decision log. Documented to prevent re-litigating.
-
-| Feature | Reason |
-|---------|--------|
-| FSRS scheduler | Item lifetime ~3–6 reps, binary grading, session-day quantization — nothing for per-user memory-model fitting to bite on |
-| Backend grading endpoint | Answer key is stored per-ply; client Stockfish WASM grades locally with zero server engine load |
-| Retry on wrong move | One attempt matches "in the real game you got one chance" |
-| Eval bar / game metadata on the solve screen | Leaks answer and severity; context lives on the reveal |
-| 3-way type guess (sharp/soft/herring) | Types 2 and 3 differ by user history, not position character — would test memory, not judgment |
-| Motif multiple-choice quiz + escalated walkthrough | Rejected round 6: tedious, thin material, unreliable ground truth at depth > 8; replaced by the opt-in line stepper |
-| Tactic-depth cap on pool entry | The parked fail-out valve observes unsolvability directly instead of guessing via one proxy |
-| SR-tracked red herrings | Herrings are one-off fillers, not material to master |
-| Per-session streak + freeze tokens | Weekly streak over a user-set schedule is self-forgiving |
-| Leaderboard in v1 (hidden-gated) | Infrastructure for a feature that may idle for months; explicit active-user trigger instead |
-| Shrinking the mobile nav font for six labels | Bar is already at `text-xs`; measurement shows six labels fit to 320px — fix layout, not type |
-| Zobrist dedup of repeat blunders | Repeat blunders may coexist; not necessary |
+- **Tree-level transposition sharing (turning the tree into a DAG)** — would change what the prior-weighted backup means (`backup.ts` D-01/D-02) and is a much larger design question. At a measured 3.5–12% duplicate rate it is not worth the risk. Omission is deliberate, not an oversight
+- **Maia batching over positions** — measured at ~1.12x (single-thread WASM is compute-bound, no per-run overhead to amortize) and rejected 2026-07-30. **Do not re-litigate.** The Maia win is overlapping (SEED-127), not batching
+- **The conservative SEED-127 variant** (keep the `Promise.all` apply barrier, only prefetch round N+1's policy) — offered and explicitly rejected in favour of the full redesign. If the determinism work proves intractable that is a checkpoint decision to raise, not a default to retreat into
+- **Separate per-phase calibration sweeps** — explicitly traded away for one combined sweep at milestone end
+- **A provenance flag or ranked-list UI change for injected moves** — an injected move is indistinguishable from an organic low-probability candidate once the prior is fixed; a badge would draw a false category line
 
 ## Traceability
 
-Which phases cover which requirements. Updated during roadmap creation.
-
 | Requirement | Phase | Status |
 |-------------|-------|--------|
-| POOL-01 | Phase 189 | Complete |
-| POOL-02 | Phase 189 | Complete |
-| POOL-03 | Phase 189, Phase 192 | Complete |
-| POOL-04 | Phase 189 | Complete |
-| POOL-05 | Phase 189 | Complete |
-| POOL-06 | Phase 189 | Complete |
-| POOL-07 | Phase 189 | Complete |
-| POOL-08 | Phase 189 | Complete |
-| POOL-09 | Phase 189, Phase 192 | Complete |
-| POOL-10 | Phase 189 | Complete |
-| SOLV-01 | Phase 190 | Complete |
-| SOLV-02 | Phase 190 | Complete |
-| SOLV-03 | Phase 190 | Complete |
-| SOLV-04 | Phase 190 | Complete |
-| SOLV-05 | Phase 190 | Complete |
-| SOLV-06 | Phase 190 | Complete |
-| SOLV-07 | Phase 190 | Complete |
-| NAV-01 | Phase 190 | Complete |
-| NAV-02 | Phase 190 | Complete |
-| SCHD-01 | Phase 191 | Complete |
-| SCHD-02 | Phase 191, Phase 193 | Complete |
-| SCHD-03 | Phase 191 | Complete |
-| PROG-01 | Phase 191, Phase 193 | Complete |
-| PROG-02 | Phase 191 | Complete |
-| PROG-03 | Phase 191 | Complete |
-| PROG-04 | Phase 191 | Complete |
-| PROG-05 | Phase 191 | Complete |
+| JANK-01 | Phase 194 | Complete |
+| JANK-02 | Phase 194 | Complete |
+| JANK-03 | Phase 194 | Complete |
+| JANK-04 | Phase 194 | Complete |
+| JANK-05 | Phase 194 | Complete |
+| ABORT-01 | Phase 194 | Complete |
+| ABORT-02 | Phase 194 | Complete |
+| ABORT-03 | Phase 194 | Complete |
+| CACHE-01 | Phase 194 | Complete |
+| CACHE-02 | Phase 194 | Complete |
+| CACHE-03 | Phase 194 | Complete |
+| CACHE-04 | Phase 194 | Complete |
+| CACHE-05 | Phase 194 | Complete |
+| CACHE-06 | Phase 194 | Complete |
+| LADDER-01 | Phase 195 | Complete |
+| LADDER-02 | Phase 195 | Complete |
+| LADDER-03 | Phase 195 | Complete |
+| LADDER-04 | Phase 195 | Complete |
+| LADDER-05 | Phase 195 | Complete |
+| INJECT-01 | Phase 196 | Complete |
+| INJECT-02 | Phase 196 | Complete |
+| INJECT-03 | Phase 196 | Complete |
+| INJECT-04 | Phase 196 | Complete |
+| INJECT-05 | Phase 196 | Complete |
+| INJECT-06 | Phase 196 | Complete |
+| INJECT-07 | Phase 196 | Complete |
+| LEAF-01 | Phase 197 | Rejected |
+| LEAF-02 | Phase 197 | Complete |
+| LEAF-03 | Phase 197 | Complete |
+| LEAF-04 | Phase 197 | Complete |
+| LEAF-05 | Phase 197 | Complete |
+| LEAF-06 | Phase 197 | Complete |
+| LEAF-07 | Phase 197 | Complete |
+
+> **`Rejected` (LEAF-01)** is a status this table did not previously use. Phase 197 built the
+> Maia-WDL leaf-value mechanism end to end, measured it, and rejected it at a pre-declared blocking
+> move-quality gate: no handoff depth was both fast and safe (depths 2 and 3 miss a forced mate-in-3
+> on the committed Maia-blindness fixture; depth 4 passes only by being behaviourally inert).
+> `WDL_LEAF_HANDOFF_DEPTH` is `null` — the production path does not run. LEAF-02..07 are genuinely
+> Complete: the depth was chosen from measurement, the frame invariant verified, move quality
+> evaluated on its own terms (that evaluation is what rejected it), the ELO question answered in
+> writing, the engine doc updated, and Phase 196's headline datum re-verified as unchanged.
+> Evidence: `reports/leaf-wdl/report.md`. Follow-up: `.planning/seeds/SEED-128-wdl-leaf-backup-reweighting.md`.
+| DISPATCH-01 | Phase 198 | Complete |
+| DISPATCH-02 | Phase 198 | Complete |
+| DISPATCH-03 | Phase 198 | Rejected |
+| DISPATCH-04 | Phase 198 | Rejected |
+| DISPATCH-05 | Phase 198 | Rejected |
+| DISPATCH-06 | Phase 198 | Rejected |
+| DISPATCH-07 | Phase 198 | Rejected |
+| DISPATCH-08 | Phase 198 | Rejected |
+| DISPATCH-09 | Phase 198 | Rejected |
+| DISPATCH-10 | Phase 198 | Rejected |
+| DISPATCH-11 | Phase 198 | Rejected |
+
+> **`Rejected` (DISPATCH-03..11), 2026-07-31.** Phase 198 was closed as **measured, not shipped** —
+> the same first-class outcome Phase 197 established, with one honest difference: the pre-declared
+> accept rule's measurement CLEARED the 25% build line at both budgets (34.84% bot / 28.61%
+> analysis), so this close is a **risk judgement by the operator, not the rule's exit branch**. The
+> apply-order design failed two independent reviews (NOT SOUND, 3 confirmed highs each), and the
+> second surfaced SEED-130: the bit-identity the design exists to preserve does not hold in the
+> shipped browser (uncleared Stockfish hash, 97% warm-vs-cleared grade divergence), and DISPATCH-08's
+> parity gate is structurally blind to it. Not one line under `frontend/` was modified. DISPATCH-01
+> and DISPATCH-02 are genuinely Complete: the design-first mandate is what caught the problem, and
+> the re-baseline measurement stands. Evidence: `reports/continuous-dispatch/report.md` (§8 records
+> the decision). Follow-up: `.planning/seeds/SEED-130-browser-grade-nondeterminism-uncleared-stockfish-hash.md`
+> (stays open).
+| RECAL-01 | Phase 199 | Pending |
+| RECAL-02 | Phase 199 | Pending |
+| RECAL-03 | Phase 199 | Pending |
+| RECAL-04 | Phase 199 | Pending |
+| RECAL-05 | Phase 199 | Pending |
 
 **Coverage:**
 
-- v1 requirements: 27 total
-- Mapped to phases: 27
+- v1 requirements: 49 total (this document's original Coverage block said "42" — a stale placeholder written before the requirement list above was finalized; 49 is the actual count of `[ ]` requirement IDs in this file)
+- Mapped to phases: 49/49
 - Unmapped: 0
 
-**Note:** the original Coverage block above (and the roadmap-creation brief) stated "24 total" — recounting the actual `### `-sectioned requirement IDs in this file (POOL-01..10, SOLV-01..07, NAV-01..02, SCHD-01..03, PROG-01..05) gives 27, not 24. Corrected here; no requirement IDs were added or removed, this is a count fix only.
+**Phase mapping (per the 2026-07-30 milestone-start decision, not re-derived by the roadmapper):**
+
+| Phase | Source | Requirement IDs |
+|-------|--------|------------------|
+| 194 — Engine main-thread + cache hygiene | SEED-126 Phases 2–5 | JANK-01..05, ABORT-01..03, CACHE-01..06 |
+| 195 — Depth-scaled grading ladder | SEED-126 Phase 1 | LADDER-01..05 |
+| 196 — Analysis-board Stockfish root injection | SEED-118 | INJECT-01..07 |
+| 197 — Maia WDL leaf values | SEED-126 Phase 6 | LEAF-01..07 |
+| 198 — mctsSearch continuous dispatch | SEED-127 | DISPATCH-01..11 |
+| 199 — Bot re-calibration sweep + strength curve refit | combined, final | RECAL-01..05 |
 
 ---
-*Requirements defined: 2026-07-25*
-*Last updated: 2026-07-25 after roadmap creation (v2.9 Phases 189-191; requirement-count correction 24→27)*
+*Requirements defined: 2026-07-30*
+*Roadmap mapping added: 2026-07-30*

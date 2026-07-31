@@ -1,7 +1,9 @@
 ---
 phase: 193-session-tick-streak-shield
 verified: 2026-07-28T09:30:00Z
-status: human_needed
+status: passed
+resolved: 2026-07-30T00:00:00Z
+resolved_by: operator (Adrian) at v2.9 milestone close — all three manual UAT items confirmed passed
 score: 13/13 must-haves verified
 behavior_unverified: 0
 overrides_applied: 0
@@ -22,7 +24,7 @@ human_verification:
 **Phase Goal:** Train's streak stops measuring weeks and starts measuring sessions — one tick-per-scheduled-day mechanism with a depletable 7-level shield replaces Phase 191's weekly-fulfillment check, `required_sessions_per_week`, and the 3-rung flame ladder.
 
 **Verified:** 2026-07-28
-**Status:** human_needed
+**Status:** passed (resolved 2026-07-30 — operator confirmed all three manual UAT items at v2.9 close)
 **Re-verification:** No — initial verification
 
 ## Method note
@@ -109,7 +111,9 @@ None. Swept all phase-touched files (`app/services/train_scheduler.py`, `app/mod
 - **Phase 191 D-05 (retroactivity) waived.** Task 1's checkpoint was resolved as option-b (hard reset, NO backfill) by explicit coordinator/user ruling ("streaks haven't shipped. do a hard reset, we lose nothing."), not option-a as the plan text recommended. `pool_eligible_since` stays nullable and is lazily stamped go-forward. Documented in the migration's module docstring and 193-01-SUMMARY.md. Verified this is what's actually in the shipped migration — it is.
 - **SCHD-02 flagged assumption resolved by user ruling.** An open, unfinished, window-EXPIRED session does NOT keep its badge (`_open_unfinished_exists` checks `is_session_expired` first and returns False). Shipped as-is, per an explicit user ruling recorded in 193-03-SUMMARY.md, with the accepted trade-off (a user can still complete an expired session for a hidden +1/-1 net-zero shield recovery with no badge cueing them toward it) stated plainly.
 
-### Human Verification Required
+### Human Verification Required — RESOLVED 2026-07-30
+
+**All three items below were confirmed passed by the operator (Adrian) at v2.9 milestone close.** Phase status flipped `human_needed` → `passed`. The list is retained verbatim as the record of what was checked.
 
 Three items, all explicitly flagged as outstanding (NOT run, NOT approved) in 193-03-SUMMARY.md's own "Outstanding manual verification" section, plus the one genuinely non-jsdom-testable UI-SPEC backstop (4-digit session-count viewport wrap) folded into item 2. Two of the three originally-listed UI-SPEC backstops (the `weekday_mask === 0` and `M === 1` "This week" grammaticality cases) turned out to have real wired unit-test evidence in `TrainProgressRow.test.tsx` (`'This week: 0 sessions'` and `'This week: 1 of 1 sessions'`, both passing) despite UI-SPEC's probe marking them unresolved — so only the viewport-rendering backstop remains genuinely unverifiable without a browser.
 

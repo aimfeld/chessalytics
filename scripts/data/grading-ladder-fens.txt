@@ -1,0 +1,68 @@
+# grading-ladder-fens.txt — widened position set for the LADDER-01 depth A/B
+# (Phase 195, SEED-126 Phase 1).
+#
+# Consumed via `--fens scripts/data/grading-ladder-fens.txt` by
+# scripts/engine-grading-depth-ab.mjs. LOAD-BEARING: `--fens` REPLACES
+# `BUILTIN_POSITIONS` entirely (see `resolvePositions` in that script) — it
+# does NOT extend it. That is why the four BUILTIN_POSITIONS FENs are copied
+# verbatim below, in their original order (italian, middlegame, sharp,
+# endgame): omitting any of them here would silently drop comparability with
+# SEED-126's recorded per-depth baseline, because the built-ins would never be
+# reached once this file is supplied. `--openings N` remains additive on top
+# of whatever this file provides.
+#
+# Format: one FEN per line. `#`-prefixed lines and trailing `# label`
+# comments are stripped by `resolvePositions`'s `line.split('#')[0].trim()`.
+#
+# Category balance (checkable counts): opening >= 3 (3 here), middlegame >= 6
+# (7 here), sharp/tactical >= 5 (5 here), endgame >= 5 (6 here, covering
+# rook / minor-piece / pawn endings, not pawn ones alone). At most a third of
+# the 21 total may be within 8 half-moves (fullmove_number <= 4) of the
+# standard start — only 2 of 21 are (the italian and endgame built-ins, the
+# latter because SEED-126's original endgame study FEN is itself pinned at
+# move 1) — so the set is deliberately not openings-dominated, per
+# 195-RESEARCH.md Pitfall 5 (an `--openings`-only widened set draws solely
+# from OPENING_BOOK's 2-6-half-move theory and would bias the ladder decision
+# toward low-branching, low-tactical-complexity positions).
+#
+# Every FEN below is legal, non-terminal, and has >= 2 legal moves, verified
+# with python-chess before this file was committed (see the Task 1 <verify>
+# in 195-02-PLAN.md). Endgame FENs are given fullmove counters well past the
+# opening phase (30-45) — they are not literal early-game positions, only
+# encoded starting at "move 1" as a synthetic study setup would otherwise be;
+# bumping the counter keeps the "near the standard start" check honest rather
+# than passing on a fullmove-number coincidence.
+
+# ── Opening (3: italian built-in + 2 curated, QGD/Najdorf theory extended
+# past move 4 so they do not count as "near the standard start") ──
+r1bqkb1r/pppp1ppp/2n2n2/4p3/2B1P3/5N2/PPPP1PPP/RNBQK2R w KQkq - 4 4 # italian (built-in)
+r1bq1rk1/pp1nbppp/2p1pn2/6B1/2BP4/2N1PN2/PP3PPP/2RQK2R b K - 0 9 # queen's gambit declined, orthodox (Rc1 line, move 9)
+rnbq1rk1/1p2bppp/p2p1n2/4p3/4P3/1NN1B3/PPP1BPPP/R2Q1RK1 b - - 5 9 # sicilian najdorf, main line (move 9)
+
+# ── Middlegame (7: built-in + 6 curated tabiyas, 15-40+ legal moves for the
+# side to move, real developed positions with material intact) ──
+r2q1rk1/pp1nbppp/2p1bn2/3p4/3P1B2/2N1PN2/PPQ1BPPP/R4RK1 w - - 6 11 # middlegame (built-in)
+r1bqr1k1/bp3ppp/p1p2nn1/3pp3/P1B1P3/2PP2NP/1P3PPN/R1BQR1K1 w - - 0 14 # giuoco pianissimo tabiya
+r1bqr1k1/pp3ppp/2p2bn1/3p4/3P4/2NBPP2/PPQ1N1PP/R4RK1 w - - 0 13 # queen's gambit, carlsbad structure
+r1bq1rk1/pppnn1bp/3p4/3Pp1p1/2P1Pp2/2N2P2/PP2BBPP/R2QNRK1 w - - 0 13 # king's indian, mar del plata structure
+2rq1rk1/1p1bppbp/p2p1np1/8/2P5/1PNQ2P1/PB2PPBP/R4RK1 w - - 2 13 # english opening, symmetrical structure
+r1b1r1k1/ppq2ppp/2n2n2/2p1p3/3P4/P1PBPN2/2Q2PPP/R1B2RK1 w - - 2 13 # nimzo-indian, rubinstein structure
+r3kb1r/1b1n1ppp/pq3n2/1ppp4/8/1BN1PN2/PP2QPPP/R1BR2K1 w kq - 0 12 # queen's gambit accepted, opposite-side castling
+
+# ── Sharp / tactical (5: built-in + 4 curated forcing lines with real
+# tension — sacrifices, exposed kings, checks) ──
+r1bq1r1k/pp1nbppp/2p1p3/3pP3/3P4/2NB1N2/PPPQ1PPP/R3K2R w KQ - 2 11 # sharp (built-in)
+r1bq1b1r/ppp3pp/2n1k3/3np3/2B5/2N2Q2/PPPP1PPP/R1B1K2R b KQ - 3 8 # fried liver attack, king forced to e6
+rnbqk2r/ppp2p1p/3b4/3PN2n/2BP1ppP/8/PPP3P1/RNBQ1RK1 b kq - 2 9 # king's gambit accepted, kieseritzky-style gambit
+r1bqk2r/pppp1Npp/2n5/4p3/2B1n3/8/PPPP2PP/RNBQ2KR b kq - 1 7 # traxler counterattack, white king forced off f-file
+r1bqkb1r/p4pp1/2p2n1p/n3N3/4p3/8/PPPPBPPP/RNBQK2R b KQkq - 1 10 # two knights defense, sharp knight incursion
+
+# ── Endgame (6: built-in rook/pawn ending + 5 curated, covering rook,
+# minor-piece (knight and bishop), pure pawn, and queen endings — not pawn
+# endings alone) ──
+8/2p5/3p4/KP5r/1R3p1k/8/4P1P1/8 w - - 0 1 # endgame (built-in, rook/pawn)
+8/8/4k3/8/8/4K3/4P3/8 w - - 0 35 # pure king-and-pawn ending (key-squares/opposition)
+4r3/8/4k3/8/8/4K3/4P3/4R3 w - - 0 32 # rook ending, symmetric material
+8/5p2/4k1p1/8/2N1P3/6P1/5PK1/8 w - - 0 38 # knight (minor-piece) ending with pawns both sides
+8/3p4/4k3/1B6/8/4K3/3P4/8 w - - 0 40 # bishop (minor-piece) ending with pawns
+8/8/4k3/8/3K4/8/3Q4/8 w - - 0 45 # queen ending

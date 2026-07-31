@@ -56,6 +56,7 @@ import {
   buildSnapshot,
   sideMatchesMover,
   applyRootCandidateHardCap,
+  mergeExtraRootMoves,
 } from './treeCommon';
 
 /**
@@ -183,15 +184,16 @@ async function expandNode(
       ? applyPolicyTemperature(rawPolicy, temperature)
       : rawPolicy;
   let candidateMap = truncateAndRenormalize(effectivePolicy);
+  // WR-02 (196-REVIEW.md): the union/prior-seeding merge is shared with
+  // mctsSearch.ts's dispatchExpansion via treeCommon.ts's
+  // mergeExtraRootMoves, so the two SearchRunner implementations cannot
+  // silently diverge on this logic (see that function's own doc comment).
+  let injectedUcis = new Set<string>();
   if (node.isRoot && budget.extraRootMoves && budget.extraRootMoves.length > 0) {
-    const merged = new Map(candidateMap);
-    for (const uci of budget.extraRootMoves) {
-      if (!merged.has(uci)) merged.set(uci, 0);
-    }
-    candidateMap = merged;
+    ({ candidateMap, injectedUcis } = mergeExtraRootMoves(candidateMap, effectivePolicy, budget.extraRootMoves));
   }
   if (node.isRoot) {
-    candidateMap = applyRootCandidateHardCap(candidateMap);
+    candidateMap = applyRootCandidateHardCap(candidateMap, injectedUcis);
   }
   const candidateUcis = Array.from(candidateMap.keys());
   if (candidateUcis.length === 0) {
@@ -200,7 +202,17 @@ async function expandNode(
     node.isExpanded = true;
     return;
   }
-  const grades = await providers.grade(node.fen, candidateUcis);
+  // Phase 194 ABORT-01 (discretionary consistency fix): forward this node's
+  // signal into grade() too, so the ENGINE-06 independent fallback path is
+  // not left as the one un-abortable grade site now that EngineProviders.grade
+  // carries the optional 3rd param — mirrors mctsSearch.ts's dispatchExpansion.
+  //
+  // Phase 195: deliberately NOT resolving a ladder depth here — this runner's
+  // whole purpose (module header) is to prove SearchRunner has a second,
+  // structurally independent implementation; entangling it with mctsSearch's
+  // ladder-depth resolution would undercut that proof. Inherits
+  // WorkerPool.grade's root-rung default (D-02).
+  const grades = await providers.grade(node.fen, candidateUcis, signal);
 
   state.nodesEvaluated += 1;
   if (state.nodesEvaluated >= budget.maxNodes) state.budgetExhausted = true;

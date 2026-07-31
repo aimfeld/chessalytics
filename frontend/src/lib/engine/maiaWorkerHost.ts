@@ -27,10 +27,14 @@
  *    would leave an expansion's promise hanging forever) and its own
  *    same-FEN batching (deduped distinct ELOs, never the full ladder) BEFORE
  *    calling this host's `analyze()` once per batch.
- * Their caches also stay separate and keyed as today (`fen` vs `fen|elo`) —
- * this host owns transport only (worker spawn/respawn/death, one in-flight
- * request, priority ordering) and guarantees every `analyze()` promise
- * settles.
+ * Their caches, however, ARE now shared (Phase 194 CACHE-05): the UCI-keyed
+ * `fen|elo` policy cache lives in `maiaPolicyCache.ts`, write-through
+ * populated by `useMaiaEngine`'s chart on every ladder rung and read by
+ * `maiaQueue`'s `policy()` on a hit — so a position the chart already
+ * inferred serves the engine's own root policy call without a second Maia
+ * forward pass. This host still owns transport only (worker spawn/respawn/
+ * death, one in-flight request, priority ordering) and guarantees every
+ * `analyze()` promise settles; it holds no cache of its own.
  *
  * Ownership of the Task-1/Task-2 respawn + Sentry-capture logic moves here
  * from `useMaiaEngine.ts`/`maiaQueue.ts`, which no longer construct a Worker
@@ -225,6 +229,11 @@ function handleMessage(msg: WorkerMessage): void {
     const req = inFlight;
     inFlight = null;
     if (req) {
+      // wdlByElo is computed by the worker and transferred on EVERY
+      // analyze() call, yet nothing in the engine core reads it today —
+      // deliberately retained, not dead payload a future cleanup should
+      // strip: Phase 197 (Maia WDL leaf values) consumes it as the leaf
+      // value for deep tree nodes (Phase 194 CACHE-06).
       req.resolve({ fen: msg.fen, rawPolicyByElo: msg.rawPolicyByElo, wdlByElo: msg.wdlByElo, backend: msg.backend });
     }
     dispatchNext();

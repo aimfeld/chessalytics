@@ -1,114 +1,51 @@
 ---
 gsd_state_version: 1.0
-milestone: v2.9
-milestone_name: Train — Spaced-Repetition Blunder Drills
-current_phase: 193
-current_phase_name: session-tick-streak-shield
-status: verifying
-stopped_at: "Completed quick 260729-sod: Maia WASM OOM fixes (respawn + Sentry tag + shared worker + cache headers)"
-last_updated: "2026-07-29T19:24:22.265Z"
-last_activity: 2026-07-29
-last_activity_desc: "Completed quick task 260729-a86: tier-3 Step-1 user picker rewritten as two correlated EXISTS (prod 360ms → 2.4ms, 71,612 → 1,443 buffers); no migration, the partial indexes already existed"
+milestone: v2.10
+milestone_name: FlawChess Engine Improvements
+current_phase: 198
+current_phase_name: mctsSearch continuous dispatch
+status: phase_closed
+stopped_at: Completed quick 260731-s0z (fix engine review findings from Phases 194-198)
+last_updated: "2026-07-31T18:51:32.903Z"
+last_activity: 2026-07-31
+last_activity_desc: Fixed 7 engine review findings from Phases 194-198 (quick 260731-s0z); phases 194-198 remain closed/integrated to main
 progress:
   total_phases: 6
-  completed_phases: 6
-  total_plans: 31
-  completed_plans: 31
-  percent: 100
+  completed_phases: 5
+  total_plans: 25
+  completed_plans: 22
+  percent: 88
 ---
 
 # Project State: FlawChess
 
 ## Current Position
 
-Phase: 193 (session-tick-streak-shield) — EXECUTING
-Plan: 3 of 3
-Status: Phase complete — ready for verification
-passed with 2 warnings, both closed at plan time. Two blocking gates are built in: a
-`checkpoint:decision` on the `herring_pool` surrogate PK (192-01) and a second on the
-`drill_solves.game_id` nullability migration (192-02, one-way door).
-Last activity: 2026-07-29 — Completed quick task 260729-sod: fixed the iOS Maia WASM OOM (WebGPU fallback was loading a second ORT runtime into the same worker instead of respawning), shared one Maia worker across /analysis, distinct Sentry grouping for Maia failures, cache headers for /maia + /engine
-
-Phase 192 fixes a correctness defect in Phase 189's red herrings: they were sourced from
-non-gem `game_best_moves` rows, which does not actually mean "several fine moves". It replaces
-that source with a precomputed, globally shared `herring_pool` table sampled from all signed-up
-users' `game_positions`, phase-balanced, confirmed by a MultiPV-5 Stockfish search whose raw
-5-move ladder is stored on the row, with the qualifier thresholds applied at **query** time so
-they are retunable without re-analysis.
-
-Waves: **1** — 192-01 tracer (pool table + `evaluate_nodes_multipv5` + generator + `herring_stmt`
-swap, one real row proven end to end). **2** — 192-02 (D-05 nullability migration + all three
-INNER→OUTER join fixes + D-06 owner-scoped reveal) and 192-03 (generator completion + the
-measurement that pins D-15/D-17), no `files_modified` overlap. **3** — 192-04 (query-time tight
-gate, degenerate exclusion, replacement herring tests, empty-pool regression) and 192-05 (reveal
-frontend gates + the four spec amendments).
-
-Notes carried into execution:
-
-- **The planner contradicted RESEARCH.md assumption A2, deliberately.** After
-  `drill_solves.game_id` becomes `ondelete="SET NULL"`, an orphaned **SR** row survives forever
-  with `solved_at IS NULL` and pins `remaining` above zero — reproducing exactly the stuck-session
-  bug WR-02 fixed via CASCADE. SR and herring orphans need *opposite* treatment in
-  `_mark_session_complete_if_done`; 192-02 specifies and tests both together.
-
-- **`herring_pool` uses a surrogate `id` PK, not SEED-120's `(user_id, game_id, ply)` triple** — a
-  PK column cannot be NULL, so `SET NULL` makes the seed's literal wording unimplementable. The
-  triple becomes a UNIQUE constraint, still doing its real job (generation dedup + `ON CONFLICT`
-  top-up idempotency). Recorded as a `checkpoint:decision`, not a silent derivation.
-
-- **Recency ordering deviates from "unchanged".** SEED-120 keeps `Game.played_at` ordering, but
-  that needs a `games` join D-01 lets null out; `source_played_at` is copied onto the pool row at
-  generation instead, same survivability logic D-03 applies to FEN and arriving move.
-
-- **D-15/D-17 constants are deliberately unset.** 192-01 ships `HERRING_LOOSE_BAND_ES` marked
-  PROVISIONAL; 192-03 measures the first run's qualifying-rate distribution and re-pins both from
-  the histogram, then grep-asserts `PROVISIONAL` is gone.
-
-Phase 191 remains COMPLETE (verified 2026-07-27, 5/5 criteria, squash-merged to `main`). All
-earlier v2.9 phases (189, 190, 190.1, 191) are done; the v2.9 `main → production` release PR is
-still outstanding and independent of this phase.
-
-The blocking human gate on plan 06 returned five real defects (nav-badge clipping,
-inconsistent schedule pickers, wrong Train defaults, centered start-screen text, and a
-session that kept its old size after `puzzles_per_session` changed). All were fixed in-branch,
-two of them needing backend changes plus additive migrations (`train_settings` new defaults,
-`drill_sessions.requested_count`). One deliberate copy deviation: the parked chip shipped as
-`{N} parked`, dropping the UI-SPEC's `— too hard for now` suffix (`191-UI-SPEC.md:106`/`:135`
-are now stale on that string). Dev-clock tooling (`app/core/dev_clock.py`, `TrainDevClock`,
-`scripts/reset_train_state.py`) was built during the gate to make the calendar-shaped
-behavior testable in one sitting; it is inert outside `ENVIRONMENT == "development"`.
-
-Phase 191 turns the Phase 189/190 mechanics into a habit loop: weekly schedule config,
-nav badge / dashboard surfacing, ad-hoc "train now", weekly streak, honest mastered/parked
-counts, celebrations, and cold/empty states. Mastered/parked/waiting counts and `pool_state`
-compute at request time from existing tables; the streak/flame uses a persisted settled
-snapshot per **D-18** (one additive Alembic migration: `streak_count`, `flame_state`,
-`streak_settled_through` on `train_settings`).
-
-Notes carried into execution:
-
-- **A1 RESOLVED by D-18** (user decision 2026-07-27): settled weeks are frozen forever —
-  lazy settlement on `GET /train/progress`, settle-before-mutate on `PUT /train/settings`
-  (old mask/timezone judges elapsed weeks). Only the in-progress week is judged live.
-
-- `streak_lost_last_week` derives from the snapshot state, so the reset notice survives a
-  reload and self-clears once the user trains again (planner choice, accepted).
-
-- The folded delete-all copy ("also resets your Train progress") is true for mastered/parked
-  (they cascade from `games`) but NOT for the weekly streak — `drill_sessions` FKs only to
-  `users` per locked Phase 189 D-04, and the D-18 snapshot on `train_settings` also survives.
-  Plan 04 forbids "fixing" this with a cascade.
-
-Phase 190.1 remains COMPLETE (verified, squash-merged to `main` 2026-07-26); the v2.9
-release to `production` is still a separate `main → production` PR.
+Phase: 198 (mctsSearch continuous dispatch) — CLOSED, measured not shipped (2026-07-31)
+Plan: closed after wave 5 of 8 (waves 6–8 cancelled, zero `frontend/` changes)
+Status: Phase closed by operator risk judgement — see `reports/continuous-dispatch/report.md` §8
+Last activity: 2026-07-31 — Completed quick task 260731-s0z: fixed 7 post-ship engine review findings from phases 194–198
 
 ## Project Reference
 
-See: .planning/PROJECT.md (updated 2026-07-14 after Phase 170)
+See: .planning/PROJECT.md (updated 2026-07-30 after Phase 194)
 Core value: Position-precise WDL across openings + endgames + time pressure on top of users' actual chess.com / lichess games, with personalized LLM commentary and an auto-generated opening-strengths/weaknesses report.
-Current focus: **v2.7 Bot Personas & Playstyle Layer CLOSED 2026-07-24.** Shipped a roster of 24 named bot personas (4 styles × 6 ELO rungs, 800–1800) on the Bots page, each a complete pinned opponent (preset, calibrated ELO, style params, opening book, resign/draw-offer policy, avatar, bio). Phases: **182 Style Levers**, **183 Persona Registry & Bots Page**, **184 Persona Calibration & Strength Honesty** (measured labels, `PERSONA_CALIBRATION_MEASURED=true`), **185 Bots Roster Transpose + Win Stars**. Deployed to production incrementally (PRs through #275). Next: `/gsd-new-milestone`.
+Current focus: **v2.10 FlawChess Engine Improvements — ROADMAP CREATED 2026-07-30.** Six phases (194–199), committed order 194 → 195 → 196 → 197 → 198 → 199 (all five source units edit `dispatchExpansion`): **194 Engine main-thread + cache hygiene** (SEED-126 Phases 2–5), **195 Depth-scaled grading ladder** (SEED-126 Phase 1), **196 Analysis-board Stockfish root injection** (SEED-118), **197 Maia WDL leaf values** (SEED-126 Phase 6), **198 mctsSearch continuous dispatch** (SEED-127), **199 Bot re-calibration sweep + strength curve refit** (combined, final). Sourced entirely from three seeds carrying measured wall-clock data — no project-level research pass. All 49 requirements mapped 1:1, 100% coverage. **Phase 194 complete 2026-07-30** (4 plans, 14/14 requirements, verification `passed`, UAT 3 passed / 1 acknowledged gap on the CACHE-01 eviction-free claim). **Phase 195 complete** (6 plans). **Phase 196 complete 2026-07-31** (3 plans, INJECT-01..07, verification `passed`, security `threats_open: 0`, code review 3 Warnings all fixed). Two carry-forwards for 197-199: (a) INJECT-05's measurement CONTRADICTS the roadmap's cache-replay prediction — the production disagreement re-run is a fresh recompute (~4.5% hit-rate ceiling), not the harness's 79.1% replay, so do not inherit the cheap-re-run premise; (b) UAT test 1 (WR-01 browser confirmation) passed on automated evidence with the live-browser check explicitly WAIVED. **Phase 197 complete 2026-07-31, measured-not-shipped** (4 plans; LEAF-01 Rejected at the pre-declared move-quality gate — no handoff depth was both fast and safe on the Maia-blindness fixture; mechanism stripped in `b1764a83`, LEAF-02..07 genuinely Complete; post-close the grading ladder was overridden to `[14,14]`/floor-10 in `02fe44f2`). **Phase 198 CLOSED 2026-07-31, measured-not-shipped by operator risk judgement** (waves 1–5 of 8; the DISPATCH-02 measurement CLEARED the build line at 34.84% bot / 28.61% analysis, but the apply-order design failed two independent reviews and surfaced SEED-130 — browser grades are not bit-deterministic (uncleared Stockfish hash) and DISPATCH-08's parity gate cannot see it; DISPATCH-01/02 Complete, DISPATCH-03..11 Rejected; decision record in `reports/continuous-dispatch/report.md` §8; SEED-130 stays open). **Consequence: Phase 199's combined-sweep premise changed** — of the three strength changes it was scoped to absorb, only the ladder shipped (195 + the `[14,14]` override); re-scope 199 before planning. Next: re-scope and `/gsd-plan-phase 199`.
 
 ## Deferred Items
+
+Items acknowledged and deferred at milestone close on 2026-07-30 (v2.9, `override_closeout` on artifacts only). All six v2.9 phases (189, 190, 190.1, 191, 192, 193) are complete and verified `passed` — Phase 193's three browser-only UAT items (dev-clock multi-day drain/reset, 7-pip density at 360px, off-day badge at both nav sites) were operator-confirmed at close, clearing the last verification gap. The items below are cross-milestone carryover, not v2.9 gaps:
+
+| Category | Count | Notes |
+|----------|-------|-------|
+| Debug sessions | 2 | `entry-submit-n-plus-1` (fixed_awaiting_deploy), `insights-diskfull-shm` (awaiting_human_verify) — both benign, unchanged since v2.6 |
+| Quick tasks | 19 | Same stale 2026-05-31 → 2026-06-16 set as at v2.7/v2.8 close — the known gsd-sdk audit miscount (missing SUMMARY artifacts, not unfinished work; see `project_stale_gsd_sdk_audit_bug`) |
+| Pending todos | 3 | `172-deferred-review-findings`, bitboard-storage note, WR-01 Tailwind axis label |
+| Dormant seeds | 7 | SEED-042/067/077/114/118/126/127 — all intentionally dormant, surfaced at `/gsd-new-milestone`. SEED-037 (the milestone itself) plus SEED-119/120/121/122/123/124/125 were closed during v2.9 |
+
+No v2.9 milestone audit doc was generated (`/gsd-audit-milestone` not run): all six phases carry a passing VERIFICATION.md, all 27 REQUIREMENTS.md rows are checked off, and Phases 190/191 both ran blocking human UAT gates whose findings were fixed in-branch.
+
+### Earlier: items deferred at the v2.7 close (2026-07-24)
 
 Items acknowledged and deferred at milestone close on 2026-07-24 (v2.7, `override_closeout`). All four v2.7 phases (182–185) are complete + verified; these are cross-milestone carryover items, not v2.7 gaps:
 
@@ -124,7 +61,11 @@ No v2.7 milestone audit doc was generated (`/gsd-audit-milestone` not run): the 
 
 ## Milestone Progress
 
-Forty milestones complete (v1.0–v2.7). **v2.7 Bot Personas & Playstyle Layer closed 2026-07-24.**
+Forty-two milestones complete (v1.0–v2.9). **v2.9 Train — Spaced-Repetition Blunder Drills closed 2026-07-30.** **v2.10 FlawChess Engine Improvements roadmap created 2026-07-30 (Phases 194–199); planning in progress.**
+
+v2.9 Train — Spaced-Repetition Blunder Drills closed 2026-07-30 — 6 phases (189, 190, 190.1, 191, 192, 193), 31 plans, 107 commits over 6 days (309 files, +68,178 / −2,386 since `v2.8`). FlawChess stopped being only an analysis tool: the import-gated `/train` page re-presents the user's own blunders as spaced-repetition puzzles until the patterns stick. **Phase 189 (SEED-037)** built the backend substrate — four CASCADE-FK tables (`drill_items`, `drill_sessions`, `drill_solves`, `train_settings`), a pure streak-keyed interval ladder (0 → next session / 1 → ~3d / 2 → ~10d; FSRS rejected), pool entry gated on the user's own out-of-book blunders clearing the winnability floor with a complete stored answer key (named total-operator predicates rejecting both SQL NULL and the eval pipeline's empty-array `missed_pv_lines` sentinel — the phase's one verification gap, closed by a mutation-tested gap-closure plan), a sharp-vs-avoid-the-blunder classifier, exactly-N session composition (~75/25 SR/herring), and solve/reveal/settings endpoints with **zero server-side grading**. **Phase 190** shipped the `/train` page and the full solve loop against those endpoints — nav on all three surfaces, six landing states, binary position read → single-move attempt graded entirely in-browser on the vendored Stockfish WASM at a *measured* movetime budget, auto-opening reveal, opt-in tactic stepper, resume, score screen; its blocking live-browser UAT found and fixed three real defects including a 21–27s pool-query planner pathology (LATERAL rewrite, 22s → 40ms). **Phase 190.1** (inserted from that UAT) rebuilt the reveal into a self-contained study surface: puzzle-type-capped green good-move arrows + played-move arrow + thin white game-move arrow, answer-stating verdict rows, and three coincidence-merged steppable line boxes, every eval from one MultiPV-4 client search so no two numbers can contradict the verdict. **Phase 191** turned the mechanics into a habit loop — auto-saving weekday/session-size pickers, numeric waiting-count nav badge, honest mastered/parked counts, reduced-motion-safe confetti + "Flaw fixed!" banner, two tailored cold/exhausted states — with a human UAT round that surfaced five issues (all fixed in-branch) and produced the dev-clock time-travel tooling (`app/core/dev_clock.py`, `TrainDevClock`, `scripts/reset_train_state.py`) that makes calendar-shaped behavior testable in one sitting. **Phase 192 (SEED-120)** fixed a real correctness defect: red herrings were sourced from non-gem `game_best_moves` rows, which does not mean "several fine moves" — replaced by a globally shared, phase-balanced, MultiPV-5-confirmed `herring_pool` whose raw 5-move ladder is stored on the row so the qualifiers apply at **query** time and stay retunable without re-analysis, plus the one-way `drill_solves.game_id` nullability door (`SET NULL`) letting a herring outlive its source game, with deliberately opposite orphan treatment for SR vs herring items. **Phase 193 (SEED-121)** replaced the weekly streak, `required_sessions_per_week`, and the 3-rung flame ladder with one `_judge_one_day`/`tick_days` machine: +1 pip (cap 7) and +1 count on a completed scheduled-day session, −1 per missed scheduled day, count resets when the shield empties, settled days frozen forever, a `pool_eligible_since` watermark protecting new users mid-import, and a server-computed `badge_visible` so neither nav site does client weekday math; the verifier independently mutation-tested the settle-before-layer guard. Archived to milestones/v2.9-ROADMAP.md + v2.9-REQUIREMENTS.md, phases to milestones/v2.9-phases/, CHANGELOG promoted, tagged v2.9. **Deployed to production** incrementally through releases #286–#290 (`origin/production` and `main` are identical across `app/`, `frontend/src/`, `alembic/` at close). Closed `override_closeout` on artifacts only — all six phases verified `passed` (Phase 193's three browser-only UAT items operator-confirmed at close); 31 cross-milestone carryover items (2 benign debug sessions, 19 stale quick-task miscounts, 3 todos, 7 dormant seeds) acknowledged as deferred.
+
+v2.8 Import Filters and Guest Data Cleanup closed 2026-07-24 — 3 phases (186, 187, 188), 6 plans. User-facing import filters on the Import tab (time-control multiselect + per-platform game cap, backward backfill on upgrades, existing users grandfathered; SEED-117), a daily background job pruning game data for guests inactive ≥30 days while keeping the guest account + auth (SEED-116), and import/eval pipeline cleanup archiving 7 completed backfill scripts while keeping `resweep_holed_games` and tiers 4/4b as permanent safety nets (SEED-115). Archived to milestones/v2.8-ROADMAP.md, phases to milestones/v2.8-phases/, tagged v2.8. Closed `override_closeout` — Phase 187's D-06 backstop (a ~5M-row `game_positions` cascade delete under live prod traffic) abstains by design and was deferred to prod observation.
 
 v2.7 Bot Personas & Playstyle Layer closed 2026-07-24 — 4 phases (182, 183, 184, 185), 19 plans. A roster of 24 named bot personas (4 styles × 6 ELO rungs, 800–1800) on the Bots page, each a complete pinned opponent with no persona × strength picker. **Phase 182 (SEED-098)** added the engine-only style levers — curated per-style×color opening books (`styleOpeningLines.ts`), signed draw contempt + hysteresis-gated resign policy (`botDrawGate.ts`), Maia-policy prior reweighting by a cheap chess.js move classifier on the Human rungs, and additive score shaping + a `childScoreSpread` variance preference on the Light/Deep rungs — all new bot-only fields, `botSampling.ts` kept pure, byte-identical with no style set. **Phase 183** shipped the typed 24-slot persona registry + Bots page grid/card/detail UI + placeholder avatars/bios, one-action Play, unchanged Custom mode, and in-game persona presence (clock avatar+name, draw-offer banner, persona-named result copy, Rematch/New opponent). **Phase 184** ran the operator overnight calibration sweep (24 cells, supervised resume-on-crash) and refit measured ELO labels from the real ledger, flipping `PERSONA_CALIBRATION_MEASURED` true with the D-07 ~1800 ceiling clamp, D-06 floor-acknowledgment popover, and D-04 within-style monotonicity; the CAL-04b gap-fill (`813acd0a`) closed the ~800/~1200 rungs. **Phase 185** re-laid-out the grid as a rung ladder (6 rung rows × 4 style columns, accent header row) and added server-tracked per-persona win stars (nullable `games.persona_id` + aggregation endpoint + min(wins,3) gold stars). Archived to milestones/v2.7-ROADMAP.md + v2.7-REQUIREMENTS.md, phases to milestones/v2.7-phases/, CHANGELOG promoted, tagged v2.7, SEED-098 closed. **Deployed to production** incrementally (PRs through #275). Closed `override_closeout` — cross-milestone carryover (2 benign debug sessions, 19 stale quick-task miscounts, 3 todos, 8 dormant seeds) acknowledged as deferred; 3 Phase-183 UI fast-follows (WR-01/IN-02/AVAT-01) tracked. Phase 184's `184-04` SUMMARY + phase VERIFICATION were reconstructed at close from the committed measured artifacts.
 
@@ -168,6 +109,9 @@ v1.29 Live-Engine Analysis Page shipped 2026-06-29 — 5 phases (136–140), 14 
 
 ### Roadmap Evolution
 
+- v2.10 FlawChess Engine Improvements roadmap created 2026-07-30 — 6 phases (194–199) continuing absolute numbering from v2.9's Phase 193. All 49 v1 requirements (JANK-01..05, ABORT-01..03, CACHE-01..06, LADDER-01..05, INJECT-01..07, LEAF-01..07, DISPATCH-01..11, RECAL-01..05) mapped 1:1 to exactly one phase per a phase structure the user specified at milestone start (not re-derived by the roadmapper) — no orphans, no duplicates. Sequencing is strictly linear and load-bearing (all five source units edit `dispatchExpansion`): **194** (SEED-126 Phases 2–5, main-thread + cache hygiene, no calibration dependency) → **195** (SEED-126 Phase 1, depth ladder, own calibration recorded before anything else touches leaf evaluation) → **196** (SEED-118, root injection, gated on 194's cache work + 195's throughput win so the disagreement re-run is a cache replay not a recompute) → **197** (SEED-126 Phase 6, Maia WDL leaves, own calibration, re-validates 196's headline number afterward) → **198** (SEED-127, continuous dispatch, the riskiest change in the codebase, rewrites the same `dispatchExpansion` region 196 touched and needs a paper design + cross-AI review before code) → **199** (one combined calibration sweep covering 195+197+198's strength changes together — an accepted trade-off that forfeits per-change attribution). Framing guardrail carried into Phase 194's success criteria: the SAN→UCI conversion and lazy-snapshot work are main-thread jank fixes (~1.4% of search wall clock) — no criterion claims a search-latency win. Also corrected REQUIREMENTS.md's stale "v1 requirements: 42 total" Coverage line to the actual count of 49 (the file undercounted at authoring time; verified by counting unique `**XXX-NN**` IDs). No `/gsd-new-milestone` requirements-gathering research pass was run — the three source seeds (SEED-126, SEED-127, SEED-118) carried the measured data instead. Next: `/gsd-plan-phase 194`.
+- v2.9 Train — Spaced-Repetition Blunder Drills closed 2026-07-30 (Phases 189–193 incl. 190.1; tag v2.9). Two phases were added mid-milestone as corrections rather than polish: **190.1** (inserted from Phase 190's blocking UAT — the reveal mixed stored server evals with live client evals, so displayed numbers could contradict the verdict) and **192** (SEED-120 — the red-herring source was structurally incapable of producing a "several fine moves" position, a correctness defect in Phase 189's design, not a bug in its implementation). **193** (SEED-121) then replaced Phase 191's just-shipped weekly streak wholesale, which was only cheap because streaks had never reached production — verified against `origin/production` before planning. Roadmap + requirements archived to `milestones/v2.9-*`, phases to `milestones/v2.9-phases/`. `override_closeout` on artifacts only; all six phases verified `passed`. Reset for the next milestone.
+
 - Phase 188 added 2026-07-24 (explicit user request after reviewing SEED-115): **Import/eval pipeline cleanup — retire completed backfill machinery** (SEED-115 base scope) with two locked amendments over the seed: (a) KEEP `resweep_holed_games` + its script — verified that `apply_completion_decision` Path C still stamps games complete WITH residual mid-game holes at MAX_EVAL_ATTEMPTS (weak/slow remote workers recreate the holed-stamped population go-forward), so the resweep is the permanent re-arm tool, not pre-Phase-119 legacy; its docstring gets updated to say so. (b) The seed's open decision resolved as **option 1**: tiers 4/4b stay as thin permanent safety nets — no strict-complete submit semantics, no worker-protocol change, no column-drop migration (the only migration is the small `ix_games_bestmove_backfill_pending` predicate realignment). No remote-worker upgrade required. `phase.add` numbered 188 correctly (187 is the active-dir max); its truncated auto-slug dir was renamed to `.planning/phases/188-import-eval-pipeline-cleanup-seed-115/`; scope details in the ROADMAP Goal block.
 - Phase 187 added 2026-07-24 (explicit user request via `/gsd-phase 187 @SEED-116`): **Guest Game Cleanup — 30-Day Inactivity Pruning** (SEED-116). Implements the already-advertised but never-built 30-day-inactivity guest cleanup: a scheduled job deletes games (+ cascading positions/flaws/bookmarks/eval_jobs) of guest users (`is_guest=true`) whose `users.last_activity` is ≥30 days old, KEEPS the guest User row + auth, and resets the incremental import cursor so a returning guest re-imports full history. Three seed gotchas: verify `last_activity` is bumped on guest browsing (not just import), reset the `import_jobs` cursor, and confirm every game-scoped child cascades with no orphans. In the same request the v2.8 milestone was **renamed "Import Filters" → "Import Filters and Guest Data Cleanup"** (top Milestones bullet, `## v2.8` section heading + intro, STATE fields). `phase.add` numbered it 187 sequentially (186 is the active-dir max) — no manual renumber needed this time.
 - Milestone v2.8 Import Filters created 2026-07-24 (explicit user request via `/gsd-phase 186 @SEED-117`) with **Phase 186: Import Filters — Time Controls + Game Cap** as its first phase. Lightweight manual open (no `/gsd-new-milestone` requirements cycle — same pattern as v2.6's creation): top Milestones bullet (⏳), `## v2.8` section + Phase 186 block appended, Progress row added, STATE flipped v2.7-closed → v2.8-in-progress, phase dir `.planning/phases/186-import-filters-tc-and-game-cap/` created, SEED-117 marked promoted. Numbered 186 manually — `phase.add` would have miscounted (active phases dir is empty post-archive; known mature-ROADMAP behavior, see Phase 164/172/177/180 entries). Seed carries the locked design decisions (backlog-only cap anchored at account creation, TC filter on both directions, cap = total imported backlog per platform, upgrades backfill / downgrades never delete, existing users grandfathered to all TCs + 5000).
@@ -200,6 +144,9 @@ v1.29 Live-Engine Analysis Page shipped 2026-06-29 — 5 phases (136–140), 14 
 
 (Cleared at v1.31 close — full log in `.planning/PROJECT.md` Key Decisions + the milestone archives.)
 
+- [Phase 194-02]: ABORT-02 needed zero production edit to `useBotGame.ts` — all four abort sites already aborted the right controller, and that signal already flowed through `createDeadlineSearch`; Task 1's wiring of the signal into `providers.grade` alone closed the gap. Proven by an empty `git diff --stat` on the hook plus four integration cases, rather than by adding `pool.stopAll()` calls the requirement explicitly prohibited.
+- [Phase 194-04]: `vi.spyOn(moduleNamespace, 'fn')` does not intercept a same-module function's internal self-call in this Vite/Vitest setup (verified empirically on a scratch module before writing production code). Non-invocation of the lazy `modalPath` builder is proven through a `modalPathBuilder = { build }` indirection object, whose late-bound property lookup IS spy-able.
+- [Phase 194-04]: The RankedLine spread audit was done by TYPE, not by the plan's literal grep — which cannot return zero because it matches its own required explanatory comment and two unrelated `line` variables. The type-based pass found a second real spread (`Analysis.tsx`, split across two source lines and therefore invisible to a line-based grep) that would have silently defeated JANK-03.
 - [Phase 151-02]: LICENSE: kept the exact FSF AGPL-3.0 boilerplate verbatim, only filled in the How-to-Apply appendix placeholders (FlawChess / 2026 / Adrian Imfeld)
 - [Phase 151-02]: MaiaAttribution renders always-visible (not hover-gated like InfoPopover) so the AGPL offer-source links are present without interaction
 - [Phase 151-03]: Insertion-ordered dict from get_current_rating_by_platform is the mechanism for picking the scalar current_rating (first key = platform of overall most-recent game, no second query needed)
@@ -570,6 +517,33 @@ v1.29 Live-Engine Analysis Page shipped 2026-06-29 — 5 phases (136–140), 14 
 - [Phase ?]: Phase 193 SCHD-02 window-expiry ruling (user, not executor): an open unfinished session's badge does NOT survive its window expiring — no code change; accepted trade-off is that record_solve has no expiry check so a late completion can still net a shield pip against the miss, and the user will never be cued toward that recovery path
 - [Phase ?]: quick 260728-pgp: capped Train session composition at 1 puzzle/game/session (shared per_game_counts Counter over due + fresh pool), uniform-random within-game pool pick via pick_one_per_game
 - [Phase ?]: 260729-sod: shared maiaWorkerHost singleton (lease refcounting, one-in-flight priority dispatch) collapses /analysis's up-to-3 Maia workers to 1, reversing Phase 154 D-04's separate-Worker decision
+- [Phase ?]: 194-01: import maskAndSoftmaxUci via the script's existing @/lib/maiaEncoding alias import, not resolveFrontendModule (which is createRequire-based for npm packages, not TS source files behind the @/ alias)
+- [Phase ?]: [Phase 194-02]: ABORT-02 required zero useBotGame.ts production edits — all four abort sites already called abortControllerRef.current?.abort(), and Task 1's mctsSearch->WorkerPool.grade signal threading closed the gap for free
+- [Phase ?]: [Phase 194-02]: deadlineSearch.test.ts edited despite being absent from the plan's files_modified frontmatter — its own <verify> command required it and the D-17 outer-stays-unaborted assertion was genuinely missing
+- [Phase ?]: CACHE-04 implemented merge-only, no partial-hit read path — per 194-RESEARCH.md Pattern 5's direct empirical measurement against the vendored Stockfish binary.
+- [Phase ?]: CACHE-05's shared fen|elo cache is a NEW module (maiaPolicyCache.ts) that maiaQueue owns and useMaiaEngine write-throughs into, not a read-through into useMaiaEngine's SAN-keyed bundle.
+- [Phase ?]: GRADE_CACHE_MAX = 1024 and MAIA_POLICY_CACHE_MAX = 2048, each with a derivation comment (measured 386-FEN working-set ceiling), not bare numbers.
+- [Phase ?]: 194-04: vi.spyOn cannot intercept a same-module function's self-call — used an exported modalPathBuilder object-property indirection seam instead (verified empirically before writing production code)
+- [Phase ?]: 194-04: found and fixed a second RankedLine spread in Analysis.tsx's reconciledRankedLines memo, missed by the phase research's single-line grep because the spread is split across two source lines
+- [Phase ?]: [Phase 195-01]: dispatchExpansion's providers.grade call needed a local non-exported GradeWithLadderDepth cast (not an interface edit) to pass a 4th argument through the frozen 3-param EngineProviders.grade — TS arity-checks the call against the static interface type even though a 4-optional-param implementation is structurally assignable to it
+- [Phase ?]: [Phase 195-02]: Bumped synthetic endgame FEN fullmove counters (30s-40s instead of the conventional study-diagram 1) so the widened set's early-position count (2/21) has real margin under the one-third cap, rather than passing at an exact 7/21 boundary coincidence caused by leaving them at move 1
+- [Phase ?]: [Phase 195-02]: 400-node subset's two non-built-in slots filled with the Fried Liver Attack (sharp/tactical) and a knight-and-pawns ending (minor-piece endgame), diversifying piece type against the built-in's own rook/pawn ending
+- [Phase ?]: [Phase 195-02]: Reverted requirements.mark-complete for LADDER-01/LADDER-05 — both are shared across Plans 02/04/05/06 (frontmatter); 195-02 alone only delivers the pre-registered input data + decision rule, not the actual widened A/B run or the measured end-to-end report that the requirement text describes. Left [ ] Pending with this partial-delivery note (mirrors 170-01's RESUME-01/02 precedent).
+- [Phase ?]: [Phase 195-03]: Rekeyed grade cache to composite (fen, gradingDepth) via one private cacheKey() helper, following maiaPolicyCache.ts's fen|elo idiom; both Phase 194 LRU touch sites re-pinned by dedicated mutation-verified regression tests under the new key.
+- [Phase ?]: Did not mark LADDER-01/LADDER-05 complete in REQUIREMENTS.md — this plan only builds the ladder-mode/hash-probe harness capability Plan 05's widened A/B run needs; the rung-selection and measured-report acceptance criteria for those two requirements remain Plan 05's deliverable.
+- [Phase ?]: Probe calls in engine-grading-depth-ab.mjs's --hash-probe deliberately do not increment the grading-call counter, so a probe's own extra go cannot desynchronize the deterministic every-Nth-call selection the D-07 accept rule depends on.
+- [Phase ?]: 196-01: floating-point drift in applyPolicyTemperature's renormalization shifts the truncation crossing point by one entry vs the raw uniform policy at T=2 — settled Assumption A2 (dropped UCI is h2h4, not h2h3); tests must derive from the real temperature-reshaped pipeline, not the raw policy
+- [Phase ?]: useState+useEffect (not useMemo) for extraRootMoves — the derivation reads flawChessEngine.rankedLines, the hook's own output, a feedback edge useMemo can't express
+- [Phase ?]: 196-03: harness's baseline pass runs to full completion (per Task 2 spec), measuring a different, more optimistic scenario (79.1% hit rate) than the browser's real ~2s-aborted-restart, which the report bounds at ~4.5% from the same data — the honest INJECT-05 finding for production is CONTEXT.md's original low-hit-rate prediction
+- [Phase ?]: 196-03: OPENING_BOOK + Phase 195 ladder FENs yielded only 3 disagreement survivors (below the floor of 5); widened the candidate pool with scripts/data/root-injection-fens.txt sampled from the existing Kaggle brilliant-move corpus rather than loosening the pre-filter
+- [Phase 197-01]: wdlLeafExpectedScore is a sibling to leafExpectedScore, not an overload; WDL_LEAF_HANDOFF_DEPTH=3 is a pre-declared candidate for Plan 02's measurement, not a chosen answer
+- [Phase 197-01]: The WDL cache is co-located in the policy cache's own fen|elo entry (not a separate cache) so a policy hit can never be a WDL miss for that rung
+- [Phase 198-01]: maiaCpuStats/maiaInflightStats and the app-faithful Maia FIFO are module-scoped (not per-makeNodeProviders-call), mirroring maiaInferenceStats and the harness's one-shared-session-per-process shape
+- [Phase 198-01]: A1 (RESEARCH.md Open Question 1) settled empirically via --real-session — the real ONNX WASM session already serialises concurrent session.run calls in dispatch order even without the FIFO (peak=4, call order matches resolve order); FIFO changes latency attribution only, never sweep output
+- [Phase ?]: 198-02: DISPATCH-02 accept rule pre-declares N=16 position width and the lower-band-governs rule when bot/analysis budgets disagree
+- [Phase ?]: 198-02: D-08's stop-rule distribution gets a single committed TSV + report table, not its own accept-rule-style gate (RESEARCH.md Open Question 3 resolved as anticipated)
+- [Phase ?]: FIX-2's step 2a reuses the SAME NO_EXTRA_ROOT_MOVES identity-preserving updater step 4 uses, so a disabled-side re-render never destabilizes useFlawChessEngine's search-restart deps
+- [Phase ?]: FIX-4's two rewritten workerPool.test.ts tests intentionally change from 'no Sentry capture ever' to 'no capture before the stop bound, one static capture after it' -- the plan's declared semantics change, re-verified RED against the old expectation
 
 ### Pending Todos
 
@@ -578,7 +552,7 @@ None active.
 ### Blockers/Concerns
 
 - active. (v1.31 and v1.32 are both deployed to production.)
-- 190.1-05 Task 2: blocking human checkpoint (gate=blocking) — operator must UAT the redesigned Train reveal on desktop and mobile browsers against D-01..D-05 and the two 190.1-VALIDATION.md manual-only rows before the phase can close.
+- [Phase 194] CACHE-01's "a 400-node search evicts none of its own working set" remains inferred, not measured — `GRADE_CACHE_MAX = 1024` against a 352-386 distinct-FEN ceiling measured *before* the change. Accepted as an acknowledged gap at UAT (2026-07-30); risk is extra Stockfish grading work, not wrong results. Closeable cheaply by counting distinct FENs reaching `providers.grade` in a 400-node run through the existing `mctsSearch` test harness. Worth doing if Phase 196's cache-replay design ends up depending on residency.
 
 ### Quick Tasks Completed
 
@@ -625,6 +599,7 @@ None active.
 | 39 | Bots: larger desktop board (600px) with viewport-height fit + tighter page padding | 2026-07-29 | 2ae6aabc | — |
 | 260729-a86 | `_claim_tier3_derived` Step 1 — the remaining picker hotspot after 260728-soo, at 89.8% of all prod DB time (10,376 calls x 221ms mean over 7.5h, 71k buffers/call). NOT an index problem: `ix_games_needs_engine_full_evals` and `ix_games_lichess_pv_backfill_pending` already exist and are already `btree(user_id)` partials, so there is no migration here. The defect was query SHAPE — both branches sat inside ONE `EXISTS` containing an `OR`, and because `u.is_guest` was correlated inside it, Postgres BitmapOr'd the two partials (cheap, 22ms/1.3k buffers) and then heap-fetched all 255,218 matching game rows (70,274 heap blocks) into a Hash Right Semi Join just to evaluate the guest guard, to select 21 users out of 418 — O(backlog), re-paid every call. Distributing the OR into two correlated `EXISTS` with the guest guard hoisted to an outer conjunct of branch (a) is logically identical (`u.is_guest` does not depend on `g`) and gives per-user Index Only Scan probes on both partials: prod-measured 360ms → 2.4ms and 71,612 → 1,443 buffers, cost now O(users). Equivalence proven on prod with EXCEPT both directions (21 = 21, 0 rows either way), and the shipped code's literally-emitted SQL re-EXPLAIN'd on prod rather than a hand-written approximation. `_es_weighted_user_pick` gained a mutually-exclusive `candidate_where_sql` param so the ES key stays single-sourced while tier-4 blob/bestmove SQL stays byte-identical (test-pinned). Gap found and closed during review: the executor's 7 tests ALL passed with the fix fully reverted (semantically identical shapes, and the dev DB is too small for a plan assertion), so an 8th test pins the emitted Step-1 shape — mutation-proven to fail on re-collapse. Backend 3931 passed, ruff/ty clean. Prod re-verification of pg_stat_statements is HUMAN-UAT after deploy | 2026-07-29 | 62c9e2b9 | [260729-a86-user-id-leading-partial-indexes-for-the-](./quick/260729-a86-user-id-leading-partial-indexes-for-the-/) |
 | 260729-sod | Fixed the iOS Maia WASM OOM behind reported random crashes during bot play. Root cause found in Sentry (FLAWCHESS-92, iPhone/Mobile Safari on `/bots`): `no available backend found. ERR: [wasm] RangeError: Out of memory` — a literal WASM heap allocation failure on an 8 GB device, so NOT an old-device capacity problem. `maia-worker.js`'s WebGPU→WASM fallback did `importScripts` a SECOND ORT runtime into the same worker global after the WebGPU attempt failed, while `session = null` freed nothing (ORT needs an explicit `release()`, and WASM linear memory never shrinks) — two full heaps in one worker, plus the 43.6 MB model fetched twice. iOS 18.2+ ships WebGPU on iPhone, so modern iPhones ENTER that branch, which is why this hit a 16 Pro Max. Measured with instrumented `WebAssembly.Memory` on the real vendored model: **226 MB of WASM heap per Maia session**, identical at batch 1 and batch 21 (so the 21-rung ELO ladder is NOT a factor) and flat across repeated inferences (the SEED-113 dispose fix holds — no leak); `enableCpuMemArena`/`enableMemPattern` move nothing. Four fixes: (1) the worker now reports `webgpu-unavailable` and the main thread respawns a fresh WASM-pinned worker — a new worker is the only way to reclaim heap #1 — with the Firefox lazy-`Clip`-shader warmup deliberately KEPT; (2) distinct `maia_failure` Sentry tag so the OOM stops hiding inside FLAWCHESS-92's `Load failed` events; (3) new `maiaWorkerHost.ts` shares ONE Maia worker across `/analysis`'s three consumers (live chart, gem sweep, FlawChess engine), reversing Phase 154 D-04 on memory grounds — 2 workers/~452 MB on mobile, up to 3/~678 MB on desktop, now 1/~226 MB; both consumer disciplines (drop-and-reissue vs no-drop FIFO) stay above the host, which owns transport only and adds a priority flag so the chart isn't starved behind MCTS/sweep calls; (4) 30-day cache headers for `/maia/*` + `/engine/*` (NOT `immutable` — ORT resolves its own wasm/mjs filenames from `wasmPaths`, so renaming would break resolution), with `maia-worker.js` carved out to `no-cache` since its protocol changed. Frontend 2840/2840 passed, lint/knip/`tsc -b` clean; the singleton guard mutation-proven (4 tests fail when disabled). Real-device iOS confirmation is HUMAN-UAT after deploy — no unit test allocates a real WASM heap | 2026-07-29 | 01f5e425 | [260729-sod-fix-maia-wasm-oom-on-ios-worker-respawn-](./quick/260729-sod-fix-maia-wasm-oom-on-ios-worker-respawn-/) |
+| 260731-s0z | Fixed 7 post-ship review findings from phases 194–198: Maia disable-mid-inference wedge, stale extraRootMoves freeze when an engine side is toggled off, grade() hang on a fully dead pool, abort-wedged stopping slots (new stop-bestmove watchdog), stale post-FEN-change commits in both engine hooks, Stockfish pv-commit throttle, and a once-per-FEN Maia legal-move context replacing 42 per-rung movegens | 2026-07-31 | 4d1caacc | [260731-s0z-fix-engine-review-findings-from-phases-1](./quick/260731-s0z-fix-engine-review-findings-from-phases-1/) |
 
 ## Deferred Items
 
@@ -677,9 +652,9 @@ Items acknowledged and deferred at **v1.29 milestone close on 2026-06-29** (user
 
 ## Session Continuity
 
-**Stopped at:** Completed quick 260729-sod: Maia WASM OOM fixes (respawn + Sentry tag + shared worker + cache headers)
+**Stopped at:** Completed quick 260731-s0z (fix engine review findings from Phases 194-198)
 
-**Last session:** 2026-07-29T19:24:12.759Z
+**Last session:** 2026-07-31T18:51:32.871Z
 
 **Resume file:**
 
@@ -772,6 +747,21 @@ None
 | Phase 193 P03 | ~15min | 3 tasks | 5 files |
 | Phase quick-260728-pgp P01 | 50min | 3 tasks | 5 files |
 | Phase quick-260729-sod P01 | ~2h | 4 tasks | 14 files |
+| Phase 194 P01 | 46min | 3 tasks | 4 files |
+| Phase 194 P02 | 27min | 2 tasks | 9 files |
+| Phase 194 P03 | 18min | 3 tasks | 9 files |
+| Phase 194 P04 | 30min | 2 tasks | 6 files |
+| Phase 195 P01 | 9min | 3 tasks | 7 files |
+| Phase 195 P02 | ~15min | 2 tasks | 3 files |
+| Phase 195 P03 | 13min | 2 tasks | 2 files |
+| Phase 195 P04 | 22min | 3 tasks | 4 files |
+| Phase 196 P01 | 25min | 3 tasks | 6 files |
+| Phase 196 P02 | 17min | 3 tasks | 5 files |
+| Phase 196 P03 | 35min | 3 tasks | 6 files |
+| Phase 197 P01 | 25min | 3 tasks | 15 files |
+| Phase 198 P01 | 32min | 3 tasks | 3 files |
+| Phase 198 P02 | 13min | 3 tasks | 3 files |
+| Phase quick-260731-s0z P01 | ~25min | 4 tasks | 13 files |
 
 ## Performance Metrics
 
@@ -871,6 +861,8 @@ Items acknowledged and deferred at v2.8 milestone close on 2026-07-24 (override 
 | debug | entry-submit-n-plus-1 | fixed_awaiting_deploy | Fix landed; awaiting deploy verification. |
 | debug | insights-diskfull-shm | awaiting_human_verify | shm_size fix in place (see CLAUDE.md); confirmed benign 16 MB /dev/shm exhaustion, not disk. |
 | backlog | 19 quick tasks, 5 dormant seeds, 3 todos | deferred | Pre-existing cross-milestone backlog, not v2.8 scope; carried forward. |
+| phase closed | Phase 198 closed at wave 5 of 8 — measured, not shipped | closed_measured_not_shipped | 2026-07-31. Waves 1–4 complete (instrumentation, pre-declared accept rule, both re-baseline TSVs, ceiling model, `build` verdict at 34.84% bot / 28.61% analysis, operator disposition recorded). Wave 5's design doc **failed two independent reviews** (NOT SOUND both times); waves 6–8 cancelled, zero lines of `frontend/` touched. Blocking finding captured as SEED-130: the shipped engine is not bit-deterministic in the browser (uncleared Stockfish hash, 97% grade divergence measured in Phase 195's Stage A) and DISPATCH-08's parity gate is structurally blind to it. Closed by operator **risk judgement** (the measurement cleared the build line — this is NOT the accept rule's exit branch): confused determinism target (SEED-130), twice-failed design review, and the win's contingency on WASM-speed Maia (a WebGPU policy drops the model below the build line). Decision record: `reports/continuous-dispatch/report.md` §8. DISPATCH-01/02 Complete, DISPATCH-03..11 Rejected. SEED-130 stays open; SEED-127 closed. |
+| gate override | Phase 198 decision-coverage gate | proceeded_on_manual_check | 2026-07-31, `/gsd-plan-phase 198 --chain`. `check.decision-coverage-plan` returned `passed:false, reason:could-not-parse` (parsed 3 of 15 bullets, `uncovered: []`) — its parser expects single-line `- **D-NN: … — …**` bullets and 198-CONTEXT.md's decisions span multiple lines each. Verified manually instead: all 15 D-NN decisions and all 5 U-NN premise updates are referenced across the 8 plans. Not a coverage gap; re-surface at verify-phase if the parser is fixed. |
 
 ## Operator Next Steps
 

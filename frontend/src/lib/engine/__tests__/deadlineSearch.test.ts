@@ -137,6 +137,30 @@ describe('createDeadlineSearch', () => {
     expect(snapshot.budgetExhausted).toBe(false);
   });
 
+  it('Phase 194 ABORT-02: a deadline cut aborts only the INNER controller — the caller\'s OUTER signal stays unaborted (D-17)', async () => {
+    const baseSearch = createStubBaseSearch({ totalNodes: 1000 });
+    const wrapped = createDeadlineSearch({ deadlineMs: 350, minNodes: 0, baseSearch });
+    const outerController = new AbortController();
+
+    const resultPromise = wrapped(
+      STUB_FEN,
+      STUB_BUDGET,
+      STUB_PROVIDERS,
+      () => {},
+      outerController.signal,
+    );
+
+    await vi.advanceTimersByTimeAsync(400);
+    const snapshot = await resultPromise;
+
+    // The cut fired (proven by Test 1's sibling assertions) via the wrapper's
+    // OWN inner controller — never the caller's. `useBotGame`'s outer
+    // `signal.aborted` check keeps meaning exactly "a cancel", never "a
+    // deadline cut", so it must read false here.
+    expect(snapshot.nodesEvaluated).toBeGreaterThan(0);
+    expect(outerController.signal.aborted).toBe(false);
+  });
+
   it('does not cut below the D-18 node floor even though the deadline already elapsed', async () => {
     const FLOOR = 3;
     const baseSearch = createStubBaseSearch({ totalNodes: 1000 });

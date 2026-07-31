@@ -24,6 +24,7 @@ import { useMaiaEngine } from '../useMaiaEngine';
 import { MAIA_ELO_LADDER, POLICY_VOCAB_SIZE } from '../../lib/maiaEncoding';
 import { acquireMaiaWorker } from '../../lib/engine/maiaWorkerHost';
 import type { AcquireMaiaWorkerOptions, MaiaAnalyzeResult, MaiaWorkerLease } from '../../lib/engine/maiaWorkerHost';
+import { getCachedPolicy, clearMaiaPolicyCache } from '../../lib/engine/maiaPolicyCache';
 
 vi.mock('../../lib/engine/maiaWorkerHost', () => ({
   acquireMaiaWorker: vi.fn(),
@@ -132,6 +133,9 @@ describe('useMaiaEngine', () => {
   beforeEach(() => {
     vi.useFakeTimers({ now: 0 });
     stubHost();
+    // The shared policy cache is a module-scoped singleton (Phase 194
+    // CACHE-05) — clear it so no test in this file leaks state.
+    clearMaiaPolicyCache();
   });
 
   afterEach(() => {
@@ -396,6 +400,97 @@ describe('useMaiaEngine', () => {
 
     expect(result.current.wdl?.win).toBeGreaterThan(0.9);
     expect(result.current.expectedScoreAtSelectedElo).toBeGreaterThan(0.9);
+  });
+
+  // ─── Shared fen|elo policy cache write-through (Phase 194 CACHE-05) ────────
+
+  it('write-through populates the shared fen|elo policy cache with a UCI-keyed entry per ladder rung after a result commits', async () => {
+    vi.advanceTimersByTime(200); // first FEN settles immediately
+    renderHook(() => useMaiaEngine({ fen: TEST_FEN, enabled: true, selectedElo: 1500 }));
+    await driveReady(currentLease);
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(200);
+    });
+    await resolveLatest(currentLease, TEST_FEN);
+
+    for (const elo of MAIA_ELO_LADDER) {
+      const cached = getCachedPolicy(TEST_FEN, elo);
+      expect(cached).toBeDefined();
+      // Every key is a UCI-shaped move string (from-square + to-square,
+      // optional promotion piece) — not a SAN string like 'Nf3', proving the
+      // write-through used maskAndSoftmaxUci, not the chart's SAN-keyed
+      // maskAndSoftmax output.
+      for (const uci of Object.keys(cached!)) {
+        expect(uci).toMatch(/^[a-h][1-8][a-h][1-8][qrbn]?$/);
+      }
+    }
+  });
+
+  it("a maiaQueue.policy() call issued after the chart populated a FEN resolves from the shared cache without a lease.analyze() call — proven via useMaiaEngine's write-through side", async () => {
+    vi.advanceTimersByTime(200);
+    renderHook(() => useMaiaEngine({ fen: TEST_FEN, enabled: true, selectedElo: 1500 }));
+    await driveReady(currentLease);
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(200);
+    });
+    await resolveLatest(currentLease, TEST_FEN);
+
+    // The 1500 rung the chart just wrote is directly readable via the shared
+    // module — this is the exact seam maiaQueue.policy() reads through (see
+    // maiaQueue.test.ts's cross-consumer CACHE-05 assertion for the
+    // zero-analyze-call proof on that side).
+    expect(getCachedPolicy(TEST_FEN, 1500)).toBeDefined();
+  });
+
+  // ─── Disable-mid-inference cleanup (quick 260731-s0z, FIX-1) ───────────────
+
+  it('a disable while an analyze is in flight, followed by re-enable, leaves a later uncached FEN analyzable again', async () => {
+    vi.advanceTimersByTime(200); // first FEN settles immediately
+    const { rerender, result } = renderHook(
+      ({ fen, enabled }: { fen: string | null; enabled: boolean }) =>
+        useMaiaEngine({ fen, enabled, selectedElo: 1500 }),
+      { initialProps: { fen: TEST_FEN as string | null, enabled: true } },
+    );
+    await driveReady(currentLease);
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(200);
+    });
+    // TEST_FEN is in flight on the first lease.
+    const inFlightCall = currentLease.latestAnalyzeCall();
+    expect(inFlightCall).toBeDefined();
+    expect(result.current.isAnalyzing).toBe(true);
+
+    // Disable mid-inference — the cleanup effect must reset the bookkeeping
+    // even though the in-flight promise has not settled yet.
+    rerender({ fen: TEST_FEN, enabled: false });
+    // The rejection handler bails on `leaseRef.current !== lease` before it
+    // can clear pendingFenRef itself — proving the fix lives in the cleanup,
+    // not in the rejection handler.
+    await act(async () => {
+      inFlightCall?.reject(new Error('lease released'));
+      await Promise.resolve();
+    });
+    expect(result.current.isAnalyzing).toBe(false);
+    expect(result.current.isReady).toBe(false);
+
+    // Re-enable AND navigate to an uncached FEN in the same commit (rather
+    // than re-enabling on the SAME fen first) — deliberately avoids a
+    // separate, legitimate same-FEN reissue-on-reconnect race that would
+    // otherwise leave a genuine in-flight request for TEST_FEN sitting on
+    // the new lease and confound this assertion. A brand-new lease is
+    // acquired; without the fix, pendingFenRef is still stuck non-null from
+    // before the disable and this analyze() is silently dropped at the
+    // single-in-flight gate.
+    rerender({ fen: TEST_FEN_2, enabled: true });
+    const newLease = currentLease;
+    expect(newLease).not.toBe(undefined);
+    await driveReady(newLease);
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(200);
+    });
+
+    const msgs = analyzeMessages(newLease);
+    expect(msgs.some((m) => m.fen === TEST_FEN_2)).toBe(true);
   });
 
   // ─── Worker death (quick 260729-sod, FIX 3 — onFatal replaces the old onerror handler) ──

@@ -104,11 +104,89 @@ export function sideMatchesMover(side: Side, mover: MoverColor): boolean {
  * ascending-UCI tie-break for equal probabilities (ENGINE-07). Shared by
  * both `SearchRunner` implementations so the cap can never diverge between
  * them (Pitfall 3).
+ *
+ * `injectedUcis` (INJECT-01) is the optional exemption set — the UCIs the
+ * `extraRootMoves` union actually ADDED, never all of `budget.extraRootMoves`
+ * (a UCI the union found already present competes as an organic candidate,
+ * not an exemption). When present and non-empty, injected candidates are
+ * exempt from competing with organic ones for the cap: organic candidates are
+ * capped to `ROOT_CANDIDATE_HARD_CAP - injectedUcis.size` (never negative)
+ * instead of every candidate competing for the same `ROOT_CANDIDATE_HARD_CAP`
+ * slots. Bug fixed here (196-01): before this parameter existed, an injected
+ * candidate was seeded with prior `0` at the union site, which sorted it dead
+ * last by this cap's own comparator and made it the FIRST entry dropped
+ * whenever the root exceeded the cap — silently defeating the injection
+ * mechanism exactly on the wide, high-temperature roots that needed it.
  */
-export function applyRootCandidateHardCap(candidateMap: Map<string, number>): Map<string, number> {
+function compareCandidateEntries(a: readonly [string, number], b: readonly [string, number]): number {
+  return b[1] - a[1] || (a[0] < b[0] ? -1 : 1);
+}
+
+/**
+ * INJECT-01/INJECT-02 union + prior-seeding: merges `budget.extraRootMoves`
+ * into the root's post-truncation candidate map, seeding each newly-added
+ * UCI's prior from its share of the ALREADY-KEPT candidates' total mass
+ * (never 0 — INJECT-02: a 0 prior made `rankScore = min(1,0/pRef)*value = 0`,
+ * which sorted the injected candidate dead last and made it the hard cap's
+ * first casualty, silently defeating the injection mechanism).
+ *
+ * Code review WR-02 (196-REVIEW.md): this block was previously copy-pasted
+ * byte-for-byte between `mctsSearch.ts`'s `dispatchExpansion` and
+ * `fallbackExpectimax.ts`'s `expandNode` (only the loop variable name
+ * differed) — exactly the class of duplication `treeCommon.ts`'s own module
+ * header warns against (a future one-sided fix to the merge order, the
+ * prior formula, or the exemption-set construction would silently
+ * reintroduce the INJECT-02 class of bug). Extracted here so both
+ * `SearchRunner` implementations call the identical logic and cannot
+ * diverge.
+ *
+ * Only meaningful for the root: callers must guard on `isRoot` themselves
+ * (this function performs no such check) since a non-root node has no
+ * `extraRootMoves` concept.
+ */
+export function mergeExtraRootMoves(
+  candidateMap: Map<string, number>,
+  effectivePolicy: Record<string, number>,
+  extraRootMoves: readonly string[] | undefined,
+): { candidateMap: Map<string, number>; injectedUcis: Set<string> } {
+  const injectedUcis = new Set<string>();
+  if (!extraRootMoves || extraRootMoves.length === 0) {
+    return { candidateMap, injectedUcis };
+  }
+  const merged = new Map(candidateMap);
+  const keptTotal = Array.from(candidateMap.keys()).reduce(
+    (sum, uci) => sum + (effectivePolicy[uci] ?? 0),
+    0,
+  );
+  for (const uci of extraRootMoves) {
+    if (!merged.has(uci)) {
+      merged.set(uci, keptTotal > 0 ? (effectivePolicy[uci] ?? 0) / keptTotal : 0);
+      injectedUcis.add(uci);
+    }
+  }
+  return { candidateMap: merged, injectedUcis };
+}
+
+export function applyRootCandidateHardCap(
+  candidateMap: Map<string, number>,
+  injectedUcis?: ReadonlySet<string>,
+): Map<string, number> {
   if (candidateMap.size <= ROOT_CANDIDATE_HARD_CAP) return candidateMap;
-  const sorted = Array.from(candidateMap.entries()).sort((a, b) => b[1] - a[1] || (a[0] < b[0] ? -1 : 1));
-  return new Map(sorted.slice(0, ROOT_CANDIDATE_HARD_CAP));
+  if (!injectedUcis || injectedUcis.size === 0) {
+    const sorted = Array.from(candidateMap.entries()).sort(compareCandidateEntries);
+    return new Map(sorted.slice(0, ROOT_CANDIDATE_HARD_CAP));
+  }
+  const injected: [string, number][] = [];
+  const organic: [string, number][] = [];
+  for (const entry of candidateMap.entries()) {
+    (injectedUcis.has(entry[0]) ? injected : organic).push(entry);
+  }
+  const organicSlots = Math.max(0, ROOT_CANDIDATE_HARD_CAP - injected.length);
+  injected.sort(compareCandidateEntries);
+  organic.sort(compareCandidateEntries);
+  const kept = injected.slice(0, ROOT_CANDIDATE_HARD_CAP).concat(organic.slice(0, organicSlots));
+  kept.sort(compareCandidateEntries);
+  return new Map(kept);
 }
 
 /**
@@ -204,6 +282,23 @@ function buildModalPath<N extends SearchTreeNode<N>>(rootChild: N): {
 }
 
 /**
+ * Indirection seam (Phase 194 JANK-03): `buildRankedLines` calls
+ * `modalPathBuilder.build(...)` — a property lookup on this mutable, exported
+ * object — instead of the bare `buildModalPath` reference, so
+ * `treeCommon.test.ts` can `vi.spyOn(modalPathBuilder, 'build')` to prove
+ * `buildRankedLines` never invokes the modal-path builder eagerly. Verified
+ * empirically (this phase, before writing this comment): a same-module
+ * function DECLARATION reference is early-bound at compile/bundle time, so
+ * `vi.spyOn` on the module's exported `buildModalPath`-if-it-were-exported
+ * cannot intercept a call the module makes to itself internally — only a
+ * late-bound property lookup on a mutable object is spy-able. Do NOT inline
+ * this back to a bare `buildModalPath(child)` call at the accessor site
+ * below; that would make the JANK-03 non-invocation tests fail to compile
+ * against a removed spy target.
+ */
+export const modalPathBuilder = { build: buildModalPath };
+
+/**
  * Variance/"sharpness" proxy for a root candidate (Phase 182 D-10): the
  * max−min spread across `node`'s OWN children's backed-up `.value`s. When
  * `node` is a root child, these are the grandchildren of the search root —
@@ -229,6 +324,19 @@ function computeChildScoreSpread<N extends SearchTreeNode<N>>(node: N): number |
  * `RankedLine` the UI consumes; `practicalScore` stays `child.value`,
  * byte-identical to before this phase (D-04). `pRef` is computed ONCE per
  * call from `rootElo` (Anti-Pattern: never recompute per child).
+ *
+ * Phase 194 JANK-03: `modalPath`/`modalStats` are attached as lazy accessor
+ * properties, not data properties — `modalPathBuilder.build(child)` (the
+ * modal-path walk) only runs on first READ of either field, via a single
+ * memoized `getModal` closure PER LINE shared by both accessors (so a
+ * consumer reading both fields still pays for exactly one computation, never
+ * two). Bot play reads neither field on the vast majority of root candidates
+ * (up to `ROOT_CANDIDATE_HARD_CAP`), so this eliminates 100% of that cost for
+ * the persona bot path — see `botStyle.ts`'s `applyStyleScoreShaping` for the
+ * one consumer that would otherwise have silently defeated this (a spread
+ * forces every accessor to evaluate). The sort comparator below reads only
+ * `sortRankScore`/`line.rootMove` — never either accessor — so sorting itself
+ * never forces evaluation.
  */
 function buildRankedLines<N extends SearchTreeNode<N>>(root: N, rootElo: number): RankedLine[] {
   const pRef = pRefForElo(rootElo);
@@ -239,26 +347,58 @@ function buildRankedLines<N extends SearchTreeNode<N>>(root: N, rootElo: number)
   const scored: { line: RankedLine; sortRankScore: number }[] = [];
   for (const child of root.children.values()) {
     if (child.uci === null) continue; // defensive; every root child has a uci
-    const modal = buildModalPath(child);
-    scored.push({
-      line: {
-        rootMove: child.uci,
-        practicalScore: child.value,
-        objectiveEvalCp: child.objectiveEvalCp,
-        objectiveEvalMate: child.objectiveEvalMate,
-        modalPath: modal.path,
-        modalStats: modal.stats,
-        visits: child.visits,
-        childScoreSpread: computeChildScoreSpread(child),
-      },
-      sortRankScore: rankScore(child.prior, pRef, child.value),
-    });
+
+    let modalCache: { path: string[]; stats: ModalPlyStat[] } | undefined;
+    const getModal = (): { path: string[]; stats: ModalPlyStat[] } =>
+      (modalCache ??= modalPathBuilder.build(child));
+
+    const line = {
+      rootMove: child.uci,
+      practicalScore: child.value,
+      objectiveEvalCp: child.objectiveEvalCp,
+      objectiveEvalMate: child.objectiveEvalMate,
+      visits: child.visits,
+      childScoreSpread: computeChildScoreSpread(child),
+    } as RankedLine;
+    Object.defineProperty(line, 'modalPath', { get: () => getModal().path, enumerable: true });
+    Object.defineProperty(line, 'modalStats', { get: () => getModal().stats, enumerable: true });
+
+    scored.push({ line, sortRankScore: rankScore(child.prior, pRef, child.value) });
   }
   scored.sort((a, b) => {
     if (b.sortRankScore !== a.sortRankScore) return b.sortRankScore - a.sortRankScore;
     return a.line.rootMove < b.line.rootMove ? -1 : a.line.rootMove > b.line.rootMove ? 1 : 0;
   });
   return scored.map((s) => s.line);
+}
+
+/**
+ * Returns a copy of `line` with `overrides` applied, PRESERVING the laziness of
+ * `modalPath`/`modalStats` (Phase 194 JANK-03).
+ *
+ * Never spread a `RankedLine`. `{ ...line }`, `Object.assign({}, line)`,
+ * `structuredClone`, and JSON round-trips all READ every enumerable property,
+ * which force-evaluates the two accessors `buildRankedLines` installs above and
+ * silently undoes JANK-03 — with no test failure, because the resulting VALUES
+ * are identical. Only the cost changes.
+ *
+ * Phase 194's code review (WR-04) found the descriptor-copy hand-rolled at two
+ * separate call sites, one of which had been missed for a full plan cycle. This
+ * is the single implementation both use, so a third caller cannot get it subtly
+ * wrong and a regression is caught by this module's own tests.
+ */
+export function cloneRankedLineWith(line: RankedLine, overrides: Partial<RankedLine>): RankedLine {
+  const next = Object.create(Object.getPrototypeOf(line) as object | null) as RankedLine;
+  Object.defineProperties(next, Object.getOwnPropertyDescriptors(line));
+  for (const [key, value] of Object.entries(overrides)) {
+    Object.defineProperty(next, key, {
+      value,
+      enumerable: true,
+      writable: true,
+      configurable: true,
+    });
+  }
+  return next;
 }
 
 /**

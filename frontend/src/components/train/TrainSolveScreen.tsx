@@ -421,7 +421,19 @@ export function TrainSolveScreen({
   // solve mutation belongs to the unmounted prior page visit) — but a LIVE
   // solve response always wins, and the restored fallback disappears the
   // moment the puzzle transitions (restoredSolve nulls together with it).
-  const verdict = trainSession.lastSolveResponse ?? restoredSolve?.verdict ?? null;
+  //
+  // Bug fix (FLAWCHESS-64): the live verdict counts only when it belongs to
+  // the puzzle currently on screen. `resetSolve()` runs in the puzzle-keyed
+  // effect below, which React fires AFTER the child TrainReveal's own effects,
+  // so a bare `lastSolveResponse` left one commit where the next puzzle was
+  // already rendered while the previous puzzle's verdict was still set —
+  // TrainReveal's query key flipped to the new position and fetched the reveal
+  // for a puzzle that had never been attempted (a guaranteed 409). Pairing the
+  // verdict with `lastSolvedPosition` closes that window at the source, and
+  // also stops the reveal panel from rendering the old solution for one frame.
+  const liveVerdict =
+    trainSession.lastSolvedPosition === puzzle.position ? trainSession.lastSolveResponse : null;
+  const verdict = liveVerdict ?? restoredSolve?.verdict ?? null;
   const showResultRow =
     moveApplied && !isGrading && !gradingError && (verdict !== null || trainSession.isSolveError);
 

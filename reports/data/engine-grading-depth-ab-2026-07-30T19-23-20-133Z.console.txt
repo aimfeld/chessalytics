@@ -1,0 +1,333 @@
+
+Grading-depth A/B — nodes=50 plies=8 concurrency=4 elo=1500 ladder-table=14+floor14
+positions=21  depths=14,12,10,8,6  reference=d14
+
+── fen38
+   d14  wall 12.6s   grade cpu 19.2s (50 calls, avg 384ms, avg 4.1 candidates)   top=f3g5 0.531
+   d12  wall 7.8s   grade cpu 7.6s (50 calls, avg 152ms, avg 4.1 candidates)   top=f3g5 0.535
+   d10  wall 5.5s   grade cpu 2.5s (50 calls, avg 50ms, avg 4.1 candidates)   top=f3g5 0.544
+   d 8  wall 4.6s   grade cpu 0.6s (50 calls, avg 13ms, avg 4.1 candidates)   top=f3g5 0.533
+   d 6  wall 4.2s   grade cpu 0.2s (50 calls, avg 4ms, avg 4.1 candidates)   top=f3g5 0.527
+     d12 vs d14: same top YES  same order NO   mean |Δ score| 0.0045  (reference top-2 gap 0.0117)
+        d14: f3g5 d2d3 b1c3 d2d4 e1g1
+        d12: f3g5 d2d3 b1c3 e1g1 d2d4
+     d10 vs d14: same top YES  same order YES  mean |Δ score| 0.0056  (reference top-2 gap 0.0117)
+     d8 vs d14: same top YES  same order NO   mean |Δ score| 0.0073  (reference top-2 gap 0.0117)
+        d14: f3g5 d2d3 b1c3 d2d4 e1g1
+        d8: f3g5 e1g1 b1c3 d2d4 d2d3
+     d6 vs d14: same top YES  same order NO   mean |Δ score| 0.0117  (reference top-2 gap 0.0117)
+        d14: f3g5 d2d3 b1c3 d2d4 e1g1
+        d6: f3g5 e1g1 d2d3 b1c3 d2d4
+
+── fen39
+   d14  wall 13.6s   grade cpu 22.5s (50 calls, avg 449ms, avg 5.5 candidates)   top=b7b5 0.489
+   d12  wall 8.2s   grade cpu 9.6s (50 calls, avg 193ms, avg 5.5 candidates)   top=b7b5 0.482
+   d10  wall 5.5s   grade cpu 3.2s (50 calls, avg 63ms, avg 5.5 candidates)   top=b7b5 0.487
+   d 8  wall 4.7s   grade cpu 1.0s (50 calls, avg 19ms, avg 5.5 candidates)   top=b7b5 0.486
+   d 6  wall 4.4s   grade cpu 0.3s (50 calls, avg 5ms, avg 5.5 candidates)   top=b7b5 0.485
+     d12 vs d14: same top YES  same order YES  mean |Δ score| 0.0029  (reference top-2 gap 0.0222)
+     d10 vs d14: same top YES  same order NO   mean |Δ score| 0.0030  (reference top-2 gap 0.0222)
+        d14: b7b5 f6d5 a7a6 b7b6 h7h6 d7b6 f8e8 a7a5
+        d10: b7b5 a7a6 f6d5 b7b6 h7h6 d7b6 f8e8 a7a5
+     d8 vs d14: same top YES  same order NO   mean |Δ score| 0.0037  (reference top-2 gap 0.0222)
+        d14: b7b5 f6d5 a7a6 b7b6 h7h6 d7b6 f8e8 a7a5
+        d8: b7b5 a7a6 f6d5 h7h6 b7b6 d7b6 f8e8 a7a5
+     d6 vs d14: same top YES  same order NO   mean |Δ score| 0.0040  (reference top-2 gap 0.0222)
+        d14: b7b5 f6d5 a7a6 b7b6 h7h6 d7b6 f8e8 a7a5
+        d6: b7b5 a7a6 f6d5 h7h6 b7b6 d7b6 f8e8 a7a5
+
+── fen40
+   d14  wall 13.6s   grade cpu 23.5s (50 calls, avg 469ms, avg 5.6 candidates)   top=b8c6 0.488
+   d12  wall 8.3s   grade cpu 9.2s (50 calls, avg 184ms, avg 5.6 candidates)   top=b8c6 0.485
+   d10  wall 5.7s   grade cpu 3.2s (50 calls, avg 64ms, avg 5.6 candidates)   top=b8c6 0.481
+   d 8  wall 4.7s   grade cpu 0.9s (50 calls, avg 18ms, avg 5.6 candidates)   top=b8c6 0.481
+   d 6  wall 4.4s   grade cpu 0.2s (50 calls, avg 5ms, avg 5.6 candidates)   top=b8c6 0.481
+     d12 vs d14: same top YES  same order YES  mean |Δ score| 0.0024  (reference top-2 gap 0.0111)
+     d10 vs d14: same top YES  same order YES  mean |Δ score| 0.0033  (reference top-2 gap 0.0111)
+     d8 vs d14: same top YES  same order NO   mean |Δ score| 0.0049  (reference top-2 gap 0.0111)
+        d14: b8c6 b8d7 b7b5 c8e6
+        d8: b8c6 b7b5 b8d7 c8e6
+     d6 vs d14: same top YES  same order YES  mean |Δ score| 0.0035  (reference top-2 gap 0.0111)
+
+── fen44
+   d14  wall 16.4s   grade cpu 32.8s (50 calls, avg 655ms, avg 9.2 candidates)   top=f3g5 0.588
+   d12  wall 9.0s   grade cpu 12.5s (50 calls, avg 250ms, avg 9.2 candidates)   top=f3g5 0.598
+   d10  wall 5.8s   grade cpu 4.2s (50 calls, avg 84ms, avg 9.4 candidates)   top=f3g5 0.601
+   d 8  wall 4.7s   grade cpu 1.2s (50 calls, avg 24ms, avg 9.3 candidates)   top=f3g5 0.602
+   d 6  wall 4.4s   grade cpu 0.3s (50 calls, avg 7ms, avg 9.2 candidates)   top=f3g5 0.600
+     d12 vs d14: same top YES  same order YES  mean |Δ score| 0.0047  (reference top-2 gap 0.0317)
+     d10 vs d14: same top YES  same order YES  mean |Δ score| 0.0069  (reference top-2 gap 0.0317)
+     d8 vs d14: same top YES  same order NO   mean |Δ score| 0.0079  (reference top-2 gap 0.0317)
+        d14: f3g5 e2d3 h2h3 a2a3 a1c1 f1e1 f3e5 c2b3 a2a4 a1d1 e3e4
+        d8: f3g5 e2d3 h2h3 a1c1 a2a3 f1e1 f3e5 c2b3 a2a4 a1d1 e3e4
+     d6 vs d14: same top YES  same order NO   mean |Δ score| 0.0072  (reference top-2 gap 0.0317)
+        d14: f3g5 e2d3 h2h3 a2a3 a1c1 f1e1 f3e5 c2b3 a2a4 a1d1 e3e4
+        d6: f3g5 e2d3 h2h3 a1c1 f1e1 a2a3 f3e5 c2b3 a2a4 a1d1 e3e4
+
+── fen45
+   d14  wall 21.0s   grade cpu 36.9s (50 calls, avg 737ms, avg 7.7 candidates)   top=c4b3 0.480
+   d12  wall 10.2s   grade cpu 14.1s (50 calls, avg 282ms, avg 7.7 candidates)   top=c4b3 0.474
+   d10  wall 6.3s   grade cpu 4.8s (50 calls, avg 96ms, avg 7.7 candidates)   top=c4b3 0.469
+   d 8  wall 4.8s   grade cpu 1.3s (50 calls, avg 25ms, avg 7.7 candidates)   top=c4b3 0.474
+   d 6  wall 4.3s   grade cpu 0.3s (50 calls, avg 6ms, avg 7.7 candidates)   top=c4b3 0.475
+     d12 vs d14: same top YES  same order YES  mean |Δ score| 0.0045  (reference top-2 gap 0.0100)
+     d10 vs d14: same top YES  same order YES  mean |Δ score| 0.0081  (reference top-2 gap 0.0100)
+     d8 vs d14: same top YES  same order YES  mean |Δ score| 0.0083  (reference top-2 gap 0.0100)
+     d6 vs d14: same top YES  same order YES  mean |Δ score| 0.0099  (reference top-2 gap 0.0100)
+
+── fen46
+   d14  wall 13.0s   grade cpu 18.3s (50 calls, avg 366ms, avg 6.2 candidates)   top=c2d2 0.459
+   d12  wall 7.7s   grade cpu 6.8s (50 calls, avg 137ms, avg 6.1 candidates)   top=c2d2 0.458
+   d10  wall 5.4s   grade cpu 2.4s (50 calls, avg 47ms, avg 6.3 candidates)   top=c2d2 0.460
+   d 8  wall 4.5s   grade cpu 0.7s (50 calls, avg 13ms, avg 6.3 candidates)   top=c2d2 0.458
+   d 6  wall 4.3s   grade cpu 0.2s (50 calls, avg 5ms, avg 6.5 candidates)   top=c2d2 0.450
+     d12 vs d14: same top YES  same order YES  mean |Δ score| 0.0062  (reference top-2 gap 0.0529)
+     d10 vs d14: same top YES  same order NO   mean |Δ score| 0.0050  (reference top-2 gap 0.0529)
+        d14: c2d2 e3e4 c3d1 d3g6 a1e1 e2g3 e2f4
+        d10: c2d2 e3e4 d3g6 c3d1 a1e1 e2g3 e2f4
+     d8 vs d14: same top YES  same order NO   mean |Δ score| 0.0071  (reference top-2 gap 0.0529)
+        d14: c2d2 e3e4 c3d1 d3g6 a1e1 e2g3 e2f4
+        d8: c2d2 c3d1 e3e4 d3g6 a1e1 e2g3 e2f4
+     d6 vs d14: same top YES  same order NO   mean |Δ score| 0.0113  (reference top-2 gap 0.0529)
+        d14: c2d2 e3e4 c3d1 d3g6 a1e1 e2g3 e2f4
+        d6: c2d2 c3d1 e3e4 d3g6 a1e1 e2g3 e2f4
+
+── fen47
+   d14  wall 14.7s   grade cpu 29.2s (50 calls, avg 584ms, avg 6.7 candidates)   top=b2b4 0.575
+   d12  wall 8.2s   grade cpu 11.5s (50 calls, avg 230ms, avg 6.7 candidates)   top=b2b4 0.576
+   d10  wall 5.4s   grade cpu 3.6s (50 calls, avg 71ms, avg 6.7 candidates)   top=b2b4 0.576
+   d 8  wall 4.6s   grade cpu 1.1s (50 calls, avg 22ms, avg 6.7 candidates)   top=b2b4 0.577
+   d 6  wall 4.2s   grade cpu 0.3s (50 calls, avg 5ms, avg 6.7 candidates)   top=b2b4 0.572
+     d12 vs d14: same top YES  same order YES  mean |Δ score| 0.0032  (reference top-2 gap 0.0086)
+     d10 vs d14: same top YES  same order NO   mean |Δ score| 0.0081  (reference top-2 gap 0.0086)
+        d14: b2b4 a2a4 e1d3 a1c1 g2g4 g1h1 h2h3 e1c2
+        d10: b2b4 e1d3 a2a4 a1c1 g2g4 h2h3 g1h1 e1c2
+     d8 vs d14: same top YES  same order NO   mean |Δ score| 0.0060  (reference top-2 gap 0.0086)
+        d14: b2b4 a2a4 e1d3 a1c1 g2g4 g1h1 h2h3 e1c2
+        d8: b2b4 a2a4 a1c1 e1d3 g2g4 g1h1 h2h3 e1c2
+     d6 vs d14: same top YES  same order YES  mean |Δ score| 0.0078  (reference top-2 gap 0.0086)
+
+── fen48
+   d14  wall 13.7s   grade cpu 18.9s (50 calls, avg 377ms, avg 5.5 candidates)   top=g2b7 0.637
+   d12  wall 7.9s   grade cpu 7.7s (50 calls, avg 153ms, avg 5.5 candidates)   top=g2b7 0.640
+   d10  wall 5.4s   grade cpu 2.4s (50 calls, avg 47ms, avg 5.5 candidates)   top=g2b7 0.643
+   d 8  wall 4.5s   grade cpu 0.7s (50 calls, avg 13ms, avg 5.5 candidates)   top=g2b7 0.645
+   d 6  wall 4.3s   grade cpu 0.2s (50 calls, avg 4ms, avg 5.5 candidates)   top=g2b7 0.643
+     d12 vs d14: same top YES  same order YES  mean |Δ score| 0.0043  (reference top-2 gap 0.0988)
+     d10 vs d14: same top YES  same order NO   mean |Δ score| 0.0120  (reference top-2 gap 0.0988)
+        d14: g2b7 a1c1 a1b1 a1d1 c3d5 f1d1 c3e4
+        d10: g2b7 a1c1 a1d1 a1b1 c3d5 f1d1 c3e4
+     d8 vs d14: same top YES  same order NO   mean |Δ score| 0.0132  (reference top-2 gap 0.0988)
+        d14: g2b7 a1c1 a1b1 a1d1 c3d5 f1d1 c3e4
+        d8: g2b7 a1c1 a1d1 a1b1 c3d5 f1d1 c3e4
+     d6 vs d14: same top YES  same order NO   mean |Δ score| 0.0155  (reference top-2 gap 0.0988)
+        d14: g2b7 a1c1 a1b1 a1d1 c3d5 f1d1 c3e4
+        d6: g2b7 a1c1 a1d1 a1b1 c3d5 f1d1 c3e4
+
+── fen49
+   d14  wall 13.2s   grade cpu 14.6s (50 calls, avg 292ms, avg 4.3 candidates)   top=e3e4 0.543
+   d12  wall 7.6s   grade cpu 5.4s (50 calls, avg 108ms, avg 4.3 candidates)   top=e3e4 0.546
+   d10  wall 5.5s   grade cpu 2.0s (50 calls, avg 39ms, avg 4.4 candidates)   top=e3e4 0.539
+   d 8  wall 4.6s   grade cpu 0.5s (50 calls, avg 11ms, avg 4.4 candidates)   top=e3e4 0.544
+   d 6  wall 4.4s   grade cpu 0.2s (50 calls, avg 3ms, avg 4.4 candidates)   top=e3e4 0.532
+     d12 vs d14: same top YES  same order NO   mean |Δ score| 0.0075  (reference top-2 gap 0.0450)
+        d14: e3e4 f3g5 d4e5 d4d5 f3e5 c1b2 d4c5 f1e1
+        d12: e3e4 f3g5 d4d5 d4e5 f3e5 c1b2 d4c5 f1e1
+     d10 vs d14: same top YES  same order NO   mean |Δ score| 0.0062  (reference top-2 gap 0.0450)
+        d14: e3e4 f3g5 d4e5 d4d5 f3e5 c1b2 d4c5 f1e1
+        d10: e3e4 f3g5 d4d5 d4e5 f3e5 c1b2 d4c5 f1e1
+     d8 vs d14: same top YES  same order NO   mean |Δ score| 0.0106  (reference top-2 gap 0.0450)
+        d14: e3e4 f3g5 d4e5 d4d5 f3e5 c1b2 d4c5 f1e1
+        d8: e3e4 f3g5 d4d5 d4e5 f3e5 c1b2 d4c5 f1e1
+     d6 vs d14: same top YES  same order NO   mean |Δ score| 0.0124  (reference top-2 gap 0.0450)
+        d14: e3e4 f3g5 d4e5 d4d5 f3e5 c1b2 d4c5 f1e1
+        d6: e3e4 f3g5 d4d5 d4e5 f3e5 c1b2 f1e1 d4c5
+
+── fen50
+   d14  wall 12.1s   grade cpu 13.4s (50 calls, avg 268ms, avg 3.2 candidates)   top=b3d5 0.547
+   d12  wall 7.3s   grade cpu 5.1s (50 calls, avg 103ms, avg 3.2 candidates)   top=b3d5 0.538
+   d10  wall 5.3s   grade cpu 1.7s (50 calls, avg 35ms, avg 3.2 candidates)   top=b3d5 0.553
+   d 8  wall 4.7s   grade cpu 0.5s (50 calls, avg 9ms, avg 3.2 candidates)   top=b3d5 0.573
+   d 6  wall 4.5s   grade cpu 0.1s (50 calls, avg 2ms, avg 3.2 candidates)   top=e3e4 0.565
+     d12 vs d14: same top YES  same order NO   mean |Δ score| 0.0061  (reference top-2 gap 0.0126)
+        d14: b3d5 e3e4 c3d5
+        d12: b3d5 c3d5 e3e4
+     d10 vs d14: same top YES  same order YES  mean |Δ score| 0.0086  (reference top-2 gap 0.0126)
+     d8 vs d14: same top YES  same order YES  mean |Δ score| 0.0240  (reference top-2 gap 0.0126)
+     d6 vs d14: same top NO   same order NO   mean |Δ score| 0.0228  (reference top-2 gap 0.0126)
+        d14: b3d5 e3e4 c3d5
+        d6: e3e4 c3d5 b3d5
+
+── fen54
+   d14  wall 14.1s   grade cpu 26.6s (50 calls, avg 531ms, avg 5.7 candidates)   top=h2h4 0.523
+   d12  wall 8.3s   grade cpu 10.5s (50 calls, avg 210ms, avg 5.7 candidates)   top=c3e2 0.526
+   d10  wall 5.6s   grade cpu 3.4s (50 calls, avg 68ms, avg 5.7 candidates)   top=h2h4 0.526
+   d 8  wall 4.7s   grade cpu 0.9s (50 calls, avg 17ms, avg 5.7 candidates)   top=h2h4 0.529
+   d 6  wall 4.4s   grade cpu 0.2s (50 calls, avg 5ms, avg 5.7 candidates)   top=h2h4 0.539
+     d12 vs d14: same top NO   same order NO   mean |Δ score| 0.0044  (reference top-2 gap 0.0073)
+        d14: h2h4 c3e2 e1c1 e1g1 a2a3
+        d12: c3e2 h2h4 e1c1 e1g1 a2a3
+     d10 vs d14: same top YES  same order YES  mean |Δ score| 0.0059  (reference top-2 gap 0.0073)
+     d8 vs d14: same top YES  same order NO   mean |Δ score| 0.0068  (reference top-2 gap 0.0073)
+        d14: h2h4 c3e2 e1c1 e1g1 a2a3
+        d8: h2h4 c3e2 e1g1 e1c1 a2a3
+     d6 vs d14: same top YES  same order NO   mean |Δ score| 0.0079  (reference top-2 gap 0.0073)
+        d14: h2h4 c3e2 e1c1 e1g1 a2a3
+        d6: h2h4 e1c1 c3e2 e1g1 a2a3
+
+── fen55
+   d14  wall 13.5s   grade cpu 18.7s (50 calls, avg 375ms, avg 3.8 candidates)   top=c6b4 0.518
+   d12  wall 9.2s   grade cpu 8.5s (50 calls, avg 169ms, avg 3.9 candidates)   top=c6b4 0.516
+   d10  wall 5.5s   grade cpu 2.3s (50 calls, avg 45ms, avg 3.9 candidates)   top=c6b4 0.498
+   d 8  wall 4.6s   grade cpu 0.5s (50 calls, avg 9ms, avg 3.9 candidates)   top=c6b4 0.493
+   d 6  wall 4.4s   grade cpu 0.1s (50 calls, avg 3ms, avg 3.9 candidates)   top=c6b4 0.483
+     d12 vs d14: same top YES  same order YES  mean |Δ score| 0.0400  (reference top-2 gap 0.1102)
+     d10 vs d14: same top YES  same order YES  mean |Δ score| 0.0489  (reference top-2 gap 0.1102)
+     d8 vs d14: same top YES  same order YES  mean |Δ score| 0.0555  (reference top-2 gap 0.1102)
+     d6 vs d14: same top YES  same order YES  mean |Δ score| 0.0396  (reference top-2 gap 0.1102)
+
+── fen56
+   d14  wall 9.5s   grade cpu 9.7s (50 calls, avg 194ms, avg 4.1 candidates)   top=d8h4 0.639
+   d12  wall 6.6s   grade cpu 3.8s (50 calls, avg 77ms, avg 4.1 candidates)   top=d6e5 0.649
+   d10  wall 5.0s   grade cpu 1.1s (50 calls, avg 21ms, avg 4.1 candidates)   top=d8h4 0.635
+   d 8  wall 4.5s   grade cpu 0.3s (50 calls, avg 7ms, avg 4.1 candidates)   top=d6e5 0.628
+   d 6  wall 4.4s   grade cpu 0.1s (50 calls, avg 3ms, avg 4.3 candidates)   top=d8h4 0.625
+     d12 vs d14: same top NO   same order NO   mean |Δ score| 0.0250  (reference top-2 gap 0.0872)
+        d14: d8h4 d6e5 h5g3 f4f3 f7f6
+        d12: d6e5 d8h4 h5g3 f4f3 f7f6
+     d10 vs d14: same top YES  same order NO   mean |Δ score| 0.0123  (reference top-2 gap 0.0872)
+        d14: d8h4 d6e5 h5g3 f4f3 f7f6
+        d10: d8h4 d6e5 f4f3 h5g3 f7f6
+     d8 vs d14: same top NO   same order NO   mean |Δ score| 0.0282  (reference top-2 gap 0.0872)
+        d14: d8h4 d6e5 h5g3 f4f3 f7f6
+        d8: d6e5 d8h4 f4f3 h5g3 f7f6
+     d6 vs d14: same top YES  same order NO   mean |Δ score| 0.0288  (reference top-2 gap 0.0872)
+        d14: d8h4 d6e5 h5g3 f4f3 f7f6
+        d6: d8h4 d6e5 f4f3 h5g3 f7f6
+
+── fen57
+   d14  wall 8.8s   grade cpu 8.6s (50 calls, avg 171ms, avg 3.4 candidates)   top=d8h4 0.597
+   d12  wall 6.3s   grade cpu 3.3s (50 calls, avg 67ms, avg 3.4 candidates)   top=d8h4 0.594
+   d10  wall 4.9s   grade cpu 1.0s (50 calls, avg 21ms, avg 3.5 candidates)   top=d8h4 0.588
+   d 8  wall 4.5s   grade cpu 0.3s (50 calls, avg 6ms, avg 3.5 candidates)   top=d8h4 0.573
+   d 6  wall 4.4s   grade cpu 0.1s (50 calls, avg 2ms, avg 3.3 candidates)   top=d8h4 0.545
+     d12 vs d14: same top YES  same order YES  mean |Δ score| 0.0046  (reference top-2 gap 0.1213)
+     d10 vs d14: same top YES  same order YES  mean |Δ score| 0.0114  (reference top-2 gap 0.1213)
+     d8 vs d14: same top YES  same order YES  mean |Δ score| 0.0161  (reference top-2 gap 0.1213)
+     d6 vs d14: same top YES  same order YES  mean |Δ score| 0.0271  (reference top-2 gap 0.1213)
+
+── fen58
+   d14  wall 13.2s   grade cpu 17.1s (50 calls, avg 341ms, avg 4.1 candidates)   top=f8d6 0.594
+   d12  wall 7.8s   grade cpu 6.8s (50 calls, avg 137ms, avg 4.1 candidates)   top=f8d6 0.588
+   d10  wall 5.2s   grade cpu 2.0s (50 calls, avg 40ms, avg 4.1 candidates)   top=f8d6 0.583
+   d 8  wall 4.5s   grade cpu 0.6s (50 calls, avg 11ms, avg 4.1 candidates)   top=f8d6 0.594
+   d 6  wall 4.2s   grade cpu 0.2s (50 calls, avg 3ms, avg 4.1 candidates)   top=f8d6 0.583
+     d12 vs d14: same top YES  same order YES  mean |Δ score| 0.0060  (reference top-2 gap 0.0517)
+     d10 vs d14: same top YES  same order YES  mean |Δ score| 0.0050  (reference top-2 gap 0.0517)
+     d8 vs d14: same top YES  same order YES  mean |Δ score| 0.0074  (reference top-2 gap 0.0517)
+     d6 vs d14: same top YES  same order NO   mean |Δ score| 0.0101  (reference top-2 gap 0.0517)
+        d14: f8d6 d8d4 f8c5 d8d5 d8d6
+        d6: f8d6 f8c5 d8d4 d8d5 d8d6
+
+── fen63
+   d14  wall 8.0s   grade cpu 6.9s (50 calls, avg 139ms, avg 2.9 candidates)   top=b4f4 0.641
+   d12  wall 5.7s   grade cpu 2.8s (50 calls, avg 56ms, avg 2.9 candidates)   top=b4f4 0.630
+   d10  wall 4.7s   grade cpu 1.2s (50 calls, avg 24ms, avg 2.9 candidates)   top=b4f4 0.621
+   d 8  wall 4.2s   grade cpu 0.3s (50 calls, avg 6ms, avg 2.9 candidates)   top=b4f4 0.624
+   d 6  wall 4.1s   grade cpu 0.1s (50 calls, avg 3ms, avg 2.9 candidates)   top=b4f4 0.634
+     d12 vs d14: same top YES  same order YES  mean |Δ score| 0.0085  (reference top-2 gap 0.1164)
+     d10 vs d14: same top YES  same order YES  mean |Δ score| 0.0202  (reference top-2 gap 0.1164)
+     d8 vs d14: same top YES  same order YES  mean |Δ score| 0.0224  (reference top-2 gap 0.1164)
+     d6 vs d14: same top YES  same order YES  mean |Δ score| 0.0190  (reference top-2 gap 0.1164)
+
+── fen64
+   d14  wall 5.6s   grade cpu 2.5s (50 calls, avg 51ms, avg 2.2 candidates)   top=e3d4 0.786
+   d12  wall 4.7s   grade cpu 1.1s (50 calls, avg 21ms, avg 2.2 candidates)   top=e3d4 0.775
+   d10  wall 4.1s   grade cpu 0.3s (50 calls, avg 6ms, avg 2.2 candidates)   top=e3d4 0.762
+   d 8  wall 4.0s   grade cpu 0.1s (50 calls, avg 2ms, avg 2.2 candidates)   top=e3e4 0.723
+   d 6  wall 4.0s   grade cpu 0.1s (50 calls, avg 1ms, avg 2.2 candidates)   top=e3d4 0.682
+     d12 vs d14: same top YES  same order YES  mean |Δ score| 0.0097  (reference top-2 gap 0.0058)
+     d10 vs d14: same top YES  same order YES  mean |Δ score| 0.0237  (reference top-2 gap 0.0058)
+     d8 vs d14: same top NO   same order NO   mean |Δ score| 0.0632  (reference top-2 gap 0.0058)
+        d14: e3d4 e3e4 e3f4
+        d8: e3e4 e3d4 e3f4
+     d6 vs d14: same top YES  same order YES  mean |Δ score| 0.1028  (reference top-2 gap 0.0058)
+
+── fen65
+   d14  wall 6.3s   grade cpu 4.1s (50 calls, avg 81ms, avg 4.4 candidates)   top=e3f4 0.599
+   d12  wall 5.2s   grade cpu 2.0s (50 calls, avg 39ms, avg 4.4 candidates)   top=e3f4 0.598
+   d10  wall 4.8s   grade cpu 1.0s (50 calls, avg 20ms, avg 4.4 candidates)   top=e3f4 0.590
+   d 8  wall 4.5s   grade cpu 0.4s (50 calls, avg 9ms, avg 4.4 candidates)   top=e3f4 0.557
+   d 6  wall 4.3s   grade cpu 0.2s (50 calls, avg 4ms, avg 4.4 candidates)   top=e3f4 0.566
+     d12 vs d14: same top YES  same order NO   mean |Δ score| 0.0018  (reference top-2 gap 0.0930)
+        d14: e3f4 e3d4 e3d3 e3f2 e3d2 e3f3 e1f1 e1d1
+        d12: e3f4 e3d4 e3d2 e3d3 e3f2 e3f3 e1f1 e1d1
+     d10 vs d14: same top YES  same order NO   mean |Δ score| 0.0026  (reference top-2 gap 0.0930)
+        d14: e3f4 e3d4 e3d3 e3f2 e3d2 e3f3 e1f1 e1d1
+        d10: e3f4 e3f2 e3d3 e3d4 e3d2 e3f3 e1d1 e1f1
+     d8 vs d14: same top YES  same order NO   mean |Δ score| 0.0070  (reference top-2 gap 0.0930)
+        d14: e3f4 e3d4 e3d3 e3f2 e3d2 e3f3 e1f1 e1d1
+        d8: e3f4 e3d2 e3d4 e3d3 e3f3 e3f2 e1f1 e1d1
+     d6 vs d14: same top YES  same order NO   mean |Δ score| 0.0065  (reference top-2 gap 0.0930)
+        d14: e3f4 e3d4 e3d3 e3f2 e3d2 e3f3 e1f1 e1d1
+        d6: e3f4 e3d2 e3d3 e3f2 e3f3 e3d4 e1f1 e1d1
+
+── fen66
+   d14  wall 7.3s   grade cpu 6.0s (50 calls, avg 120ms, avg 2.9 candidates)   top=g2f3 0.965
+   d12  wall 4.7s   grade cpu 1.0s (50 calls, avg 19ms, avg 2.9 candidates)   top=f2f4 0.919
+   d10  wall 4.2s   grade cpu 0.2s (50 calls, avg 5ms, avg 2.9 candidates)   top=f2f4 0.884
+   d 8  wall 4.2s   grade cpu 0.1s (50 calls, avg 2ms, avg 2.9 candidates)   top=f2f4 0.861
+   d 6  wall 4.2s   grade cpu 0.1s (50 calls, avg 1ms, avg 2.9 candidates)   top=g2f3 0.855
+     d12 vs d14: same top NO   same order NO   mean |Δ score| 0.0416  (reference top-2 gap 0.0096)
+        d14: g2f3 f2f4 f2f3
+        d12: f2f4 g2f3 f2f3
+     d10 vs d14: same top NO   same order NO   mean |Δ score| 0.0786  (reference top-2 gap 0.0096)
+        d14: g2f3 f2f4 f2f3
+        d10: f2f4 g2f3 f2f3
+     d8 vs d14: same top NO   same order NO   mean |Δ score| 0.0980  (reference top-2 gap 0.0096)
+        d14: g2f3 f2f4 f2f3
+        d8: f2f4 g2f3 f2f3
+     d6 vs d14: same top YES  same order YES  mean |Δ score| 0.1046  (reference top-2 gap 0.0096)
+
+── fen67
+   d14  wall 7.4s   grade cpu 5.1s (50 calls, avg 101ms, avg 2.7 candidates)   top=e3e4 0.997
+   d12  wall 5.1s   grade cpu 1.4s (50 calls, avg 29ms, avg 2.7 candidates)   top=e3e4 0.967
+   d10  wall 4.4s   grade cpu 0.4s (50 calls, avg 8ms, avg 2.8 candidates)   top=e3e4 0.945
+   d 8  wall 4.2s   grade cpu 0.1s (50 calls, avg 2ms, avg 2.8 candidates)   top=e3e4 0.903
+   d 6  wall 4.2s   grade cpu 0.1s (50 calls, avg 1ms, avg 2.8 candidates)   top=e3d4 0.846
+     d12 vs d14: same top YES  same order YES  mean |Δ score| 0.0289  (reference top-2 gap 0.0078)
+     d10 vs d14: same top YES  same order NO   mean |Δ score| 0.0566  (reference top-2 gap 0.0078)
+        d14: e3e4 e3d4 d2d4 d2d3 b5d7
+        d10: e3e4 e3d4 d2d3 d2d4 b5d7
+     d8 vs d14: same top YES  same order YES  mean |Δ score| 0.1074  (reference top-2 gap 0.0078)
+     d6 vs d14: same top NO   same order NO   mean |Δ score| 0.1461  (reference top-2 gap 0.0078)
+        d14: e3e4 e3d4 d2d4 d2d3 b5d7
+        d6: e3d4 e3e4 d2d4 d2d3 b5d7
+
+── fen68
+   d14  wall 7.8s   grade cpu 4.2s (50 calls, avg 84ms, avg 3.9 candidates)   top=d4c5 0.983
+   d12  wall 4.8s   grade cpu 0.9s (50 calls, avg 18ms, avg 3.9 candidates)   top=d2a5 0.985
+   d10  wall 4.5s   grade cpu 0.4s (50 calls, avg 8ms, avg 3.9 candidates)   top=d2f4 0.980
+   d 8  wall 4.4s   grade cpu 0.2s (50 calls, avg 3ms, avg 3.9 candidates)   top=d2f4 0.966
+   d 6  wall 4.4s   grade cpu 0.1s (50 calls, avg 2ms, avg 3.9 candidates)   top=d2f4 0.968
+     d12 vs d14: same top NO   same order NO   mean |Δ score| 0.0042  (reference top-2 gap 0.0046)
+        d14: d4c5 d2e3 d4e4 d2g5 d2a5 d2f4 d2h6 d2e2 d4c4
+        d12: d2a5 d4c5 d2e3 d2g5 d4e4 d2f4 d2e2 d2h6 d4c4
+     d10 vs d14: same top NO   same order NO   mean |Δ score| 0.0042  (reference top-2 gap 0.0046)
+        d14: d4c5 d2e3 d4e4 d2g5 d2a5 d2f4 d2h6 d2e2 d4c4
+        d10: d2f4 d2g5 d4e4 d2a5 d2e3 d4c5 d2h6 d2e2 d4c4
+     d8 vs d14: same top NO   same order NO   mean |Δ score| 0.0158  (reference top-2 gap 0.0046)
+        d14: d4c5 d2e3 d4e4 d2g5 d2a5 d2f4 d2h6 d2e2 d4c4
+        d8: d2f4 d2g5 d2a5 d4e4 d2e3 d4c5 d2h6 d2e2 d4c4
+     d6 vs d14: same top NO   same order NO   mean |Δ score| 0.0222  (reference top-2 gap 0.0046)
+        d14: d4c5 d2e3 d4e4 d2g5 d2a5 d2f4 d2h6 d2e2 d4c4
+        d6: d2f4 d2g5 d2a5 d2e3 d4e4 d4c5 d2e2 d2h6 d4c4
+
+Total wall across 21 positions:
+  d14  245.5s   1.00x vs d14
+  d12  150.5s   1.63x vs d14
+  d10  108.7s   2.26x vs d14
+  d 8  94.7s   2.59x vs d14
+  d 6  90.4s   2.72x vs d14
+
+Wrote /home/aimfeld/Projects/Python/flawchess/reports/data/engine-grading-depth-ab-2026-07-30T19-23-20-133Z.tsv

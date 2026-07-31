@@ -15,7 +15,7 @@
  * `applyStyleScoreShaping`, and `styleBookWeighting` coverage.
  */
 
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, vi } from 'vitest';
 import { Chess } from 'chess.js';
 import {
   classifyMoveFeatures,
@@ -298,6 +298,67 @@ describe('applyStyleScoreShaping', () => {
       modalPath: ['g1f3', 'b8c6'],
       visits: 7,
     });
+  });
+
+  it('preserves modalPath/modalStats as accessor properties after shaping and never invokes the underlying builder (Phase 194 JANK-03 landmine fix)', () => {
+    const style = makeStyle({ scoreBonus: 0.05 });
+    // A call-count oracle behind the getter, standing in for the real
+    // `buildModalPath`/`modalPathBuilder` (treeCommon.ts) — the assertion
+    // that matters is "was the getter invoked", which is identical whatever
+    // function backs it.
+    const modalBuilder = vi.fn(
+      (): { path: string[]; stats: RankedLine['modalStats'] } => ({
+        path: ['g1f3', 'b8c6'],
+        stats: [],
+      }),
+    );
+
+    // A REAL accessor-backed RankedLine — mirrors buildRankedLines' own
+    // Object.defineProperty construction (treeCommon.ts). A plain
+    // data-property fixture (the `makeLine()` helper above) would pass this
+    // test VACUOUSLY even if applyStyleScoreShaping still spread its input,
+    // since spreading a plain data property is a harmless no-op — only a
+    // real accessor can expose the eager-evaluation hazard.
+    const line = {
+      rootMove: 'g1f3',
+      practicalScore: 0.5,
+      objectiveEvalCp: null,
+      objectiveEvalMate: null,
+      visits: 1,
+      childScoreSpread: null,
+    } as RankedLine;
+    Object.defineProperty(line, 'modalPath', { get: () => modalBuilder().path, enumerable: true });
+    Object.defineProperty(line, 'modalStats', { get: () => modalBuilder().stats, enumerable: true });
+
+    const [shaped] = applyStyleScoreShaping([line], style);
+    expect(shaped).toBeDefined();
+
+    const modalPathDescriptor = Object.getOwnPropertyDescriptor(shaped, 'modalPath');
+    expect(typeof modalPathDescriptor?.get).toBe('function');
+    expect(modalPathDescriptor?.value).toBeUndefined();
+
+    const modalStatsDescriptor = Object.getOwnPropertyDescriptor(shaped, 'modalStats');
+    expect(typeof modalStatsDescriptor?.get).toBe('function');
+    expect(modalStatsDescriptor?.value).toBeUndefined();
+
+    // The whole point: shaping a bot move's candidate lines must not force
+    // eager evaluation of the lazy modal-path fields it never reads.
+    expect(modalBuilder).not.toHaveBeenCalled();
+
+    // Sanity: reading it AFTER shaping still works and invokes the builder
+    // exactly once (proves the getter wasn't silently broken, only that it
+    // is genuinely lazy).
+    expect(shaped!.modalPath).toEqual(['g1f3', 'b8c6']);
+    expect(modalBuilder).toHaveBeenCalledTimes(1);
+  });
+
+  it('does not mutate the input line (practicalScore on the input stays unchanged after shaping)', () => {
+    const style = makeStyle({ scoreBonus: 0.2 });
+    const line = makeLine({ practicalScore: 0.4 });
+
+    applyStyleScoreShaping([line], style);
+
+    expect(line.practicalScore).toBe(0.4);
   });
 });
 

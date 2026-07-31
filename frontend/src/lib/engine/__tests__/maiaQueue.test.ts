@@ -16,11 +16,15 @@
  */
 
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
-import { createMaiaQueue, MAIA_CACHE_MAX, type MaiaQueue } from '../maiaQueue';
+import * as Sentry from '@sentry/react';
+
+vi.mock('@sentry/react', () => ({ captureException: vi.fn() }));
+import { createMaiaQueue, type MaiaQueue } from '../maiaQueue';
 import { acquireMaiaWorker, ENGINE_PATH } from '../maiaWorkerHost';
 import type { AcquireMaiaWorkerOptions, MaiaAnalyzeResult, MaiaWorkerLease } from '../maiaWorkerHost';
 import type { EngineProviders } from '../types';
 import { maskAndSoftmax, POLICY_VOCAB_SIZE } from '@/lib/maiaEncoding';
+import { MAIA_POLICY_CACHE_MAX, clearMaiaPolicyCache, getCachedPolicy, setCachedPolicy } from '../maiaPolicyCache';
 
 vi.mock('../maiaWorkerHost', async (importOriginal) => {
   const actual = await importOriginal<typeof import('../maiaWorkerHost')>();
@@ -138,6 +142,10 @@ function fenVariant(n: number): string {
 describe('createMaiaQueue', () => {
   beforeEach(() => {
     stubHost();
+    // The policy cache is a module-scoped singleton (Phase 194 CACHE-05,
+    // shared with useMaiaEngine's write-through) — clear it so no test in
+    // this file (or a sibling suite importing the same module) leaks state.
+    clearMaiaPolicyCache();
   });
 
   afterEach(() => {
@@ -260,25 +268,55 @@ describe('createMaiaQueue', () => {
     expect(analyzeMessages(lease)).toHaveLength(2);
   });
 
-  it('caps the cache at MAIA_CACHE_MAX entries (FIFO eviction)', async () => {
+  it(
+    'caps the shared policy cache at MAIA_POLICY_CACHE_MAX entries (LRU eviction, Phase 194 CACHE-01/02)',
+    async () => {
+      const queue = createMaiaQueue();
+      const lease = (): FakeLease => createdLeases[0]!;
+      // Seed one more than the cap, each a distinct (fen, elo) key.
+      for (let i = 0; i < MAIA_POLICY_CACHE_MAX + 1; i++) {
+        const fen = fenVariant(i);
+        const p = queue.policy(fen, 1500, 'w');
+        if (i === 0) await driveReady(lease());
+        await resolveLatest(lease(), fen, [1500]);
+        await p;
+      }
+      // The very first (fen=fenVariant(0), elo=1500) entry should have been
+      // evicted (never touched again after its initial insert) —
+      // re-requesting it must issue a NEW analyze call, not resolve from cache.
+      const analyzeCountBefore = analyzeMessages(lease()).length;
+      const pAgain = queue.policy(fenVariant(0), 1500, 'w');
+      await resolveLatest(lease(), fenVariant(0), [1500]);
+      await pAgain;
+      expect(analyzeMessages(lease()).length).toBe(analyzeCountBefore + 1);
+    },
+    15000,
+  );
+
+  // ─── CACHE-05: shared cache short-circuit ──────────────────────────────
+
+  it("policy() resolves a pre-seeded shared-cache entry (e.g. from useMaiaEngine's write-through) without ever calling lease.analyze()", async () => {
     const queue = createMaiaQueue();
-    const lease = (): FakeLease => createdLeases[0]!;
-    // Seed one more than the cap, each a distinct (fen, elo) key.
-    for (let i = 0; i < MAIA_CACHE_MAX + 1; i++) {
-      const fen = fenVariant(i);
-      const p = queue.policy(fen, 1500, 'w');
-      if (i === 0) await driveReady(lease());
-      await resolveLatest(lease(), fen, [1500]);
-      await p;
-    }
-    // The very first (fen=fenVariant(0), elo=1500) entry should have been
-    // evicted — re-requesting it must issue a NEW analyze call, not resolve
-    // from cache.
-    const analyzeCountBefore = analyzeMessages(lease()).length;
-    const pAgain = queue.policy(fenVariant(0), 1500, 'w');
-    await resolveLatest(lease(), fenVariant(0), [1500]);
-    await pAgain;
-    expect(analyzeMessages(lease()).length).toBe(analyzeCountBefore + 1);
+    // Seed the shared cache exactly the way useMaiaEngine's write-through
+    // does — without ever going through this queue's own dispatch path.
+    const seeded = { e2e4: 0.9, d2d4: 0.1 };
+    setCachedPolicy(TEST_FEN, 1500, seeded);
+
+    const result = await queue.policy(TEST_FEN, 1500, 'w');
+    expect(result).toEqual(seeded);
+    // No lease was ever acquired — the cache hit short-circuits before ensureLease().
+    expect(createdLeases).toHaveLength(0);
+  });
+
+  it('getCachedPolicy sees the entry maiaQueue.handleResult writes on a real analyze() resolution', async () => {
+    const queue = createMaiaQueue();
+    const p1 = queue.policy(TEST_FEN, 1500, 'w');
+    const lease = createdLeases[0]!;
+    await driveReady(lease);
+    await resolveLatest(lease, TEST_FEN, [1500]);
+    const result = await p1;
+
+    expect(getCachedPolicy(TEST_FEN, 1500)).toEqual(result);
   });
 
   // ─── No-drop async FIFO (Open Question 2) ──────────────────────────────
@@ -368,5 +406,60 @@ describe('createMaiaQueue', () => {
     const queue: MaiaQueue = createMaiaQueue();
     const providerPolicy: EngineProviders['policy'] = queue.policy;
     expect(typeof providerPolicy).toBe('function');
+  });
+});
+
+// ─── Throw containment in the fulfilment handler (Phase 194 code-review WR-03) ──
+//
+// `handleResult` runs inside `.then(onFulfilled, onRejected)`'s FULFILMENT arm,
+// so a throw there is NOT caught by the sibling rejection handler — it becomes
+// an unhandled rejection and every request in the batch hangs forever, freezing
+// the search with no telemetry. The realistic trigger is `maskAndSoftmaxUci`,
+// which reads chess.js's PRIVATE `_moves()` under a `^1.4.0` caret range.
+describe('createMaiaQueue: handleResult throw containment (code-review WR-03)', () => {
+  beforeEach(() => {
+    stubHost();
+    clearMaiaPolicyCache();
+  });
+
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  it('a throw while converting the policy settles every request in the batch instead of hanging, and reports to Sentry', async () => {
+    const captureSpy = vi.mocked(Sentry.captureException);
+    captureSpy.mockClear();
+    const queue = createMaiaQueue();
+
+    const p1 = queue.policy(TEST_FEN, 1500, 'b');
+    const p2 = queue.policy(TEST_FEN, 1900, 'b');
+    const lease = createdLeases[0]!;
+    await driveReady(lease);
+
+    // A malformed result: `rawPolicyByElo` carries a policy array of the wrong
+    // length, which `maskAndSoftmaxUci` rejects by throwing — standing in for
+    // the chess.js private-API break the guard actually exists for.
+    const call = lease.analyzeCalls[lease.analyzeCalls.length - 1];
+    call?.resolve({
+      fen: TEST_FEN,
+      rawPolicyByElo: [
+        { elo: 1500, policy: null as unknown as Float32Array },
+        { elo: 1900, policy: null as unknown as Float32Array },
+      ],
+      wdlByElo: [],
+      backend: 'wasm',
+    });
+
+    // Both promises settle (empty) rather than hanging forever.
+    await expect(p1).resolves.toEqual({});
+    await expect(p2).resolves.toEqual({});
+    expect(captureSpy).toHaveBeenCalledTimes(1);
+
+    // The queue is still usable afterward — `dispatching` was cleared and
+    // processQueue() ran, so a later request still dispatches.
+    const p3 = queue.policy(fenVariant(7), 1500, 'w');
+    await Promise.resolve();
+    await resolveLatest(lease, fenVariant(7), [1500]);
+    await expect(p3).resolves.toBeTypeOf('object');
   });
 });

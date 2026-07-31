@@ -196,4 +196,119 @@ describe('useFlawChessEngine', () => {
     const secondSignal = mockMctsSearch.mock.calls[1]?.[4] as AbortSignal;
     expect(secondSignal.aborted).toBe(false);
   });
+
+  // ─── Phase 196 (INJECT-03): extraRootMoves threading ───────────────────────
+
+  it('threads extraRootMoves into the SearchBudget by reference (INJECT-03)', async () => {
+    vi.advanceTimersByTime(200);
+    const extra = ['h2h4'];
+
+    renderHook(() => useFlawChessEngine({ fen: TEST_FEN, enabled: true, elo: 1500, extraRootMoves: extra }));
+
+    expect(mockMctsSearch).toHaveBeenCalledTimes(1);
+    const budget = mockMctsSearch.mock.calls[0]?.[1] as { extraRootMoves?: string[] };
+    expect(budget.extraRootMoves).toBe(extra);
+  });
+
+  it('produces a SearchBudget with extraRootMoves undefined when the option is omitted (byte-identical to pre-phase behaviour)', async () => {
+    vi.advanceTimersByTime(200);
+
+    renderHook(() => useFlawChessEngine({ fen: TEST_FEN, enabled: true, elo: 1500 }));
+
+    expect(mockMctsSearch).toHaveBeenCalledTimes(1);
+    const budget = mockMctsSearch.mock.calls[0]?.[1] as { extraRootMoves?: string[] };
+    expect(budget.extraRootMoves).toBeUndefined();
+  });
+
+  it('does NOT restart the search when extraRootMoves keeps the SAME array reference across a re-render', async () => {
+    vi.advanceTimersByTime(200);
+    const extra = ['h2h4'];
+
+    const { rerender } = renderHook(
+      ({ elo }: { elo: number }) =>
+        useFlawChessEngine({ fen: TEST_FEN, enabled: true, elo, extraRootMoves: extra }),
+      { initialProps: { elo: 1500 } },
+    );
+
+    expect(mockMctsSearch).toHaveBeenCalledTimes(1);
+    const stopAllCallsBefore = mockStopAll.mock.calls.length;
+
+    // Re-render with an unrelated prop unchanged and the SAME extraRootMoves
+    // reference: no new search should be dispatched.
+    rerender({ elo: 1500 });
+
+    expect(mockMctsSearch).toHaveBeenCalledTimes(1);
+    expect(mockStopAll.mock.calls.length).toBe(stopAllCallsBefore);
+  });
+
+  it('restarts the search when extraRootMoves changes identity, even with equal contents (identity is the contract)', async () => {
+    vi.advanceTimersByTime(200);
+
+    const { rerender } = renderHook(
+      ({ extraRootMoves }: { extraRootMoves: string[] }) =>
+        useFlawChessEngine({ fen: TEST_FEN, enabled: true, elo: 1500, extraRootMoves }),
+      { initialProps: { extraRootMoves: ['h2h4'] } },
+    );
+
+    expect(mockMctsSearch).toHaveBeenCalledTimes(1);
+    const stopAllCallsBefore = mockStopAll.mock.calls.length;
+
+    // A NEW array reference with equal contents must still restart — identity
+    // is the contract, which is precisely why Analysis.tsx (Task 2) owns the
+    // stability guarantee.
+    rerender({ extraRootMoves: ['h2h4'] });
+
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(200);
+    });
+
+    expect(mockMctsSearch).toHaveBeenCalledTimes(2);
+    expect(mockStopAll.mock.calls.length).toBeGreaterThan(stopAllCallsBefore);
+    const budget = mockMctsSearch.mock.calls[1]?.[1] as { extraRootMoves?: string[] };
+    expect(budget.extraRootMoves).toEqual(['h2h4']);
+  });
+
+  // ─── FIX-5 (quick 260731-s0z): abort the superseded run on a RAPID FEN change ──
+
+  it('FIX-5: aborts the previous run immediately on a RAPID FEN change (not up to RAPID_STEP_DEBOUNCE_MS later), and its pending trailing snapshot never lands after the clear', async () => {
+    vi.advanceTimersByTime(200); // settled path: first FEN fires the search immediately
+    const { rerender, result } = renderHook(
+      ({ fen }: { fen: string }) => useFlawChessEngine({ fen, enabled: true, elo: 1500 }),
+      { initialProps: { fen: TEST_FEN } },
+    );
+
+    expect(mockMctsSearch).toHaveBeenCalledTimes(1);
+    const onSnapshot = mockMctsSearch.mock.calls[0]?.[3] as (s: EngineSnapshot) => void;
+    const firstSignal = mockMctsSearch.mock.calls[0]?.[4] as AbortSignal;
+    expect(firstSignal.aborted).toBe(false);
+
+    const snapshot1 = makeSnapshot('e2e4');
+    const snapshot2 = makeSnapshot('g1f3');
+    act(() => {
+      onSnapshot(snapshot1); // immediate commit
+      onSnapshot(snapshot2); // schedules a trailing commit (no time advanced between calls)
+    });
+    expect(result.current.rankedLines).toBe(snapshot1.rankedLines);
+
+    // RAPID FEN change — no time advance, so the navigation debounce takes
+    // the rapid (150ms-later) path. Before the fix, nothing aborted the old
+    // run here — that only happened once the debounced search-trigger effect
+    // ran, up to RAPID_STEP_DEBOUNCE_MS later.
+    rerender({ fen: TEST_FEN_2 });
+    expect(firstSignal.aborted).toBe(true);
+
+    // Advance past the debounce/throttle window — this also fires the FEN
+    // debounce, dispatching the new search.
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(150);
+    });
+
+    // The OLD search's pending trailing commit (snapshot2) must NOT land
+    // after the FEN-effect clear — rankedLines is EMPTY (INITIAL_SNAPSHOT),
+    // never snapshot2's.
+    expect(result.current.rankedLines).toEqual([]);
+    expect(result.current.rankedLines).not.toBe(snapshot2.rankedLines);
+    expect(mockMctsSearch).toHaveBeenCalledTimes(2);
+    expect(mockMctsSearch.mock.calls[1]?.[0]).toBe(TEST_FEN_2);
+  });
 });

@@ -28,10 +28,17 @@
  */
 
 import { useRef, useState, useCallback, useEffect, useMemo } from 'react';
-import { maskAndSoftmax, softmaxWdl, expectedScore, MAIA_ELO_LADDER } from '../lib/maiaEncoding';
+import {
+  buildPolicyMoveContext,
+  softmaxPolicyByContext,
+  softmaxWdl,
+  expectedScore,
+  MAIA_ELO_LADDER,
+} from '../lib/maiaEncoding';
 import type { WdlVector } from '../lib/maiaEncoding';
 import { acquireMaiaWorker } from '../lib/engine/maiaWorkerHost';
 import type { MaiaAnalyzeResult, MaiaWorkerLease } from '../lib/engine/maiaWorkerHost';
+import { setCachedPolicy } from '../lib/engine/maiaPolicyCache';
 
 // ─── Constants ───────────────────────────────────────────────────────────────
 
@@ -107,12 +114,43 @@ interface MaiaResult {
 
 // ─── Helpers ─────────────────────────────────────────────────────────────────
 
-/** Converts the host's raw per-ELO payload into the hook's normalized MaiaResult. */
+/**
+ * Converts the host's raw per-ELO payload into the hook's normalized
+ * MaiaResult. Also write-throughs the shared `fen|elo` policy cache
+ * (`maiaPolicyCache.ts`, Phase 194 CACHE-05) with a UCI-keyed distribution
+ * per ladder rung, so a position this chart already inferred serves the
+ * engine's own root `policy()` call (`maiaQueue.ts`) without a second
+ * ~130 ms Maia forward pass. Keyed on `fen` — this function is always called
+ * with the RESULT's own `msg.fen`, never the hook's current `fen` prop
+ * (163-REVIEW WR-03: `latestResult` clears one commit after the prop
+ * changes, so a write keyed on the prop could target the wrong position).
+ * UCI-keyed rather than reusing this function's own SAN-keyed
+ * `moveProbabilities`: the engine's consumer needs UCI keys, and converting
+ * SAN to UCI at read time would reintroduce the per-move chess.js replay
+ * Phase 194 JANK-01 removed from the hot path.
+ *
+ * Bug fix (quick 260731-s0z, FIX-7): this used to call both `maskAndSoftmax`
+ * and `maskAndSoftmaxUci` per ELO rung — 21 rungs means 42 `new Chess(fen)`
+ * constructions and 42 full legal-move generations for ONE FEN whose
+ * legal-move set, vocab indices, and UCI/SAN keys are rung-INVARIANT; only
+ * the logits differ per rung. `buildPolicyMoveContext` now builds that
+ * rung-invariant context ONCE, and `softmaxPolicyByContext` runs one softmax
+ * pass per rung over precomputed indices, returning both keyspaces from a
+ * single pass. `maskAndSoftmax`/`maskAndSoftmaxUci` are kept as the
+ * independent reference implementations the parity tests
+ * (`maiaEncoding.test.ts`) compare this path against — not reimplemented on
+ * top of it, which would make those tests self-referential.
+ */
 function buildMaiaResult(fen: string, msg: MaiaAnalyzeResult): MaiaResult {
-  const perElo = msg.rawPolicyByElo.map(({ elo, policy }) => ({
-    elo,
-    moveProbabilities: maskAndSoftmax(policy, fen),
-  }));
+  const ctx = buildPolicyMoveContext(fen);
+  const perElo = msg.rawPolicyByElo.map(({ elo, policy }) => {
+    const { san, uci } = softmaxPolicyByContext(policy, ctx);
+    setCachedPolicy(fen, elo, uci);
+    return {
+      elo,
+      moveProbabilities: san,
+    };
+  });
   const wdlByElo = msg.wdlByElo.map(({ elo, wdl }) => ({ elo, wdl: softmaxWdl(wdl) }));
   return { fen, perElo, wdlByElo };
 }
@@ -325,6 +363,23 @@ export function useMaiaEngine({
       disposed = true;
       lease.release();
       leaseRef.current = null;
+      // Bug fix (quick 260731-s0z, FIX-1): this cleanup used to only null the
+      // lease, leaving pendingFenRef/isAnalyzing/isReady set. The in-flight
+      // request's own rejection handler above bails at the
+      // `leaseRef.current !== lease` check BEFORE it clears pendingFenRef, so
+      // that ref stayed non-null forever and every later analyze() returned
+      // at the single-in-flight gate — a disable-mid-inference permanently
+      // wedged the hook even after a subsequent re-enable. Mirrors the
+      // four-field reset `onFatal` above already performs, and the analogous
+      // teardown reset in useStockfishEngine.ts's worker cleanup.
+      pendingFenRef.current = null;
+      setIsAnalyzing(false);
+      setIsReady(false);
+      isReadyRef.current = false;
+      // useGemSweep.ts flips `enabled` dynamically (engineEnabled =
+      // effectiveEnabled && hasWork) so it inherits this fix too; it only
+      // reads perElo/resultFen/hasFailed, never isReady/isAnalyzing, so these
+      // added resets cannot regress the sweep.
     };
   }, [enabled, priority]);
 

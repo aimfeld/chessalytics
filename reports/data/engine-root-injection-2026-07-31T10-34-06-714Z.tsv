@@ -1,0 +1,6 @@
+position	fen	nodes	elo	sf_top_uci	sf_top_raw_maia_prob	baseline_wall_ms	injected_wall_ms	grade_cache_hits	grade_cache_misses	injected_uci	injected_practical_score	injected_visits	top_organic_uci	top_organic_practical_score	top_organic_visits	baseline_top_uci	baseline_top_practical_score
+fen28	2r3k1/p4ppp/q2bp3/3p4/2rN4/4P2P/P2Q1PP1/R1R3K1 b - - 0 22	400	1500	a6a2	0.001261	40193	2537	388	12	a6a2	1.000000	7	d6b4	0.752832	139	d6b4	0.752507
+fen30	1r2r2k/2RR1Qpp/q1p2b2/p1B5/3p4/4P1P1/P4P1P/6K1 w - - 6 28	400	1500	g1g2	0.009909	36332	2704	386	14	g1g2	0.646625	13	f7f6	0.875136	595	f7f6	0.875139
+fen31	6k1/4rp2/2Bp2p1/3Pbq1p/2Q1R3/6P1/5P2/6K1 b - - 3 31	400	1500	e5g3	0.021635	55214	27400	103	297	e5g3	0.987422	444	f5h3	0.733811	11	e7a7	0.715562
+fen32	2kr4/ppp2pp1/3p4/2bN4/4P1n1/3B3q/PPP4B/R2Q1R1K w - - 2 19	400	1500	d1g4	0.013916	34462	13292	290	110	d1g4	0.305374	110	d1e2	0.254110	280	d1e2	0.258869
+fen33	4rrk1/6p1/2Q1p1q1/p4p2/3P1R2/P5P1/1P2N2P/5RK1 w - - 2 25	400	1500	f4f5	0.013983	42058	3655	382	18	f4f5	0.688156	9	d4d5	0.923058	296	d4d5	0.923213

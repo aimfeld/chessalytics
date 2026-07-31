@@ -26,8 +26,15 @@ export type Side = 'w' | 'b';
 export interface EngineProviders {
   /** UCI-keyed Maia move-probability distribution at `elo` for `side` to move (D-08). */
   policy(fen: string, elo: number, side: Side): Promise<Record<string, number>>;
-  /** UCI-keyed Stockfish shallow-eval grades for the candidate UCI moves, white-POV cp (D-08). */
-  grade(fen: string, candidateUcis: string[]): Promise<Map<string, MoveGrade>>;
+  /**
+   * UCI-keyed Stockfish shallow-eval grades for the candidate UCI moves,
+   * white-POV cp (D-08). `signal` (Phase 194 ABORT-01/03) is OPTIONAL so a
+   * two-argument implementation/call site stays structurally assignable to
+   * this interface — widening it to required would break every existing
+   * fabricated-in-tests provider and the Node calibration providers outside
+   * the frontend `tsc` project (ABORT-03).
+   */
+  grade(fen: string, candidateUcis: string[], signal?: AbortSignal): Promise<Map<string, MoveGrade>>;
 }
 
 /**
@@ -109,9 +116,25 @@ export interface RankedLine {
    * than the `…` a null cp would print (quick 260709).
    */
   objectiveEvalMate: number | null;
-  /** The line's most-visited continuation, UCI sequence (D-08). */
+  /**
+   * The line's most-visited continuation, UCI sequence (D-08). Phase 194
+   * JANK-03: constructed as a LAZY accessor property (a getter, not a data
+   * property) — computed only on first read, memoized thereafter. TypeScript
+   * cannot distinguish an accessor from a data property in this type
+   * declaration, so this comment is the only signal a future editor gets:
+   * spreading (`{ ...line }`), `structuredClone`-ing, or otherwise cloning a
+   * `RankedLine` FORCES this getter to evaluate immediately, defeating the
+   * laziness this field exists for. Copy property DESCRIPTORS
+   * (`Object.getOwnPropertyDescriptors`), never spread, when building a
+   * derived `RankedLine` — see `botStyle.ts`'s `applyStyleScoreShaping`.
+   */
   modalPath: string[];
-  /** Per-ply display stats index-aligned with `modalPath` (Phase 160). */
+  /**
+   * Per-ply display stats index-aligned with `modalPath` (Phase 160). Phase
+   * 194 JANK-03: same lazy-accessor caveat as `modalPath` above — shares ONE
+   * memoized computation with it, so reading both costs exactly one
+   * `buildModalPath` call, not two. Never spread a `RankedLine`.
+   */
   modalStats: ModalPlyStat[];
   /** Total expansion visits attributed to this root candidate. */
   visits: number;

@@ -1,0 +1,43 @@
+
+Grading-depth A/B — nodes=50 plies=8 concurrency=4 elo=1500 ladder-table=14+floor14
+positions=6  depths=14,10  reference=d14
+
+── fen15
+   d14  wall 14.8s   grade cpu 22.4s (50 calls, avg 449ms, avg 4.1 candidates)   top=f3g5 0.534
+   d10  wall 6.1s   grade cpu 3.2s (50 calls, avg 64ms, avg 4.1 candidates)   top=f3g5 0.542
+     d10 vs d14: same top YES  same order NO   mean |Δ score| 0.0068  (reference top-2 gap 0.0133)
+        d14: f3g5 d2d3 b1c3 d2d4 e1g1
+        d10: f3g5 d2d3 d2d4 b1c3 e1g1
+
+── fen16
+   d14  wall 23.2s   grade cpu 41.8s (50 calls, avg 836ms, avg 9.2 candidates)   top=f3g5 0.587
+   d10  wall 6.8s   grade cpu 5.4s (50 calls, avg 108ms, avg 9.4 candidates)   top=f3g5 0.599
+     d10 vs d14: same top YES  same order YES  mean |Δ score| 0.0073  (reference top-2 gap 0.0304)
+
+── fen17
+   d14  wall 17.8s   grade cpu 32.0s (50 calls, avg 639ms, avg 5.7 candidates)   top=h2h4 0.523
+   d10  wall 6.2s   grade cpu 4.2s (50 calls, avg 85ms, avg 5.7 candidates)   top=h2h4 0.530
+     d10 vs d14: same top YES  same order NO   mean |Δ score| 0.0133  (reference top-2 gap 0.0073)
+        d14: h2h4 c3e2 e1c1 e1g1 a2a3
+        d10: h2h4 c3e2 e1g1 e1c1 a2a3
+
+── fen18
+   d14  wall 10.1s   grade cpu 10.1s (50 calls, avg 202ms, avg 2.9 candidates)   top=b4f4 0.645
+   d10  wall 5.4s   grade cpu 1.7s (50 calls, avg 33ms, avg 2.9 candidates)   top=b4f4 0.618
+     d10 vs d14: same top YES  same order YES  mean |Δ score| 0.0181  (reference top-2 gap 0.1177)
+
+── fen19
+   d14  wall 20.3s   grade cpu 25.9s (50 calls, avg 517ms, avg 3.9 candidates)   top=c6b4 0.517
+   d10  wall 6.4s   grade cpu 3.1s (50 calls, avg 61ms, avg 3.9 candidates)   top=c6b4 0.495
+     d10 vs d14: same top YES  same order YES  mean |Δ score| 0.0234  (reference top-2 gap 0.1111)
+
+── fen20
+   d14  wall 7.3s   grade cpu 5.3s (50 calls, avg 106ms, avg 2.9 candidates)   top=g2f3 0.940
+   d10  wall 4.5s   grade cpu 0.4s (50 calls, avg 7ms, avg 2.9 candidates)   top=g2f3 0.882
+     d10 vs d14: same top YES  same order YES  mean |Δ score| 0.0584  (reference top-2 gap 0.0012)
+
+Total wall across 6 positions:
+  d14  93.6s   1.00x vs d14
+  d10  35.5s   2.64x vs d14
+
+Wrote /home/aimfeld/Projects/Python/flawchess/reports/data/engine-grading-depth-ab-2026-07-30T19-26-47-906Z.tsv

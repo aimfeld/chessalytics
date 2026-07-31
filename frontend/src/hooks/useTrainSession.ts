@@ -121,6 +121,17 @@ export interface UseTrainSessionResult {
    * pending/erroring, so a stale prior-puzzle verdict never leaks into the
    * current puzzle's render (cleared per-puzzle by `resetSolve`). */
   lastSolveResponse: SolveResponse | null;
+  /** The `TrainPuzzle.position` that `lastSolveResponse` belongs to (the
+   * mutation's own `variables`, so the two can never drift), or null when
+   * there is no landed verdict.
+   *
+   * Bug fix (FLAWCHESS-64): `resetSolve()` runs in a puzzle-keyed EFFECT, so
+   * on the Next transition there is one commit where the render already has
+   * the next puzzle but the mutation still holds the previous puzzle's data.
+   * Consumers must pair the verdict with this position rather than treating
+   * a non-null `lastSolveResponse` as "the current puzzle is solved" — the
+   * reveal GET fired in that window 409s ("Puzzle not yet attempted"). */
+  lastSolvedPosition: number | null;
   /** Re-submits the exact same payload as the last `solvePuzzle` call
    * (T-190-12/T-190-15) — a no-op until a solve attempt has been made. */
   retrySolve: () => void;
@@ -271,6 +282,11 @@ export function useTrainSession(): UseTrainSessionResult {
     isSolvePending: solveMutation.isPending,
     isSolveError: solveMutation.isError,
     lastSolveResponse: solveMutation.data ?? null,
+    // `variables` is the payload of the SAME call `data` came from (a new
+    // mutate() clears data back to undefined), so this pair is always
+    // self-consistent — see the interface docstring (FLAWCHESS-64).
+    lastSolvedPosition:
+      solveMutation.data !== undefined ? (solveMutation.variables?.body.position ?? null) : null,
     retrySolve,
     resetSolve,
     advance,

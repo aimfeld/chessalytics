@@ -804,6 +804,140 @@ describe('useBotGame', () => {
     });
   });
 
+  // ─── ABORT-02 (Phase 194): all four abort sites reach WorkerPool.grade ────
+  //
+  // `selectBotMove`/`createDeadlineSearch` stay fully mocked in this suite
+  // (see the module-header note on `mockCreateDeadlineSearch` above) — this
+  // file never exercises the real mctsSearch/dispatchExpansion wiring; that
+  // signal-forwarding proof lives in mctsSearch.test.ts's own ABORT-01 test
+  // (reference-identity assertion on providers.grade's 3rd argument) and
+  // workerPool.test.ts's ABORT-02 cases (what WorkerPool.grade's abort
+  // listener actually does). What THIS suite proves is the one link neither
+  // of those files can see: that `useBotGame`'s four `abortControllerRef`
+  // sites actually abort the SAME signal object that reaches `deps.grade`
+  // (== `pool.grade`, the real `WorkerPool.grade` in production — only its
+  // factory is mocked here). `mockSelectBotMove`'s implementation below
+  // forwards straight to `deps.grade` with the signal it was given, standing
+  // in for "whatever selectBotMove/mctsSearch eventually does with it" —
+  // proven for real elsewhere, not re-proven here.
+  describe('ABORT-02 (Phase 194): four abort sites stop in-flight Stockfish work', () => {
+    /** Bot-plays-first settings — mounting starts a bot think immediately. */
+    const BOT_AS_WHITE: BotGameSettings = { ...DEFAULT_SETTINGS, userColor: 'black' };
+
+    /**
+     * Arms `mockGrade` (== `pool.grade`) to capture every AbortSignal it is
+     * called with, register an abort listener recording whether it fired,
+     * and never resolve on its own — genuinely "in-flight" until aborted,
+     * mirroring `WorkerPool.grade`'s own real in-flight-until-stopped shape.
+     */
+    function armGradeCapture(): { signals: AbortSignal[]; fired: boolean[] } {
+      const signals: AbortSignal[] = [];
+      const fired: boolean[] = [];
+      mockGrade.mockReset().mockImplementation((_fen: string, _ucis: string[], signal?: AbortSignal) => {
+        const idx = signals.length;
+        signals.push(signal ?? new AbortController().signal);
+        fired.push(false);
+        signal?.addEventListener('abort', () => {
+          fired[idx] = true;
+        });
+        return new Promise<Map<string, MoveGrade>>(() => {}); // never resolves on its own
+      });
+      return { signals, fired };
+    }
+
+    /** Forwards straight to `deps.grade` with the signal `selectBotMove` was given — see the describe-level comment above. */
+    function armSelectBotMoveForwarding(): void {
+      mockSelectBotMove.mockImplementation(
+        (fen: string, _settings: unknown, deps: { grade: typeof mockGrade }, signal?: AbortSignal) =>
+          deps.grade(fen, ['e7e5'], signal),
+      );
+    }
+
+    it('site 1 (finalizeGame/resign, ~line 773): resign() aborts the in-flight grade signal', async () => {
+      const { signals, fired } = armGradeCapture();
+      armSelectBotMoveForwarding();
+      const { result } = renderHook(() => useBotGame(DEFAULT_SETTINGS));
+
+      act(() => {
+        result.current.attemptMove('e2', 'e4');
+      });
+      await advance(1000);
+      expect(signals[0]).toBeDefined();
+      expect(signals[0]!.aborted).toBe(false);
+
+      act(() => {
+        result.current.resign();
+      });
+
+      expect(signals[0]!.aborted).toBe(true);
+      expect(fired[0]).toBe(true);
+    });
+
+    it('site 2 (newGame, ~line 1072): newGame() aborts the in-flight grade signal', async () => {
+      const { signals, fired } = armGradeCapture();
+      armSelectBotMoveForwarding();
+      const { result } = renderHook(() => useBotGame(DEFAULT_SETTINGS));
+
+      act(() => {
+        result.current.attemptMove('e2', 'e4');
+      });
+      await advance(1000);
+      expect(signals[0]).toBeDefined();
+      expect(signals[0]!.aborted).toBe(false);
+
+      act(() => {
+        result.current.newGame();
+      });
+
+      expect(signals[0]!.aborted).toBe(true);
+      expect(fired[0]).toBe(true);
+    });
+
+    it('site 3 (runBotTurn, ~line 1316): a fresh turn dispatch supersedes and aborts the previous one', async () => {
+      const { signals, fired } = armGradeCapture();
+      armSelectBotMoveForwarding();
+      // Bot plays first — mounting alone starts turn #1's think.
+      const { result } = renderHook(() => useBotGame(BOT_AS_WHITE));
+      await advance(1000);
+      expect(signals[0]).toBeDefined();
+      expect(signals[0]!.aborted).toBe(false);
+
+      // newGame() resets moveHistory to a fresh array reference; since the
+      // bot plays first again, the bot-turn-trigger effect re-fires and
+      // `runBotTurn` dispatches turn #2 — its OWN abort call (site 3, unlike
+      // newGame's own site-2 abort at line 1072) is what a bare newGame()
+      // exercises here, evidenced below by a SECOND, freshly-unaborted grade
+      // call proving turn #2 actually started while turn #1's signal aborted.
+      act(() => {
+        result.current.newGame();
+      });
+      await advance(1000);
+
+      expect(signals[0]!.aborted).toBe(true);
+      expect(fired[0]).toBe(true);
+      expect(signals.length).toBeGreaterThanOrEqual(2);
+      expect(signals[1]!.aborted).toBe(false); // turn #2's own signal is fresh, not collaterally aborted
+    });
+
+    it('site 4 (unmount cleanup, ~line 1553): unmounting aborts the in-flight grade signal', async () => {
+      const { signals, fired } = armGradeCapture();
+      armSelectBotMoveForwarding();
+      const { result, unmount } = renderHook(() => useBotGame(DEFAULT_SETTINGS));
+
+      act(() => {
+        result.current.attemptMove('e2', 'e4');
+      });
+      await advance(1000);
+      expect(signals[0]).toBeDefined();
+      expect(signals[0]!.aborted).toBe(false);
+
+      unmount();
+
+      expect(signals[0]!.aborted).toBe(true);
+      expect(fired[0]).toBe(true);
+    });
+  });
+
   describe('hidden-tab time (D-20/WR-02, amended SC2)', () => {
     it('hidden-tab time during the bot think is not charged to its committed debit', async () => {
       let resolveSearch: ((uci: string) => void) | undefined;

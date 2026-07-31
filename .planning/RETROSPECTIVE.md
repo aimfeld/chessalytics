@@ -4,6 +4,64 @@
 
 > Note: v1.18, v1.19, v1.20, v1.23, v1.25, v1.27, and v2.1–v2.5 closes did not add retrospective sections (only the ROADMAP archives + MILESTONES entries were written). Not backfilled here to avoid reconstructing reflections after the fact; their facts live in the corresponding `milestones/vX.Y-ROADMAP.md` and `MILESTONES.md`.
 
+## Milestone: v2.9 — Train — Spaced-Repetition Blunder Drills
+
+**Shipped:** 2026-07-30 (deployed to production incrementally through releases #286–#290)
+**Phases:** 6 (189, 190, 190.1, 191, 192, 193) | **Plans:** 31
+**Timeline:** 2026-07-24 → 2026-07-30 (107 commits, 309 files, +68,178 / −2,386 since `v2.8`)
+
+### What Was Built
+
+The first milestone that changes what FlawChess *is*: an import-gated `/train` page re-presents the user's own blunders as spaced-repetition puzzles until the patterns stick.
+
+- **Pool + scheduler backend (189, SEED-037)** — four CASCADE-FK tables, a pure streak-keyed interval ladder (0 → next session / 1 → ~3d / 2 → ~10d; FSRS rejected as unjustifiable for this corpus), pool entry gated on the user's own out-of-book blunders with a complete stored answer key, a sharp-vs-avoid-the-blunder blob classifier, exactly-N session composition, and solve/reveal/settings endpoints — with **zero server-side grading** by design.
+- **Train page + solve loop (190)** — the full session end to end: nav on all three surfaces, six landing states, binary position read → single-move attempt graded entirely in-browser on the already-vendored Stockfish WASM at a *measured* movetime budget, auto-opening reveal, opt-in tactic stepper, resume, score screen.
+- **Reveal redesign (190.1)** — every arrow, line, and eval on the reveal sourced from one MultiPV-4 client search, so no two displayed numbers can contradict the verdict.
+- **Schedule + progress surface (191)** — auto-saving weekday/session-size pickers, numeric waiting-count nav badge, honest mastered/parked counts, reduced-motion-safe celebrations, tailored cold/exhausted states.
+- **Red-herring position pool (192, SEED-120)** — a globally shared, phase-balanced, MultiPV-5-confirmed `herring_pool` whose raw ladder is stored so qualifiers apply at query time, plus the `drill_solves.game_id` `SET NULL` one-way door letting a herring outlive its source game.
+- **Session-tick streak with a depletable shield (193, SEED-121)** — one day-judging state machine replacing the weekly-fulfillment check, `required_sessions_per_week`, and the 3-rung flame ladder.
+
+### What Worked
+
+- **Building the backend first, against nothing.** Phase 189 shipped a complete, tested API surface with no frontend at all, so Phase 190 spent its budget on the solve-loop UX rather than on discovering endpoint shape.
+- **Blocking human UAT gates as the last plan of a phase.** Both Phases 190 and 191 ended on an explicit human checkpoint, and both earned it: 190's found three real defects (a 21–27s pool-query planner pathology fixed by a LATERAL rewrite, 22s → 40ms; a React-StrictMode-triggered indefinite grading hang; a resume dead-click), 191's found five. None were reachable from jsdom or pytest.
+- **One-search-per-surface as a reusable correctness principle.** v2.0 Phase 158 established it for `/analysis` (one UCI-keyed eval lookup); 190.1 applied the same move to Train's reveal. Both times it converted "keep the numbers consistent" from a discipline into a structural property.
+- **The verifier independently mutation-testing the highest-risk claim.** Phase 193's verifier didn't take the SUMMARY's word that the settle-before-layer guard was load-bearing: it removed the call, watched the test genuinely fail, and restored it. That is the standard the project already learned to demand, actually met.
+- **Building the dev clock instead of waiting.** Train's behavior is calendar-shaped, so Phase 191's gate produced `dev_clock.py` + `TrainDevClock` + `reset_train_state.py` as a side effect — turning a multi-day verification problem into a one-sitting one, inert outside development.
+
+### What Was Inefficient
+
+- **A design defect shipped, then needed a whole phase to undo.** Phase 189's red herrings came from non-gem `game_best_moves` rows on the assumption that "not a gem" implies "several fine moves". It does not. Catching this required Phase 192 — a new table, a MultiPV-5 generator, a nullability migration on a table holding live user results, and five plans. The assumption was stated plainly in the seed and never tested against a real position before being built on.
+- **A just-shipped mechanism was replaced two days later.** Phase 191 delivered the weekly streak (including a D-18 settlement snapshot and a 3-rung flame ladder); Phase 193 deleted all of it. This was cheap *only* because streaks had never reached production — verified against `origin/production` before planning. Had v2.9 shipped weekly, the same realization would have cost a data migration.
+- **The empty-array sentinel bypass needed a gap-closure plan.** Phase 189's answer-key gate used `IS NOT NULL`, which admits the eval pipeline's `[]` "no lines" sentinel. Verification caught it; plan 189-06 fixed it with named total-operator predicates. The pipeline's sentinel convention was already known (`project_asyncpg_jsonb_null_vs_sql_null` records a close cousin) and should have been front-of-mind at plan time.
+- **Phase 193's UAT sat unresolved for two days.** Its verification landed `human_needed` on 2026-07-28 with three genuinely browser-only checks, and nothing consumed them until the milestone close asked. Verification that ends in a queue nobody drains is a gate in name only.
+
+### Patterns Established
+
+- **Grade on the client when the engine is already there.** The vendored Stockfish WASM made server-side grading unnecessary, which in turn let the pre-attempt payload be built to contain neither the answer key nor the puzzle-type ground truth — a security property that fell out of a performance decision.
+- **Store the raw measurement, gate at query time.** `herring_pool` keeps the full MultiPV-5 ladder on the row so both qualifier constants and the degenerate-position rule are retunable without re-analysis. The same shape as v2.4's `maia_prob` float (never a boolean) and v1.30's stored blobs driving `retag_flaws.py`.
+- **Pin deferred constants from a measurement, not a guess.** 192-01 shipped `HERRING_LOOSE_BAND_ES` marked `PROVISIONAL`; 192-03 measured ~900 real candidates, set both constants from the histogram, then grep-asserted `PROVISIONAL` was gone.
+- **Time-dependent endpoints take `now_utc` from a dependency**, never `datetime.now()` inline — the precondition that makes the dev clock work at all.
+- **Opposite treatment for structurally-different orphans.** After `SET NULL`, an orphaned SR item must not pin a session open (the v2.9 stuck-session bug) while an orphaned herring must be skippable; the planner deliberately contradicted RESEARCH.md's assumption here and specified both together.
+
+### Key Lessons
+
+1. **Test the load-bearing assumption against one real row before building on it.** "Non-gem means several fine moves" was checkable in minutes and cost a five-plan phase instead.
+2. **A phase that replaces a just-shipped mechanism is cheap only while the mechanism is unshipped** — check `origin/production` first, as Phase 193 did, and treat the answer as the deciding input rather than a footnote.
+3. **Human-verification items need an owner and a due point**, not just an honest flag. Three UAT checks sat in `human_needed` until a milestone close happened to ask about them.
+4. **When one search can source every displayed number, make it.** Twice now (v2.0 Phase 158, v2.9 Phase 190.1) the fix for "these numbers disagree" was structural, not a reconciliation pass.
+5. **Known pipeline sentinels belong in the plan's pitfalls section.** The `[]` `missed_pv_lines` convention was already documented in project memory and still shipped a bypass.
+6. **Insert the UAT-driven phase rather than patching in place.** 190.1 as its own numbered phase kept the redesign planned, reviewed, and archived; folding it into 190 as fixes would have hidden a real scope change.
+
+### Cost Observations
+
+- Six phases, 31 plans, 107 commits over 6 days — the densest milestone since v1.17, and the first since v2.0 to add a top-level product surface.
+- Two of the six phases (190.1, 192) were corrections rather than planned scope, and a third (193) replaced a phase from the same milestone. Roughly a third of the plan budget went to fixing decisions made inside this milestone.
+- Zero new runtime dependencies on either stack — Train runs on the already-vendored Stockfish WASM, the existing `game_flaws` archive, and one new table.
+- Closed `override_closeout` on artifacts only: all six phases verified `passed`, with 31 cross-milestone carryover items (19 of them the long-known stale quick-task audit miscount) acknowledged as deferred.
+
+---
+
 ## Milestone: v2.6 — Bot Strength Calibration
 
 **Shipped:** 2026-07-21 (dev-only; no production deploy — nothing reads the artifact yet)
@@ -1177,6 +1235,8 @@ Three table-driven Endgames-page sections replaced with the WDL + ScoreBullet ca
 | v1.16 | 5 | 24 | Stockfish eval analyses: opening-stats eval column, transposition WDL, Start-vs-End tiles, LLM prompt awareness |
 | v1.17 | 13 | ~54 | Endgame stats card redesign → statistical-rigor pass; inserted-decimal cadence absorbed a 5→13 phase scope expansion; Endgame Skill dropped, ELO rebuilt as invariant-preserving logistic stretch |
 | v2.0 | 9 | 24 | Client-side practical-play engine (Maia-weighted expectimax-in-MCTS over a Stockfish.wasm pool); pure-core-first-against-fake-providers build order; scope drifted 153–159 → 153–161 (artifact-free 160 bucket + SEED-088 161); visual UAT batch-deferred to close |
+| v2.6 | 3 | 10 | Measurement-as-deliverable milestone; calibrate the anchor scale before measuring on it; phases regrouped into the milestone retroactively (archival CLI needed `--force`) |
+| v2.9 | 6 | 31 | First new top-level product surface since v2.0; backend-first against no frontend; blocking human UAT as the last plan of a phase (found 8 real defects across 190/191); a third of the plan budget spent correcting decisions made inside the same milestone (190.1, 192, 193) |
 
 ### Top Lessons (Verified Across Milestones)
 
@@ -1194,3 +1254,7 @@ Three table-driven Endgames-page sections replaced with the WDL + ScoreBullet ca
 12. Smoke real data before locking statistical specs — v1.14's three confidence-bucket pivots cost real REQUIREMENTS rewrites that a 30-min discuss-phase smoke would have prevented
 13. Check derived/peer metrics for algebraic degeneracy before building the UI — v1.17's Conv-Gap ≡ Recov-Gap mirror identity was provable on paper; a composite "skill" number is a trap unless it survives cohort-deconfound + individual-interpretation + temporal-stability + median-coincide simultaneously
 14. Keep the ROADMAP `<details>` block current as phases ship even when pushing direct-to-main — v1.17 reconciled 13 stale "planned" entries at close, which is error-prone
+15. Test the load-bearing assumption against one real row before building on it — v2.9's "non-gem means several fine moves" was checkable in minutes and instead cost a five-plan correction phase (192)
+16. When one search can source every displayed number, make it structural rather than reconciled — the same fix landed twice (v2.0 Phase 158 for `/analysis`, v2.9 Phase 190.1 for Train)
+17. A blocking human UAT gate as the last plan of a phase earns its cost — v2.9 Phases 190 and 191 surfaced 8 real defects between them, none reachable from jsdom or pytest
+18. Human-verification items need an owner and a due point, not just an honest flag — v2.9 Phase 193's three UAT checks sat unresolved until the milestone close happened to ask

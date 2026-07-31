@@ -370,4 +370,102 @@ describe('FlawChessAgreementVerdict', () => {
     expect(onPlayMove).not.toHaveBeenCalled();
     expect(screen.getByTestId('flawchess-verdict-tooltip-e4')).toBeTruthy();
   });
+
+  // ─── Phase 196 (INJECT-06): component-level proof — the lookup is a plain
+  // `rootMove` find over whatever array it is handed, with no hidden top-N
+  // assumption, no score comparison, and no provenance distinction. ─────────
+
+  it('renders the FlawChess practical line for a Stockfish pick placed at index 3 of a 5-entry flawChessRankedLines (out-of-top-2 shape, INJECT-06)', () => {
+    render(
+      <FlawChessAgreementVerdict
+        flawChessLine={fcLine('e2e4', 30)}
+        stockfishLine={sfLine('d2d4', 60)}
+        flawChessRankedLines={[
+          fcLine('e2e4', 30),
+          fcLine('c2c4', 20),
+          fcLine('g1f3', 10),
+          fcLine('d2d4', 50, 0.6), // Stockfish's pick — array index 3 (4th entry)
+          fcLine('b2b3', 5),
+        ]}
+        engineEnabled
+        elo={1500}
+        baseFen={START_FEN}
+        rawProbBySan={{}}
+        shownSans={[]}
+      />,
+    );
+    // Guard against a vacuous pass: a null verdict never renders the popover at all.
+    expect(screen.getByTestId('flawchess-verdict-sentence')).toBeTruthy();
+    fireEvent.focus(screen.getByTestId('flawchess-verdict-move-d4'));
+    const tooltip = screen.getByTestId('flawchess-verdict-tooltip-d4').textContent ?? '';
+    expect(tooltip).toMatch(/FlawChess \(practical\)/);
+  });
+
+  it("renders the practical line even when the Stockfish pick's practicalScore exactly ties the top organic line's (lookup is by rootMove, never a score comparison)", () => {
+    render(
+      <FlawChessAgreementVerdict
+        flawChessLine={fcLine('e2e4', 30, 0.5)}
+        stockfishLine={sfLine('d2d4', 60)}
+        flawChessRankedLines={[
+          fcLine('e2e4', 30, 0.5), // top organic line's practicalScore
+          fcLine('c2c4', 20, 0.4),
+          fcLine('g1f3', 10, 0.3),
+          fcLine('d2d4', 50, 0.5), // Stockfish's pick — EXACT tie with the top line's practicalScore
+          fcLine('b2b3', 5, 0.2),
+        ]}
+        engineEnabled
+        elo={1500}
+        baseFen={START_FEN}
+        rawProbBySan={{}}
+        shownSans={[]}
+      />,
+    );
+    expect(screen.getByTestId('flawchess-verdict-sentence')).toBeTruthy();
+    fireEvent.focus(screen.getByTestId('flawchess-verdict-move-d4'));
+    const tooltip = screen.getByTestId('flawchess-verdict-tooltip-d4').textContent ?? '';
+    expect(tooltip).toMatch(/FlawChess \(practical\)/);
+  });
+
+  it('renders identical tooltip text regardless of the Stockfish pick\'s array position in flawChessRankedLines (no provenance distinction, D-01/D-02)', () => {
+    const sfPickLine = fcLine('d2d4', 50, 0.6);
+    const other0 = fcLine('e2e4', 30);
+    const other1 = fcLine('c2c4', 20);
+    const other2 = fcLine('g1f3', 10);
+    const other3 = fcLine('b2b3', 5);
+
+    const { unmount } = render(
+      <FlawChessAgreementVerdict
+        flawChessLine={fcLine('e2e4', 30)}
+        stockfishLine={sfLine('d2d4', 60)}
+        flawChessRankedLines={[other0, sfPickLine, other1, other2, other3]}
+        engineEnabled
+        elo={1500}
+        baseFen={START_FEN}
+        rawProbBySan={{}}
+        shownSans={[]}
+      />,
+    );
+    expect(screen.getByTestId('flawchess-verdict-sentence')).toBeTruthy();
+    fireEvent.focus(screen.getByTestId('flawchess-verdict-move-d4'));
+    const textAtIndex1 = screen.getByTestId('flawchess-verdict-tooltip-d4').textContent ?? '';
+    unmount();
+
+    render(
+      <FlawChessAgreementVerdict
+        flawChessLine={fcLine('e2e4', 30)}
+        stockfishLine={sfLine('d2d4', 60)}
+        flawChessRankedLines={[other0, other1, other2, other3, sfPickLine]}
+        engineEnabled
+        elo={1500}
+        baseFen={START_FEN}
+        rawProbBySan={{}}
+        shownSans={[]}
+      />,
+    );
+    expect(screen.getByTestId('flawchess-verdict-sentence')).toBeTruthy();
+    fireEvent.focus(screen.getByTestId('flawchess-verdict-move-d4'));
+    const textAtIndex4 = screen.getByTestId('flawchess-verdict-tooltip-d4').textContent ?? '';
+
+    expect(textAtIndex4).toBe(textAtIndex1);
+  });
 });

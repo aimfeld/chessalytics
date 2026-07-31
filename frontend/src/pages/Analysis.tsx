@@ -118,6 +118,7 @@ import type { NodeId, MoveNode } from '@/hooks/useAnalysisBoard';
 import type { MoveCurvePoint } from '@/hooks/useMaiaEngine';
 import { buildEvalLookup, getByUci, getBySan, resolveReconciledBest, rankReconciledCandidates } from '@/lib/engineEvalLookup';
 import type { RankedLine } from '@/lib/engine/types';
+import { cloneRankedLineWith } from '@/lib/engine/treeCommon';
 import type { PvLine } from '@/hooks/uciParser';
 import { classifyGem, summarizeForGem, GEM_MAIA_MAX_PROB } from '@/lib/gemMove';
 import { useGemSweep } from '@/hooks/useGemSweep';
@@ -244,6 +245,19 @@ const FLAWCHESS_ENGINE_ARROW_WIDTH = 1.0;
 /** Normalized width of the Stockfish board arrow — nests inside the FC arrow
  *  and outside the thin white next-move arrow (D-05). */
 const STOCKFISH_ENGINE_ARROW_WIDTH = 0.5;
+
+/**
+ * Phase 196 (INJECT-04, RESEARCH.md Pitfall 1): the single shared empty-array
+ * reference returned from every "nothing to inject" branch of the
+ * `extraRootMoves` state below. Load-bearing because `useFlawChessEngine`
+ * treats an `extraRootMoves` identity change as "restart the search", while
+ * `engine.pvLines`' array reference changes on EVERY Stockfish `info` line
+ * during the ~1.5-2s window before the free run commits. A fresh `[]`
+ * literal on those branches would abort and restart the FlawChess search
+ * continuously and DISPLAY-01's first search would never complete — there
+ * must be exactly ONE such array in the module.
+ */
+const NO_EXTRA_ROOT_MOVES: string[] = [];
 
 type AnalysisLayoutMode = 'mobile' | 'mid' | 'desktop';
 
@@ -837,6 +851,16 @@ export default function Analysis() {
   // localStorage/URL param) — resets to TEMPERATURE_DEFAULT on every page load.
   const [temperature, setTemperature] = useState(TEMPERATURE_DEFAULT);
 
+  // Phase 196 (INJECT-03/04): the free run's settled disagreement moves fed
+  // into the FlawChess root, exactly once per position. The VALUE is derived
+  // by the effect further down (placed after `freeRunCommitted` and after
+  // `flawChessEngine` itself exist, since it reads this hook's own output —
+  // a feedback edge a `useMemo` cannot express, hence `useState` here rather
+  // than a memo). `injectedForPositionRef` is the per-position exactly-once
+  // latch that effect reads/writes.
+  const [extraRootMoves, setExtraRootMoves] = useState<string[]>(NO_EXTRA_ROOT_MOVES);
+  const injectedForPositionRef = useRef<string | null>(null);
+
   // FlawChess Engine (Phase 153-155 client-side MCTS search core, DISPLAY-01):
   // gated on its own header switch (`flawChessEnabled`), independent of the
   // Stockfish and Maia switches. `selectedElo` is shared for both colors
@@ -848,6 +872,7 @@ export default function Analysis() {
     enabled: flawChessEnabled,
     elo: selectedElo,
     policyTemperature: temperature,
+    extraRootMoves,
   });
 
   // Seeding guard refs: prevent re-running effects after the first game load.
@@ -1081,6 +1106,105 @@ export default function Analysis() {
     return Array.from(new Set([...maiaSans, ...fcSans, ...freeRunSans])).sort();
   }, [maiaEnabled, shownSans, flawChessEnabled, flawChessDisplayedSans, freeRunCommitted, engine.pvLines, position]);
 
+  // Phase 196 (INJECT-03/INJECT-04): supply the free run's settled root
+  // first-moves (UCIs) to the FlawChess search exactly once per position, on
+  // genuine disagreement only. Distinct from `unionSans` above in TWO
+  // load-bearing ways: (1) stays in raw UCI form (SearchBudget.extraRootMoves
+  // is `string[]` of UCIs, not SANs), and (2) MUST return the SAME shared
+  // `NO_EXTRA_ROOT_MOVES` reference on every no-op branch — this value feeds
+  // `useFlawChessEngine`'s search-restart effect deps (unionSans does not),
+  // so an unstable identity here would abort+restart the FlawChess search on
+  // every Stockfish info-line update during the ~1.5-2s pre-commit window
+  // (RESEARCH.md Pitfall 1).
+  useEffect(() => {
+    // (1) Latch reset: navigating away (or back) to a DIFFERENT position
+    // clears the per-position latch so a revisited position can inject again.
+    if (injectedForPositionRef.current !== null && injectedForPositionRef.current !== position) {
+      injectedForPositionRef.current = null;
+    }
+    // (2a) Bug fix (quick 260731-s0z, FIX-2): with a side disabled, that
+    // hook's `fen` prop is `null` (see the `engineEnabled ? position : null` /
+    // `flawChessEnabled ? position : null` call sites below), so its
+    // `currentFen` pins to `null` forever, the (2b) staleness guard below
+    // returns on every run, and step (4)'s sentinel reset is unreachable —
+    // a previously latched extraRootMoves array kept feeding every subsequent
+    // position's search budget even while that side stayed off. Placed
+    // BEFORE the (2) latch check (a latched position must still reset) but
+    // clears the latch too, so re-enabling can inject afresh; nothing can
+    // latch while disabled since this branch returns before step (3). Reuses
+    // the SAME identity-preserving updater step (4) uses, so the shared
+    // NO_EXTRA_ROOT_MOVES reference contract holds.
+    if (!engineEnabled || !flawChessEnabled) {
+      injectedForPositionRef.current = null;
+      setExtraRootMoves((prev) => (prev === NO_EXTRA_ROOT_MOVES ? prev : NO_EXTRA_ROOT_MOVES));
+      return;
+    }
+
+    // (2) Latch check: the INJECT-04 exactly-once guarantee. Without this, a
+    // later rankedLines update that now contains the injected move would look
+    // like "nothing missing", reset extraRootMoves to the sentinel, and
+    // restart the search a second time — oscillating.
+    if (injectedForPositionRef.current === position) return;
+
+    // (2b) Staleness guard (WR-01, 196-REVIEW.md): this effect fires in the
+    // SAME passive-effect flush as useFlawChessEngine's and useStockfishEngine's
+    // OWN FEN-reset effects (both declared earlier in this component's body).
+    // A `setState` call inside those sibling effects does not retroactively
+    // update the closure values THIS effect already captured from the
+    // just-completed render — so the moment `position` changes, this
+    // effect's closure can still hold `flawChessEngine.rankedLines` /
+    // `engine.pvLines` from the PREVIOUS position while `position` itself is
+    // already the new value. `bestSanFromPv`'s incidental legality check
+    // below is not a reliable staleness guard on its own — a stale UCI is
+    // often ALSO legal in the new position (e.g. a sibling-branch navigation
+    // that preserves side-to-move parity), which would otherwise let step
+    // (3) compute `missing` from stale data and permanently latch a spurious
+    // candidate for the new position. Bail out here whenever either hook's
+    // `currentFen` has not yet caught up to `position`; this same effect
+    // re-fires (via the `engine.pvLines/flawChessEngine.rankedLines` deps
+    // below) once each hook's own reset — and eventually its real re-search
+    // commit — lands for the new position.
+    if (flawChessEngine.currentFen !== position || engine.currentFen !== position) {
+      return;
+    }
+
+    // (3) Compute `next`.
+    let next: string[] = NO_EXTRA_ROOT_MOVES;
+    if (flawChessEnabled && freeRunCommitted && flawChessEngine.rankedLines.length > 0) {
+      const organicUcis = new Set(flawChessEngine.rankedLines.map((line) => line.rootMove));
+      const candidateUcis = [engine.pvLines[0]?.moves[0], engine.pvLines[1]?.moves[0]].filter(
+        (uci): uci is string => uci !== undefined,
+      );
+      const missing = candidateUcis.filter(
+        (uci) => bestSanFromPv(position, uci) !== null && !organicUcis.has(uci),
+      );
+      if (missing.length > 0) next = Array.from(new Set(missing)).sort();
+    }
+
+    // (4) Commit.
+    if (next === NO_EXTRA_ROOT_MOVES) {
+      setExtraRootMoves((prev) => (prev === NO_EXTRA_ROOT_MOVES ? prev : NO_EXTRA_ROOT_MOVES));
+    } else {
+      injectedForPositionRef.current = position;
+      setExtraRootMoves(next);
+    }
+    // Accepted cost (documented, not a bug to fix): on navigating AWAY from a
+    // position that had an injection, extraRootMoves resets to the sentinel,
+    // and because useFlawChessEngine debounces its FEN the reset can reach
+    // the hook up to one debounce window (RAPID_STEP_DEBOUNCE_MS) before the
+    // new FEN does — producing one extra abort+restart of a search that is
+    // about to be superseded anyway. Deliberately not engineered away.
+  }, [
+    engineEnabled,
+    flawChessEnabled,
+    freeRunCommitted,
+    engine.pvLines,
+    engine.currentFen,
+    flawChessEngine.rankedLines,
+    flawChessEngine.currentFen,
+    position,
+  ]);
+
   // Phase 158 (SEED-087 SC2, RESEARCH Pitfall 5): the shared grading run is
   // gated on EITHER display consumer being active — fen/enabled are always
   // paired on this same condition below so the worker is never alive-but-
@@ -1210,17 +1334,39 @@ export default function Analysis() {
   // root candidate surfaces `#-4` on the card + agreement verdict instead of the
   // `…` a null cp alone would print (quick 260709 — the earlier cp-only swap
   // dropped mate).
+  //
+  // Phase 194 JANK-03 audit fix: this used to be `{ ...line, objectiveEvalCp:
+  // ..., objectiveEvalMate: ... }` — a second, previously-unaudited
+  // `RankedLine` spread site that the phase's own `{\s*\.\.\.line` grep
+  // missed because the `{` and `...line` fall on separate source lines.
+  // Spreading forces `modalPath`/`modalStats`' lazy accessors to evaluate
+  // immediately for every one of `FC_MAX_LINES` lines on every render this
+  // memo recomputes. `Object.getOwnPropertyDescriptors` copies the getter
+  // descriptor (laziness preserved), never the current value.
   const reconciledRankedLines = useMemo<RankedLine[]>(
     () =>
       flawChessEngine.rankedLines.slice(0, FC_MAX_LINES).map((line) => {
         const resolved = getByUci(evalLookup, line.rootMove);
-        return {
-          ...line,
+        return cloneRankedLineWith(line, {
           objectiveEvalCp: resolved?.evalCp ?? null,
           objectiveEvalMate: resolved?.evalMate ?? null,
-        };
+        });
       }),
     [flawChessEngine.rankedLines, evalLookup],
+  );
+
+  // Phase 196 (INJECT-06, RESEARCH.md "CORRECTED" / Pitfall 2): a second,
+  // UNSLICED view of the same rankedLines, for the verdict row's lookup
+  // ONLY. Eval reconciliation is deliberately NOT applied here — the
+  // verdict's lookup reads only `.rootMove`/`.practicalScore`.
+  // FlawChessEngineLines' visible list stays capped at FC_MAX_LINES
+  // (reconciledRankedLines, unchanged above); INJECT-06 needs the lookup to
+  // see every root candidate the search tracked, because per D-01 a
+  // genuinely strong-but-unfindable injected move is legitimately outranked
+  // out of the top 2 and must still surface its practical score.
+  const flawChessRankedLinesForVerdict = useMemo<RankedLine[]>(
+    () => flawChessEngine.rankedLines,
+    [flawChessEngine.rankedLines],
   );
 
   // Phase 162 UAT (supersedes D-04/D-12's card scope): the Stockfish card's
@@ -3167,7 +3313,7 @@ export default function Analysis() {
               <FlawChessAgreementVerdict
                 flawChessLine={reconciledRankedLines[0] ?? null}
                 stockfishLine={reconciledStockfishLine ?? (engine.pvLines[0] ?? null)}
-                flawChessRankedLines={reconciledRankedLines}
+                flawChessRankedLines={flawChessRankedLinesForVerdict}
                 engineEnabled={engineEnabled}
                 elo={selectedElo}
                 baseFen={position}

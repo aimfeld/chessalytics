@@ -38,6 +38,7 @@
 
 import { Chess, type Move } from 'chess.js';
 import type { RankedLine } from './types';
+import { cloneRankedLineWith } from './treeCommon';
 import { maiaPolicyWeighting, type BookCandidate, type BookWeightingFn } from './openingBook';
 
 // ─── BotStyleParams (D-01: raw numeric knobs, no function fields) ─────────
@@ -268,6 +269,19 @@ function clampUnitInterval(value: number): number {
  * transform is additive-only on `practicalScore` alone, so
  * `argmaxLine`/`sampleRankedLines` (`botSampling.ts`) read the shaped score
  * off the exact same `RankedLine` shape they already consume.
+ *
+ * Phase 194 JANK-03 fix: this function is called from `selectBotMove.ts` for
+ * EVERY persona bot move (every rung carries a `style`) — exactly the case
+ * lazy `modalPath`/`modalStats` accessors exist to make free. The previous
+ * implementation did `{ ...line, practicalScore: ... }`: an object spread
+ * reads every own enumerable property, accessor or not, and bakes the
+ * getter's CURRENT value into a plain data property on the new object —
+ * silently forcing eager evaluation of `modalPath`/`modalStats` for every
+ * one of the (up to `ROOT_CANDIDATE_HARD_CAP`) root candidates, on every bot
+ * move, defeating JANK-03 for the exact "bot play: 100% waste" case the
+ * optimization targets. `Object.getOwnPropertyDescriptors` copies the
+ * DESCRIPTOR (getter identity + laziness), not the current value, so the
+ * shaped line's `modalPath`/`modalStats` stay unevaluated accessors.
  */
 export function applyStyleScoreShaping(
   lines: readonly RankedLine[],
@@ -276,8 +290,8 @@ export function applyStyleScoreShaping(
   return lines.map((line) => {
     const varianceTerm =
       line.childScoreSpread !== null ? style.varianceBonus * line.childScoreSpread : 0;
-    const shaped = line.practicalScore + style.scoreBonus + varianceTerm;
-    return { ...line, practicalScore: clampUnitInterval(shaped) };
+    const shaped = clampUnitInterval(line.practicalScore + style.scoreBonus + varianceTerm);
+    return cloneRankedLineWith(line, { practicalScore: shaped });
   });
 }
 
