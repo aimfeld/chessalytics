@@ -200,7 +200,11 @@ async function expandNode(
     node.isExpanded = true;
     return;
   }
-  const grades = await providers.grade(node.fen, candidateUcis);
+  // Phase 194 ABORT-01 (discretionary consistency fix): forward this node's
+  // signal into grade() too, so the ENGINE-06 independent fallback path is
+  // not left as the one un-abortable grade site now that EngineProviders.grade
+  // carries the optional 3rd param — mirrors mctsSearch.ts's dispatchExpansion.
+  const grades = await providers.grade(node.fen, candidateUcis, signal);
 
   state.nodesEvaluated += 1;
   if (state.nodesEvaluated >= budget.maxNodes) state.budgetExhausted = true;

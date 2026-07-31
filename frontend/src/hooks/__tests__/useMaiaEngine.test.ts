@@ -24,6 +24,7 @@ import { useMaiaEngine } from '../useMaiaEngine';
 import { MAIA_ELO_LADDER, POLICY_VOCAB_SIZE } from '../../lib/maiaEncoding';
 import { acquireMaiaWorker } from '../../lib/engine/maiaWorkerHost';
 import type { AcquireMaiaWorkerOptions, MaiaAnalyzeResult, MaiaWorkerLease } from '../../lib/engine/maiaWorkerHost';
+import { getCachedPolicy, clearMaiaPolicyCache } from '../../lib/engine/maiaPolicyCache';
 
 vi.mock('../../lib/engine/maiaWorkerHost', () => ({
   acquireMaiaWorker: vi.fn(),
@@ -132,6 +133,9 @@ describe('useMaiaEngine', () => {
   beforeEach(() => {
     vi.useFakeTimers({ now: 0 });
     stubHost();
+    // The shared policy cache is a module-scoped singleton (Phase 194
+    // CACHE-05) — clear it so no test in this file leaks state.
+    clearMaiaPolicyCache();
   });
 
   afterEach(() => {
@@ -396,6 +400,46 @@ describe('useMaiaEngine', () => {
 
     expect(result.current.wdl?.win).toBeGreaterThan(0.9);
     expect(result.current.expectedScoreAtSelectedElo).toBeGreaterThan(0.9);
+  });
+
+  // ─── Shared fen|elo policy cache write-through (Phase 194 CACHE-05) ────────
+
+  it('write-through populates the shared fen|elo policy cache with a UCI-keyed entry per ladder rung after a result commits', async () => {
+    vi.advanceTimersByTime(200); // first FEN settles immediately
+    renderHook(() => useMaiaEngine({ fen: TEST_FEN, enabled: true, selectedElo: 1500 }));
+    await driveReady(currentLease);
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(200);
+    });
+    await resolveLatest(currentLease, TEST_FEN);
+
+    for (const elo of MAIA_ELO_LADDER) {
+      const cached = getCachedPolicy(TEST_FEN, elo);
+      expect(cached).toBeDefined();
+      // Every key is a UCI-shaped move string (from-square + to-square,
+      // optional promotion piece) — not a SAN string like 'Nf3', proving the
+      // write-through used maskAndSoftmaxUci, not the chart's SAN-keyed
+      // maskAndSoftmax output.
+      for (const uci of Object.keys(cached!)) {
+        expect(uci).toMatch(/^[a-h][1-8][a-h][1-8][qrbn]?$/);
+      }
+    }
+  });
+
+  it("a maiaQueue.policy() call issued after the chart populated a FEN resolves from the shared cache without a lease.analyze() call — proven via useMaiaEngine's write-through side", async () => {
+    vi.advanceTimersByTime(200);
+    renderHook(() => useMaiaEngine({ fen: TEST_FEN, enabled: true, selectedElo: 1500 }));
+    await driveReady(currentLease);
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(200);
+    });
+    await resolveLatest(currentLease, TEST_FEN);
+
+    // The 1500 rung the chart just wrote is directly readable via the shared
+    // module — this is the exact seam maiaQueue.policy() reads through (see
+    // maiaQueue.test.ts's cross-consumer CACHE-05 assertion for the
+    // zero-analyze-call proof on that side).
+    expect(getCachedPolicy(TEST_FEN, 1500)).toBeDefined();
   });
 
   // ─── Worker death (quick 260729-sod, FIX 3 — onFatal replaces the old onerror handler) ──

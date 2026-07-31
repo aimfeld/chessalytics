@@ -254,6 +254,80 @@ export function maskAndSoftmax(policy: Float32Array, fen: string): Record<string
   return probabilities;
 }
 
+// ─── Single-pass UCI-keyed policy conversion (JANK-01) ──────────────────────────
+
+/**
+ * Shape of the move objects chess.js's private `_moves({legal:true})` returns
+ * (reconstructed from `addMove()`, `chess.js:1754-1778` — NOT exported by
+ * chess.js's `.d.ts`, which declares `_moves` as an untyped private member).
+ * `from`/`to` are 0x88-style numeric square indices, not algebraic strings.
+ */
+interface InternalMove {
+  from: number;
+  to: number;
+  promotion?: PromotionPiece;
+}
+
+/**
+ * Converts a chess.js 0x88-style numeric square index to its algebraic
+ * string, matching chess.js's own private `algebraic()` helper exactly
+ * (`chess.js:1591-1596`: file = square & 0xf, rank = square >> 4).
+ */
+function algebraicFromIndex(square: number): string {
+  const file = square & 0xf;
+  const rank = square >> 4;
+  return `${'abcdefgh'[file]}${'87654321'[rank]}`;
+}
+
+/**
+ * Single-pass UCI-keyed counterpart to `maskAndSoftmax` above (JANK-01).
+ * Reads chess.js's private `_moves({legal:true})` ONCE and builds UCI keys
+ * directly from each internal move's numeric `from`/`to`/`promotion` fields —
+ * never constructing a `Move` object (whose constructor re-runs full
+ * legal-move generation a second time to produce SAN, `chess.js:1328`) or a
+ * per-candidate `Chess` instance. `maskAndSoftmax` stays SAN-keyed and
+ * unchanged for `useMaiaEngine.ts`'s Moves-by-Rating chart; this function
+ * exists because `maiaQueue.ts`'s hot path only ever needs UCI keys, and the
+ * previous per-SAN `sanToUci` replay (`sanToSquares.ts`) was the real O(n²)
+ * main-thread cost (JANK-01/194-RESEARCH.md Pattern 1). A `chess.js` version
+ * bump that changes `_moves`'s internal move-object shape or the
+ * promotion-lane enumeration order is guarded by the parity test in
+ * `maiaEncoding.test.ts`'s `describe('maskAndSoftmaxUci', ...)` block, which
+ * pins this function's output key-for-key and value-for-value against
+ * `maskAndSoftmax` + `sanToUci` (JANK-02).
+ */
+export function maskAndSoftmaxUci(policy: Float32Array, fen: string): Record<string, number> {
+  const chess = new Chess(fen);
+  const isBlackToMove = fen.split(' ')[1] === 'b';
+  // Bracket-notation bypasses the `private _moves` TS declaration — same idiom
+  // chess.js's own Move constructor uses internally (chess.js:1328).
+  const internalMoves = chess['_moves']({ legal: true }) as InternalMove[];
+
+  const ucis: string[] = [];
+  const scores: number[] = [];
+  for (const move of internalMoves) {
+    const from = algebraicFromIndex(move.from);
+    const to = algebraicFromIndex(move.to);
+    const idx = moveVocabIndex(
+      isBlackToMove ? mirrorSquare(from) : from,
+      isBlackToMove ? mirrorSquare(to) : to,
+      move.promotion,
+    );
+    ucis.push(`${from}${to}${move.promotion ?? ''}`);
+    scores.push(policy[idx] ?? Number.NEGATIVE_INFINITY);
+  }
+
+  const max = scores.length > 0 ? Math.max(...scores) : 0;
+  const exps = scores.map((s) => Math.exp(s - max));
+  const sum = exps.reduce((a, b) => a + b, 0);
+
+  const probabilities: Record<string, number> = {};
+  ucis.forEach((uci, i) => {
+    probabilities[uci] = sum > 0 ? (exps[i] ?? 0) / sum : 0;
+  });
+  return probabilities;
+}
+
 // ─── Expected score (CONTRACT §e, D-04) ─────────────────────────────────────────
 
 /** Weight applied to a draw when collapsing WDL to a single expected-score fill (D-04). */

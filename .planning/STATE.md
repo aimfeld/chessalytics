@@ -2,31 +2,35 @@
 gsd_state_version: 1.0
 milestone: v2.10
 milestone_name: FlawChess Engine Improvements
+current_phase: 195
+current_phase_name: Depth-scaled grading ladder
 status: planning
-last_updated: "2026-07-30T15:30:00.000Z"
+stopped_at: Completed 194-04-PLAN.md
+last_updated: "2026-07-30T16:44:37.103Z"
 last_activity: 2026-07-30
+last_activity_desc: Phase 194 complete, transitioned to Phase 195
 progress:
   total_phases: 6
-  completed_phases: 0
-  total_plans: 0
-  completed_plans: 0
-  percent: 0
+  completed_phases: 1
+  total_plans: 4
+  completed_plans: 4
+  percent: 17
 ---
 
 # Project State: FlawChess
 
 ## Current Position
 
-Phase: 194 of 6 (Engine main-thread + cache hygiene)
-Plan: — of TBD
+Phase: 195 — Depth-scaled grading ladder
+Plan: Not started
 Status: Ready to plan
-Last activity: 2026-07-30 — ROADMAP.md created for v2.10 (Phases 194–199); all 49 requirements mapped, 100% coverage
+Last activity: 2026-07-30 — Phase 194 complete, transitioned to Phase 195
 
 ## Project Reference
 
-See: .planning/PROJECT.md (updated 2026-07-30 after the v2.9 milestone close)
+See: .planning/PROJECT.md (updated 2026-07-30 after Phase 194)
 Core value: Position-precise WDL across openings + endgames + time pressure on top of users' actual chess.com / lichess games, with personalized LLM commentary and an auto-generated opening-strengths/weaknesses report.
-Current focus: **v2.10 FlawChess Engine Improvements — ROADMAP CREATED 2026-07-30.** Six phases (194–199), committed order 194 → 195 → 196 → 197 → 198 → 199 (all five source units edit `dispatchExpansion`): **194 Engine main-thread + cache hygiene** (SEED-126 Phases 2–5), **195 Depth-scaled grading ladder** (SEED-126 Phase 1), **196 Analysis-board Stockfish root injection** (SEED-118), **197 Maia WDL leaf values** (SEED-126 Phase 6), **198 mctsSearch continuous dispatch** (SEED-127), **199 Bot re-calibration sweep + strength curve refit** (combined, final). Sourced entirely from three seeds carrying measured wall-clock data — no project-level research pass. All 49 requirements mapped 1:1, 100% coverage. Next: `/gsd-plan-phase 194`.
+Current focus: **v2.10 FlawChess Engine Improvements — ROADMAP CREATED 2026-07-30.** Six phases (194–199), committed order 194 → 195 → 196 → 197 → 198 → 199 (all five source units edit `dispatchExpansion`): **194 Engine main-thread + cache hygiene** (SEED-126 Phases 2–5), **195 Depth-scaled grading ladder** (SEED-126 Phase 1), **196 Analysis-board Stockfish root injection** (SEED-118), **197 Maia WDL leaf values** (SEED-126 Phase 6), **198 mctsSearch continuous dispatch** (SEED-127), **199 Bot re-calibration sweep + strength curve refit** (combined, final). Sourced entirely from three seeds carrying measured wall-clock data — no project-level research pass. All 49 requirements mapped 1:1, 100% coverage. **Phase 194 complete 2026-07-30** (4 plans, 14/14 requirements, verification `passed`, UAT 3 passed / 1 acknowledged gap on the CACHE-01 eviction-free claim). Next: `/gsd-plan-phase 195`.
 
 ## Deferred Items
 
@@ -140,6 +144,9 @@ v1.29 Live-Engine Analysis Page shipped 2026-06-29 — 5 phases (136–140), 14 
 
 (Cleared at v1.31 close — full log in `.planning/PROJECT.md` Key Decisions + the milestone archives.)
 
+- [Phase 194-02]: ABORT-02 needed zero production edit to `useBotGame.ts` — all four abort sites already aborted the right controller, and that signal already flowed through `createDeadlineSearch`; Task 1's wiring of the signal into `providers.grade` alone closed the gap. Proven by an empty `git diff --stat` on the hook plus four integration cases, rather than by adding `pool.stopAll()` calls the requirement explicitly prohibited.
+- [Phase 194-04]: `vi.spyOn(moduleNamespace, 'fn')` does not intercept a same-module function's internal self-call in this Vite/Vitest setup (verified empirically on a scratch module before writing production code). Non-invocation of the lazy `modalPath` builder is proven through a `modalPathBuilder = { build }` indirection object, whose late-bound property lookup IS spy-able.
+- [Phase 194-04]: The RankedLine spread audit was done by TYPE, not by the plan's literal grep — which cannot return zero because it matches its own required explanatory comment and two unrelated `line` variables. The type-based pass found a second real spread (`Analysis.tsx`, split across two source lines and therefore invisible to a line-based grep) that would have silently defeated JANK-03.
 - [Phase 151-02]: LICENSE: kept the exact FSF AGPL-3.0 boilerplate verbatim, only filled in the How-to-Apply appendix placeholders (FlawChess / 2026 / Adrian Imfeld)
 - [Phase 151-02]: MaiaAttribution renders always-visible (not hover-gated like InfoPopover) so the AGPL offer-source links are present without interaction
 - [Phase 151-03]: Insertion-ordered dict from get_current_rating_by_platform is the mechanism for picking the scalar current_rating (first key = platform of overall most-recent game, no second query needed)
@@ -510,6 +517,14 @@ v1.29 Live-Engine Analysis Page shipped 2026-06-29 — 5 phases (136–140), 14 
 - [Phase ?]: Phase 193 SCHD-02 window-expiry ruling (user, not executor): an open unfinished session's badge does NOT survive its window expiring — no code change; accepted trade-off is that record_solve has no expiry check so a late completion can still net a shield pip against the miss, and the user will never be cued toward that recovery path
 - [Phase ?]: quick 260728-pgp: capped Train session composition at 1 puzzle/game/session (shared per_game_counts Counter over due + fresh pool), uniform-random within-game pool pick via pick_one_per_game
 - [Phase ?]: 260729-sod: shared maiaWorkerHost singleton (lease refcounting, one-in-flight priority dispatch) collapses /analysis's up-to-3 Maia workers to 1, reversing Phase 154 D-04's separate-Worker decision
+- [Phase ?]: 194-01: import maskAndSoftmaxUci via the script's existing @/lib/maiaEncoding alias import, not resolveFrontendModule (which is createRequire-based for npm packages, not TS source files behind the @/ alias)
+- [Phase ?]: [Phase 194-02]: ABORT-02 required zero useBotGame.ts production edits — all four abort sites already called abortControllerRef.current?.abort(), and Task 1's mctsSearch->WorkerPool.grade signal threading closed the gap for free
+- [Phase ?]: [Phase 194-02]: deadlineSearch.test.ts edited despite being absent from the plan's files_modified frontmatter — its own <verify> command required it and the D-17 outer-stays-unaborted assertion was genuinely missing
+- [Phase ?]: CACHE-04 implemented merge-only, no partial-hit read path — per 194-RESEARCH.md Pattern 5's direct empirical measurement against the vendored Stockfish binary.
+- [Phase ?]: CACHE-05's shared fen|elo cache is a NEW module (maiaPolicyCache.ts) that maiaQueue owns and useMaiaEngine write-throughs into, not a read-through into useMaiaEngine's SAN-keyed bundle.
+- [Phase ?]: GRADE_CACHE_MAX = 1024 and MAIA_POLICY_CACHE_MAX = 2048, each with a derivation comment (measured 386-FEN working-set ceiling), not bare numbers.
+- [Phase ?]: 194-04: vi.spyOn cannot intercept a same-module function's self-call — used an exported modalPathBuilder object-property indirection seam instead (verified empirically before writing production code)
+- [Phase ?]: 194-04: found and fixed a second RankedLine spread in Analysis.tsx's reconciledRankedLines memo, missed by the phase research's single-line grep because the spread is split across two source lines
 
 ### Pending Todos
 
@@ -518,7 +533,7 @@ None active.
 ### Blockers/Concerns
 
 - active. (v1.31 and v1.32 are both deployed to production.)
-- 190.1-05 Task 2: blocking human checkpoint (gate=blocking) — operator must UAT the redesigned Train reveal on desktop and mobile browsers against D-01..D-05 and the two 190.1-VALIDATION.md manual-only rows before the phase can close.
+- [Phase 194] CACHE-01's "a 400-node search evicts none of its own working set" remains inferred, not measured — `GRADE_CACHE_MAX = 1024` against a 352-386 distinct-FEN ceiling measured *before* the change. Accepted as an acknowledged gap at UAT (2026-07-30); risk is extra Stockfish grading work, not wrong results. Closeable cheaply by counting distinct FENs reaching `providers.grade` in a 400-node run through the existing `mctsSearch` test harness. Worth doing if Phase 196's cache-replay design ends up depending on residency.
 
 ### Quick Tasks Completed
 
@@ -617,9 +632,9 @@ Items acknowledged and deferred at **v1.29 milestone close on 2026-06-29** (user
 
 ## Session Continuity
 
-**Stopped at:** Completed quick 260729-sod: Maia WASM OOM fixes (respawn + Sentry tag + shared worker + cache headers)
+**Stopped at:** Phase 194 complete (UAT passed 3/4, 1 acknowledged gap), ready to plan Phase 195
 
-**Last session:** 2026-07-29T19:24:12.759Z
+**Last session:** 2026-07-30
 
 **Resume file:**
 
@@ -712,6 +727,10 @@ None
 | Phase 193 P03 | ~15min | 3 tasks | 5 files |
 | Phase quick-260728-pgp P01 | 50min | 3 tasks | 5 files |
 | Phase quick-260729-sod P01 | ~2h | 4 tasks | 14 files |
+| Phase 194 P01 | 46min | 3 tasks | 4 files |
+| Phase 194 P02 | 27min | 2 tasks | 9 files |
+| Phase 194 P03 | 18min | 3 tasks | 9 files |
+| Phase 194 P04 | 30min | 2 tasks | 6 files |
 
 ## Performance Metrics
 

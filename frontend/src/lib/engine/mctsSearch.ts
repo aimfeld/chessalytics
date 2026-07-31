@@ -392,7 +392,12 @@ async function dispatchExpansion(
   budget: SearchBudget,
   providers: EngineProviders,
   rootMover: MoverColor,
+  signal: AbortSignal,
 ): Promise<DispatchedExpansion> {
+  // Phase 194 ABORT-01: `policy()` is NOT signalled and never will be — an
+  // in-flight ONNX inference cannot be interrupted, and a stale resolution is
+  // unused and harmless once this expansion's result is discarded (mirrors
+  // useFlawChessEngine.ts's own Pitfall-1 comment on maiaQueue).
   const rawPolicy = await providers.policy(leaf.fen, budget.elo[leaf.side], leaf.side);
   const temperature = budget.policyTemperature ?? DEFAULT_POLICY_TEMPERATURE;
   const effectivePolicy =
@@ -426,7 +431,11 @@ async function dispatchExpansion(
       rootExploration: null,
     };
   }
-  const grades = await providers.grade(leaf.fen, candidateUcis);
+  // Phase 194 ABORT-01: forward the search's own signal so an abort reaches
+  // WorkerPool.grade's existing (previously unused) 3rd param — dequeuing an
+  // unstarted request or posting `stop` to an in-flight one instead of
+  // grinding out its full GRADING_MOVETIME_SAFETY_CAP_MS budget.
+  const grades = await providers.grade(leaf.fen, candidateUcis, signal);
   const rootExploration = leaf.isRoot ? rootExplorationPriors(candidateMap) : null;
   return { leaf, path, candidateMap, grades, rawPolicy, rootExploration };
 }
@@ -509,7 +518,7 @@ export const mctsSearch: SearchRunner = async (rootFen, budget, providers, onSna
     // to an array in INPUT order regardless of which promise settles first,
     // so applying `results` in order is never raw arrival order.
     const results = await Promise.all(
-      toExpand.map(({ leaf, path }) => dispatchExpansion(leaf, path, budget, providers, rootMover)),
+      toExpand.map(({ leaf, path }) => dispatchExpansion(leaf, path, budget, providers, rootMover, signal)),
     );
 
     for (const result of results) {

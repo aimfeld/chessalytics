@@ -204,6 +204,23 @@ function buildModalPath<N extends SearchTreeNode<N>>(rootChild: N): {
 }
 
 /**
+ * Indirection seam (Phase 194 JANK-03): `buildRankedLines` calls
+ * `modalPathBuilder.build(...)` — a property lookup on this mutable, exported
+ * object — instead of the bare `buildModalPath` reference, so
+ * `treeCommon.test.ts` can `vi.spyOn(modalPathBuilder, 'build')` to prove
+ * `buildRankedLines` never invokes the modal-path builder eagerly. Verified
+ * empirically (this phase, before writing this comment): a same-module
+ * function DECLARATION reference is early-bound at compile/bundle time, so
+ * `vi.spyOn` on the module's exported `buildModalPath`-if-it-were-exported
+ * cannot intercept a call the module makes to itself internally — only a
+ * late-bound property lookup on a mutable object is spy-able. Do NOT inline
+ * this back to a bare `buildModalPath(child)` call at the accessor site
+ * below; that would make the JANK-03 non-invocation tests fail to compile
+ * against a removed spy target.
+ */
+export const modalPathBuilder = { build: buildModalPath };
+
+/**
  * Variance/"sharpness" proxy for a root candidate (Phase 182 D-10): the
  * max−min spread across `node`'s OWN children's backed-up `.value`s. When
  * `node` is a root child, these are the grandchildren of the search root —
@@ -229,6 +246,19 @@ function computeChildScoreSpread<N extends SearchTreeNode<N>>(node: N): number |
  * `RankedLine` the UI consumes; `practicalScore` stays `child.value`,
  * byte-identical to before this phase (D-04). `pRef` is computed ONCE per
  * call from `rootElo` (Anti-Pattern: never recompute per child).
+ *
+ * Phase 194 JANK-03: `modalPath`/`modalStats` are attached as lazy accessor
+ * properties, not data properties — `modalPathBuilder.build(child)` (the
+ * modal-path walk) only runs on first READ of either field, via a single
+ * memoized `getModal` closure PER LINE shared by both accessors (so a
+ * consumer reading both fields still pays for exactly one computation, never
+ * two). Bot play reads neither field on the vast majority of root candidates
+ * (up to `ROOT_CANDIDATE_HARD_CAP`), so this eliminates 100% of that cost for
+ * the persona bot path — see `botStyle.ts`'s `applyStyleScoreShaping` for the
+ * one consumer that would otherwise have silently defeated this (a spread
+ * forces every accessor to evaluate). The sort comparator below reads only
+ * `sortRankScore`/`line.rootMove` — never either accessor — so sorting itself
+ * never forces evaluation.
  */
 function buildRankedLines<N extends SearchTreeNode<N>>(root: N, rootElo: number): RankedLine[] {
   const pRef = pRefForElo(rootElo);
@@ -239,26 +269,58 @@ function buildRankedLines<N extends SearchTreeNode<N>>(root: N, rootElo: number)
   const scored: { line: RankedLine; sortRankScore: number }[] = [];
   for (const child of root.children.values()) {
     if (child.uci === null) continue; // defensive; every root child has a uci
-    const modal = buildModalPath(child);
-    scored.push({
-      line: {
-        rootMove: child.uci,
-        practicalScore: child.value,
-        objectiveEvalCp: child.objectiveEvalCp,
-        objectiveEvalMate: child.objectiveEvalMate,
-        modalPath: modal.path,
-        modalStats: modal.stats,
-        visits: child.visits,
-        childScoreSpread: computeChildScoreSpread(child),
-      },
-      sortRankScore: rankScore(child.prior, pRef, child.value),
-    });
+
+    let modalCache: { path: string[]; stats: ModalPlyStat[] } | undefined;
+    const getModal = (): { path: string[]; stats: ModalPlyStat[] } =>
+      (modalCache ??= modalPathBuilder.build(child));
+
+    const line = {
+      rootMove: child.uci,
+      practicalScore: child.value,
+      objectiveEvalCp: child.objectiveEvalCp,
+      objectiveEvalMate: child.objectiveEvalMate,
+      visits: child.visits,
+      childScoreSpread: computeChildScoreSpread(child),
+    } as RankedLine;
+    Object.defineProperty(line, 'modalPath', { get: () => getModal().path, enumerable: true });
+    Object.defineProperty(line, 'modalStats', { get: () => getModal().stats, enumerable: true });
+
+    scored.push({ line, sortRankScore: rankScore(child.prior, pRef, child.value) });
   }
   scored.sort((a, b) => {
     if (b.sortRankScore !== a.sortRankScore) return b.sortRankScore - a.sortRankScore;
     return a.line.rootMove < b.line.rootMove ? -1 : a.line.rootMove > b.line.rootMove ? 1 : 0;
   });
   return scored.map((s) => s.line);
+}
+
+/**
+ * Returns a copy of `line` with `overrides` applied, PRESERVING the laziness of
+ * `modalPath`/`modalStats` (Phase 194 JANK-03).
+ *
+ * Never spread a `RankedLine`. `{ ...line }`, `Object.assign({}, line)`,
+ * `structuredClone`, and JSON round-trips all READ every enumerable property,
+ * which force-evaluates the two accessors `buildRankedLines` installs above and
+ * silently undoes JANK-03 — with no test failure, because the resulting VALUES
+ * are identical. Only the cost changes.
+ *
+ * Phase 194's code review (WR-04) found the descriptor-copy hand-rolled at two
+ * separate call sites, one of which had been missed for a full plan cycle. This
+ * is the single implementation both use, so a third caller cannot get it subtly
+ * wrong and a regression is caught by this module's own tests.
+ */
+export function cloneRankedLineWith(line: RankedLine, overrides: Partial<RankedLine>): RankedLine {
+  const next = Object.create(Object.getPrototypeOf(line) as object | null) as RankedLine;
+  Object.defineProperties(next, Object.getOwnPropertyDescriptors(line));
+  for (const [key, value] of Object.entries(overrides)) {
+    Object.defineProperty(next, key, {
+      value,
+      enumerable: true,
+      writable: true,
+      configurable: true,
+    });
+  }
+  return next;
 }
 
 /**

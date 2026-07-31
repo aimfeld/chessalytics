@@ -38,8 +38,15 @@ export const GRADING_TARGET_DEPTH = 14;
 /** Wall-clock safety valve (ms) so a slow position never stalls a pool worker. */
 export const GRADING_MOVETIME_SAFETY_CAP_MS = 2500;
 
-/** Pool-level (per-FEN) grade-cache cap (mirrors the grading hook's GRADE_CACHE_MAX FIFO pattern). */
-export const GRADE_CACHE_MAX = 256;
+/**
+ * Pool-level (per-FEN) grade-cache cap. A full 400-node analysis-board search
+ * touches a measured 352-386 distinct FENs (194-RESEARCH.md Pattern 4) — 256
+ * was small enough that a single search thrashed its own cache before
+ * cross-search reuse was even possible. 1024 is the next power of two above
+ * roughly 2.6x the measured 386-FEN ceiling: one full search's working set
+ * plus about 1.6 searches worth of navigation history (Phase 194 CACHE-01).
+ */
+export const GRADE_CACHE_MAX = 1024;
 
 /** Per-worker `Hash` UCI option cap (MB) — Pitfall 1 mitigation: shallow searchmoves-restricted grading doesn't benefit from a large hash table, and N workers at default Hash settings multiplies mobile memory pressure for no search-quality gain. */
 export const WORKER_HASH_MB = 8;
@@ -131,12 +138,16 @@ export interface WorkerPool {
 // scan is both correct and fast enough. Tie-break order matches every other
 // canonical tie-break in the Phase 153 core: NEVER insertion/arrival order.
 //
-// WR-02: `priority`/`depth` are populated by the Phase 155 MCTS orchestrator,
-// which computes per-root-line practical scores — that caller doesn't exist
-// yet. Every request built by `grade()` today carries `priority: 0, depth: 0`
-// (see below), so this ordering logic is correct and tested in isolation but
-// currently unreachable through the frozen 2-arg `EngineProviders.grade`
-// contract. Not a bug — tracked forward as a Phase 155 requirement.
+// WR-02: `priority`/`depth` are populated by a caller that computes
+// per-root-line practical scores. Every request built by `grade()` today
+// still carries `priority: 0, depth: 0` (see below) because Phase 155's MCTS
+// orchestrator dispatches at most `computePoolSize()` concurrent expansions
+// per round — dispatch capacity always keeps pace with demand, so this
+// ordering logic is correct and tested in isolation but has no discriminating
+// input to act on yet. Phase 198 (mctsSearch continuous dispatch) is the
+// consumer that will populate real priority values once in-flight expansions
+// can exceed free worker slots, making dispatch order matter for the first
+// time. Deliberately retained, not dead code (Phase 194 CACHE-06).
 
 /** Push a new request onto the pending array. */
 export function enqueue(pending: QueuedGradeRequest[], req: QueuedGradeRequest): void {
@@ -229,8 +240,28 @@ export function createWorkerPool(): WorkerPool {
   let spawned = false;
 
   function cacheGrades(fen: string, grades: Map<string, MoveGrade>): void {
-    cache.set(fen, grades);
-    // FIFO eviction (mirrors useStockfishGradingEngine's GRADE_CACHE_MAX pattern).
+    // CACHE-03: merge into any existing per-FEN entry rather than replacing
+    // it. A same-FEN request with a shifted candidate set (the root's
+    // candidate list can widen or narrow across PUCT selection rounds) must
+    // not destroy grades already accumulated for UCIs outside this call's
+    // request. Incoming values win on key collision — a re-grade of the same
+    // UCI at the same depth is the same computation, so overwriting is safe.
+    const existing = cache.get(fen);
+    const merged = existing ? new Map(existing) : new Map<string, MoveGrade>();
+    for (const [uci, grade] of grades) merged.set(uci, grade);
+    // Phase 194 code-review WR-01: a write is a use. `Map.set` on an ALREADY
+    // PRESENT key does not reorder it, so without this delete a re-graded FEN
+    // keeps its original insertion position and the eviction below picks it as
+    // if the cache were still FIFO. That hits the worst possible target: the
+    // root is the FEN most often re-graded (its candidate set widens across
+    // PUCT rounds — the very case the merge above exists for), so the entry
+    // CACHE-02 is meant to protect would be the first one dropped.
+    cache.delete(fen);
+    cache.set(fen, merged);
+    // LRU eviction: both the read-hit branch in grade() below and the write
+    // above do a delete-then-reinsert touch, so Map's insertion-order
+    // iteration here yields the least-recently-USED entry, not the
+    // least-recently-inserted one (CACHE-02).
     if (cache.size > GRADE_CACHE_MAX) {
       const oldest = cache.keys().next().value;
       if (oldest !== undefined) cache.delete(oldest);
@@ -396,6 +427,17 @@ export function createWorkerPool(): WorkerPool {
     if (signal?.aborted) return Promise.resolve(new Map());
 
     const cached = cache.get(fen);
+    // CACHE-04: partial-hit (subset) grading was tested against the vendored
+    // Stockfish binary using the shipped `go depth 14 searchmoves ...
+    // movetime 2500` shape, and produced a DIFFERENT cp for the same move at
+    // the same reported depth (bound exact) than a full-set grade of the same
+    // (fen, move) — the italian position's f3e5 at -301 (5-move set) vs -253
+    // (2-move subset), and the middlegame position's f3e5 at 9 (5-move set)
+    // vs 5 (2-move subset), both at matching depth 14. `searchmoves`
+    // restriction changes Stockfish's internal move ordering and time
+    // allocation, so a subset grade is not interchangeable with a full-set
+    // grade even at matching depth. Keep this all-or-nothing read; do not add
+    // a partial-hit path. [CITED: 194-RESEARCH.md Pattern 5, measured 2026-07-30]
     if (cached && candidateUcis.every((uci) => cached.has(uci))) {
       // Pool-level cache hit (position-only, ELO-independent) — no new go.
       const subset = new Map<string, MoveGrade>();
@@ -403,6 +445,12 @@ export function createWorkerPool(): WorkerPool {
         const g = cached.get(uci);
         if (g) subset.set(uci, g);
       }
+      // LRU touch-on-hit: delete then reinsert so Map's insertion-order
+      // iteration (consumed by cacheGrades' `keys().next().value` eviction)
+      // yields the least-recently-USED entry, not the least-recently-inserted
+      // one (CACHE-02).
+      cache.delete(fen);
+      cache.set(fen, cached);
       return Promise.resolve(subset);
     }
 
@@ -413,35 +461,51 @@ export function createWorkerPool(): WorkerPool {
     if (slots.length === 0) return Promise.resolve(new Map());
 
     return new Promise((resolve) => {
-      const req: QueuedGradeRequest = { fen, candidateUcis, priority: 0, depth: 0, resolve };
+      // Phase 194 code-review WR-02: `{ once: true }` only self-removes the
+      // listener if it FIRES. A request that settles normally would leave its
+      // listener (and the `req` closure it captures) attached for the signal's
+      // whole lifetime — and mctsSearch threads ONE signal through every grade
+      // of a search, so a 400-node analysis search accumulated ~400 of them.
+      // Settle through this wrapper so every exit path detaches.
+      let onAbort: (() => void) | null = null;
+      const settle = (grades: Map<string, MoveGrade>): void => {
+        if (onAbort && signal) signal.removeEventListener('abort', onAbort);
+        onAbort = null;
+        resolve(grades);
+      };
+
+      const req: QueuedGradeRequest = {
+        fen,
+        candidateUcis,
+        priority: 0,
+        depth: 0,
+        resolve: settle,
+      };
       enqueue(pending, req);
 
       if (signal) {
-        signal.addEventListener(
-          'abort',
-          () => {
-            const idx = pending.indexOf(req);
-            if (idx >= 0) {
-              // Unstarted — just drop it from the queue.
-              pending.splice(idx, 1);
-              resolve(new Map());
+        onAbort = () => {
+          const idx = pending.indexOf(req);
+          if (idx >= 0) {
+            // Unstarted — just drop it from the queue.
+            pending.splice(idx, 1);
+            settle(new Map());
+            return;
+          }
+          // In-flight — send stop; the eventual bestmove is discarded by
+          // the same stopPending/FLAWCHESS-7V guard handleLine already
+          // uses for a superseded search.
+          for (const slot of slots) {
+            if (slot.current === req && slot.state === 'thinking') {
+              slot.worker.postMessage('stop');
+              slot.stopPending = true;
+              slot.state = 'stopping';
+              settle(new Map());
               return;
             }
-            // In-flight — send stop; the eventual bestmove is discarded by
-            // the same stopPending/FLAWCHESS-7V guard handleLine already
-            // uses for a superseded search.
-            for (const slot of slots) {
-              if (slot.current === req && slot.state === 'thinking') {
-                slot.worker.postMessage('stop');
-                slot.stopPending = true;
-                slot.state = 'stopping';
-                resolve(new Map());
-                return;
-              }
-            }
-          },
-          { once: true },
-        );
+          }
+        };
+        signal.addEventListener('abort', onAbort, { once: true });
       }
 
       dispatchNext();

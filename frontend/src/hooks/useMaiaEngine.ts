@@ -28,10 +28,17 @@
  */
 
 import { useRef, useState, useCallback, useEffect, useMemo } from 'react';
-import { maskAndSoftmax, softmaxWdl, expectedScore, MAIA_ELO_LADDER } from '../lib/maiaEncoding';
+import {
+  maskAndSoftmax,
+  maskAndSoftmaxUci,
+  softmaxWdl,
+  expectedScore,
+  MAIA_ELO_LADDER,
+} from '../lib/maiaEncoding';
 import type { WdlVector } from '../lib/maiaEncoding';
 import { acquireMaiaWorker } from '../lib/engine/maiaWorkerHost';
 import type { MaiaAnalyzeResult, MaiaWorkerLease } from '../lib/engine/maiaWorkerHost';
+import { setCachedPolicy } from '../lib/engine/maiaPolicyCache';
 
 // ─── Constants ───────────────────────────────────────────────────────────────
 
@@ -107,12 +114,29 @@ interface MaiaResult {
 
 // ─── Helpers ─────────────────────────────────────────────────────────────────
 
-/** Converts the host's raw per-ELO payload into the hook's normalized MaiaResult. */
+/**
+ * Converts the host's raw per-ELO payload into the hook's normalized
+ * MaiaResult. Also write-throughs the shared `fen|elo` policy cache
+ * (`maiaPolicyCache.ts`, Phase 194 CACHE-05) with a UCI-keyed distribution
+ * per ladder rung, so a position this chart already inferred serves the
+ * engine's own root `policy()` call (`maiaQueue.ts`) without a second
+ * ~130 ms Maia forward pass. Keyed on `fen` — this function is always called
+ * with the RESULT's own `msg.fen`, never the hook's current `fen` prop
+ * (163-REVIEW WR-03: `latestResult` clears one commit after the prop
+ * changes, so a write keyed on the prop could target the wrong position).
+ * UCI-keyed rather than reusing this function's own SAN-keyed
+ * `moveProbabilities`: the engine's consumer needs UCI keys, and converting
+ * SAN to UCI at read time would reintroduce the per-move chess.js replay
+ * Phase 194 JANK-01 removed from the hot path.
+ */
 function buildMaiaResult(fen: string, msg: MaiaAnalyzeResult): MaiaResult {
-  const perElo = msg.rawPolicyByElo.map(({ elo, policy }) => ({
-    elo,
-    moveProbabilities: maskAndSoftmax(policy, fen),
-  }));
+  const perElo = msg.rawPolicyByElo.map(({ elo, policy }) => {
+    setCachedPolicy(fen, elo, maskAndSoftmaxUci(policy, fen));
+    return {
+      elo,
+      moveProbabilities: maskAndSoftmax(policy, fen),
+    };
+  });
   const wdlByElo = msg.wdlByElo.map(({ elo, wdl }) => ({ elo, wdl: softmaxWdl(wdl) }));
   return { fen, perElo, wdlByElo };
 }

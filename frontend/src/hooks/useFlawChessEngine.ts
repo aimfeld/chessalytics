@@ -216,13 +216,14 @@ export function useFlawChessEngine({
     const queue = queueRef.current;
     if (!debouncedFen || !enabled || !pool || !queue) return;
 
-    // Pitfall 1: mctsSearch's own while-loop only checks `signal.aborted`
-    // between rounds and NEVER forwards the signal into dispatchExpansion's
-    // policy()/grade() calls — so a bare controller.abort() leaves the
-    // previous run's in-flight Stockfish pool work grinding for up to
-    // GRADING_MOVETIME_SAFETY_CAP_MS. Explicitly stop the pool too.
-    // maiaQueue has no stopAll (an in-flight ONNX inference cannot be
-    // interrupted) — a stale policy() resolution is unused and harmless.
+    // Pitfall 1 (STALE as of Phase 194 ABORT-01): dispatchExpansion now
+    // forwards this signal into providers.grade()'s 3rd param, so the abort()
+    // below already reaches WorkerPool.grade's dequeue/stop handling on its
+    // own. The explicit pool.stopAll() call is kept as redundant, idempotent
+    // defense in depth (not removed — that's out of scope for Phase 194), not
+    // because it is still load-bearing. maiaQueue has no stopAll (an
+    // in-flight ONNX inference cannot be interrupted) — a stale policy()
+    // resolution is unused and harmless.
     abortControllerRef.current?.abort();
     pool.stopAll();
 

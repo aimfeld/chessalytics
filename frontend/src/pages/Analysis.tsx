@@ -118,6 +118,7 @@ import type { NodeId, MoveNode } from '@/hooks/useAnalysisBoard';
 import type { MoveCurvePoint } from '@/hooks/useMaiaEngine';
 import { buildEvalLookup, getByUci, getBySan, resolveReconciledBest, rankReconciledCandidates } from '@/lib/engineEvalLookup';
 import type { RankedLine } from '@/lib/engine/types';
+import { cloneRankedLineWith } from '@/lib/engine/treeCommon';
 import type { PvLine } from '@/hooks/uciParser';
 import { classifyGem, summarizeForGem, GEM_MAIA_MAX_PROB } from '@/lib/gemMove';
 import { useGemSweep } from '@/hooks/useGemSweep';
@@ -1210,15 +1211,23 @@ export default function Analysis() {
   // root candidate surfaces `#-4` on the card + agreement verdict instead of the
   // `…` a null cp alone would print (quick 260709 — the earlier cp-only swap
   // dropped mate).
+  //
+  // Phase 194 JANK-03 audit fix: this used to be `{ ...line, objectiveEvalCp:
+  // ..., objectiveEvalMate: ... }` — a second, previously-unaudited
+  // `RankedLine` spread site that the phase's own `{\s*\.\.\.line` grep
+  // missed because the `{` and `...line` fall on separate source lines.
+  // Spreading forces `modalPath`/`modalStats`' lazy accessors to evaluate
+  // immediately for every one of `FC_MAX_LINES` lines on every render this
+  // memo recomputes. `Object.getOwnPropertyDescriptors` copies the getter
+  // descriptor (laziness preserved), never the current value.
   const reconciledRankedLines = useMemo<RankedLine[]>(
     () =>
       flawChessEngine.rankedLines.slice(0, FC_MAX_LINES).map((line) => {
         const resolved = getByUci(evalLookup, line.rootMove);
-        return {
-          ...line,
+        return cloneRankedLineWith(line, {
           objectiveEvalCp: resolved?.evalCp ?? null,
           objectiveEvalMate: resolved?.evalMate ?? null,
-        };
+        });
       }),
     [flawChessEngine.rankedLines, evalLookup],
   );

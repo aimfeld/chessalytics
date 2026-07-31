@@ -152,7 +152,7 @@
 | 191. Schedule + Progress Surface (SEED-037, v2.9) | 6/6 | Complete | 2026-07-27 |
 | 192. Precomputed Red-Herring Position Pool (SEED-120, v2.9) | 5/5 | Complete | 2026-07-28 |
 | 193. Session-Tick Streaks with a Depletable Shield (SEED-121, v2.9) | 3/3 | Complete | 2026-07-28 |
-| 194. Engine main-thread + cache hygiene (SEED-126 Phases 2–5, v2.10) | 0/TBD | Not started | - |
+| 194. Engine main-thread + cache hygiene (SEED-126 Phases 2–5, v2.10) | 4/4 | Complete | 2026-07-30 |
 | 195. Depth-scaled grading ladder (SEED-126 Phase 1, v2.10) | 0/TBD | Not started | - |
 | 196. Analysis-board Stockfish root injection (SEED-118, v2.10) | 0/TBD | Not started | - |
 | 197. Maia WDL leaf values (SEED-126 Phase 6, v2.10) | 0/TBD | Not started | - |
@@ -181,7 +181,31 @@ Eliminate the engine's measured structural waste — main-thread jank, undersize
   4. A same-FEN grade request with a shifted candidate set no longer destroys the prior cache entry (merge, not overwrite), and the analysis board's Maia ELO-ladder chart and the engine's root policy call share one `fen|elo`-keyed cache, so navigating to an already-charted position is not re-inferred at ~130 ms per position (CACHE-03, CACHE-05).
   5. The transient `--candidate fast` prototype and flag are deleted from `engine-mainthread-cost.mjs` once the fast path ships, so the baseline pass measures shipped code (JANK-05); the two deliberately-retained removal candidates (`wdlByElo` worker transfer, `workerPool` priority queue) carry in-code notes naming their Phase 197 / Phase 198 consumers instead of being deleted as dead code (CACHE-06).
 
-**Plans**: TBD (~4 plans expected — one per SEED-126 sub-phase: SAN→UCI conversion, abort threading, lazy snapshots, cache correctness + capacity)
+**Plans:** 4/4 plans complete
+
+Plans:
+**Wave 1**
+
+- [x] 194-01-PLAN.md — Wave 1. Pre-phase main-thread baseline capture, then the single-pass UCI-keyed policy conversion with its underpromotion parity guard, re-measurement, and deletion of the transient `--candidate fast` prototype (JANK-01, JANK-02, JANK-04, JANK-05)
+
+**Wave 2** *(blocked on Wave 1 completion)*
+
+- [x] 194-02-PLAN.md — Wave 2. Thread the abort signal from `mctsSearch` into `WorkerPool.grade`'s already-implemented third parameter, plus the symmetric `fallbackExpectimax` fix; prove all four `useBotGame` abort sites and the deadline cut stop in-flight Stockfish work with no edit at those sites (ABORT-01, ABORT-02, ABORT-03)
+
+**Wave 3** *(blocked on Wave 2 completion)*
+
+- [x] 194-03-PLAN.md — Wave 3. Provider caches: `GRADE_CACHE_MAX` 256→1024, a new shared module-level `fen|elo` policy cache at 2048 backing `maiaQueue` and written through by the ELO-ladder chart, LRU eviction in both, merging `cacheGrades`, the measured CACHE-04 no-partial-hit finding recorded in-code, and retention notes naming Phase 197 / Phase 198 (CACHE-01..06)
+- [x] 194-04-PLAN.md — Wave 3. Lazy `modalPath`/`modalStats` accessors on `RankedLine` sharing one memoized closure per line, and the `botStyle.ts` object-spread landmine fix that would otherwise make the whole optimization a no-op on the persona bot path (JANK-03)
+
+Wave ordering is load-bearing. Most cross-wave dependencies here are file ownership rather
+than a data dependency — do not "optimize" one away on the grounds that no plan reads the
+prior plan's output. The exception is Plan 03's dependency on Plan 01, which is *also* a real
+code dependency: Plan 03 calls `maskAndSoftmaxUci`, which does not exist until Plan 01 lands
+(see 194-03-PLAN.md's `<dependency_note>`, which splits its two dependencies by kind).
+Wave 1 runs alone so nothing contaminates JANK-04's pre-phase baseline.
+Wave 3 (Plans 03 and 04) follows Wave 2 because Plan 03 and Plan 02 both append cases to
+`workerPool.test.ts`, and Plan 04 and Plan 02 both edit `types.ts`. Plans 03 and 04 share
+Wave 3 safely: their `files_modified` sets do not intersect.
 
 ### Phase 195: Depth-scaled grading ladder
 

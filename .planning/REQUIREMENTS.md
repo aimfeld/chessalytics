@@ -23,26 +23,26 @@
 
 ### Main-Thread Cost (SEED-126 Phases 2, 4)
 
-- [ ] **JANK-01**: Policy results are converted to a UCI-keyed distribution in a single pass over legal moves, without constructing a `Chess` instance and replaying a move per candidate
-- [ ] **JANK-02**: A parity test asserts the fast conversion path matches `moves({verbose:true})`-derived UCIs key-for-key on a fixture that includes an underpromotion position, so a chess.js version bump fails CI loudly instead of silently corrupting the policy distribution
-- [ ] **JANK-03**: Search snapshots are built lazily — a consumer reading only `rootMove`/`practicalScore`/`childScoreSpread` pays nothing for `modalPath`/`modalStats` — while `onSnapshot` still fires after every completed backup (D-10 preserved exactly)
-- [ ] **JANK-04**: Measured main-thread blocking per complete search drops materially at both the 50-node bot budget and the 400-node analysis budget, verified by `scripts/engine-mainthread-cost.mjs` with ranked-line output bit-identical to the baseline. **This is a jank requirement, not a latency one** — the affected work is ~1.4% of search wall clock and no success criterion may claim the search finishes sooner
-- [ ] **JANK-05**: The transient `--candidate fast` prototype and flag in `engine-mainthread-cost.mjs` are deleted once the fast path ships, so the baseline pass measures shipped code
+- [x] **JANK-01**: Policy results are converted to a UCI-keyed distribution in a single pass over legal moves, without constructing a `Chess` instance and replaying a move per candidate
+- [x] **JANK-02**: A parity test asserts the fast conversion path matches `moves({verbose:true})`-derived UCIs key-for-key on a fixture that includes an underpromotion position, so a chess.js version bump fails CI loudly instead of silently corrupting the policy distribution
+- [x] **JANK-03**: Search snapshots are built lazily — a consumer reading only `rootMove`/`practicalScore`/`childScoreSpread` pays nothing for `modalPath`/`modalStats` — while `onSnapshot` still fires after every completed backup (D-10 preserved exactly)
+- [x] **JANK-04**: Measured main-thread blocking per complete search drops materially at both the 50-node bot budget and the 400-node analysis budget, verified by `scripts/engine-mainthread-cost.mjs` with ranked-line output bit-identical to the baseline. **This is a jank requirement, not a latency one** — the affected work is ~1.4% of search wall clock and no success criterion may claim the search finishes sooner
+- [x] **JANK-05**: The transient `--candidate fast` prototype and flag in `engine-mainthread-cost.mjs` are deleted once the fast path ships, so the baseline pass measures shipped code
 
 ### Abort Propagation (SEED-126 Phase 3)
 
-- [ ] **ABORT-01**: The abort signal is threaded from `mctsSearch` into `WorkerPool.grade` (the already-present, never-passed third parameter), so an aborted search stops in-flight Stockfish work instead of grinding for up to `GRADING_MOVETIME_SAFETY_CAP_MS`
-- [ ] **ABORT-02**: All four `useBotGame` abort sites (resign, new game, unmount, deadline cut) stop Stockfish work; a `createDeadlineSearch` cut plays its move without waiting out the current round of grades
-- [ ] **ABORT-03**: `WorkerPool` remains structurally assignable to the frozen 2-arg `EngineProviders.grade` contract, so the locked Phase 153 contract survives
+- [x] **ABORT-01**: The abort signal is threaded from `mctsSearch` into `WorkerPool.grade` (the already-present, never-passed third parameter), so an aborted search stops in-flight Stockfish work instead of grinding for up to `GRADING_MOVETIME_SAFETY_CAP_MS`
+- [x] **ABORT-02**: All four `useBotGame` abort sites (resign, new game, unmount, deadline cut) stop Stockfish work; a `createDeadlineSearch` cut plays its move without waiting out the current round of grades
+- [x] **ABORT-03**: `WorkerPool` remains structurally assignable to the frozen 2-arg `EngineProviders.grade` contract, so the locked Phase 153 contract survives
 
 ### Provider Caches (SEED-126 Phase 5)
 
-- [ ] **CACHE-01**: Both provider caches are sized to hold a full search's distinct-FEN working set plus some navigation history, so a single search no longer thrashes its own cache before cross-search reuse is even possible
-- [ ] **CACHE-02**: Both caches evict LRU rather than FIFO, so the root and upper tree — the nodes a PUCT selection walk re-descends most — are retained instead of dropped first
-- [ ] **CACHE-03**: `cacheGrades` merges into an existing entry rather than replacing the whole map, so a same-FEN request with a shifted candidate set cannot destroy the prior entry
-- [ ] **CACHE-04**: A partial cache hit grades only the missing candidate subset — **or**, if subset-graded values are empirically shown to differ from full-set-graded ones for the same `(fen, depth)` (because `searchmoves` changes what Stockfish searches), the all-or-nothing read is kept and that finding is recorded in-code
-- [ ] **CACHE-05**: The analysis board's Maia ELO-ladder chart and the engine's root policy call share one cache keyed `fen|elo`, so a navigated position is not re-inferred at ~130 ms per position; `maiaWorkerHost.ts`'s "caches stay separate" header note is reversed
-- [ ] **CACHE-06**: The two removal candidates SEED-126 identified are deliberately retained with in-code notes recording their downstream consumer: the `wdlByElo` worker transfer (Phase 197) and the `workerPool` priority queue (Phase 198)
+- [x] **CACHE-01**: Both provider caches are sized to hold a full search's distinct-FEN working set plus some navigation history, so a single search no longer thrashes its own cache before cross-search reuse is even possible
+- [x] **CACHE-02**: Both caches evict LRU rather than FIFO, so the root and upper tree — the nodes a PUCT selection walk re-descends most — are retained instead of dropped first
+- [x] **CACHE-03**: `cacheGrades` merges into an existing entry rather than replacing the whole map, so a same-FEN request with a shifted candidate set cannot destroy the prior entry
+- [x] **CACHE-04**: A partial cache hit grades only the missing candidate subset — **or**, if subset-graded values are empirically shown to differ from full-set-graded ones for the same `(fen, depth)` (because `searchmoves` changes what Stockfish searches), the all-or-nothing read is kept and that finding is recorded in-code
+- [x] **CACHE-05**: The analysis board's Maia ELO-ladder chart and the engine's root policy call share one cache keyed `fen|elo`, so a navigated position is not re-inferred at ~130 ms per position; `maiaWorkerHost.ts`'s "caches stay separate" header note is reversed
+- [x] **CACHE-06**: The two removal candidates SEED-126 identified are deliberately retained with in-code notes recording their downstream consumer: the `wdlByElo` worker transfer (Phase 197) and the `workerPool` priority queue (Phase 198)
 
 ### Depth-Scaled Grading Ladder (SEED-126 Phase 1)
 
@@ -113,20 +113,20 @@
 
 | Requirement | Phase | Status |
 |-------------|-------|--------|
-| JANK-01 | Phase 194 | Pending |
-| JANK-02 | Phase 194 | Pending |
-| JANK-03 | Phase 194 | Pending |
-| JANK-04 | Phase 194 | Pending |
-| JANK-05 | Phase 194 | Pending |
-| ABORT-01 | Phase 194 | Pending |
-| ABORT-02 | Phase 194 | Pending |
-| ABORT-03 | Phase 194 | Pending |
-| CACHE-01 | Phase 194 | Pending |
-| CACHE-02 | Phase 194 | Pending |
-| CACHE-03 | Phase 194 | Pending |
-| CACHE-04 | Phase 194 | Pending |
-| CACHE-05 | Phase 194 | Pending |
-| CACHE-06 | Phase 194 | Pending |
+| JANK-01 | Phase 194 | Complete |
+| JANK-02 | Phase 194 | Complete |
+| JANK-03 | Phase 194 | Complete |
+| JANK-04 | Phase 194 | Complete |
+| JANK-05 | Phase 194 | Complete |
+| ABORT-01 | Phase 194 | Complete |
+| ABORT-02 | Phase 194 | Complete |
+| ABORT-03 | Phase 194 | Complete |
+| CACHE-01 | Phase 194 | Complete |
+| CACHE-02 | Phase 194 | Complete |
+| CACHE-03 | Phase 194 | Complete |
+| CACHE-04 | Phase 194 | Complete |
+| CACHE-05 | Phase 194 | Complete |
+| CACHE-06 | Phase 194 | Complete |
 | LADDER-01 | Phase 195 | Pending |
 | LADDER-02 | Phase 195 | Pending |
 | LADDER-03 | Phase 195 | Pending |

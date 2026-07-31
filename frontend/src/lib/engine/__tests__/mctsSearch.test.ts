@@ -47,7 +47,7 @@
  * guidance.
  */
 
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, vi } from 'vitest';
 import { Chess } from 'chess.js';
 import { evalToExpectedScore } from '@/lib/liveFlaw';
 import { mctsSearch } from '../mctsSearch';
@@ -607,6 +607,27 @@ describe('mctsSearch — abort', () => {
     expect(result.nodesEvaluated).toBe(SNAPSHOTS_BEFORE_ABORT); // stopped promptly, far below maxNodes
     expect(result.budgetExhausted).toBe(false); // an abort is not budget exhaustion
     expect(result.rankedLines.length).toBeGreaterThan(0); // partial snapshot is still usable
+  });
+
+  it('Phase 194 ABORT-01: every providers.grade() call receives the search\'s own AbortSignal, by reference, on every expansion', async () => {
+    const controller = new AbortController();
+    const budget: SearchBudget = { maxNodes: 5, elo: NEUTRAL_BUDGET_ELO, maxPlies: 3, concurrency: 1 };
+    const gradeSpy = vi.fn(makeFixedGrade({ [SIMPLE_WHITE_FEN]: SIMPLE_WHITE_GRADES }));
+    const providers: EngineProviders = {
+      policy: makeFixedPolicy({ [SIMPLE_WHITE_FEN]: SIMPLE_WHITE_POLICY }),
+      grade: gradeSpy,
+    };
+
+    await mctsSearch(SIMPLE_WHITE_FEN, budget, providers, () => {}, controller.signal);
+
+    expect(gradeSpy.mock.calls.length).toBeGreaterThan(0);
+    for (const call of gradeSpy.mock.calls) {
+      // Reference identity, not merely "defined" — a NEW AbortSignal that
+      // happens to report the same .aborted value would pass a weaker check
+      // but would NOT actually let WorkerPool.grade's abort listener see this
+      // search's real cancel.
+      expect(call[2]).toBe(controller.signal);
+    }
   });
 });
 

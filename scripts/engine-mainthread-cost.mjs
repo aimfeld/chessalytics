@@ -8,8 +8,8 @@
  *          — raw Maia policy logits keyed by (fen, elo), Stockfish grades keyed
  *          by (fen, candidates).
  *   Pass 2 replays the IDENTICAL search with zero-latency providers that still
- *          perform the real main-thread post-processing (`maskAndSoftmax` +
- *          `sanToUci`, exactly as `maiaQueue.handleResult` does).
+ *          perform the real main-thread post-processing (`maskAndSoftmaxUci`,
+ *          exactly as `maiaQueue.handleResult` does).
  *   Pass 2's wall clock therefore IS the main-thread cost — everything that in
  *   the browser runs on the UI thread, with all worker latency removed.
  *
@@ -22,27 +22,24 @@
  * WHY IT MATTERS: this cost is invisible in search wall clock (measured at ~1.4%)
  * but it is the number that governs UI responsiveness — it lands on the React
  * main thread in 5-8 ms chunks that block paint and input. Do NOT read this
- * script's output as a search-latency measurement. Baseline 2026-07-30 at 50
- * nodes: 349 ms (italian) / 514 ms (middlegame), of which ~80% was the SAN->UCI
- * conversion. Scale roughly 8x for the analysis board's 400-node budget.
+ * script's output as a search-latency measurement.
  *
- * `--candidate fast` additionally times a PROTOTYPE of SEED-126 Phase 2's fix
- * (single-pass, UCI-keyed, via chess.js's private `_moves`) and asserts its
- * output is bit-identical to the current path. Two things about that prototype:
- *
- *   1. It DUPLICATES `maiaEncoding.ts`'s private `moveVocabIndex`/`mirrorSquare`
- *      math, which is exactly the drift hazard `maia-worker.js`'s header warns
- *      about. The mandatory parity assertion IS the drift guard: if the real
- *      encoding changes, this script fails loudly instead of reporting numbers
- *      from a diverged copy. Never weaken that assertion into a warning.
- *   2. It is TRANSIENT. Once Phase 2 lands in `maiaQueue.ts`/`maiaEncoding.ts`,
- *      DELETE the prototype and the `--candidate` flag — the baseline pass alone
- *      then measures the shipped code, which is what you re-run to confirm the win.
+ * Baseline (194-BASELINE.md, full before/after evidence): pre-JANK-01, the
+ * SAN->UCI conversion (`maskAndSoftmax` + per-candidate `sanToUci`) cost ~1004 ms
+ * TOTAL across the 4 built-in positions at `--nodes 50` and ~8137 ms at
+ * `--nodes 400`. Post-JANK-01, the shipped single-pass `maskAndSoftmaxUci`
+ * (`@/lib/maiaEncoding`) costs ~240 ms / ~1466 ms for the same positions/budgets
+ * — a ~4.2x-5.6x reduction, with ranked-line output confirmed bit-identical to
+ * the old path at all 8 position x node-budget combinations measured. This
+ * script now measures ONLY the shipped conversion (the transient `--candidate
+ * fast` prototype and its parity-checked comparison against the pre-JANK-01
+ * two-step path were deleted once that evidence was captured — see
+ * 194-BASELINE.md for the full run-by-run numbers).
  *
  * Usage:
  *   node --import ./scripts/lib/frontend-alias-hook.mjs scripts/engine-mainthread-cost.mjs \
  *     [--nodes 50] [--procs 4] [--plies 8] [--elo 1500] [--repeats 3] \
- *     [--candidate fast] [--openings 0] [--fens path/to/fens.txt]
+ *     [--openings 0] [--fens path/to/fens.txt]
  *
  *   --repeats   replay iterations to average (the replay is fast; pass 1 dominates)
  *   --openings  additionally draw N positions from `calibration-openings.mjs`'s OPENING_BOOK
@@ -52,22 +49,19 @@ import { pathToFileURL } from 'node:url';
 import path from 'node:path';
 import fs from 'node:fs';
 
-import { createMaiaSession, resolveFrontendModule } from './lib/node-engine-providers.mjs';
+import { createMaiaSession } from './lib/node-engine-providers.mjs';
 import { createStockfishPool } from './lib/stockfish-pool.mjs';
 import { OPENING_BOOK } from './lib/calibration-openings.mjs';
 
 import { mctsSearch } from '@/lib/engine/mctsSearch';
 import {
-  maskAndSoftmax,
+  maskAndSoftmaxUci,
   encodeBoard,
   eloToInput,
   NUM_SQUARES,
   PLANES_PER_SQUARE,
   POLICY_VOCAB_SIZE,
 } from '@/lib/maiaEncoding';
-import { sanToUci } from '@/lib/sanToSquares';
-
-const { Chess } = await resolveFrontendModule('chess.js');
 
 const __dirname = path.dirname(new URL(import.meta.url).pathname);
 const REPO_ROOT = path.resolve(__dirname, '..');
@@ -97,109 +91,20 @@ const BUILTIN_POSITIONS = [
   { label: 'endgame', fen: '8/2p5/3p4/KP5r/1R3p1k/8/4P1P1/8 w - - 0 1' },
 ];
 
-// ─── Policy post-processing variants ─────────────────────────────────────────
+// ─── Policy post-processing ───────────────────────────────────────────────────
 
 /**
- * CURRENT shipped path: `maiaQueue.handleResult`'s `maskAndSoftmax` followed by a
- * per-legal-move `sanToUci`, each of which constructs a fresh `Chess` and
- * replays the move. This is the baseline being measured — keep it calling the
- * LIVE functions so it tracks whatever `maiaQueue` actually does.
+ * SHIPPED single-pass UCI-keyed conversion (JANK-01) — the same
+ * `maskAndSoftmaxUci` `maiaQueue.handleResult` calls in production. Kept
+ * calling the LIVE function (not duplicated here) so this script tracks
+ * whatever `maiaQueue` actually does. Renamed from `currentPolicyConversion`
+ * (JANK-05): before JANK-01 shipped, this measured the old `maskAndSoftmax` +
+ * per-candidate `sanToUci` path; see 194-BASELINE.md for that pre-change
+ * measurement and the post-change bit-identity proof against this function.
  */
-function currentPolicyConversion(logits, fen) {
-  const sanKeyed = maskAndSoftmax(logits, fen);
-  const uciKeyed = {};
-  for (const [san, prob] of Object.entries(sanKeyed)) {
-    const uci = sanToUci(fen, san);
-    if (uci !== null) uciKeyed[uci] = prob;
-  }
-  return uciKeyed;
+function shippedPolicyConversion(logits, fen) {
+  return maskAndSoftmaxUci(logits, fen);
 }
-
-// --- BEGIN transient Phase 2 prototype (delete once the fix ships) -----------
-//
-// Duplicates maiaEncoding.ts's PRIVATE vocab-index + mirror math. Guarded by the
-// mandatory parity assertion in `assertParity` — see the module header.
-
-/** chess.js internal 0x88-style square number -> algebraic (mirrors its own `algebraic()`). */
-const CHESS_JS_FILE_MASK = 15;
-const CHESS_JS_RANK_SHIFT = 4;
-const BOARD_SIZE = 8;
-const BASE_VOCAB_SIZE = NUM_SQUARES * NUM_SQUARES;
-const UNDERPROMOTION_PIECE_LANES = ['q', 'r', 'b', 'n'];
-
-function internalSquareToAlgebraic(square) {
-  return `abcdefgh`[square & CHESS_JS_FILE_MASK] + (BOARD_SIZE - (square >> CHESS_JS_RANK_SHIFT));
-}
-function squareTokenIndex(square) {
-  return (Number(square[1]) - 1) * BOARD_SIZE + (square.charCodeAt(0) - 'a'.charCodeAt(0));
-}
-function mirrorSquare(square) {
-  return `${square[0]}${BOARD_SIZE + 1 - Number(square[1])}`;
-}
-function moveVocabIndex(from, to, promotion) {
-  if (promotion === undefined || promotion === 'q') {
-    return squareTokenIndex(from) * NUM_SQUARES + squareTokenIndex(to);
-  }
-  return BASE_VOCAB_SIZE + squareTokenIndex(to) * UNDERPROMOTION_PIECE_LANES.length
-    + UNDERPROMOTION_PIECE_LANES.indexOf(promotion);
-}
-
-/** PROTOTYPE of SEED-126 Phase 2: one legal-move generation, UCI keys, no SAN round-trip. */
-function fastPolicyConversion(logits, fen) {
-  const chess = new Chess(fen);
-  const isBlackToMove = fen.split(' ')[1] === 'b';
-  const internalMoves = chess['_moves']({ legal: true });
-  const count = internalMoves.length;
-  const ucis = new Array(count);
-  const scores = new Float64Array(count);
-  let max = Number.NEGATIVE_INFINITY;
-  for (let i = 0; i < count; i++) {
-    const move = internalMoves[i];
-    const from = internalSquareToAlgebraic(move.from);
-    const to = internalSquareToAlgebraic(move.to);
-    ucis[i] = `${from}${to}${move.promotion ?? ''}`;
-    const idx = moveVocabIndex(
-      isBlackToMove ? mirrorSquare(from) : from,
-      isBlackToMove ? mirrorSquare(to) : to,
-      move.promotion,
-    );
-    const score = logits[idx] ?? Number.NEGATIVE_INFINITY;
-    scores[i] = score;
-    if (score > max) max = score;
-  }
-  let sum = 0;
-  for (let i = 0; i < count; i++) {
-    scores[i] = Math.exp(scores[i] - max);
-    sum += scores[i];
-  }
-  const out = {};
-  for (let i = 0; i < count; i++) out[ucis[i]] = sum > 0 ? scores[i] / sum : 0;
-  return out;
-}
-
-/** Fails the run if the prototype has drifted from the live encoding. Never downgrade to a warning. */
-function assertParity(logits, fen) {
-  const expected = currentPolicyConversion(logits, fen);
-  const actual = fastPolicyConversion(logits, fen);
-  const expectedKeys = Object.keys(expected).sort().join(',');
-  const actualKeys = Object.keys(actual).sort().join(',');
-  if (expectedKeys !== actualKeys) {
-    throw new Error(
-      `Phase 2 prototype drifted from maiaEncoding.ts at ${fen}: key sets differ ` +
-        `(${Object.keys(expected).length} vs ${Object.keys(actual).length}). ` +
-        `Re-derive moveVocabIndex/mirrorSquare from maiaEncoding.ts before trusting any number here.`,
-    );
-  }
-  for (const key of Object.keys(expected)) {
-    if (expected[key] !== actual[key]) {
-      throw new Error(
-        `Phase 2 prototype drifted from maiaEncoding.ts at ${fen}: probability for ${key} ` +
-          `differs (${expected[key]} vs ${actual[key]}).`,
-      );
-    }
-  }
-}
-// --- END transient Phase 2 prototype ----------------------------------------
 
 // ─── Arg parsing ─────────────────────────────────────────────────────────────
 
@@ -223,7 +128,6 @@ export function parseArgs(argv) {
     plies: DEFAULT_PLIES,
     elo: DEFAULT_ELO,
     repeats: DEFAULT_REPEATS,
-    candidate: null,
     openings: 0,
     fens: null,
   };
@@ -244,13 +148,6 @@ export function parseArgs(argv) {
       case 'repeats': args.repeats = parsePositiveIntFlag(value, key); i++; break;
       case 'openings': args.openings = parsePositiveIntFlag(value, key, 0); i++; break;
       case 'fens': args.fens = requireFlagValue(value, key); i++; break;
-      case 'candidate': {
-        const raw = requireFlagValue(value, key);
-        if (raw !== 'fast') throw new Error(`Invalid --candidate ${JSON.stringify(raw)}: only "fast" is supported`);
-        args.candidate = raw;
-        i++;
-        break;
-      }
       default:
         throw new Error(`Unknown flag --${key}`);
     }
@@ -319,12 +216,10 @@ async function main() {
 
   console.log(
     `\nMain-thread cost — nodes=${args.nodes} plies=${args.plies} concurrency=${args.procs} ` +
-      `elo=${args.elo} repeats=${args.repeats}  positions=${positions.length}` +
-      `${args.candidate ? `  candidate=${args.candidate}` : ''}\n`,
+      `elo=${args.elo} repeats=${args.repeats}  positions=${positions.length}\n`,
   );
 
-  let totalCurrent = 0;
-  let totalCandidate = 0;
+  let totalMs = 0;
 
   for (const { label, fen } of positions) {
     const logitCache = new Map();
@@ -335,7 +230,7 @@ async function main() {
       policy: async (f, elo) => {
         const key = `${f}|${elo}`;
         if (!logitCache.has(key)) logitCache.set(key, await rawLogits(f, elo));
-        return currentPolicyConversion(logitCache.get(key), f);
+        return shippedPolicyConversion(logitCache.get(key), f);
       },
       grade: async (f, candidateUcis) => {
         const key = `${f}|${candidateUcis.join(',')}`;
@@ -351,66 +246,35 @@ async function main() {
     // A cache miss means the replay diverged from pass 1, which invalidates the
     // whole measurement — count and fail rather than substituting empties.
     let misses = 0;
-    const replayProviders = (convert) => ({
+    const replayProviders = {
       policy: async (f, elo) => {
         const logits = logitCache.get(`${f}|${elo}`);
         if (logits === undefined) { misses++; return {}; }
-        return convert(logits, f);
+        return shippedPolicyConversion(logits, f);
       },
       grade: async (f, candidateUcis) => {
         const grades = gradeCache.get(`${f}|${candidateUcis.join(',')}`);
         if (grades === undefined) { misses++; return new Map(); }
         return grades;
       },
-    });
-
-    const timeReplay = async (convert) => {
-      await mctsSearch(fen, budget, replayProviders(convert), NO_SNAPSHOT, NEVER_ABORT); // warm-up, discarded
-      let total = 0;
-      let snapshot = null;
-      for (let i = 0; i < args.repeats; i++) {
-        const startedAt = performance.now();
-        snapshot = await mctsSearch(fen, budget, replayProviders(convert), NO_SNAPSHOT, NEVER_ABORT);
-        total += performance.now() - startedAt;
-      }
-      return { ms: total / args.repeats, snapshot };
     };
 
-    const current = await timeReplay(currentPolicyConversion);
-    totalCurrent += current.ms;
+    await mctsSearch(fen, budget, replayProviders, NO_SNAPSHOT, NEVER_ABORT); // warm-up, discarded
+    let replayTotalMs = 0;
+    for (let i = 0; i < args.repeats; i++) {
+      const startedAt = performance.now();
+      await mctsSearch(fen, budget, replayProviders, NO_SNAPSHOT, NEVER_ABORT);
+      replayTotalMs += performance.now() - startedAt;
+    }
+    const replayMs = replayTotalMs / args.repeats;
+    totalMs += replayMs;
 
     console.log(`── ${label}`);
     console.log(`   real search wall                    ${(realWallMs / 1000).toFixed(1)}s  (nodes ${realSnapshot.nodesEvaluated})`);
     console.log(
-      `   MAIN-THREAD, current code           ${current.ms.toFixed(0)} ms` +
-        `  = ${((current.ms / realWallMs) * 100).toFixed(2)}% of wall`,
+      `   MAIN-THREAD                         ${replayMs.toFixed(0)} ms` +
+        `  = ${((replayMs / realWallMs) * 100).toFixed(2)}% of wall`,
     );
-
-    if (args.candidate === 'fast') {
-      for (const key of logitCache.keys()) {
-        const [cachedFen] = key.split('|');
-        assertParity(logitCache.get(key), cachedFen);
-      }
-      const candidate = await timeReplay(fastPolicyConversion);
-      totalCandidate += candidate.ms;
-      const identical =
-        current.snapshot.rankedLines.length === candidate.snapshot.rankedLines.length &&
-        current.snapshot.rankedLines.every(
-          (line, i) =>
-            line.rootMove === candidate.snapshot.rankedLines[i].rootMove &&
-            line.practicalScore === candidate.snapshot.rankedLines[i].practicalScore,
-        );
-      console.log(
-        `   MAIN-THREAD, Phase 2 prototype      ${candidate.ms.toFixed(0)} ms` +
-          `  = ${((candidate.ms / realWallMs) * 100).toFixed(2)}% of wall`,
-      );
-      console.log(
-        `   saved                               ${(current.ms - candidate.ms).toFixed(0)} ms` +
-          `  (${((1 - candidate.ms / current.ms) * 100).toFixed(0)}% of main-thread cost)`,
-      );
-      console.log(`   ranked output bit-identical         ${identical ? 'YES' : 'NO  <-- INVESTIGATE'}`);
-      if (!identical) process.exitCode = 1;
-    }
 
     if (misses > 0) {
       console.error(
@@ -423,14 +287,7 @@ async function main() {
     console.log('');
   }
 
-  console.log(`TOTAL main-thread across ${positions.length} positions:`);
-  console.log(`  current code        ${totalCurrent.toFixed(0)} ms`);
-  if (args.candidate === 'fast') {
-    console.log(
-      `  Phase 2 prototype   ${totalCandidate.toFixed(0)} ms   ` +
-        `(${(totalCurrent / totalCandidate).toFixed(1)}x faster, saves ${(totalCurrent - totalCandidate).toFixed(0)} ms)`,
-    );
-  }
+  console.log(`TOTAL main-thread across ${positions.length} positions: ${totalMs.toFixed(0)} ms`);
   console.log(
     `\nReminder: this is UI-thread blocking time, NOT search latency. It lands in 5-8 ms ` +
       `chunks that block paint and input.`,
