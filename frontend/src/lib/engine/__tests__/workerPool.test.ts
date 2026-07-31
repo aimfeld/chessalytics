@@ -18,6 +18,7 @@ import {
   MOBILE_POOL_SIZE,
   GRADE_CACHE_MAX,
   GRADING_WATCHDOG_TIMEOUT_MS,
+  STOP_BESTMOVE_WATCHDOG_TIMEOUT_MS,
   type QueuedGradeRequest,
   type WorkerPool,
   type MoveGrade,
@@ -610,7 +611,12 @@ describe('createWorkerPool: watchdog (D-06)', () => {
     expect(Sentry.captureException).not.toHaveBeenCalled();
   });
 
-  it('an abort of an in-flight request clears its watchdog — no Sentry capture after the deadline', async () => {
+  it('quick 260731-s0z FIX-4: an abort of an in-flight request re-arms a stop-bestmove watchdog — one static Sentry capture after STOP_BESTMOVE_WATCHDOG_TIMEOUT_MS if the worker never answers `stop`, and the dead slot is never re-dispatched to', async () => {
+    // Prior to FIX-4 this test asserted NO capture at all after
+    // GRADING_WATCHDOG_TIMEOUT_MS — a bare `clearSlotWatchdog` on abort left
+    // the 'stopping' slot with no exit if `stop` never got a `bestmove` back.
+    // FIX-4 re-arms a MUCH tighter bound instead (10s, not 60s) precisely so
+    // that hang is bounded and Sentry-visible.
     const pool = createWorkerPool();
     const controller = new AbortController();
     const gradePromise = pool.grade(TEST_FEN, ['e7e5'], controller.signal);
@@ -621,11 +627,52 @@ describe('createWorkerPool: watchdog (D-06)', () => {
     await gradePromise;
 
     vi.mocked(Sentry.captureException).mockClear();
-    await vi.advanceTimersByTimeAsync(GRADING_WATCHDOG_TIMEOUT_MS);
+    // No answering bestmove ever arrives on this worker.
+    await vi.advanceTimersByTimeAsync(STOP_BESTMOVE_WATCHDOG_TIMEOUT_MS - 1);
+    expect(Sentry.captureException).not.toHaveBeenCalled();
+
+    await vi.advanceTimersByTimeAsync(1);
+    expect(Sentry.captureException).toHaveBeenCalledTimes(1);
+    const [err, ctx] = vi.mocked(Sentry.captureException).mock.calls[0]!;
+    expect(err).toBeInstanceOf(Error);
+    expect((err as Error).message).toBe('Stockfish worker pool: stop-bestmove watchdog timeout');
+    expect(ctx).toEqual(
+      expect.objectContaining({ tags: expect.objectContaining({ source: 'stockfish-worker-pool' }) }),
+    );
+
+    // The dead slot is never re-dispatched to (mirrors the D-06 watchdog's
+    // own dead-slot-avoidance proof above).
+    const second = pool.grade(TEST_FEN_2, ['d7d5']);
+    const otherWorker = createdWorkers.find((w) => w !== worker)!;
+    driveInit(otherWorker);
+    otherWorker.simulateMessage('info depth 14 multipv 1 score cp 5 nodes 1000 pv d7d5');
+    otherWorker.simulateMessage('bestmove d7d5');
+    await second;
+    expect(otherWorker.messages).toContain(`position fen ${TEST_FEN_2}`);
+    expect(worker.messages).not.toContain(`position fen ${TEST_FEN_2}`);
+  });
+
+  it('quick 260731-s0z FIX-4: a healthy stop answered by a bestmove before STOP_BESTMOVE_WATCHDOG_TIMEOUT_MS disarms the re-armed watchdog — no Sentry capture', async () => {
+    const pool = createWorkerPool();
+    const controller = new AbortController();
+    const gradePromise = pool.grade(TEST_FEN, ['e7e5'], controller.signal);
+    const worker = createdWorkers[0]!;
+    driveInit(worker);
+
+    controller.abort();
+    await gradePromise;
+
+    // The worker answers the `stop` with its terminating bestmove BEFORE the
+    // stop-bestmove bound — this must disarm the re-armed watchdog.
+    worker.simulateMessage('bestmove e7e5');
+
+    vi.mocked(Sentry.captureException).mockClear();
+    await vi.advanceTimersByTimeAsync(STOP_BESTMOVE_WATCHDOG_TIMEOUT_MS);
     expect(Sentry.captureException).not.toHaveBeenCalled();
   });
 
-  it('stopAll() clears every in-flight watchdog — no Sentry capture after the deadline', async () => {
+  it('quick 260731-s0z FIX-4: stopAll() re-arms a stop-bestmove watchdog per thinking slot — one static Sentry capture per never-answering slot after STOP_BESTMOVE_WATCHDOG_TIMEOUT_MS', async () => {
+    // Same failure shape as the abort test above, via stopAll() instead.
     const pool = createWorkerPool();
     const gradePromise = pool.grade(TEST_FEN, ['e7e5']);
     const worker = createdWorkers[0]!;
@@ -635,8 +682,16 @@ describe('createWorkerPool: watchdog (D-06)', () => {
     await gradePromise;
 
     vi.mocked(Sentry.captureException).mockClear();
-    await vi.advanceTimersByTimeAsync(GRADING_WATCHDOG_TIMEOUT_MS);
+    await vi.advanceTimersByTimeAsync(STOP_BESTMOVE_WATCHDOG_TIMEOUT_MS - 1);
     expect(Sentry.captureException).not.toHaveBeenCalled();
+
+    await vi.advanceTimersByTimeAsync(1);
+    expect(Sentry.captureException).toHaveBeenCalledTimes(1);
+    const [err, ctx] = vi.mocked(Sentry.captureException).mock.calls[0]!;
+    expect((err as Error).message).toBe('Stockfish worker pool: stop-bestmove watchdog timeout');
+    expect(ctx).toEqual(
+      expect.objectContaining({ tags: expect.objectContaining({ source: 'stockfish-worker-pool' }) }),
+    );
   });
 
   it('terminate() clears every in-flight watchdog — no Sentry capture after the deadline', async () => {
@@ -687,6 +742,72 @@ describe('createWorkerPool: watchdog (D-06)', () => {
     await vi.advanceTimersByTimeAsync(1);
     await gradePromise;
     expect(settled).toBe(true);
+  });
+});
+
+// ─── createWorkerPool: FIX-3 — grade() on a fully dead pool (quick 260731-s0z) ──
+
+describe('createWorkerPool: grade() on a fully dead pool (quick 260731-s0z FIX-3)', () => {
+  beforeEach(() => {
+    stubDesktopSizing(6); // computePoolSize() -> 4 slots
+    stubWorkerCtor();
+    vi.useFakeTimers();
+    vi.mocked(Sentry.captureException).mockClear();
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
+    vi.unstubAllGlobals();
+  });
+
+  it('a fresh signal-less grade() issued after every slot has died via onerror resolves empty rather than hanging', async () => {
+    const pool = createWorkerPool();
+    const first = pool.grade(TEST_FEN, ['e7e5']);
+    for (const w of createdWorkers) w.simulateError();
+    await expect(first).resolves.toEqual(new Map());
+
+    // Every slot is now dead. Before FIX-3 the only zero-capacity guard was
+    // `slots.length === 0`, which does not cover this case — a fresh request
+    // was enqueued into a queue nothing would ever service.
+    const second = pool.grade(TEST_FEN_2, ['d7d5']);
+    let settled = false;
+    void second.then(() => {
+      settled = true;
+    });
+    await vi.advanceTimersByTimeAsync(GRADING_WATCHDOG_TIMEOUT_MS);
+    expect(settled).toBe(true);
+    expect(await second).toEqual(new Map());
+  });
+
+  it('FIX-3 + FIX-4 composed: aborting one shared signal across every slot kills the whole pool via the stop-bestmove watchdog, and a subsequent signal-less grade() still resolves empty', async () => {
+    const pool = createWorkerPool();
+    const controller = new AbortController();
+    // One request per slot (4 slots under stubDesktopSizing(6)), sharing ONE
+    // AbortController.
+    const dispatched = [
+      pool.grade(TEST_FEN, ['e2e4'], controller.signal),
+      pool.grade(TEST_FEN, ['e2e4'], controller.signal),
+      pool.grade(TEST_FEN, ['e2e4'], controller.signal),
+      pool.grade(TEST_FEN, ['e2e4'], controller.signal),
+    ];
+    expect(createdWorkers.length).toBe(4);
+    for (const w of createdWorkers) driveInit(w);
+
+    controller.abort();
+    await Promise.all(dispatched);
+
+    // None of the four workers ever answers `stop` with a bestmove — advance
+    // past the stop-bestmove bound so every slot dies.
+    await vi.advanceTimersByTimeAsync(STOP_BESTMOVE_WATCHDOG_TIMEOUT_MS);
+
+    const fresh = pool.grade(TEST_FEN_2, ['d7d5']);
+    let settled = false;
+    void fresh.then(() => {
+      settled = true;
+    });
+    await vi.advanceTimersByTimeAsync(GRADING_WATCHDOG_TIMEOUT_MS);
+    expect(settled).toBe(true);
+    expect(await fresh).toEqual(new Map());
   });
 });
 

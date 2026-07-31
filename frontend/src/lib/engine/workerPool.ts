@@ -90,6 +90,22 @@ export const MOBILE_CORE_THRESHOLD = 4;
  */
 export const GRADING_WATCHDOG_TIMEOUT_MS = 60_000;
 
+/**
+ * Bug fix (quick 260731-s0z, FIX-4): host-side "stop-bestmove" watchdog (ms),
+ * armed instead of a bare `clearSlotWatchdog` whenever this pool sends `stop`
+ * to a slot (the abort in-flight branch and `stopAll()`'s thinking branch).
+ * Without it, a slot parked in `'stopping'` whose worker never answers with a
+ * `bestmove` (a genuinely hung worker) was lost permanently: not marked
+ * `dead`, so it also blinded `noLiveSlotRemains()` / the FIX-3 dead-pool
+ * guard, and nothing reached Sentry. A `stop` must produce `bestmove`
+ * near-immediately (the search polls the stop flag between nodes), so this
+ * bound is an order of magnitude tighter than `GRADING_WATCHDOG_TIMEOUT_MS` —
+ * a false positive costs one permanently dead slot (Sentry-visible via
+ * `fireStopWatchdog`), and this constant is the tuning knob if that is ever
+ * observed in production.
+ */
+export const STOP_BESTMOVE_WATCHDOG_TIMEOUT_MS = 10_000;
+
 // ─── Types ──────────────────────────────────────────────────────────────────
 
 /** A single pending grade() request awaiting dispatch to a free worker slot. */
@@ -487,6 +503,47 @@ export function createWorkerPool(): WorkerPool {
     if (noLiveSlotRemains()) drainPending();
   }
 
+  /**
+   * Bug fix (quick 260731-s0z, FIX-4): arm the stop-bestmove watchdog on a
+   * slot we just sent `stop` to, in place of a bare `clearSlotWatchdog`.
+   * Reuses `watchdogTimer` rather than adding a second field — the two
+   * bounds (`GRADING_WATCHDOG_TIMEOUT_MS` for a "go" that never answers,
+   * `STOP_BESTMOVE_WATCHDOG_TIMEOUT_MS` for a "stop" that never answers) are
+   * mutually exclusive by slot state, and every existing exit path already
+   * clears that one field.
+   */
+  function armStopWatchdog(slot: PoolWorkerSlot): void {
+    clearSlotWatchdog(slot);
+    slot.watchdogTimer = setTimeout(() => fireStopWatchdog(slot), STOP_BESTMOVE_WATCHDOG_TIMEOUT_MS);
+  }
+
+  /**
+   * Bug fix (quick 260731-s0z, FIX-4): fires when a slot we sent `stop` to
+   * never produces the terminating `bestmove` within
+   * `STOP_BESTMOVE_WATCHDOG_TIMEOUT_MS` — the slot was left parked in
+   * `'stopping'` forever, permanently lost but never marked `dead`, so it
+   * also blinded `noLiveSlotRemains()`. Deliberately mirrors `fireWatchdog`
+   * rather than sharing a body: the two differ in whether a `stop` still
+   * needs sending (it doesn't here — we already sent one) and in the Sentry
+   * message; reusing `dead` (instead of a new lifecycle state) is the same
+   * choice D-06 already made for `fireWatchdog`. `slot.stopPending` is left
+   * alone here — `dead` is the dispatch gate, and a late `bestmove` on a
+   * dead slot is already harmless (handleLine's stopPending branch would
+   * just no-op it).
+   */
+  function fireStopWatchdog(slot: PoolWorkerSlot): void {
+    slot.watchdogTimer = null;
+    // STATIC message — no interpolated FEN/UCI (CLAUDE.md Sentry grouping rule).
+    Sentry.captureException(new Error('Stockfish worker pool: stop-bestmove watchdog timeout'), {
+      tags: { source: 'stockfish-worker-pool' },
+    });
+    slot.isReady = false;
+    slot.dead = true;
+    slot.current?.resolve(new Map());
+    slot.current = null;
+    if (noLiveSlotRemains()) drainPending();
+  }
+
   function sendGo(slot: PoolWorkerSlot, req: QueuedGradeRequest): void {
     slot.current = req;
     slot.accumulator = new Map();
@@ -552,6 +609,10 @@ export function createWorkerPool(): WorkerPool {
         // Stale bestmove — the terminal response to our own `stop`. Discard
         // (FLAWCHESS-7V guard); the request was already settled elsewhere
         // (abort path, D-06 watchdog fire) or will be re-dispatched.
+        // This clear is also (quick 260731-s0z, FIX-4) the disarm point for
+        // the re-armed stop-bestmove watchdog on the healthy path — a
+        // `bestmove` landing before STOP_BESTMOVE_WATCHDOG_TIMEOUT_MS clears
+        // it here before it can fire.
         clearSlotWatchdog(slot);
         slot.stopPending = false;
         slot.state = 'idle';
@@ -673,6 +734,15 @@ export function createWorkerPool(): WorkerPool {
     // spawn loop), nothing will ever dispatch a queued request — resolve
     // empty now rather than enqueuing into a queue nothing will service.
     if (slots.length === 0) return Promise.resolve(new Map());
+    // Bug fix (quick 260731-s0z, FIX-3): the guard above only covers "no slot
+    // was ever constructed". Once every constructed slot has since died (via
+    // `worker.onerror`, `fireWatchdog`, or FIX-4's `fireStopWatchdog`), a NEW
+    // request enqueued here was reachable and unrecoverable — `dispatchNext`
+    // skips every non-`isReady` slot and `drainPending` only runs at a death
+    // TRANSITION, not for a request queued afterward, so `useBotGame.ts`'s
+    // signal-less `.grade(fen, [uci])` call hung unconditionally. Requires
+    // `slots.length > 0`, which the guard above has just established.
+    if (noLiveSlotRemains()) return Promise.resolve(new Map());
 
     return new Promise((resolve) => {
       // Phase 194 code-review WR-02: `{ once: true }` only self-removes the
@@ -712,7 +782,12 @@ export function createWorkerPool(): WorkerPool {
           // uses for a superseded search.
           for (const slot of slots) {
             if (slot.current === req && slot.state === 'thinking') {
-              clearSlotWatchdog(slot);
+              // Bug fix (quick 260731-s0z, FIX-4): a bare `clearSlotWatchdog`
+              // here left the slot parked in 'stopping' with no exit if the
+              // worker never answers `stop` with a terminating `bestmove` —
+              // arm the stop-bestmove watchdog instead so a genuinely hung
+              // worker is bounded and marked dead rather than lost silently.
+              armStopWatchdog(slot);
               slot.worker.postMessage('stop');
               slot.stopPending = true;
               slot.state = 'stopping';
@@ -731,7 +806,10 @@ export function createWorkerPool(): WorkerPool {
   function stopAll(): void {
     for (const slot of slots) {
       if (slot.state === 'thinking') {
-        clearSlotWatchdog(slot);
+        // Bug fix (quick 260731-s0z, FIX-4): same re-arm as the abort path
+        // above — a bare clearSlotWatchdog left a never-answering `stop`
+        // unbounded.
+        armStopWatchdog(slot);
         slot.worker.postMessage('stop');
         slot.stopPending = true;
         slot.state = 'stopping';
