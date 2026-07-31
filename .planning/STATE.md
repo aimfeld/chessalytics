@@ -5,10 +5,10 @@ milestone_name: FlawChess Engine Improvements
 current_phase: 198
 current_phase_name: mctsSearch continuous dispatch
 status: phase_closed
-stopped_at: Phase 198 closed as measured-not-shipped (2026-07-31, operator risk judgement)
-last_updated: "2026-07-31T18:00:00.000Z"
+stopped_at: Completed quick 260731-s0z (fix engine review findings from Phases 194-198)
+last_updated: "2026-07-31T18:51:32.903Z"
 last_activity: 2026-07-31
-last_activity_desc: Phase 198 closed measured-not-shipped; phases 194-198 integrated to main
+last_activity_desc: Fixed 7 engine review findings from Phases 194-198 (quick 260731-s0z); phases 194-198 remain closed/integrated to main
 progress:
   total_phases: 6
   completed_phases: 5
@@ -542,6 +542,8 @@ v1.29 Live-Engine Analysis Page shipped 2026-06-29 — 5 phases (136–140), 14 
 - [Phase 198-01]: A1 (RESEARCH.md Open Question 1) settled empirically via --real-session — the real ONNX WASM session already serialises concurrent session.run calls in dispatch order even without the FIFO (peak=4, call order matches resolve order); FIFO changes latency attribution only, never sweep output
 - [Phase ?]: 198-02: DISPATCH-02 accept rule pre-declares N=16 position width and the lower-band-governs rule when bot/analysis budgets disagree
 - [Phase ?]: 198-02: D-08's stop-rule distribution gets a single committed TSV + report table, not its own accept-rule-style gate (RESEARCH.md Open Question 3 resolved as anticipated)
+- [Phase ?]: FIX-2's step 2a reuses the SAME NO_EXTRA_ROOT_MOVES identity-preserving updater step 4 uses, so a disabled-side re-render never destabilizes useFlawChessEngine's search-restart deps
+- [Phase ?]: FIX-4's two rewritten workerPool.test.ts tests intentionally change from 'no Sentry capture ever' to 'no capture before the stop bound, one static capture after it' -- the plan's declared semantics change, re-verified RED against the old expectation
 
 ### Pending Todos
 
@@ -649,9 +651,9 @@ Items acknowledged and deferred at **v1.29 milestone close on 2026-06-29** (user
 
 ## Session Continuity
 
-**Stopped at:** Phase 198 closed (measured, not shipped) — phases 194–198 integrated into main
+**Stopped at:** Completed quick 260731-s0z (fix engine review findings from Phases 194-198)
 
-**Last session:** 2026-07-31T13:23:48.685Z
+**Last session:** 2026-07-31T18:51:32.871Z
 
 **Resume file:**
 
@@ -758,6 +760,7 @@ None
 | Phase 197 P01 | 25min | 3 tasks | 15 files |
 | Phase 198 P01 | 32min | 3 tasks | 3 files |
 | Phase 198 P02 | 13min | 3 tasks | 3 files |
+| Phase quick-260731-s0z P01 | ~25min | 4 tasks | 13 files |
 
 ## Performance Metrics
 
