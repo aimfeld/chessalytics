@@ -267,4 +267,48 @@ describe('useFlawChessEngine', () => {
     const budget = mockMctsSearch.mock.calls[1]?.[1] as { extraRootMoves?: string[] };
     expect(budget.extraRootMoves).toEqual(['h2h4']);
   });
+
+  // ─── FIX-5 (quick 260731-s0z): abort the superseded run on a RAPID FEN change ──
+
+  it('FIX-5: aborts the previous run immediately on a RAPID FEN change (not up to RAPID_STEP_DEBOUNCE_MS later), and its pending trailing snapshot never lands after the clear', async () => {
+    vi.advanceTimersByTime(200); // settled path: first FEN fires the search immediately
+    const { rerender, result } = renderHook(
+      ({ fen }: { fen: string }) => useFlawChessEngine({ fen, enabled: true, elo: 1500 }),
+      { initialProps: { fen: TEST_FEN } },
+    );
+
+    expect(mockMctsSearch).toHaveBeenCalledTimes(1);
+    const onSnapshot = mockMctsSearch.mock.calls[0]?.[3] as (s: EngineSnapshot) => void;
+    const firstSignal = mockMctsSearch.mock.calls[0]?.[4] as AbortSignal;
+    expect(firstSignal.aborted).toBe(false);
+
+    const snapshot1 = makeSnapshot('e2e4');
+    const snapshot2 = makeSnapshot('g1f3');
+    act(() => {
+      onSnapshot(snapshot1); // immediate commit
+      onSnapshot(snapshot2); // schedules a trailing commit (no time advanced between calls)
+    });
+    expect(result.current.rankedLines).toBe(snapshot1.rankedLines);
+
+    // RAPID FEN change — no time advance, so the navigation debounce takes
+    // the rapid (150ms-later) path. Before the fix, nothing aborted the old
+    // run here — that only happened once the debounced search-trigger effect
+    // ran, up to RAPID_STEP_DEBOUNCE_MS later.
+    rerender({ fen: TEST_FEN_2 });
+    expect(firstSignal.aborted).toBe(true);
+
+    // Advance past the debounce/throttle window — this also fires the FEN
+    // debounce, dispatching the new search.
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(150);
+    });
+
+    // The OLD search's pending trailing commit (snapshot2) must NOT land
+    // after the FEN-effect clear — rankedLines is EMPTY (INITIAL_SNAPSHOT),
+    // never snapshot2's.
+    expect(result.current.rankedLines).toEqual([]);
+    expect(result.current.rankedLines).not.toBe(snapshot2.rankedLines);
+    expect(mockMctsSearch).toHaveBeenCalledTimes(2);
+    expect(mockMctsSearch.mock.calls[1]?.[0]).toBe(TEST_FEN_2);
+  });
 });

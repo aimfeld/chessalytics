@@ -189,6 +189,24 @@ export function useFlawChessEngine({
 
   const [debouncedFen, setDebouncedFen] = useState<string | null>(null);
   useEffect(() => {
+    // Bug fix (quick 260731-s0z, FIX-5): abort the OLD search's controller
+    // and cancel any pending trailing onSnapshot commit HERE, not only in
+    // the debounced search-trigger effect below (up to RAPID_STEP_DEBOUNCE_MS
+    // later on the rapid path) or the abort-on-disable cleanup. Without this,
+    // the old search kept running and its onSnapshot throttle's
+    // pendingTimerRef could still fire a trailing commit of the OLD
+    // position's snapshot AFTER setSnapshot(INITIAL_SNAPSHOT) below had
+    // already cleared it for the new position. Deliberately minimal: no
+    // `pool.stopAll()` call here — ABORT-01 already forwards this signal
+    // into providers.grade, and an extra stop would now also arm Task 2's
+    // (quick 260731-s0z FIX-4) stop-watchdogs; `lastCommitAtRef` is left
+    // alone, owned by the search-trigger effect below, which already resets it.
+    abortControllerRef.current?.abort();
+    if (pendingTimerRef.current) {
+      clearTimeout(pendingTimerRef.current);
+      pendingTimerRef.current = null;
+    }
+
     // Drop the previous position's lines immediately so the card never shows
     // orphaned rankedLines from the prior ply while the new search spins up
     // (mirrors useStockfishEngine's identical FEN-effect clearing behavior).

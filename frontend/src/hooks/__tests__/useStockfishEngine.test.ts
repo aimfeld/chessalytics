@@ -70,6 +70,16 @@ describe('useStockfishEngine', () => {
     // Use a regular function (not arrow) so `new Worker(url)` works.
     // A constructor that returns a plain object has that object override `this`.
     vi.stubGlobal('Worker', vi.fn(function () { return mockWorker; }));
+    // Test hygiene fix (quick 260731-s0z): the 'visibility hidden...' test
+    // below redefines document.visibilityState via Object.defineProperty,
+    // which leaks across tests in this file (jsdom's document is not
+    // recreated per-test) — reset it here so later tests are not silently
+    // affected by whichever test ran before them.
+    Object.defineProperty(document, 'visibilityState', {
+      value: 'visible',
+      configurable: true,
+      writable: true,
+    });
   });
 
   afterEach(() => {
@@ -383,5 +393,107 @@ describe('useStockfishEngine', () => {
 
     expect(mockWorker.messages).toContain('stop');
     expect(mockWorker.terminated).toBe(true);
+  });
+
+  // ─── FIX-5 (quick 260731-s0z): stop the superseded search on a RAPID FEN change ──
+
+  it('FIX-5: stops the superseded search immediately on a RAPID FEN change, discarding its info lines and bestmove', () => {
+    vi.advanceTimersByTime(200); // settled path: first FEN fires the search immediately
+    const { rerender, result } = renderHook(
+      ({ fen }: { fen: string }) => useStockfishEngine({ fen, enabled: true }),
+      { initialProps: { fen: TEST_FEN } },
+    );
+    driveInit(mockWorker);
+    expect(mockWorker.messages.filter((m) => m.startsWith('go ')).length).toBe(1);
+
+    act(() => {
+      mockWorker.simulateMessage(
+        'info depth 14 multipv 1 score cp 52 nodes 30000 pv e2e4 e7e5',
+      );
+    });
+    expect(result.current.evalCp).toBe(-52);
+
+    // RAPID FEN change — no time advance since the initial settle, so
+    // sinceLast is 0 (< RAPID_STEP_DEBOUNCE_MS). Before FIX-5, nothing
+    // stopped the old search on this path.
+    rerender({ fen: TEST_FEN_2 });
+    expect(mockWorker.messages).toContain('stop');
+
+    // The OLD search's info line must not commit — currentFen already
+    // points at TEST_FEN_2.
+    act(() => {
+      mockWorker.simulateMessage(
+        'info depth 15 multipv 1 score cp 60 nodes 40000 pv e2e4 e7e5',
+      );
+    });
+    expect(result.current.pvLines).toHaveLength(0);
+    expect(result.current.evalCp).toBeNull();
+    expect(result.current.currentFen).toBe(TEST_FEN_2);
+
+    // The OLD search's terminating bestmove is discarded (not committed),
+    // and the discard handler re-analyzes the current (new) position
+    // exactly once — one position/go pair for TEST_FEN_2, two go commands
+    // total (the original TEST_FEN search + this re-analysis).
+    act(() => {
+      mockWorker.simulateMessage('bestmove e2e4 ponder e7e5');
+    });
+    expect(result.current.pvLines).toHaveLength(0);
+    expect(
+      mockWorker.messages.filter((m) => m === `position fen ${TEST_FEN_2}`).length,
+    ).toBe(1);
+    expect(mockWorker.messages.filter((m) => m.startsWith('go ')).length).toBe(2);
+  });
+
+  // ─── FIX-6 (quick 260731-s0z): throttle pvLines commits during a search ────
+
+  it('FIX-6: commits at most one pvLines snapshot per throttle window, first paint immediate, final bestmove unconditional', async () => {
+    const { result } = renderHook(() =>
+      useStockfishEngine({ fen: TEST_FEN, enabled: true }),
+    );
+    driveInit(mockWorker);
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(200);
+    });
+
+    // First info line — commits immediately (the throttle's "last commit"
+    // timestamp starts at 0, so the very first commit is always immediate).
+    act(() => {
+      mockWorker.simulateMessage(
+        'info depth 10 multipv 1 score cp 10 nodes 1000 pv e2e4 e7e5',
+      );
+    });
+    expect(result.current.evalCp).toBe(-10);
+
+    // Second info line inside the throttle window — must NOT commit yet.
+    act(() => {
+      mockWorker.simulateMessage(
+        'info depth 11 multipv 1 score cp 20 nodes 2000 pv e2e4 e7e5',
+      );
+    });
+    expect(result.current.evalCp).toBe(-10);
+
+    // Advance past the throttle window (150ms, same value as
+    // RAPID_STEP_DEBOUNCE_MS but a distinct mechanism) — the trailing commit
+    // fires with the LATEST (second) value, not the first.
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(150);
+    });
+    expect(result.current.evalCp).toBe(-20);
+
+    // Third info line schedules a new trailing commit (pending)...
+    act(() => {
+      mockWorker.simulateMessage(
+        'info depth 12 multipv 1 score cp 30 nodes 3000 pv e2e4 e7e5',
+      );
+    });
+    expect(result.current.evalCp).toBe(-20); // still pending, no timer advanced
+
+    // ...followed immediately by bestmove: an unconditional flush, visible
+    // with NO timer advance.
+    act(() => {
+      mockWorker.simulateMessage('bestmove e2e4 ponder e7e5');
+    });
+    expect(result.current.evalCp).toBe(-30);
+    expect(result.current.isAnalyzing).toBe(false);
   });
 });
