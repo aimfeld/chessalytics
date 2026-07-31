@@ -2148,6 +2148,78 @@ describe('Analysis-board Stockfish root injection (Phase 196, INJECT-03/04/06)',
     clientWidthSpy.mockRestore();
   });
 
+  // ─── Reset on engine-side disable (quick 260731-s0z, FIX-2) ────────────────
+
+  it('resets extraRootMoves to the sentinel when the Stockfish engine switch is turned off, and keeps it there through a later navigation', () => {
+    const clientWidthSpy = vi.spyOn(Element.prototype, 'clientWidth', 'get').mockReturnValue(400);
+
+    engineState.isReady = true;
+    engineState.isAnalyzing = false;
+    engineState.pvLines = [
+      { moves: ['g1f3'], evalCp: 30, evalMate: null, depth: 18 },
+      { moves: ['e2e4'], evalCp: 25, evalMate: null, depth: 18 },
+    ];
+    flawChessState.rankedLines = [fcLine('d2d4')];
+
+    renderAnalysis();
+    // Latch an injection first, exactly as the earlier latch test does.
+    expect(lastFlawChessCall()?.extraRootMoves).toEqual(['e2e4', 'g1f3']);
+
+    fireEvent.click(screen.getByTestId('btn-analysis-engine-toggle'));
+    expect(lastFlawChessCall()?.extraRootMoves).toEqual([]);
+
+    // Navigate to a new position while the switch stays off — must stay at
+    // the sentinel, not resurrect the previously latched array.
+    fireEvent.click(screen.getByTestId('square-e2'));
+    fireEvent.click(screen.getByTestId('square-e4'));
+    expect(lastFlawChessCall()?.extraRootMoves).toEqual([]);
+
+    clientWidthSpy.mockRestore();
+  });
+
+  it('resets extraRootMoves to the sentinel when the FlawChess engine switch is turned off, and keeps it there through a later navigation', () => {
+    const clientWidthSpy = vi.spyOn(Element.prototype, 'clientWidth', 'get').mockReturnValue(400);
+
+    engineState.isReady = true;
+    engineState.isAnalyzing = false;
+    engineState.pvLines = [
+      { moves: ['g1f3'], evalCp: 30, evalMate: null, depth: 18 },
+      { moves: ['e2e4'], evalCp: 25, evalMate: null, depth: 18 },
+    ];
+    flawChessState.rankedLines = [fcLine('d2d4')];
+
+    renderAnalysis();
+    expect(lastFlawChessCall()?.extraRootMoves).toEqual(['e2e4', 'g1f3']);
+
+    fireEvent.click(screen.getByTestId('btn-analysis-flawchess-toggle'));
+    expect(lastFlawChessCall()?.extraRootMoves).toEqual([]);
+
+    fireEvent.click(screen.getByTestId('square-e2'));
+    fireEvent.click(screen.getByTestId('square-e4'));
+    expect(lastFlawChessCall()?.extraRootMoves).toEqual([]);
+
+    clientWidthSpy.mockRestore();
+  });
+
+  it('keeps the SAME sentinel reference across an unrelated re-render while an engine side stays off', () => {
+    engineState.isReady = true;
+    engineState.isAnalyzing = false;
+    engineState.pvLines = [
+      { moves: ['g1f3'], evalCp: 30, evalMate: null, depth: 18 },
+      { moves: ['e2e4'], evalCp: 25, evalMate: null, depth: 18 },
+    ];
+    flawChessState.rankedLines = [fcLine('d2d4')];
+
+    renderAnalysis();
+    fireEvent.click(screen.getByTestId('btn-analysis-engine-toggle'));
+    const first = lastFlawChessCall()?.extraRootMoves;
+    expect(first).toEqual([]);
+
+    fireEvent.click(screen.getByTestId('btn-analysis-maia-toggle'));
+    const second = lastFlawChessCall()?.extraRootMoves;
+    expect(second).toBe(first);
+  });
+
   it('does NOT commit a spurious latch from a stale previous-position pvLines/rankedLines pairing that is coincidentally ALSO legal in the new position (WR-01, 196-REVIEW.md)', () => {
     // Reproduces the exact race the code review flagged: this effect can run
     // in the SAME passive-effect flush as useFlawChessEngine's/

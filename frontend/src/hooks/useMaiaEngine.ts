@@ -349,6 +349,23 @@ export function useMaiaEngine({
       disposed = true;
       lease.release();
       leaseRef.current = null;
+      // Bug fix (quick 260731-s0z, FIX-1): this cleanup used to only null the
+      // lease, leaving pendingFenRef/isAnalyzing/isReady set. The in-flight
+      // request's own rejection handler above bails at the
+      // `leaseRef.current !== lease` check BEFORE it clears pendingFenRef, so
+      // that ref stayed non-null forever and every later analyze() returned
+      // at the single-in-flight gate — a disable-mid-inference permanently
+      // wedged the hook even after a subsequent re-enable. Mirrors the
+      // four-field reset `onFatal` above already performs, and the analogous
+      // teardown reset in useStockfishEngine.ts's worker cleanup.
+      pendingFenRef.current = null;
+      setIsAnalyzing(false);
+      setIsReady(false);
+      isReadyRef.current = false;
+      // useGemSweep.ts flips `enabled` dynamically (engineEnabled =
+      // effectiveEnabled && hasWork) so it inherits this fix too; it only
+      // reads perElo/resultFen/hasFailed, never isReady/isAnalyzing, so these
+      // added resets cannot regress the sweep.
     };
   }, [enabled, priority]);
 

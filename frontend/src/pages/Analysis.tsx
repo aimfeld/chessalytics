@@ -1122,6 +1122,24 @@ export default function Analysis() {
     if (injectedForPositionRef.current !== null && injectedForPositionRef.current !== position) {
       injectedForPositionRef.current = null;
     }
+    // (2a) Bug fix (quick 260731-s0z, FIX-2): with a side disabled, that
+    // hook's `fen` prop is `null` (see the `engineEnabled ? position : null` /
+    // `flawChessEnabled ? position : null` call sites below), so its
+    // `currentFen` pins to `null` forever, the (2b) staleness guard below
+    // returns on every run, and step (4)'s sentinel reset is unreachable —
+    // a previously latched extraRootMoves array kept feeding every subsequent
+    // position's search budget even while that side stayed off. Placed
+    // BEFORE the (2) latch check (a latched position must still reset) but
+    // clears the latch too, so re-enabling can inject afresh; nothing can
+    // latch while disabled since this branch returns before step (3). Reuses
+    // the SAME identity-preserving updater step (4) uses, so the shared
+    // NO_EXTRA_ROOT_MOVES reference contract holds.
+    if (!engineEnabled || !flawChessEnabled) {
+      injectedForPositionRef.current = null;
+      setExtraRootMoves((prev) => (prev === NO_EXTRA_ROOT_MOVES ? prev : NO_EXTRA_ROOT_MOVES));
+      return;
+    }
+
     // (2) Latch check: the INJECT-04 exactly-once guarantee. Without this, a
     // later rankedLines update that now contains the injected move would look
     // like "nothing missing", reset extraRootMoves to the sentinel, and
@@ -1177,6 +1195,7 @@ export default function Analysis() {
     // new FEN does — producing one extra abort+restart of a search that is
     // about to be superseded anyway. Deliberately not engineered away.
   }, [
+    engineEnabled,
     flawChessEnabled,
     freeRunCommitted,
     engine.pvLines,
