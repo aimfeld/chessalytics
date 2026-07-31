@@ -84,6 +84,18 @@ export interface UseFlawChessEngineOptions {
    * (Pitfall 1/T-159-08) stays legible from the hook's own call site.
    */
   policyTemperature?: number;
+  /**
+   * Phase 196 (INJECT-03/INJECT-04): root-only UCI moves (never SANs)
+   * unioned with Maia's top-k at the root. Omitted or `undefined` produces a
+   * `SearchBudget.extraRootMoves` of `undefined` — byte-identical to
+   * pre-phase behaviour for every existing caller (e.g. `useBotGame`).
+   * This field is in the search-trigger effect's dependency array below, so
+   * an identity change aborts the in-flight search and starts a fresh one —
+   * the CALLER owns referential stability (see `Analysis.tsx`'s
+   * `NO_EXTRA_ROOT_MOVES` sentinel); this hook deliberately performs no
+   * content comparison or debouncing of its own.
+   */
+  extraRootMoves?: string[];
 }
 
 export interface FlawChessEngineState {
@@ -97,6 +109,18 @@ export interface FlawChessEngineState {
   isSearching: boolean;
   /** True once the WorkerPool/MaiaQueue instances are created (enabled-gated). */
   isReady: boolean;
+  /**
+   * Code review WR-01 (196-REVIEW.md): the FEN `rankedLines` was most
+   * recently reset/committed for. Set in the SAME effect (and same render)
+   * that clears `snapshot` to `INITIAL_SNAPSHOT` on every `fen` change, so it
+   * lags `fen` by exactly the same one render `rankedLines` does — letting a
+   * consumer distinguish "rankedLines genuinely belongs to the current
+   * position" from "rankedLines is a stale closure value from the previous
+   * position, captured in the same passive-effect flush as this hook's own
+   * FEN-reset effect." Consumers must NOT trust `rankedLines` for a given
+   * FEN unless `currentFen === thatFen`.
+   */
+  currentFen: string | null;
 }
 
 const INITIAL_SNAPSHOT: EngineSnapshot = {
@@ -113,6 +137,7 @@ export function useFlawChessEngine({
   enabled,
   elo,
   policyTemperature,
+  extraRootMoves,
 }: UseFlawChessEngineOptions): FlawChessEngineState {
   // ─── Refs ──────────────────────────────────────────────────────────────────
 
@@ -133,6 +158,8 @@ export function useFlawChessEngine({
   const [isReady, setIsReady] = useState(false);
   const [isSearching, setIsSearching] = useState(false);
   const [snapshot, setSnapshot] = useState<EngineSnapshot>(INITIAL_SNAPSHOT);
+  /** WR-01 (196-REVIEW.md): the FEN `snapshot.rankedLines` currently belongs to. */
+  const [currentFen, setCurrentFen] = useState<string | null>(null);
 
   // ─── Provider lifecycle (Pattern 1) — created once per enabled-lifetime ────
   //
@@ -166,6 +193,11 @@ export function useFlawChessEngine({
     // orphaned rankedLines from the prior ply while the new search spins up
     // (mirrors useStockfishEngine's identical FEN-effect clearing behavior).
     setSnapshot(INITIAL_SNAPSHOT);
+    // WR-01 (196-REVIEW.md): committed in the SAME effect run as the
+    // `snapshot` reset above, so `currentFen` lags `fen` by exactly the same
+    // one render that `snapshot.rankedLines` does — see useStockfishEngine's
+    // identical `currentFen` field for the full rationale.
+    setCurrentFen(fen);
     if (fen === null) {
       setDebouncedFen(null);
       return;
@@ -246,7 +278,10 @@ export function useFlawChessEngine({
       // D-07/Open Question 2: both colors share the single on-page ELO in
       // free analysis; true self/opponent asymmetry is deferred to Phase 157.
       elo: { w: elo, b: elo },
-      // extraRootMoves intentionally left unset (155-RESEARCH.md A5).
+      // Phase 196 (INJECT-03): threaded straight through from this hook's own
+      // options — stays `undefined` for every caller that does not pass it,
+      // so existing callers' (e.g. useBotGame) budgets are byte-identical.
+      extraRootMoves,
       // Phase 159 D-06/D-07 (Thread A): defaulted at THIS call site (not
       // inside mctsSearch) so the no-op short-circuit stays visible at the
       // orchestrator layer (Pitfall 1/T-159-08).
@@ -275,7 +310,7 @@ export function useFlawChessEngine({
         Sentry.captureException(err, { tags: { source: 'flawchess-engine' } });
         setIsSearching(false);
       });
-  }, [debouncedFen, enabled, elo, policyTemperature, handleSnapshot]);
+  }, [debouncedFen, enabled, elo, policyTemperature, extraRootMoves, handleSnapshot]);
 
   // ─── Abort-on-disable guard (WR-02, 155-REVIEW.md) ─────────────────────────
   //
@@ -312,5 +347,6 @@ export function useFlawChessEngine({
     budgetExhausted: snapshot.budgetExhausted,
     isSearching,
     isReady,
+    currentFen,
   };
 }

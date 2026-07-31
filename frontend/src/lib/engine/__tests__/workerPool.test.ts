@@ -690,9 +690,9 @@ describe('createWorkerPool: watchdog (D-06)', () => {
   });
 });
 
-// ─── createWorkerPool: grade cache — capacity, LRU, merge (Phase 194 CACHE-01..04) ──
+// ─── createWorkerPool: grade cache — capacity, LRU, merge (Phase 194 CACHE-01..04, INJECT-05) ──
 
-describe('createWorkerPool: grade cache (Phase 194 CACHE-01..04)', () => {
+describe('createWorkerPool: grade cache (Phase 194 CACHE-01..04, INJECT-05)', () => {
   beforeEach(() => {
     stubDesktopSizing(6); // computePoolSize() -> 4 slots
     stubWorkerCtor();
@@ -722,6 +722,100 @@ describe('createWorkerPool: grade cache (Phase 194 CACHE-01..04)', () => {
     worker.simulateMessage(`bestmove ${uci}`);
     return promise;
   }
+
+  // ─── INJECT-05: cacheStats()/resetCacheStats() outcome counters ────────────
+  //
+  // These pin the counter semantics the root-injection measurement harness
+  // (scripts/engine-root-injection.mjs) depends on: a hit/miss here is a
+  // cache OUTCOME (was fresh Stockfish work needed), counted at the exact
+  // point grade()'s read gate decides that — not a count of Stockfish
+  // dispatches or resolved searches.
+
+  it('a fresh cache reports { hits: 0, misses: 0 } (INJECT-05)', () => {
+    const pool = createWorkerPool();
+    expect(pool.cacheStats()).toEqual({ hits: 0, misses: 0 });
+  });
+
+  it('a grade() for a novel (fen, depth) increments misses by 1 and leaves hits at 0 (INJECT-05)', async () => {
+    const pool = createWorkerPool();
+    const first = pool.grade(TEST_FEN, [UCI], undefined, 10);
+    const worker = createdWorkers[0]!;
+    driveInit(worker);
+    await roundTrip(worker, first, UCI, 10);
+    expect(pool.cacheStats()).toEqual({ hits: 0, misses: 1 });
+  });
+
+  it('a repeat grade() for the same (fen, depth) with an already-cached candidate subset increments hits by 1 and leaves misses unchanged (INJECT-05)', async () => {
+    const pool = createWorkerPool();
+    const first = pool.grade(TEST_FEN, [UCI], undefined, 10);
+    const worker = createdWorkers[0]!;
+    driveInit(worker);
+    await roundTrip(worker, first, UCI, 10);
+    expect(pool.cacheStats()).toEqual({ hits: 0, misses: 1 });
+
+    const second = await pool.grade(TEST_FEN, [UCI], undefined, 10);
+    expect(second.get(UCI)?.evalCp).toBe(-10);
+    expect(pool.cacheStats()).toEqual({ hits: 1, misses: 1 });
+  });
+
+  it('a repeat grade() for the same fen at a DIFFERENT depth increments misses (LADDER-03, INJECT-05)', async () => {
+    const pool = createWorkerPool();
+    const first = pool.grade(TEST_FEN, [UCI], undefined, 14);
+    const worker = createdWorkers[0]!;
+    driveInit(worker);
+    await roundTrip(worker, first, UCI, 10);
+    expect(pool.cacheStats()).toEqual({ hits: 0, misses: 1 });
+
+    const second = pool.grade(TEST_FEN, [UCI], undefined, 10);
+    await roundTrip(worker, second, UCI, 8);
+    expect(pool.cacheStats()).toEqual({ hits: 0, misses: 2 });
+  });
+
+  it('a repeat grade() for the same (fen, depth) requesting a UCI the cached entry lacks increments misses (CACHE-04, INJECT-05)', async () => {
+    const pool = createWorkerPool();
+    const first = pool.grade(TEST_FEN, [UCI], undefined, 10);
+    const worker = createdWorkers[0]!;
+    driveInit(worker);
+    await roundTrip(worker, first, UCI, 10);
+    expect(pool.cacheStats()).toEqual({ hits: 0, misses: 1 });
+
+    const second = pool.grade(TEST_FEN, [UCI, OTHER_UCI], undefined, 10);
+    worker.simulateMessage(`info depth 10 multipv 1 score cp 11 nodes 1000 pv ${UCI}`);
+    worker.simulateMessage(`info depth 10 multipv 2 score cp 6 nodes 1000 pv ${OTHER_UCI}`);
+    worker.simulateMessage(`bestmove ${UCI}`);
+    await second;
+    expect(pool.cacheStats()).toEqual({ hits: 0, misses: 2 });
+  });
+
+  it("resetCacheStats() returns both counters to 0 without evicting any cached entry — a subsequent repeat request still reports a hit (INJECT-05)", async () => {
+    const pool = createWorkerPool();
+    const first = pool.grade(TEST_FEN, [UCI], undefined, 10);
+    const worker = createdWorkers[0]!;
+    driveInit(worker);
+    await roundTrip(worker, first, UCI, 10);
+    expect(pool.cacheStats()).toEqual({ hits: 0, misses: 1 });
+
+    pool.resetCacheStats();
+    expect(pool.cacheStats()).toEqual({ hits: 0, misses: 0 });
+
+    const second = await pool.grade(TEST_FEN, [UCI], undefined, 10);
+    expect(second.get(UCI)?.evalCp).toBe(-10);
+    expect(pool.cacheStats()).toEqual({ hits: 1, misses: 0 });
+  });
+
+  it('the empty-candidateUcis and already-aborted early returns happen before the cache is consulted and increment neither counter (INJECT-05)', async () => {
+    const pool = createWorkerPool();
+
+    const emptyResult = await pool.grade(TEST_FEN, []);
+    expect(emptyResult).toEqual(new Map());
+    expect(pool.cacheStats()).toEqual({ hits: 0, misses: 0 });
+
+    const controller = new AbortController();
+    controller.abort();
+    const abortedResult = await pool.grade(TEST_FEN, [UCI], controller.signal, 10);
+    expect(abortedResult).toEqual(new Map());
+    expect(pool.cacheStats()).toEqual({ hits: 0, misses: 0 });
+  });
 
   it(
     'LRU (CACHE-01/02): filling to exactly GRADE_CACHE_MAX evicts nothing; touching an entry then forcing one eviction spares it and evicts a never-read entry — fails under FIFO',

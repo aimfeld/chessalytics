@@ -56,6 +56,7 @@ import {
   buildSnapshot,
   sideMatchesMover,
   applyRootCandidateHardCap,
+  mergeExtraRootMoves,
 } from './treeCommon';
 
 /**
@@ -183,15 +184,16 @@ async function expandNode(
       ? applyPolicyTemperature(rawPolicy, temperature)
       : rawPolicy;
   let candidateMap = truncateAndRenormalize(effectivePolicy);
+  // WR-02 (196-REVIEW.md): the union/prior-seeding merge is shared with
+  // mctsSearch.ts's dispatchExpansion via treeCommon.ts's
+  // mergeExtraRootMoves, so the two SearchRunner implementations cannot
+  // silently diverge on this logic (see that function's own doc comment).
+  let injectedUcis = new Set<string>();
   if (node.isRoot && budget.extraRootMoves && budget.extraRootMoves.length > 0) {
-    const merged = new Map(candidateMap);
-    for (const uci of budget.extraRootMoves) {
-      if (!merged.has(uci)) merged.set(uci, 0);
-    }
-    candidateMap = merged;
+    ({ candidateMap, injectedUcis } = mergeExtraRootMoves(candidateMap, effectivePolicy, budget.extraRootMoves));
   }
   if (node.isRoot) {
-    candidateMap = applyRootCandidateHardCap(candidateMap);
+    candidateMap = applyRootCandidateHardCap(candidateMap, injectedUcis);
   }
   const candidateUcis = Array.from(candidateMap.keys());
   if (candidateUcis.length === 0) {

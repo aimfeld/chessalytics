@@ -167,6 +167,21 @@ export interface WorkerPool {
    * exists (pinned by a test in `__tests__/workerPool.test.ts`).
    */
   warm(): void;
+  /**
+   * INJECT-05: exact hit/miss counts for this pool's shared `GradeCache`
+   * since pool creation (or since the last `resetCacheStats()` call). A
+   * hit/miss here counts a cache OUTCOME (see `GradeCache.read`'s doc
+   * comment) — not whether a dispatched Stockfish search ultimately
+   * produced a result. Read-only: calling `cacheStats()` cannot change any
+   * observable `grade()` behavior.
+   */
+  cacheStats(): { hits: number; misses: number };
+  /**
+   * INJECT-05: resets this pool's `GradeCache` hit/miss counters (as
+   * reported by `cacheStats()`) to zero WITHOUT evicting any cached entry —
+   * a subsequent identical `grade()` request still reports a hit.
+   */
+  resetCacheStats(): void;
 }
 
 // ─── Priority queue (POOL-02): plain array, linear max-scan ────────────────
@@ -271,11 +286,53 @@ function sideToMove(fen: string): 'w' | 'b' {
   return fen.split(' ')[1] === 'b' ? 'b' : 'w';
 }
 
-export function createWorkerPool(): WorkerPool {
-  const slots: PoolWorkerSlot[] = [];
-  const pending: QueuedGradeRequest[] = [];
+/**
+ * The public surface `createGradeCache()` returns — the shipped grade-outcome
+ * cache, extracted from `createWorkerPool`'s closure (INJECT-05) so a Node
+ * measurement harness (`scripts/engine-root-injection.mjs`) can read/write
+ * through the EXACT same read gate, keying, LRU touch, and merge semantics
+ * the browser pool uses, rather than a harness-local reimplementation that
+ * would measure a mirror of production behavior instead of production
+ * behavior itself.
+ */
+export interface GradeCache {
+  /**
+   * Reads a cached grade subset for `(fen, gradingDepth)` restricted to
+   * `candidateUcis`. Returns `null` on any miss (CACHE-04/LADDER-03
+   * all-or-nothing: a cached entry that lacks even one requested UCI is
+   * still a miss). INJECT-05: increments `stats().misses` on every `null`
+   * return and `stats().hits` on every non-null return — these are cache
+   * OUTCOME counters, not Stockfish-dispatch counters. The caller
+   * (`createWorkerPool.grade()`) may still resolve empty AFTER a counted
+   * miss via its own separate zero-live-slots guard; that later failure mode
+   * does not change what THIS counter measures ("was fresh Stockfish work
+   * needed"), so the harness's reported denominator stays unambiguous.
+   */
+  read(fen: string, candidateUcis: string[], gradingDepth: number): Map<string, MoveGrade> | null;
+  /** Merges `grades` into the existing `(fen, gradingDepth)` entry (CACHE-03), never replacing it wholesale. */
+  write(fen: string, gradingDepth: number, grades: Map<string, MoveGrade>): void;
+  /** INJECT-05: exact hit/miss counts since cache creation (or since the last `resetCacheStats()` call). */
+  stats(): { hits: number; misses: number };
+  /** INJECT-05: resets the hit/miss counters to zero WITHOUT evicting any cached entry — a subsequent identical request still reports a hit via `cacheStats()`. */
+  resetCacheStats(): void;
+}
+
+/**
+ * Extracted from `createWorkerPool`'s in-closure cache (Phase 194
+ * CACHE-01..04) so a Node measurement harness (INJECT-05,
+ * `scripts/engine-root-injection.mjs`) can read/write through the shipped
+ * read gate, keying, LRU touch, and merge semantics directly, and so
+ * `createWorkerPool`'s own `grade()` and that harness share exactly one
+ * `GradeCache` instance each rather than two implementations that could
+ * silently drift apart. This is a behaviour-preserving move: the read gate,
+ * keying, LRU touch, merge semantics, and eviction policy below are
+ * byte-identical to the pre-extraction closure — only the hit/miss counters
+ * are new (INJECT-05).
+ */
+export function createGradeCache(): GradeCache {
   const cache = new Map<string, Map<string, MoveGrade>>();
-  let spawned = false;
+  let cacheHits = 0;
+  let cacheMisses = 0;
 
   /**
    * The ONLY place a grade-cache key is built (LADDER-03/ENGINE-07). Composes
@@ -291,7 +348,7 @@ export function createWorkerPool(): WorkerPool {
     return `${fen}|${gradingDepth}`;
   }
 
-  function cacheGrades(fen: string, gradingDepth: number, grades: Map<string, MoveGrade>): void {
+  function write(fen: string, gradingDepth: number, grades: Map<string, MoveGrade>): void {
     // CACHE-03: merge into any existing (fen, gradingDepth) entry rather than
     // replacing it, scoped within a single depth. A same-(fen, depth) request
     // with a shifted candidate set (the root's candidate list can widen or
@@ -313,7 +370,7 @@ export function createWorkerPool(): WorkerPool {
     // dropped.
     cache.delete(key);
     cache.set(key, merged);
-    // LRU eviction: both the read-hit branch in grade() below and the write
+    // LRU eviction: both the read-hit branch in read() below and the write
     // above do a delete-then-reinsert touch, so Map's insertion-order
     // iteration here yields the least-recently-USED entry, not the
     // least-recently-inserted one (CACHE-02).
@@ -322,6 +379,76 @@ export function createWorkerPool(): WorkerPool {
       if (oldest !== undefined) cache.delete(oldest);
     }
   }
+
+  function read(
+    fen: string,
+    candidateUcis: string[],
+    gradingDepth: number,
+  ): Map<string, MoveGrade> | null {
+    // LADDER-03/ENGINE-07: the key is the composite (fen, gradingDepth), built
+    // ONCE here via the single key helper and reused for the read gate below
+    // AND for both halves of the read-hit LRU touch. A depth-14 cached entry
+    // must never satisfy a depth-10 request (or vice versa) regardless of
+    // which visit order reached this FEN first — an exact composite-key match
+    // is the ONLY read path; there is no "nearest depth" or "deeper is better"
+    // fallback.
+    const key = cacheKey(fen, gradingDepth);
+    const cached = cache.get(key);
+    // CACHE-04: partial-hit (subset) grading was tested against the vendored
+    // Stockfish binary using the shipped `go depth 14 searchmoves ...
+    // movetime 2500` shape, and produced a DIFFERENT cp for the same move at
+    // the same reported depth (bound exact) than a full-set grade of the same
+    // (fen, move) — the italian position's f3e5 at -301 (5-move set) vs -253
+    // (2-move subset), and the middlegame position's f3e5 at 9 (5-move set)
+    // vs 5 (2-move subset), both at matching depth 14. `searchmoves`
+    // restriction changes Stockfish's internal move ordering and time
+    // allocation, so a subset grade is not interchangeable with a full-set
+    // grade even at matching depth. Keep this all-or-nothing read (scoped to
+    // one (fen, depth) entry); do not add a partial-hit path. [CITED:
+    // 194-RESEARCH.md Pattern 5, measured 2026-07-30]
+    if (cached && candidateUcis.every((uci) => cached.has(uci))) {
+      // Pool-level cache hit (position-only, ELO-independent) — no new go.
+      const subset = new Map<string, MoveGrade>();
+      for (const uci of candidateUcis) {
+        const g = cached.get(uci);
+        if (g) subset.set(uci, g);
+      }
+      // LRU touch-on-hit: delete then reinsert so Map's insertion-order
+      // iteration (consumed by write()'s `keys().next().value` eviction)
+      // yields the least-recently-USED entry, not the least-recently-inserted
+      // one (CACHE-02).
+      cache.delete(key);
+      cache.set(key, cached);
+      cacheHits += 1;
+      return subset;
+    }
+    // INJECT-05: a miss is counted here, at the ONLY point this cache decides
+    // "fresh Stockfish work is needed" — before ensureSpawned()/dispatch, so
+    // these counters measure cache OUTCOMES, not Stockfish-dispatch outcomes.
+    // The caller may still resolve empty AFTER a counted miss via its own
+    // separate zero-live-slots guard; that is a distinct, later failure mode
+    // and does not change what this counter measures.
+    cacheMisses += 1;
+    return null;
+  }
+
+  function stats(): { hits: number; misses: number } {
+    return { hits: cacheHits, misses: cacheMisses };
+  }
+
+  function resetCacheStats(): void {
+    cacheHits = 0;
+    cacheMisses = 0;
+  }
+
+  return { read, write, stats, resetCacheStats };
+}
+
+export function createWorkerPool(): WorkerPool {
+  const slots: PoolWorkerSlot[] = [];
+  const pending: QueuedGradeRequest[] = [];
+  const gradeCache = createGradeCache();
+  let spawned = false;
 
   /** Clear a slot's in-flight watchdog timer, if any. Idempotent. Extracted so the call sites that take a slot out of `thinking` cannot drift apart — bestmove, abort, `stopAll`, `terminate`, `onerror`, and the defensive clear in `sendGo`. */
   function clearSlotWatchdog(slot: PoolWorkerSlot): void {
@@ -437,11 +564,11 @@ export function createWorkerPool(): WorkerPool {
       slot.state = 'idle';
       slot.current = null;
       if (req) {
-        // This `bestmove` branch is the ONLY caller of cacheGrades — the
+        // This `bestmove` branch is the ONLY caller of gradeCache.write — the
         // abort path, stopAll, terminate, and onerror all settle without
         // writing, which is precisely what keeps a partial grade out of the
         // cache. Do not "helpfully" add a write to one of those settle paths.
-        cacheGrades(req.fen, req.gradingDepth, slot.accumulator);
+        gradeCache.write(req.fen, req.gradingDepth, slot.accumulator);
         req.resolve(slot.accumulator);
       }
       dispatchNext();
@@ -533,42 +660,13 @@ export function createWorkerPool(): WorkerPool {
     // this guard the search would run to completion unnecessarily.
     if (signal?.aborted) return Promise.resolve(new Map());
 
-    // LADDER-03/ENGINE-07: the key is the composite (fen, gradingDepth), built
-    // ONCE here via the single key helper and reused for the read gate below
-    // AND for both halves of the read-hit LRU touch. A depth-14 cached entry
-    // must never satisfy a depth-10 request (or vice versa) regardless of
-    // which visit order reached this FEN first — an exact composite-key match
-    // is the ONLY read path; there is no "nearest depth" or "deeper is better"
-    // fallback.
-    const key = cacheKey(fen, resolvedGradingDepth);
-    const cached = cache.get(key);
-    // CACHE-04: partial-hit (subset) grading was tested against the vendored
-    // Stockfish binary using the shipped `go depth 14 searchmoves ...
-    // movetime 2500` shape, and produced a DIFFERENT cp for the same move at
-    // the same reported depth (bound exact) than a full-set grade of the same
-    // (fen, move) — the italian position's f3e5 at -301 (5-move set) vs -253
-    // (2-move subset), and the middlegame position's f3e5 at 9 (5-move set)
-    // vs 5 (2-move subset), both at matching depth 14. `searchmoves`
-    // restriction changes Stockfish's internal move ordering and time
-    // allocation, so a subset grade is not interchangeable with a full-set
-    // grade even at matching depth. Keep this all-or-nothing read (scoped to
-    // one (fen, depth) entry); do not add a partial-hit path. [CITED:
-    // 194-RESEARCH.md Pattern 5, measured 2026-07-30]
-    if (cached && candidateUcis.every((uci) => cached.has(uci))) {
-      // Pool-level cache hit (position-only, ELO-independent) — no new go.
-      const subset = new Map<string, MoveGrade>();
-      for (const uci of candidateUcis) {
-        const g = cached.get(uci);
-        if (g) subset.set(uci, g);
-      }
-      // LRU touch-on-hit: delete then reinsert so Map's insertion-order
-      // iteration (consumed by cacheGrades' `keys().next().value` eviction)
-      // yields the least-recently-USED entry, not the least-recently-inserted
-      // one (CACHE-02).
-      cache.delete(key);
-      cache.set(key, cached);
-      return Promise.resolve(subset);
-    }
+    // INJECT-05: gradeCache.read() is the shipped read gate — this call site
+    // is now IDENTICAL to what a Node harness sharing one createGradeCache()
+    // instance across a baseline and an injected mctsSearch pass exercises,
+    // so a measured hit rate (via cacheStats()) describes real cache
+    // behavior, not a mirror.
+    const hit = gradeCache.read(fen, candidateUcis, resolvedGradingDepth);
+    if (hit) return Promise.resolve(hit);
 
     ensureSpawned();
     // WR-03: if every slot construction attempt threw (0 live slots after the
@@ -678,5 +776,12 @@ export function createWorkerPool(): WorkerPool {
     ensureSpawned();
   }
 
-  return { grade, stopAll, terminate, warm };
+  return {
+    grade,
+    stopAll,
+    terminate,
+    warm,
+    cacheStats: () => gradeCache.stats(),
+    resetCacheStats: () => gradeCache.resetCacheStats(),
+  };
 }

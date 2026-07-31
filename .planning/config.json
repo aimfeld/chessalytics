@@ -9,7 +9,7 @@
     "plan_check": true,
     "verifier": true,
     "nyquist_validation": true,
-    "_auto_chain_active": true,
+    "_auto_chain_active": false,
     "ai_integration_phase": true
   },
   "git": {

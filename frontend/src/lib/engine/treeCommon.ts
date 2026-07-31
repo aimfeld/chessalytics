@@ -104,11 +104,89 @@ export function sideMatchesMover(side: Side, mover: MoverColor): boolean {
  * ascending-UCI tie-break for equal probabilities (ENGINE-07). Shared by
  * both `SearchRunner` implementations so the cap can never diverge between
  * them (Pitfall 3).
+ *
+ * `injectedUcis` (INJECT-01) is the optional exemption set — the UCIs the
+ * `extraRootMoves` union actually ADDED, never all of `budget.extraRootMoves`
+ * (a UCI the union found already present competes as an organic candidate,
+ * not an exemption). When present and non-empty, injected candidates are
+ * exempt from competing with organic ones for the cap: organic candidates are
+ * capped to `ROOT_CANDIDATE_HARD_CAP - injectedUcis.size` (never negative)
+ * instead of every candidate competing for the same `ROOT_CANDIDATE_HARD_CAP`
+ * slots. Bug fixed here (196-01): before this parameter existed, an injected
+ * candidate was seeded with prior `0` at the union site, which sorted it dead
+ * last by this cap's own comparator and made it the FIRST entry dropped
+ * whenever the root exceeded the cap — silently defeating the injection
+ * mechanism exactly on the wide, high-temperature roots that needed it.
  */
-export function applyRootCandidateHardCap(candidateMap: Map<string, number>): Map<string, number> {
+function compareCandidateEntries(a: readonly [string, number], b: readonly [string, number]): number {
+  return b[1] - a[1] || (a[0] < b[0] ? -1 : 1);
+}
+
+/**
+ * INJECT-01/INJECT-02 union + prior-seeding: merges `budget.extraRootMoves`
+ * into the root's post-truncation candidate map, seeding each newly-added
+ * UCI's prior from its share of the ALREADY-KEPT candidates' total mass
+ * (never 0 — INJECT-02: a 0 prior made `rankScore = min(1,0/pRef)*value = 0`,
+ * which sorted the injected candidate dead last and made it the hard cap's
+ * first casualty, silently defeating the injection mechanism).
+ *
+ * Code review WR-02 (196-REVIEW.md): this block was previously copy-pasted
+ * byte-for-byte between `mctsSearch.ts`'s `dispatchExpansion` and
+ * `fallbackExpectimax.ts`'s `expandNode` (only the loop variable name
+ * differed) — exactly the class of duplication `treeCommon.ts`'s own module
+ * header warns against (a future one-sided fix to the merge order, the
+ * prior formula, or the exemption-set construction would silently
+ * reintroduce the INJECT-02 class of bug). Extracted here so both
+ * `SearchRunner` implementations call the identical logic and cannot
+ * diverge.
+ *
+ * Only meaningful for the root: callers must guard on `isRoot` themselves
+ * (this function performs no such check) since a non-root node has no
+ * `extraRootMoves` concept.
+ */
+export function mergeExtraRootMoves(
+  candidateMap: Map<string, number>,
+  effectivePolicy: Record<string, number>,
+  extraRootMoves: readonly string[] | undefined,
+): { candidateMap: Map<string, number>; injectedUcis: Set<string> } {
+  const injectedUcis = new Set<string>();
+  if (!extraRootMoves || extraRootMoves.length === 0) {
+    return { candidateMap, injectedUcis };
+  }
+  const merged = new Map(candidateMap);
+  const keptTotal = Array.from(candidateMap.keys()).reduce(
+    (sum, uci) => sum + (effectivePolicy[uci] ?? 0),
+    0,
+  );
+  for (const uci of extraRootMoves) {
+    if (!merged.has(uci)) {
+      merged.set(uci, keptTotal > 0 ? (effectivePolicy[uci] ?? 0) / keptTotal : 0);
+      injectedUcis.add(uci);
+    }
+  }
+  return { candidateMap: merged, injectedUcis };
+}
+
+export function applyRootCandidateHardCap(
+  candidateMap: Map<string, number>,
+  injectedUcis?: ReadonlySet<string>,
+): Map<string, number> {
   if (candidateMap.size <= ROOT_CANDIDATE_HARD_CAP) return candidateMap;
-  const sorted = Array.from(candidateMap.entries()).sort((a, b) => b[1] - a[1] || (a[0] < b[0] ? -1 : 1));
-  return new Map(sorted.slice(0, ROOT_CANDIDATE_HARD_CAP));
+  if (!injectedUcis || injectedUcis.size === 0) {
+    const sorted = Array.from(candidateMap.entries()).sort(compareCandidateEntries);
+    return new Map(sorted.slice(0, ROOT_CANDIDATE_HARD_CAP));
+  }
+  const injected: [string, number][] = [];
+  const organic: [string, number][] = [];
+  for (const entry of candidateMap.entries()) {
+    (injectedUcis.has(entry[0]) ? injected : organic).push(entry);
+  }
+  const organicSlots = Math.max(0, ROOT_CANDIDATE_HARD_CAP - injected.length);
+  injected.sort(compareCandidateEntries);
+  organic.sort(compareCandidateEntries);
+  const kept = injected.slice(0, ROOT_CANDIDATE_HARD_CAP).concat(organic.slice(0, organicSlots));
+  kept.sort(compareCandidateEntries);
+  return new Map(kept);
 }
 
 /**

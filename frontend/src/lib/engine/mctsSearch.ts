@@ -20,9 +20,15 @@
  * a terminal/depth-capped dead end (Pitfall 6 — those never call providers
  * at all). D-10: `onSnapshot` fires after EVERY completed backup; no
  * `Date.now()`/`performance.now()` anywhere in this file. D-03/D-04: root
- * children are Maia top-k unioned with `budget.extraRootMoves` (guaranteed
- * inclusion, AFTER truncation, so a near-zero-Maia-probability Stockfish
- * candidate is never dropped by the mass cut) and, at `concurrency > 1`,
+ * children are Maia top-k unioned with `budget.extraRootMoves`, AFTER
+ * truncation, so a near-zero-Maia-probability Stockfish candidate is never
+ * dropped by the mass cut — AND (INJECT-01, 196-01) `applyRootCandidateHardCap`
+ * receives the union's own added UCIs as an exemption set, so that same
+ * candidate is never dropped by the root hard cap either. Before Phase 196
+ * this second mechanism was NOT honoured: an injected candidate was seeded
+ * with prior 0, sorted dead last by the cap's own comparator, and was the
+ * cap's first casualty whenever the root exceeded it — the union survived
+ * the mass cut but silently lost to the hard cap. And, at `concurrency > 1`,
  * multiple expansions are selected synchronously within one round (marking
  * each as `isPending` — the sole gate that keeps a later same-round
  * selection from re-picking it; visit counts increment only at APPLY time,
@@ -77,6 +83,7 @@ import {
   buildSnapshot,
   sideMatchesMover,
   applyRootCandidateHardCap,
+  mergeExtraRootMoves,
 } from './treeCommon';
 
 /**
@@ -398,12 +405,16 @@ function applyExpansion(result: DispatchedExpansion, rootMover: MoverColor): voi
  * Expands one leaf: `policy()` -> (Phase 159 D-05/D-06/D-07, root-mover side
  * only, short-circuited at the default temperature per Pitfall 1) temperature
  * reshape -> `truncateAndRenormalize` -> (root only) union with
- * `budget.extraRootMoves` AFTER truncation (D-04 — guarantees inclusion
- * regardless of Maia mass, matching D-05's floor rationale) -> (root only)
- * `applyRootCandidateHardCap` (D-07/Pitfall 6) -> ONE batched `grade()` call
- * over the resulting candidate set. Pure with respect to the tree — does not
- * mutate anything; `applyExpansion` performs all mutation once every
- * concurrent dispatch has resolved.
+ * `budget.extraRootMoves` AFTER truncation (D-04 — never dropped by Maia's
+ * mass cut regardless of its own probability, matching D-05's floor
+ * rationale) -> (root only) `applyRootCandidateHardCap`, passed the union's
+ * own added UCIs as an exemption set (D-07/Pitfall 6, INJECT-01, 196-01 —
+ * never dropped by the root hard cap either) -> ONE batched `grade()` call
+ * over the resulting candidate set. Before Phase 196 the cap received no
+ * exemption and an injected candidate's prior was seeded at 0, so a wide
+ * root silently discarded it here despite surviving the union above. Pure
+ * with respect to the tree — does not mutate anything; `applyExpansion`
+ * performs all mutation once every concurrent dispatch has resolved.
  */
 async function dispatchExpansion(
   leaf: EngineNode,
@@ -424,15 +435,16 @@ async function dispatchExpansion(
       ? applyPolicyTemperature(rawPolicy, temperature)
       : rawPolicy;
   let candidateMap = truncateAndRenormalize(effectivePolicy);
+  // WR-02 (196-REVIEW.md): the union/prior-seeding merge is shared with
+  // fallbackExpectimax.ts's expandNode via treeCommon.ts's
+  // mergeExtraRootMoves, so the two SearchRunner implementations cannot
+  // silently diverge on this logic (see that function's own doc comment).
+  let injectedUcis = new Set<string>();
   if (leaf.isRoot && budget.extraRootMoves && budget.extraRootMoves.length > 0) {
-    const merged = new Map(candidateMap);
-    for (const uci of budget.extraRootMoves) {
-      if (!merged.has(uci)) merged.set(uci, 0);
-    }
-    candidateMap = merged;
+    ({ candidateMap, injectedUcis } = mergeExtraRootMoves(candidateMap, effectivePolicy, budget.extraRootMoves));
   }
   if (leaf.isRoot) {
-    candidateMap = applyRootCandidateHardCap(candidateMap);
+    candidateMap = applyRootCandidateHardCap(candidateMap, injectedUcis);
   }
   const candidateUcis = Array.from(candidateMap.keys());
   if (candidateUcis.length === 0) {

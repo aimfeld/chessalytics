@@ -54,13 +54,14 @@
 
 ### Analysis-Board Root Injection (SEED-118)
 
-- [ ] **INJECT-01**: `applyRootCandidateHardCap` no longer silently drops `extraRootMoves` when the root exceeds `ROOT_CANDIDATE_HARD_CAP`; a regression test covers a simultaneous injection at T=2.0 on a high-branching position
-- [ ] **INJECT-02**: Injected root moves are seeded with a prior on the same scale as organic candidates (renormalized, or findability read from `SearchTreeNode.rawMaiaProb`) rather than `0`, so `rankScore` is not comparing incommensurable scales
-- [ ] **INJECT-03**: `useFlawChessEngine` accepts `extraRootMoves`, and the analysis board supplies the free run's settled `pvLines[0..1].moves[0]` — zero extra Stockfish compute, since MultiPV=2 already runs on the same position
-- [ ] **INJECT-04**: The FlawChess search re-runs once on `freeRunCommitted`, and only when Stockfish's move is not already a root candidate; first-paint instant-start behaviour (DISPLAY-01) is unchanged
-- [ ] **INJECT-05**: The disagreement re-run is **measured** to be largely a cache replay rather than a recompute — the re-run's provider cache hit rate is reported as this requirement's evidence, not assumed
-- [ ] **INJECT-06**: On disagreement the analysis board shows a practical score for Stockfish's preferred move through the existing top-pick comparison / verdict row — no ranked-list changes, no provenance badge (findability demotion *is* the product's opinion)
-- [ ] **INJECT-07**: `mctsSearch.ts`'s header claim that the union gives "guaranteed inclusion" is corrected to describe actual behaviour
+- [x] **INJECT-01**: `applyRootCandidateHardCap` no longer silently drops `extraRootMoves` when the root exceeds `ROOT_CANDIDATE_HARD_CAP`; a regression test covers a simultaneous injection at T=2.0 on a high-branching position
+- [x] **INJECT-02**: Injected root moves are seeded with a prior on the same scale as organic candidates (renormalized, or findability read from `SearchTreeNode.rawMaiaProb`) rather than `0`, so `rankScore` is not comparing incommensurable scales
+- [x] **INJECT-03**: `useFlawChessEngine` accepts `extraRootMoves`, and the analysis board supplies the free run's settled `pvLines[0..1].moves[0]` — zero extra Stockfish compute, since MultiPV=2 already runs on the same position
+- [x] **INJECT-04**: The FlawChess search re-runs once on `freeRunCommitted`, and only when Stockfish's move is not already a root candidate; first-paint instant-start behaviour (DISPLAY-01) is unchanged
+- [x] **INJECT-05**: The disagreement re-run's provider cache hit rate is **measured** and reported as this requirement's evidence, not assumed
+  - **Correction (Phase 196, 2026-07-31):** the mandate above (measure and report, don't assume) was met — see `reports/root-injection/report.md`. But this requirement was originally worded "is measured to be **largely a cache replay** rather than a recompute", and the measurement **contradicts** that prediction for production. The report's headline 79.1% hit rate describes a harness scenario where two *fully completed* searches share a cache; the browser aborts the organic search ~1.7–2s in (~2–4% of a 400-node search's life), and the report derives a **~4.5% ceiling** for that real path. In production the disagreement re-run is **essentially a fresh recompute, not a replay.** Phases 197–199 must not assume a cheap re-run.
+- [x] **INJECT-06**: On disagreement the analysis board shows a practical score for Stockfish's preferred move through the existing top-pick comparison / verdict row — no ranked-list changes, no provenance badge (findability demotion *is* the product's opinion)
+- [x] **INJECT-07**: `mctsSearch.ts`'s header claim that the union gives "guaranteed inclusion" is corrected to describe actual behaviour
 
 ### Maia WDL Leaf Values (SEED-126 Phase 6)
 
@@ -132,13 +133,13 @@
 | LADDER-03 | Phase 195 | Complete |
 | LADDER-04 | Phase 195 | Complete |
 | LADDER-05 | Phase 195 | Complete |
-| INJECT-01 | Phase 196 | Pending |
-| INJECT-02 | Phase 196 | Pending |
-| INJECT-03 | Phase 196 | Pending |
-| INJECT-04 | Phase 196 | Pending |
-| INJECT-05 | Phase 196 | Pending |
-| INJECT-06 | Phase 196 | Pending |
-| INJECT-07 | Phase 196 | Pending |
+| INJECT-01 | Phase 196 | Complete |
+| INJECT-02 | Phase 196 | Complete |
+| INJECT-03 | Phase 196 | Complete |
+| INJECT-04 | Phase 196 | Complete |
+| INJECT-05 | Phase 196 | Complete |
+| INJECT-06 | Phase 196 | Complete |
+| INJECT-07 | Phase 196 | Complete |
 | LEAF-01 | Phase 197 | Pending |
 | LEAF-02 | Phase 197 | Pending |
 | LEAF-03 | Phase 197 | Pending |

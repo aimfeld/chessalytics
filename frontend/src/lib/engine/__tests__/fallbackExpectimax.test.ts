@@ -34,7 +34,8 @@ import { Chess } from 'chess.js';
 import { evalToExpectedScore } from '@/lib/liveFlaw';
 import { mctsSearch } from '../mctsSearch';
 import { fallbackExpectimax } from '../fallbackExpectimax';
-import { ROOT_CANDIDATE_HARD_CAP } from '../policyTemperature';
+import { ROOT_CANDIDATE_HARD_CAP, applyPolicyTemperature } from '../policyTemperature';
+import { truncateAndRenormalize } from '../select';
 import type { SearchRunner } from '../guardrail';
 import type { EngineProviders, EngineSnapshot, SearchBudget, MoveGrade } from '../types';
 
@@ -205,6 +206,46 @@ describe('fallbackExpectimax — D-04 extraRootMoves', () => {
     expect(extraLine!.practicalScore).toBe(evalToExpectedScore(extraMoveGrade.evalCp, extraMoveGrade.evalMate, 'white'));
     // The union revives ONLY the injected move — its dropped-tail siblings stay dropped.
     expect(snapshot.rankedLines.map((l) => l.rootMove)).not.toContain('e1d1');
+  });
+
+  it('INJECT-02 observable-ranking proof: a post-fix injected move with a real prior ranks ABOVE a known weaker organic candidate whose rankScore it beats', async () => {
+    // Mirrors mctsSearch.test.ts's identical fixture and derivation — see
+    // that file for the full numeric rationale (ENGINE-06 parity).
+    const POLICY: Record<string, number> = {
+      e2e3: 0.55,
+      e1d2: 0.35, // the "known weaker organic": kept, high prior, mediocre grade
+      e2e4: 0.07, // the injected candidate: dropped, non-trivial raw prob, strong grade
+      e1f2: 0.01,
+      e1d1: 0.01,
+      e1f1: 0.01,
+    };
+    const GRADES: Record<string, MoveGrade> = {
+      e2e3: { evalCp: 50, evalMate: null, depth: 10 },
+      e1d2: { evalCp: 10, evalMate: null, depth: 10 },
+      e2e4: { evalCp: 700, evalMate: null, depth: 10 },
+    };
+    const ELO = 2200; // pRefForElo(2200) = 0.015, below both candidates' priors — saturates both
+    const budget: SearchBudget = {
+      maxNodes: 1,
+      elo: { w: ELO, b: ELO },
+      maxPlies: 3,
+      concurrency: 1,
+      extraRootMoves: ['e2e4'],
+    };
+    const providers: EngineProviders = {
+      policy: makeFixedPolicy({ [SIMPLE_WHITE_FEN]: POLICY }),
+      grade: makeFixedGrade({ [SIMPLE_WHITE_FEN]: GRADES }),
+    };
+
+    const snapshot = await fallbackExpectimax(SIMPLE_WHITE_FEN, budget, providers, () => {}, freshSignal());
+
+    const injectedIndex = snapshot.rankedLines.findIndex((l) => l.rootMove === 'e2e4');
+    const weakerOrganicIndex = snapshot.rankedLines.findIndex((l) => l.rootMove === 'e1d2');
+    expect(injectedIndex).toBeGreaterThanOrEqual(0);
+    expect(weakerOrganicIndex).toBeGreaterThanOrEqual(0);
+    // Pre-fix (prior 0): e2e4 would rank strictly LAST regardless of its
+    // 700cp grade — this assertion would fail.
+    expect(injectedIndex).toBeLessThan(weakerOrganicIndex);
   });
 });
 
@@ -395,6 +436,43 @@ describe('fallbackExpectimax — Phase 159 policy temperature', () => {
     const snapshot = await fallbackExpectimax(START_FEN, budget, providers, () => {}, freshSignal());
 
     expect(snapshot.rankedLines.length).toBeLessThanOrEqual(ROOT_CANDIDATE_HARD_CAP);
+  });
+
+  it('extreme-flatness INJECT-01 regression: an out-of-mass-cut injected UCI survives BOTH the mass cut and the hard cap', async () => {
+    // Mirrors mctsSearch.test.ts's identical regression (ENGINE-06 parity —
+    // the two independent SearchRunner implementations must agree
+    // observably, not merely share a helper).
+    const START_FEN = 'rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1'; // 20 legal moves
+    const POLICY_TEMPERATURE = 2;
+    const uniformPolicy = uniformPolicyFromLegalMoves(START_FEN);
+    // Derived from the SAME pipeline expandNode actually runs (temperature
+    // reshape THEN truncation) — see mctsSearch.test.ts's sibling comment for
+    // why deriving off the raw policy would pick a UCI the real T=2 run never
+    // actually drops (floating-point drift in the renormalization shifts the
+    // truncation crossing point by one entry vs the raw uniform input).
+    const effectivePolicy = applyPolicyTemperature(uniformPolicy, POLICY_TEMPERATURE);
+    const kept = truncateAndRenormalize(effectivePolicy);
+    const droppedUci = Object.keys(uniformPolicy).find((uci) => !kept.has(uci));
+    expect(droppedUci).toBeDefined();
+    const injectedUci = droppedUci as string;
+
+    const budget: SearchBudget = {
+      maxNodes: 1,
+      elo: NEUTRAL_BUDGET_ELO,
+      maxPlies: 1,
+      concurrency: 1,
+      policyTemperature: POLICY_TEMPERATURE,
+      extraRootMoves: [injectedUci],
+    };
+    const providers: EngineProviders = {
+      policy: makeFixedPolicy({ [START_FEN]: uniformPolicy }),
+      grade: makeFixedGrade({}),
+    };
+
+    const snapshot = await fallbackExpectimax(START_FEN, budget, providers, () => {}, freshSignal());
+
+    expect(snapshot.rankedLines.length).toBeLessThanOrEqual(ROOT_CANDIDATE_HARD_CAP);
+    expect(snapshot.rankedLines.some((l) => l.rootMove === injectedUci)).toBe(true);
   });
 });
 

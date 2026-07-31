@@ -21,9 +21,11 @@ import {
   buildSnapshot,
   modalPathBuilder,
   cloneRankedLineWith,
+  applyRootCandidateHardCap,
   type SearchTreeNode,
 } from '../treeCommon';
 import { mctsSearch } from '../mctsSearch';
+import { ROOT_CANDIDATE_HARD_CAP } from '../policyTemperature';
 import type { EngineProviders, MoveGrade, RankedLine, SearchBudget, Side } from '../types';
 
 describe('sideMatchesMover', () => {
@@ -41,6 +43,179 @@ describe('sideMatchesMover', () => {
 
   it("'w' does NOT match 'black'", () => {
     expect(sideMatchesMover('w', 'black')).toBe(false);
+  });
+});
+
+// ─── applyRootCandidateHardCap — INJECT-01 exemption (196-01 Task 2) ──────
+//
+// This function had zero direct tests before this phase (196-RESEARCH.md
+// grep-confirmed) — a large part of why the hard-cap regression survived.
+// Fixtures use plain `new Map<string, number>([...])` literals with distinct
+// descending probabilities and at least one exact tie pair straddling the
+// cap boundary, so the ascending-UCI tie-break is genuinely exercised, not
+// merely present in the code path.
+
+describe('applyRootCandidateHardCap — INJECT-01 exemption', () => {
+  // 20 entries, strictly descending except an exact tie between p15/p16 at
+  // the cutoff itself (both 0.023) — ascending-UCI tie-break must keep p15
+  // (the last KEPT slot) and drop p16 (the first DROPPED slot).
+  const SIZE20_ENTRIES: [string, number][] = [
+    ['p01', 0.3],
+    ['p02', 0.22],
+    ['p03', 0.18],
+    ['p04', 0.12],
+    ['p05', 0.09],
+    ['p06', 0.07],
+    ['p07', 0.06],
+    ['p08', 0.05],
+    ['p09', 0.045],
+    ['p10', 0.04],
+    ['p11', 0.035],
+    ['p12', 0.03],
+    ['p13', 0.025],
+    ['p14', 0.024],
+    ['p16', 0.023],
+    ['p15', 0.023],
+    ['p17', 0.021],
+    ['p18', 0.02],
+    ['p19', 0.018],
+    ['p20', 0.01],
+  ];
+
+  it('applyRootCandidateHardCap(map) and applyRootCandidateHardCap(map, new Set()) are byte-identical, including order', () => {
+    const map = new Map(SIZE20_ENTRIES);
+
+    const withoutSet = applyRootCandidateHardCap(map);
+    const withEmptySet = applyRootCandidateHardCap(map, new Set());
+
+    expect(withoutSet.size).toBe(ROOT_CANDIDATE_HARD_CAP);
+    expect([...withEmptySet.entries()]).toEqual([...withoutSet.entries()]);
+    // The tie-break at the cutoff resolves ascending-UCI: p15 kept, p16 dropped.
+    expect(withoutSet.has('p15')).toBe(true);
+    expect(withoutSet.has('p16')).toBe(false);
+  });
+
+  it('a 19-entry map: the exemption set keeps a UCI the plain cap would drop; without it, the same UCI is dropped', () => {
+    const entries: [string, number][] = [
+      ['q01', 0.3],
+      ['q02', 0.22],
+      ['q03', 0.18],
+      ['q04', 0.12],
+      ['q05', 0.09],
+      ['q06', 0.07],
+      ['q07', 0.06],
+      ['q08', 0.05],
+      ['q09', 0.045],
+      ['q10', 0.04],
+      ['q11', 0.035],
+      ['q12', 0.03],
+      ['q13', 0.025],
+      ['q14', 0.024],
+      ['q15', 0.023],
+      ['q16', 0.021],
+      ['q17', 0.02],
+      ['q18', 0.018],
+      ['q19', 0.01],
+    ];
+    const map = new Map(entries);
+    const lowestProbUci = 'q19'; // the smallest prior — dropped by the plain cap
+
+    const withExemption = applyRootCandidateHardCap(map, new Set([lowestProbUci]));
+    const withoutExemption = applyRootCandidateHardCap(map);
+
+    expect(withExemption.size).toBe(ROOT_CANDIDATE_HARD_CAP);
+    expect(withExemption.has(lowestProbUci)).toBe(true);
+    expect(withoutExemption.size).toBe(ROOT_CANDIDATE_HARD_CAP);
+    expect(withoutExemption.has(lowestProbUci)).toBe(false);
+  });
+
+  it('an exemption set of 17 over a 25-entry map clamps to exactly the cap, contains ONLY exempted keys, and keeps the highest-probability ones by the same ascending-UCI tie-break', () => {
+    // 17 exempted candidates share one probability (an intentional 17-way
+    // tie) so only the ascending-UCI comparator can order them; 8 organic
+    // candidates at a much higher probability must be excluded entirely once
+    // organicSlots clamps to 0 — never a negative slice, never > the cap.
+    const injectedEntries: [string, number][] = Array.from(
+      { length: 17 },
+      (_, i) => [`z${String(i).padStart(2, '0')}`, 0.05] as [string, number],
+    );
+    const organicEntries: [string, number][] = Array.from(
+      { length: 8 },
+      (_, i) => [`o${String(i).padStart(2, '0')}`, 0.9] as [string, number],
+    );
+    const map = new Map([...injectedEntries, ...organicEntries]);
+    const injectedUcis = new Set(injectedEntries.map(([uci]) => uci));
+
+    const result = applyRootCandidateHardCap(map, injectedUcis);
+
+    expect(result.size).toBe(ROOT_CANDIDATE_HARD_CAP);
+    for (const uci of result.keys()) {
+      expect(injectedUcis.has(uci)).toBe(true); // organicSlots clamped to 0 — no organic key survives
+    }
+    const expectedKeys = injectedEntries.slice(0, ROOT_CANDIDATE_HARD_CAP).map(([uci]) => uci);
+    expect([...result.keys()]).toEqual(expectedKeys);
+  });
+
+  it('a UCI present in BOTH the map and the exemption set consumes an organic slot, not an extra exemption slot — result matches passing it only in the map', () => {
+    const entries: [string, number][] = [
+      ['r01', 0.3],
+      ['r02', 0.22],
+      ['r03', 0.18],
+      ['r04', 0.12],
+      ['r05', 0.09],
+      ['r06', 0.07], // the overlap candidate — already organic, ALSO passed as exempted
+      ['r07', 0.06],
+      ['r08', 0.05],
+      ['r09', 0.045],
+      ['r10', 0.04],
+      ['r11', 0.035],
+      ['r12', 0.03],
+      ['r13', 0.025],
+      ['r14', 0.024],
+      ['r15', 0.023],
+      ['r16', 0.021],
+      ['r17', 0.02],
+      ['r18', 0.018],
+      ['r19', 0.01],
+    ];
+    const map = new Map(entries);
+    const overlapUci = 'r06';
+
+    const withOverlapExemption = applyRootCandidateHardCap(map, new Set([overlapUci]));
+    const plainCap = applyRootCandidateHardCap(map);
+
+    expect(withOverlapExemption.size).toBe(ROOT_CANDIDATE_HARD_CAP);
+    expect([...withOverlapExemption.entries()]).toEqual([...plainCap.entries()]);
+  });
+
+  it('two calls with the same inputs produce the same key order (deterministic tie-break, ENGINE-07)', () => {
+    const entries: [string, number][] = [
+      ['s01', 0.3],
+      ['s02', 0.22],
+      ['s03', 0.18],
+      ['s04', 0.12],
+      ['s05', 0.09],
+      ['s06', 0.07],
+      ['s07', 0.06],
+      ['s08', 0.05],
+      ['s09', 0.045],
+      ['s10', 0.04],
+      ['s11', 0.035],
+      ['s12', 0.03],
+      ['s13', 0.025],
+      ['s14', 0.024],
+      ['s15', 0.023],
+      ['s16', 0.021],
+      ['s17', 0.02],
+      ['s18', 0.018],
+      ['s19', 0.01],
+    ];
+    const map = new Map(entries);
+    const injectedUcis = new Set(['s19']); // the dropped tail, exempted
+
+    const first = applyRootCandidateHardCap(map, injectedUcis);
+    const second = applyRootCandidateHardCap(map, injectedUcis);
+
+    expect([...second.entries()]).toEqual([...first.entries()]);
   });
 });
 

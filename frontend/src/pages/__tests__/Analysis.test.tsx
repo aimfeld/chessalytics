@@ -32,6 +32,12 @@ const engineState: {
   depth: number;
   isAnalyzing: boolean;
   isReady: boolean;
+  /** WR-01 (196-REVIEW.md): the FEN `pvLines` currently belongs to. Defaults
+   *  to `null` so pre-existing tests that never set it exercise the "no
+   *  position asserted stale" default; the race-condition regression test
+   *  below is the one place that drives this deliberately out of sync with
+   *  `position` to reproduce the same-flush staleness window. */
+  currentFen: string | null;
 } = {
   evalCp: null,
   evalMate: null,
@@ -39,10 +45,22 @@ const engineState: {
   depth: 0,
   isAnalyzing: false,
   isReady: false,
+  currentFen: null,
 };
 
 vi.mock('@/hooks/useStockfishEngine', () => ({
-  useStockfishEngine: () => ({ ...engineState }),
+  // WR-01 (196-REVIEW.md): `currentFen` defaults to `null` in engineState so
+  // it must normally mirror whichever `fen` the hook was called with
+  // (matches the real hook: currentFen is committed in the SAME effect run
+  // as the fen it was reset for, so it is NEVER stale relative to the fen
+  // the hook itself was just invoked with). The stale-race regression test
+  // below is the one place that overrides `engineState.currentFen` to an
+  // EXPLICIT (non-null) FEN string to simulate the hook's own reset not
+  // having landed yet for the new `fen` argument.
+  useStockfishEngine: (options: { fen: string | null }) => ({
+    ...engineState,
+    currentFen: engineState.currentFen ?? options.fen,
+  }),
 }));
 
 // Mock isLowPowerDevice (Phase 172, SEED-106 D-05): useGemSweep.ts's device
@@ -181,21 +199,65 @@ const flawChessState: {
   }[];
   isSearching: boolean;
   isReady: boolean;
+  /** WR-01 (196-REVIEW.md): the FEN `rankedLines` currently belongs to.
+   *  `null` (the default) mirrors whichever `fen` the mocked hook was called
+   *  with — see `useStockfishEngine`'s identical mock override above for the
+   *  full rationale. */
+  currentFen: string | null;
 } = {
   rankedLines: [],
   isSearching: false,
   isReady: true,
+  currentFen: null,
 };
 
+// Phase 196 (INJECT-03/04/06): every call's `extraRootMoves` option is
+// captured into flawChessCalls so tests can assert the derived
+// extraRootMoves value/identity across re-renders — mirrors the
+// gradingCalls/lastPrimaryGradingCall idiom above.
+const flawChessCalls: { extraRootMoves: string[] | undefined }[] = [];
+function lastFlawChessCall(): { extraRootMoves: string[] | undefined } | undefined {
+  return flawChessCalls[flawChessCalls.length - 1];
+}
+
 vi.mock('@/hooks/useFlawChessEngine', () => ({
-  useFlawChessEngine: () => ({
-    rankedLines: flawChessState.rankedLines,
-    nodesEvaluated: 0,
-    budgetExhausted: false,
-    isSearching: flawChessState.isSearching,
-    isReady: flawChessState.isReady,
-  }),
+  useFlawChessEngine: (options: { fen: string | null; extraRootMoves?: string[] }) => {
+    flawChessCalls.push({ extraRootMoves: options.extraRootMoves });
+    return {
+      rankedLines: flawChessState.rankedLines,
+      nodesEvaluated: 0,
+      budgetExhausted: false,
+      isSearching: flawChessState.isSearching,
+      isReady: flawChessState.isReady,
+      // WR-01 (196-REVIEW.md): mirrors whichever `fen` the hook was called
+      // with unless a test explicitly overrides `flawChessState.currentFen`
+      // to simulate a stale/lagging reset.
+      currentFen: flawChessState.currentFen ?? options.fen,
+    };
+  },
 }));
+
+/** Minimal RankedLine-shaped fixture matching flawChessState's element type
+ *  (Phase 196) — mirrors FlawChessAgreementVerdict.test.tsx's own `fcLine`. */
+function fcLine(rootMove: string): {
+  rootMove: string;
+  practicalScore: number;
+  objectiveEvalCp: number | null;
+  objectiveEvalMate: number | null;
+  modalPath: string[];
+  modalStats: { objectiveEvalCp: number | null; objectiveEvalMate: number | null; maiaProb: number | null }[];
+  visits: number;
+} {
+  return {
+    rootMove,
+    practicalScore: 0.5,
+    objectiveEvalCp: null,
+    objectiveEvalMate: null,
+    modalPath: [rootMove],
+    modalStats: [{ objectiveEvalCp: null, objectiveEvalMate: null, maiaProb: null }],
+    visits: 1,
+  };
+}
 
 // Mock useUserProfile: no real network in this shell-level test.
 vi.mock('@/hooks/useUserProfile', () => ({
@@ -272,15 +334,18 @@ afterEach(() => {
   engineState.depth = 0;
   engineState.isAnalyzing = false;
   engineState.isReady = false;
+  engineState.currentFen = null;
   maiaState.expectedScoreAtSelectedElo = null;
   maiaState.perElo = [];
   flawChessState.rankedLines = [];
   flawChessState.isSearching = false;
   flawChessState.isReady = true;
+  flawChessState.currentFen = null;
   gradingState.gradeMap = new Map();
   gradingState.isGrading = false;
   gradingCalls.length = 0;
   maiaCalls.length = 0;
+  flawChessCalls.length = 0;
   libraryGameState.data = undefined;
 });
 
@@ -1902,5 +1967,306 @@ describe('Sweep demotion (Phase 175, SEED-108 D-01/D-01a — supersedes Phase 17
       expect(lastSweepGradingCall()?.fen).not.toBe(ROOT_FEN);
       expect(lastSweepMaiaCall()?.fen).toBeNull();
     });
+  });
+});
+
+describe('Analysis-board Stockfish root injection (Phase 196, INJECT-03/04/06)', () => {
+  it('stays at the sentinel (stable identity across re-renders) while the free run has not committed (INJECT-04)', () => {
+    engineState.isReady = true;
+    engineState.isAnalyzing = true;
+    engineState.pvLines = [];
+
+    renderAnalysis();
+
+    const first = lastFlawChessCall()?.extraRootMoves;
+    expect(first).toEqual([]);
+
+    // Force a re-render (toggling an unrelated switch) — the sentinel's
+    // reference must be unchanged.
+    fireEvent.click(screen.getByTestId('btn-analysis-maia-toggle'));
+    const second = lastFlawChessCall()?.extraRootMoves;
+    expect(second).toBe(first);
+  });
+
+  it('injects both settled root moves (ascending-UCI sorted) when neither is an organic FlawChess candidate', () => {
+    engineState.isReady = true;
+    engineState.isAnalyzing = false;
+    engineState.pvLines = [
+      { moves: ['g1f3'], evalCp: 30, evalMate: null, depth: 18 },
+      { moves: ['e2e4'], evalCp: 25, evalMate: null, depth: 18 },
+    ];
+    // Non-empty organic set (so disagreement is distinguishable from
+    // ignorance) that contains NEITHER settled move.
+    flawChessState.rankedLines = [fcLine('d2d4')];
+
+    renderAnalysis();
+
+    expect(lastFlawChessCall()?.extraRootMoves).toEqual(['e2e4', 'g1f3']);
+  });
+
+  it('stays at the sentinel when the organic set already contains BOTH settled moves (no wasteful re-run)', () => {
+    engineState.isReady = true;
+    engineState.isAnalyzing = false;
+    engineState.pvLines = [
+      { moves: ['g1f3'], evalCp: 30, evalMate: null, depth: 18 },
+      { moves: ['e2e4'], evalCp: 25, evalMate: null, depth: 18 },
+    ];
+    flawChessState.rankedLines = [fcLine('e2e4'), fcLine('g1f3')];
+
+    renderAnalysis();
+
+    expect(lastFlawChessCall()?.extraRootMoves).toEqual([]);
+  });
+
+  it('injects only the ONE settled move missing from the organic set', () => {
+    engineState.isReady = true;
+    engineState.isAnalyzing = false;
+    engineState.pvLines = [
+      { moves: ['g1f3'], evalCp: 30, evalMate: null, depth: 18 },
+      { moves: ['e2e4'], evalCp: 25, evalMate: null, depth: 18 },
+    ];
+    flawChessState.rankedLines = [fcLine('g1f3')];
+
+    renderAnalysis();
+
+    expect(lastFlawChessCall()?.extraRootMoves).toEqual(['e2e4']);
+  });
+
+  it('keeps the SAME extraRootMoves reference when engine.pvLines is replaced by a new array with the SAME first moves (restart-storm guard, RESEARCH.md Pitfall 1)', () => {
+    engineState.isReady = true;
+    engineState.isAnalyzing = false;
+    engineState.pvLines = [
+      { moves: ['g1f3'], evalCp: 30, evalMate: null, depth: 18 },
+      { moves: ['e2e4'], evalCp: 25, evalMate: null, depth: 18 },
+    ];
+    // Organic set already covers both settled moves, so nothing is injectable
+    // — extraRootMoves must be the shared sentinel.
+    flawChessState.rankedLines = [fcLine('e2e4'), fcLine('g1f3')];
+
+    renderAnalysis();
+    const before = lastFlawChessCall()?.extraRootMoves;
+    expect(before).toEqual([]);
+
+    // A brand-new array object (simulating a Stockfish info-line update
+    // during the pre-commit window) holding the SAME first moves.
+    engineState.pvLines = [
+      { moves: ['g1f3'], evalCp: 32, evalMate: null, depth: 19 },
+      { moves: ['e2e4'], evalCp: 26, evalMate: null, depth: 19 },
+    ];
+    fireEvent.click(screen.getByTestId('btn-analysis-maia-toggle'));
+
+    const after = lastFlawChessCall()?.extraRootMoves;
+    expect(after).toBe(before);
+  });
+
+  it('holds the latch: once injected, a later rankedLines update that now CONTAINS the injected move does not reset extraRootMoves to the sentinel (no second restart)', () => {
+    engineState.isReady = true;
+    engineState.isAnalyzing = false;
+    engineState.pvLines = [
+      { moves: ['g1f3'], evalCp: 30, evalMate: null, depth: 18 },
+      { moves: ['e2e4'], evalCp: 25, evalMate: null, depth: 18 },
+    ];
+    flawChessState.rankedLines = [fcLine('d2d4')];
+
+    renderAnalysis();
+    expect(lastFlawChessCall()?.extraRootMoves).toEqual(['e2e4', 'g1f3']);
+
+    // The search has now incorporated both injected moves into rankedLines —
+    // the latch must hold and NOT reset extraRootMoves to the sentinel.
+    flawChessState.rankedLines = [fcLine('d2d4'), fcLine('e2e4'), fcLine('g1f3')];
+    fireEvent.click(screen.getByTestId('btn-analysis-maia-toggle'));
+
+    expect(lastFlawChessCall()?.extraRootMoves).toEqual(['e2e4', 'g1f3']);
+  });
+
+  it('stays at the sentinel when the organic rankedLines set is empty (disagreement is indistinguishable from ignorance)', () => {
+    engineState.isReady = true;
+    engineState.isAnalyzing = false;
+    engineState.pvLines = [{ moves: ['e2e4'], evalCp: 25, evalMate: null, depth: 18 }];
+    flawChessState.rankedLines = [];
+
+    renderAnalysis();
+
+    expect(lastFlawChessCall()?.extraRootMoves).toEqual([]);
+  });
+
+  it('stays at the sentinel while engine.pvLines is empty (mirrors the standalone-Stockfish-off case)', () => {
+    engineState.isReady = true;
+    engineState.isAnalyzing = false;
+    engineState.pvLines = [];
+    flawChessState.rankedLines = [fcLine('d2d4')];
+
+    renderAnalysis();
+
+    expect(lastFlawChessCall()?.extraRootMoves).toEqual([]);
+  });
+
+  it('filters out an illegal/stale UCI before it reaches the budget, keeping only the legal settled move', () => {
+    engineState.isReady = true;
+    engineState.isAnalyzing = false;
+    engineState.pvLines = [
+      // 'e2e5' is not a legal one-move pawn jump from the starting position.
+      { moves: ['e2e5'], evalCp: 10, evalMate: null, depth: 18 },
+      { moves: ['e2e4'], evalCp: 25, evalMate: null, depth: 18 },
+    ];
+    flawChessState.rankedLines = [fcLine('d2d4')];
+
+    renderAnalysis();
+
+    expect(lastFlawChessCall()?.extraRootMoves).toEqual(['e2e4']);
+  });
+
+  it('resets to the sentinel on FEN change and clears the latch, so a later disagreement on the NEW position injects again (INJECT-04)', () => {
+    const clientWidthSpy = vi.spyOn(Element.prototype, 'clientWidth', 'get').mockReturnValue(400);
+
+    engineState.isReady = true;
+    engineState.isAnalyzing = false;
+    engineState.pvLines = [
+      { moves: ['g1f3'], evalCp: 30, evalMate: null, depth: 18 },
+      { moves: ['e2e4'], evalCp: 25, evalMate: null, depth: 18 },
+    ];
+    flawChessState.rankedLines = [fcLine('d2d4')];
+
+    renderAnalysis();
+    expect(lastFlawChessCall()?.extraRootMoves).toEqual(['e2e4', 'g1f3']);
+
+    // Play a real move (1.e4) — the position changes. Seed the NEW position's
+    // fixtures (a fresh disagreement) before completing the move so this
+    // render cycle picks them up.
+    fireEvent.click(screen.getByTestId('square-e2'));
+    engineState.pvLines = [
+      { moves: ['e7e5'], evalCp: 10, evalMate: null, depth: 18 },
+      { moves: ['c7c5'], evalCp: 5, evalMate: null, depth: 18 },
+    ];
+    flawChessState.rankedLines = [fcLine('d7d6')];
+    fireEvent.click(screen.getByTestId('square-e4'));
+
+    // The latch cleared for the new position, so this fresh disagreement
+    // injects again rather than staying latched/stuck at the sentinel.
+    expect(lastFlawChessCall()?.extraRootMoves).toEqual(['c7c5', 'e7e5']);
+
+    clientWidthSpy.mockRestore();
+  });
+
+  it('does NOT commit a spurious latch from a stale previous-position pvLines/rankedLines pairing that is coincidentally ALSO legal in the new position (WR-01, 196-REVIEW.md)', () => {
+    // Reproduces the exact race the code review flagged: this effect can run
+    // in the SAME passive-effect flush as useFlawChessEngine's/
+    // useStockfishEngine's OWN FEN-reset effects, whose setState calls only
+    // take effect on the NEXT render — so on the render where `position`
+    // just changed, `engine.pvLines`/`flawChessEngine.rankedLines` can still
+    // belong to the PREVIOUS position. `bestSanFromPv`'s incidental legality
+    // check is NOT a reliable guard against this: a stale UCI is frequently
+    // ALSO legal in the new position when navigation preserves side-to-move
+    // parity. The prior committed regression test (below, "resets to the
+    // sentinel on FEN change...") does NOT exercise this: it hand-mutates the
+    // mock's data to the NEW position's fixtures BEFORE firing the
+    // position-changing click, which does not match production's
+    // asynchronous reset timing. THIS test instead defers the mock's data
+    // update until AFTER the position-changing clicks, explicitly holding
+    // `currentFen` at the OLD position throughout — simulating the hook's
+    // own reset not having landed yet.
+    const clientWidthSpy = vi.spyOn(Element.prototype, 'clientWidth', 'get').mockReturnValue(400);
+
+    // The real starting FEN (mirrors ROOT_FEN used elsewhere in this file) —
+    // used below as an explicit non-null override so the mock's `currentFen`
+    // does NOT auto-mirror `options.fen` (which changes every render); a
+    // fixed literal is required here specifically BECAUSE the mock has no
+    // memory of its own across renders the way the real hook's state does.
+    const START_FEN = 'rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1';
+
+    // Ply 0 (start position): a genuine disagreement — 'g1f3'/'e2e4' are
+    // settled Stockfish moves, neither is an organic FlawChess candidate —
+    // establishes the "prior" pvLines/rankedLines pairing that will become
+    // stale once we navigate away. currentFen is left at its default (null,
+    // mirrors `options.fen`) for this FIRST render only, so the baseline
+    // injection below is genuinely fresh/correct — matching production.
+    engineState.isReady = true;
+    engineState.isAnalyzing = false;
+    engineState.pvLines = [
+      { moves: ['g1f3'], evalCp: 30, evalMate: null, depth: 18 },
+      { moves: ['e2e4'], evalCp: 25, evalMate: null, depth: 18 },
+    ];
+    flawChessState.rankedLines = [fcLine('d2d4')];
+
+    renderAnalysis();
+    expect(lastFlawChessCall()?.extraRootMoves).toEqual(['e2e4', 'g1f3']);
+
+    // Freeze currentFen at the START position's FEN so it does NOT track
+    // `position` through the two moves below. This simulates the hooks'
+    // async reset never catching up during this navigation — an
+    // exaggeration of the real one-render lag, but sufficient to prove the
+    // specific coincidental-legality failure mode.
+    engineState.currentFen = START_FEN;
+    flawChessState.currentFen = START_FEN;
+
+    // Ply 0 -> 1: White plays 1.d4. Side to move flips to Black, so the
+    // stale 'g1f3'/'e2e4' (White moves) are illegal here — the race cannot
+    // manifest on this ply (matches production: wrong-side-to-move breaks
+    // the incidental-legality coincidence).
+    fireEvent.click(screen.getByTestId('square-d2'));
+    fireEvent.click(screen.getByTestId('square-d4'));
+
+    // Ply 1 -> 2: Black plays 1...d5. Side to move flips back to White,
+    // and NEITHER d4 nor d5 touched the g1 knight or the e2 pawn — so the
+    // STALE 'g1f3'/'e2e4' are (coincidentally) ALSO legal in this brand-new
+    // position, despite being computed from an entirely different position's
+    // organic/settled data. Without the WR-01 fix, this is exactly where the
+    // spurious latch commits.
+    fireEvent.click(screen.getByTestId('square-d7'));
+    fireEvent.click(screen.getByTestId('square-d5'));
+
+    // Now simulate the hooks' own async reset finally landing for the new
+    // position (post 1.d4 d5): fresh, correct data showing NO real
+    // disagreement — both settled Stockfish moves are already organic
+    // FlawChess candidates.
+    engineState.pvLines = [
+      { moves: ['c2c4'], evalCp: 15, evalMate: null, depth: 18 },
+      { moves: ['g1f3'], evalCp: 12, evalMate: null, depth: 18 },
+    ];
+    flawChessState.rankedLines = [fcLine('c2c4'), fcLine('g1f3')];
+    // currentFen must equal whatever `position` now is; read the mock's own
+    // forwarded fen via a throwaway render is unnecessary — the sentinel
+    // constant `null` re-enables the mock's "mirror options.fen" default,
+    // which is exactly "the hook has caught up to the current position".
+    engineState.currentFen = null;
+    flawChessState.currentFen = null;
+    fireEvent.click(screen.getByTestId('btn-analysis-maia-toggle'));
+
+    // With the WR-01 fix: no spurious latch ever committed for the post-1.d4
+    // d5 position, so once genuinely-fresh (non-disagreeing) data lands, the
+    // effect correctly resets to the sentinel. Without the fix: the stale
+    // pairing incorrectly latched ['e2e4', 'g1f3'] the moment the race
+    // manifested above, and the INJECT-04 "exactly once" guarantee then
+    // permanently blocks this effect from ever re-evaluating for that
+    // position again — so this assertion would see the stale, wrong value
+    // instead of the sentinel.
+    expect(lastFlawChessCall()?.extraRootMoves).toEqual([]);
+
+    clientWidthSpy.mockRestore();
+  });
+
+  it("wires the verdict's lookup to the UNSLICED rankedLines: the practical line populates for a Stockfish pick ranked below the visible top 2 (INJECT-06)", () => {
+    engineState.isReady = true;
+    engineState.isAnalyzing = false;
+    engineState.pvLines = [{ moves: ['g1f3'], evalCp: 300, evalMate: null, depth: 18 }];
+    // The FC top pick (e2e4) gets a real objective eval via the grading map so
+    // the verdict classifier doesn't bail on a null eval (D-06).
+    gradingState.gradeMap = new Map([['e4', { evalCp: 40, evalMate: null, depth: 10 }]]);
+    // 5 organic rankedLines with the Stockfish pick (g1f3 / Nf3) at index 3 —
+    // below FC_MAX_LINES (2), so `reconciledRankedLines` (the visible top-2)
+    // would NOT contain it, proving the verdict's own prop must be unsliced.
+    flawChessState.rankedLines = [
+      fcLine('e2e4'),
+      fcLine('d2d4'),
+      fcLine('c2c4'),
+      fcLine('g1f3'),
+      fcLine('b2b3'),
+    ];
+
+    renderAnalysis();
+
+    fireEvent.focus(screen.getByTestId('flawchess-verdict-move-Nf3'));
+    const tooltip = screen.getByTestId('flawchess-verdict-tooltip-Nf3').textContent ?? '';
+    expect(tooltip).toMatch(/FlawChess \(practical\)/);
   });
 });

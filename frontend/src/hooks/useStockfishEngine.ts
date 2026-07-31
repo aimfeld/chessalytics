@@ -60,6 +60,17 @@ export interface StockfishEngineState {
   isAnalyzing: boolean;
   /** True once the UCI init sequence completes (uciok + readyok). */
   isReady: boolean;
+  /**
+   * Code review WR-01 (196-REVIEW.md): the FEN `pvLines` was most recently
+   * reset/committed for. Set in the SAME effect (and same `fen`-change
+   * render) that clears `pvLines` to `[]`, so it lags `fen` by exactly the
+   * same one render `pvLines` does — letting a consumer distinguish "pvLines
+   * genuinely belongs to the current position" from "pvLines is a stale
+   * closure value from the previous position, captured in the same passive-
+   * effect flush as this hook's own FEN-reset effect." Consumers must NOT
+   * trust `pvLines` for a given FEN unless `currentFen === thatFen`.
+   */
+  currentFen: string | null;
 }
 
 // ─── Hook ────────────────────────────────────────────────────────────────────
@@ -120,6 +131,8 @@ export function useStockfishEngine({
   const [evalMate, setEvalMate] = useState<number | null>(null);
   const [pvLines, setPvLines] = useState<PvLine[]>([]);
   const [depth, setDepth] = useState(0);
+  /** WR-01 (196-REVIEW.md): the FEN `pvLines` currently belongs to. */
+  const [currentFen, setCurrentFen] = useState<string | null>(null);
 
   // ─── Ref sync (ref-for-latest-value) ───────────────────────────────────────
 
@@ -152,6 +165,13 @@ export function useStockfishEngine({
     setEvalCp(null);
     setEvalMate(null);
     setDepth(0);
+    // WR-01 (196-REVIEW.md): committed in the SAME effect run as the
+    // `pvLines` reset above, so `currentFen` lags `fen` by exactly the same
+    // one render that `pvLines` does — a consumer reading both in the same
+    // render either sees them both-stale-together (safe: currentFen !==
+    // position, so the consumer knows not to trust pvLines) or both-fresh-
+    // together, never a mismatched pairing.
+    setCurrentFen(fen);
     if (fen === null) {
       setDebouncedFen(null);
       return;
@@ -395,5 +415,5 @@ export function useStockfishEngine({
 
   // ─── Return ────────────────────────────────────────────────────────────────
 
-  return { evalCp, evalMate, pvLines, depth, isAnalyzing, isReady };
+  return { evalCp, evalMate, pvLines, depth, isAnalyzing, isReady, currentFen };
 }

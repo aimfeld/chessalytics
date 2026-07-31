@@ -154,7 +154,7 @@
 | 193. Session-Tick Streaks with a Depletable Shield (SEED-121, v2.9) | 3/3 | Complete | 2026-07-28 |
 | 194. Engine main-thread + cache hygiene (SEED-126 Phases 2–5, v2.10) | 4/4 | Complete | 2026-07-30 |
 | 195. Depth-scaled grading ladder (SEED-126 Phase 1, v2.10) | 6/6 | Complete | - |
-| 196. Analysis-board Stockfish root injection (SEED-118, v2.10) | 0/TBD | Not started | - |
+| 196. Analysis-board Stockfish root injection (SEED-118, v2.10) | 3/3 | Complete | 2026-07-31 |
 | 197. Maia WDL leaf values (SEED-126 Phase 6, v2.10) | 0/TBD | Not started | - |
 | 198. mctsSearch continuous dispatch (SEED-127, v2.10) | 0/TBD | Not started | - |
 | 199. Bot re-calibration sweep + strength curve refit (v2.10) | 0/TBD | Not started | - |
@@ -263,10 +263,25 @@ Waves: 1 = {01, 02} (no shared files, 02 needs no code); 2 = {03, 04} (both depe
   1. `applyRootCandidateHardCap` no longer silently drops `extraRootMoves` when the root exceeds `ROOT_CANDIDATE_HARD_CAP`; a regression test covers a simultaneous injection at T=2.0 on a high-branching position — the exact scenario that let this survive undetected (INJECT-01).
   2. Injected root moves are seeded with a prior on the same scale as organic candidates (renormalized, or read from `SearchTreeNode.rawMaiaProb`) instead of `0`, so `rankScore` compares commensurable scales rather than always demoting an injected move to last (INJECT-02).
   3. `useFlawChessEngine` accepts `extraRootMoves`, and the analysis board supplies the free MultiPV=2 run's settled `pvLines[0..1].moves[0]` at zero extra Stockfish compute; the FlawChess search re-runs exactly once, only after `freeRunCommitted` settles and only when Stockfish's move is not already a root candidate — first-paint instant-start behaviour (DISPLAY-01) is unchanged (INJECT-03, INJECT-04).
-  4. The disagreement re-run's provider cache hit rate is measured and reported as this requirement's own evidence, not assumed — confirming the re-run is largely a cache replay against the first search's tree rather than a second full recompute (INJECT-05).
+  4. The disagreement re-run's provider cache hit rate is measured and reported as this requirement's own evidence, not assumed (INJECT-05). **Outcome correction (2026-07-31):** this criterion originally continued "— confirming the re-run is largely a cache replay against the first search's tree rather than a second full recompute". The measurement was taken and honestly reported (`reports/root-injection/report.md`), and it **contradicts** that predicted conclusion for production: the 79.1% headline hit rate describes a harness scenario where two *fully completed* searches share a cache, whereas the browser aborts the organic search ~1.7–2s in (~2–4% of a 400-node search's life), for which the report derives a **~4.5% ceiling**. The real re-run is a fresh recompute, not a replay. The requirement is satisfied (measured, not assumed); the prediction is not. Phases 197–199 must re-baseline against this rather than inheriting the cheap-re-run premise.
   5. On disagreement, the analysis board shows a practical score for Stockfish's preferred move through the existing top-pick comparison / verdict row, with no ranked-list changes and no provenance badge distinguishing injected from organic candidates (INJECT-06); `mctsSearch.ts`'s header claim of "guaranteed inclusion" is corrected to describe what the code actually guarantees post-fix (INJECT-07).
 
-**Plans**: TBD
+**Plans:** 3/3 plans complete
+
+Plans:
+**Wave 1**
+
+- [x] 196-01-PLAN.md — Wave 1. Tracer: the hard-cap exemption on `applyRootCandidateHardCap` plus the commensurate injected prior at both union sites, mirrored into `fallbackExpectimax.ts`, proven end-to-end by a T=2.0 high-branching `mctsSearch` run; then the parity/boundary regression matrix and the corrected `mctsSearch.ts` header claims (INJECT-01, INJECT-02, INJECT-07)
+
+**Wave 2** *(blocked on Wave 1 completion)*
+
+- [x] 196-02-PLAN.md — Wave 2. `extraRootMoves` on `useFlawChessEngine`, the analysis board's stable-identity per-position-latched disagreement supply, and the additive unsliced ranked-lines memo that lets the practical score reach the existing verdict row (INJECT-03, INJECT-04, INJECT-06)
+- [x] 196-03-PLAN.md — Wave 2. Extract and instrument the shipped grade cache, build the two-pass Node measurement harness, and commit the 400-node run plus the narrated report with both required numbers and the superseded-framing note (INJECT-05)
+
+Wave ordering: Plans 02 and 03 both depend on Plan 01 behaviourally — until the search core honours
+an injected root move, supplying one from the UI is a no-op and the harness would measure a dropped
+candidate. Plans 02 and 03 share no files and run in parallel. Plan 01's Task 1 is the phase tracer
+and is verified before any expansion work builds on it.
 
 ### Phase 197: Maia WDL leaf values
 

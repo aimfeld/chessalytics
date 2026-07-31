@@ -51,7 +51,8 @@ import { describe, it, expect, vi } from 'vitest';
 import { Chess } from 'chess.js';
 import { evalToExpectedScore } from '@/lib/liveFlaw';
 import { mctsSearch } from '../mctsSearch';
-import { ROOT_CANDIDATE_HARD_CAP } from '../policyTemperature';
+import { ROOT_CANDIDATE_HARD_CAP, applyPolicyTemperature } from '../policyTemperature';
+import { truncateAndRenormalize } from '../select';
 import { gradingDepthForTreeDepth, GRADING_ROOT_DEPTH } from '../gradingLadder';
 import type { EngineProviders, EngineSnapshot, SearchBudget, Side, MoveGrade } from '../types';
 
@@ -384,6 +385,58 @@ describe('mctsSearch — D-04 extraRootMoves', () => {
     // The union revives ONLY the injected move — its dropped-tail siblings stay dropped.
     expect(snapshot.rankedLines.map((l) => l.rootMove)).not.toContain('e1d1');
   });
+
+  it('INJECT-02 observable-ranking proof: a post-fix injected move with a real prior ranks ABOVE a known weaker organic candidate whose rankScore it beats', async () => {
+    // Policy shaped so e2e4 (injected) carries a genuinely non-trivial raw
+    // probability yet is still dropped by truncateAndRenormalize's 90%-mass
+    // cut — e2e3 (0.55) + e1d2 (0.35) already reach cumulative 0.90 before
+    // e2e4 is even considered. This is a materially different shape than the
+    // D-04 test above (whose dropped-tail probability is a near-zero 0.01):
+    // INJECT-02 needs the injected candidate's prior to be big enough, once
+    // seeded correctly, to outrank a real organic competitor.
+    const POLICY: Record<string, number> = {
+      e2e3: 0.55,
+      e1d2: 0.35, // the "known weaker organic": kept, high prior, mediocre grade
+      e2e4: 0.07, // the injected candidate: dropped, non-trivial raw prob, strong grade
+      e1f2: 0.01,
+      e1d1: 0.01,
+      e1f1: 0.01,
+    };
+    const GRADES: Record<string, MoveGrade> = {
+      e2e3: { evalCp: 50, evalMate: null, depth: 10 },
+      e1d2: { evalCp: 10, evalMate: null, depth: 10 }, // mediocre — the "known weaker organic"
+      e2e4: { evalCp: 700, evalMate: null, depth: 10 }, // clearly better value
+    };
+    // pRefForElo(2200) = 0.015, well below BOTH e1d2's renormalized prior
+    // (0.35/0.90 ≈ 0.389) and e2e4's post-fix seeded prior (0.07/0.90 ≈
+    // 0.078) — both saturate rankScore's findability factor to 1, so the
+    // ranking below reduces to a direct practicalScore comparison (700cp
+    // beats 10cp), an unambiguous derivation rather than a coincidence of the
+    // findability curve's shape at this ELO.
+    const ELO = 2200;
+    const budget: SearchBudget = {
+      maxNodes: 1,
+      elo: { w: ELO, b: ELO },
+      maxPlies: 3,
+      concurrency: 1,
+      extraRootMoves: ['e2e4'],
+    };
+    const providers: EngineProviders = {
+      policy: makeFixedPolicy({ [SIMPLE_WHITE_FEN]: POLICY }),
+      grade: makeFixedGrade({ [SIMPLE_WHITE_FEN]: GRADES }),
+    };
+
+    const snapshot = await mctsSearch(SIMPLE_WHITE_FEN, budget, providers, () => {}, freshSignal());
+
+    const injectedIndex = snapshot.rankedLines.findIndex((l) => l.rootMove === 'e2e4');
+    const weakerOrganicIndex = snapshot.rankedLines.findIndex((l) => l.rootMove === 'e1d2');
+    expect(injectedIndex).toBeGreaterThanOrEqual(0);
+    expect(weakerOrganicIndex).toBeGreaterThanOrEqual(0);
+    // Pre-fix (prior 0): rankScore(e2e4) = min(1, 0/pRef) * value = 0, so
+    // e2e4 would rank strictly LAST regardless of its 700cp grade, below
+    // e1d2's positive (if mediocre) rankScore — this assertion would fail.
+    expect(injectedIndex).toBeLessThan(weakerOrganicIndex);
+  });
 });
 
 // ─── Phase 159 D-01: findability ranking reorders the root at low ELO ──────
@@ -577,6 +630,47 @@ describe('mctsSearch — Phase 159 policy temperature', () => {
     const snapshot = await mctsSearch(START_FEN, budget, providers, () => {}, freshSignal());
 
     expect(snapshot.rankedLines.length).toBeLessThanOrEqual(ROOT_CANDIDATE_HARD_CAP);
+  });
+
+  it('extreme-flatness INJECT-01 regression: an out-of-mass-cut injected UCI survives BOTH the mass cut and the hard cap', async () => {
+    const START_FEN = 'rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1'; // 20 legal moves
+    const POLICY_TEMPERATURE = 2;
+    const uniformPolicy = uniformPolicyFromLegalMoves(START_FEN);
+    // 196-RESEARCH.md Assumption A2: the exact dropped-tail UCI is unverified
+    // by name — derive it from the SAME pipeline dispatchExpansion actually
+    // runs (temperature reshape THEN truncation), not from the raw policy:
+    // floating-point drift from applyPolicyTemperature's renormalization can
+    // shift which UCI(s) cross the 90%-mass cutoff by one position vs the raw
+    // distribution (measured: raw drops 2 of 20 uniform moves, T=2 drops only
+    // 1) — so deriving off the raw policy would pick a UCI the real T=2 run
+    // never actually drops, defeating the regression. Assert the fixture's
+    // own premise (a dropped UCI must exist) rather than assume it.
+    const effectivePolicy = applyPolicyTemperature(uniformPolicy, POLICY_TEMPERATURE);
+    const kept = truncateAndRenormalize(effectivePolicy);
+    const droppedUci = Object.keys(uniformPolicy).find((uci) => !kept.has(uci));
+    expect(droppedUci).toBeDefined();
+    const injectedUci = droppedUci as string;
+
+    const budget: SearchBudget = {
+      maxNodes: 1,
+      elo: NEUTRAL_BUDGET_ELO,
+      maxPlies: 1,
+      concurrency: 1,
+      policyTemperature: POLICY_TEMPERATURE,
+      extraRootMoves: [injectedUci],
+    };
+    const providers: EngineProviders = {
+      policy: makeFixedPolicy({ [START_FEN]: uniformPolicy }),
+      grade: makeFixedGrade({}),
+    };
+
+    const snapshot = await mctsSearch(START_FEN, budget, providers, () => {}, freshSignal());
+
+    // Pre-fix: 19 organic + 1 injected = 20 candidates, the injected one
+    // seeded at prior 0 sorted dead last by applyRootCandidateHardCap's own
+    // comparator, guaranteeing it among the entries the 15-cap dropped.
+    expect(snapshot.rankedLines.length).toBeLessThanOrEqual(ROOT_CANDIDATE_HARD_CAP);
+    expect(snapshot.rankedLines.some((l) => l.rootMove === injectedUci)).toBe(true);
   });
 });
 

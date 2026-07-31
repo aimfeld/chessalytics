@@ -2,35 +2,35 @@
 gsd_state_version: 1.0
 milestone: v2.10
 milestone_name: FlawChess Engine Improvements
-current_phase: 195
-status: completed
-stopped_at: Completed 195-04-PLAN.md
-last_updated: "2026-07-30T20:46:51.273Z"
-last_activity: 2026-07-30
-last_activity_desc: Phase 195 marked complete
+current_phase: 197
+current_phase_name: Maia WDL leaf values
+status: planning
+stopped_at: Completed 196-03-PLAN.md
+last_updated: "2026-07-31T05:09:35.864Z"
+last_activity: 2026-07-31
+last_activity_desc: Phase 196 complete, transitioned to Phase 197
 progress:
   total_phases: 6
-  completed_phases: 2
-  total_plans: 10
-  completed_plans: 10
-  percent: 33
-current_phase_name: depth-scaled-grading-ladder
+  completed_phases: 3
+  total_plans: 13
+  completed_plans: 13
+  percent: 50
 ---
 
 # Project State: FlawChess
 
 ## Current Position
 
-Phase: 195 — COMPLETE
-Plan: 5 of 6
-Status: Phase 195 complete
-Last activity: 2026-07-30 — Phase 195 marked complete
+Phase: 197 — Maia WDL leaf values
+Plan: Not started
+Status: Ready to plan
+Last activity: 2026-07-31 — Phase 196 complete, transitioned to Phase 197
 
 ## Project Reference
 
 See: .planning/PROJECT.md (updated 2026-07-30 after Phase 194)
 Core value: Position-precise WDL across openings + endgames + time pressure on top of users' actual chess.com / lichess games, with personalized LLM commentary and an auto-generated opening-strengths/weaknesses report.
-Current focus: **v2.10 FlawChess Engine Improvements — ROADMAP CREATED 2026-07-30.** Six phases (194–199), committed order 194 → 195 → 196 → 197 → 198 → 199 (all five source units edit `dispatchExpansion`): **194 Engine main-thread + cache hygiene** (SEED-126 Phases 2–5), **195 Depth-scaled grading ladder** (SEED-126 Phase 1), **196 Analysis-board Stockfish root injection** (SEED-118), **197 Maia WDL leaf values** (SEED-126 Phase 6), **198 mctsSearch continuous dispatch** (SEED-127), **199 Bot re-calibration sweep + strength curve refit** (combined, final). Sourced entirely from three seeds carrying measured wall-clock data — no project-level research pass. All 49 requirements mapped 1:1, 100% coverage. **Phase 194 complete 2026-07-30** (4 plans, 14/14 requirements, verification `passed`, UAT 3 passed / 1 acknowledged gap on the CACHE-01 eviction-free claim). Next: `/gsd-plan-phase 195`.
+Current focus: **v2.10 FlawChess Engine Improvements — ROADMAP CREATED 2026-07-30.** Six phases (194–199), committed order 194 → 195 → 196 → 197 → 198 → 199 (all five source units edit `dispatchExpansion`): **194 Engine main-thread + cache hygiene** (SEED-126 Phases 2–5), **195 Depth-scaled grading ladder** (SEED-126 Phase 1), **196 Analysis-board Stockfish root injection** (SEED-118), **197 Maia WDL leaf values** (SEED-126 Phase 6), **198 mctsSearch continuous dispatch** (SEED-127), **199 Bot re-calibration sweep + strength curve refit** (combined, final). Sourced entirely from three seeds carrying measured wall-clock data — no project-level research pass. All 49 requirements mapped 1:1, 100% coverage. **Phase 194 complete 2026-07-30** (4 plans, 14/14 requirements, verification `passed`, UAT 3 passed / 1 acknowledged gap on the CACHE-01 eviction-free claim). **Phase 195 complete** (6 plans). **Phase 196 complete 2026-07-31** (3 plans, INJECT-01..07, verification `passed`, security `threats_open: 0`, code review 3 Warnings all fixed). Two carry-forwards for 197-199: (a) INJECT-05's measurement CONTRADICTS the roadmap's cache-replay prediction — the production disagreement re-run is a fresh recompute (~4.5% hit-rate ceiling), not the harness's 79.1% replay, so do not inherit the cheap-re-run premise; (b) UAT test 1 (WR-01 browser confirmation) passed on automated evidence with the live-browser check explicitly WAIVED. Next: `/gsd-plan-phase 197`.
 
 ## Deferred Items
 
@@ -532,6 +532,10 @@ v1.29 Live-Engine Analysis Page shipped 2026-06-29 — 5 phases (136–140), 14 
 - [Phase ?]: [Phase 195-03]: Rekeyed grade cache to composite (fen, gradingDepth) via one private cacheKey() helper, following maiaPolicyCache.ts's fen|elo idiom; both Phase 194 LRU touch sites re-pinned by dedicated mutation-verified regression tests under the new key.
 - [Phase ?]: Did not mark LADDER-01/LADDER-05 complete in REQUIREMENTS.md — this plan only builds the ladder-mode/hash-probe harness capability Plan 05's widened A/B run needs; the rung-selection and measured-report acceptance criteria for those two requirements remain Plan 05's deliverable.
 - [Phase ?]: Probe calls in engine-grading-depth-ab.mjs's --hash-probe deliberately do not increment the grading-call counter, so a probe's own extra go cannot desynchronize the deterministic every-Nth-call selection the D-07 accept rule depends on.
+- [Phase ?]: 196-01: floating-point drift in applyPolicyTemperature's renormalization shifts the truncation crossing point by one entry vs the raw uniform policy at T=2 — settled Assumption A2 (dropped UCI is h2h4, not h2h3); tests must derive from the real temperature-reshaped pipeline, not the raw policy
+- [Phase ?]: useState+useEffect (not useMemo) for extraRootMoves — the derivation reads flawChessEngine.rankedLines, the hook's own output, a feedback edge useMemo can't express
+- [Phase ?]: 196-03: harness's baseline pass runs to full completion (per Task 2 spec), measuring a different, more optimistic scenario (79.1% hit rate) than the browser's real ~2s-aborted-restart, which the report bounds at ~4.5% from the same data — the honest INJECT-05 finding for production is CONTEXT.md's original low-hit-rate prediction
+- [Phase ?]: 196-03: OPENING_BOOK + Phase 195 ladder FENs yielded only 3 disagreement survivors (below the floor of 5); widened the candidate pool with scripts/data/root-injection-fens.txt sampled from the existing Kaggle brilliant-move corpus rather than loosening the pre-filter
 
 ### Pending Todos
 
@@ -639,9 +643,9 @@ Items acknowledged and deferred at **v1.29 milestone close on 2026-06-29** (user
 
 ## Session Continuity
 
-**Stopped at:** Completed 195-04-PLAN.md
+**Stopped at:** Completed 196-03-PLAN.md
 
-**Last session:** 2026-07-30T19:03:50.727Z
+**Last session:** 2026-07-31T00:02:31.110Z
 
 **Resume file:**
 
@@ -742,6 +746,9 @@ None
 | Phase 195 P02 | ~15min | 2 tasks | 3 files |
 | Phase 195 P03 | 13min | 2 tasks | 2 files |
 | Phase 195 P04 | 22min | 3 tasks | 4 files |
+| Phase 196 P01 | 25min | 3 tasks | 6 files |
+| Phase 196 P02 | 17min | 3 tasks | 5 files |
+| Phase 196 P03 | 35min | 3 tasks | 6 files |
 
 ## Performance Metrics
 
