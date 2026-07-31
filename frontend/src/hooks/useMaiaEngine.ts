@@ -29,8 +29,8 @@
 
 import { useRef, useState, useCallback, useEffect, useMemo } from 'react';
 import {
-  maskAndSoftmax,
-  maskAndSoftmaxUci,
+  buildPolicyMoveContext,
+  softmaxPolicyByContext,
   softmaxWdl,
   expectedScore,
   MAIA_ELO_LADDER,
@@ -128,13 +128,27 @@ interface MaiaResult {
  * `moveProbabilities`: the engine's consumer needs UCI keys, and converting
  * SAN to UCI at read time would reintroduce the per-move chess.js replay
  * Phase 194 JANK-01 removed from the hot path.
+ *
+ * Bug fix (quick 260731-s0z, FIX-7): this used to call both `maskAndSoftmax`
+ * and `maskAndSoftmaxUci` per ELO rung — 21 rungs means 42 `new Chess(fen)`
+ * constructions and 42 full legal-move generations for ONE FEN whose
+ * legal-move set, vocab indices, and UCI/SAN keys are rung-INVARIANT; only
+ * the logits differ per rung. `buildPolicyMoveContext` now builds that
+ * rung-invariant context ONCE, and `softmaxPolicyByContext` runs one softmax
+ * pass per rung over precomputed indices, returning both keyspaces from a
+ * single pass. `maskAndSoftmax`/`maskAndSoftmaxUci` are kept as the
+ * independent reference implementations the parity tests
+ * (`maiaEncoding.test.ts`) compare this path against — not reimplemented on
+ * top of it, which would make those tests self-referential.
  */
 function buildMaiaResult(fen: string, msg: MaiaAnalyzeResult): MaiaResult {
+  const ctx = buildPolicyMoveContext(fen);
   const perElo = msg.rawPolicyByElo.map(({ elo, policy }) => {
-    setCachedPolicy(fen, elo, maskAndSoftmaxUci(policy, fen));
+    const { san, uci } = softmaxPolicyByContext(policy, ctx);
+    setCachedPolicy(fen, elo, uci);
     return {
       elo,
-      moveProbabilities: maskAndSoftmax(policy, fen),
+      moveProbabilities: san,
     };
   });
   const wdlByElo = msg.wdlByElo.map(({ elo, wdl }) => ({ elo, wdl: softmaxWdl(wdl) }));

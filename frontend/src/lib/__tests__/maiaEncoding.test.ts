@@ -16,6 +16,8 @@ import {
   squareIndex,
   maskAndSoftmax,
   maskAndSoftmaxUci,
+  buildPolicyMoveContext,
+  softmaxPolicyByContext,
   expectedScore,
   softmaxWdl,
   eloToInput,
@@ -222,6 +224,106 @@ describe('maskAndSoftmaxUci', () => {
     for (const p of values) {
       expect(p).toBeCloseTo(expectedUniform, 6);
     }
+  });
+});
+
+// ─── buildPolicyMoveContext / softmaxPolicyByContext (quick 260731-s0z FIX-7) ───
+
+/** Black to move, WITH an en-passant capture available AND all four
+ *  underpromotion lanes available on the same move — exercises the
+ *  black-to-move mirroring, the en-passant move, and the underpromotion
+ *  lanes together in one FEN (verified via chess.js: `exd3` + `e1=Q/R/B/N`
+ *  are all legal here, king moves aside). */
+const TRICKY_FEN = '6k1/8/8/8/3Pp3/8/4p3/K7 b - d3 0 1';
+
+/** A position with no legal moves (checkmate) — exercises the terminal-position empty-map path. */
+const CHECKMATE_FEN = 'rnb1kbnr/pppp1ppp/8/4p3/6Pq/5P2/PPPPP2P/RNBQKBNR w KQkq - 1 3';
+
+describe('buildPolicyMoveContext / softmaxPolicyByContext', () => {
+  const fenCases: [name: string, fen: string][] = [
+    ['start position', START_FEN],
+    ['black to move', BLACK_TO_MOVE_FEN],
+    ['promotion available', PROMOTION_FEN],
+    ['castling available', CASTLE_FEN],
+    ['en passant available', EN_PASSANT_FEN],
+  ];
+
+  it.each(fenCases)(
+    'reproduces maskAndSoftmax + maskAndSoftmaxUci key-for-key and value-for-value (%s)',
+    (_name, fen) => {
+      const policy = nonUniformPolicy(7, 3);
+      const ctx = buildPolicyMoveContext(fen);
+      const { san, uci } = softmaxPolicyByContext(policy, ctx);
+
+      const expectedSan = maskAndSoftmax(policy, fen);
+      const expectedUci = maskAndSoftmaxUci(policy, fen);
+
+      expect(Object.keys(san).sort()).toEqual(Object.keys(expectedSan).sort());
+      for (const key of Object.keys(expectedSan)) {
+        expect(san[key]).toBeCloseTo(expectedSan[key] ?? NaN, 10);
+      }
+
+      expect(Object.keys(uci).sort()).toEqual(Object.keys(expectedUci).sort());
+      for (const key of Object.keys(expectedUci)) {
+        expect(uci[key]).toBeCloseTo(expectedUci[key] ?? NaN, 10);
+      }
+    },
+  );
+
+  it('reproduces the two-way parity on a tricky FEN combining a promotion, an en-passant move, and black to move', () => {
+    const policy = nonUniformPolicy(17, 8);
+    const ctx = buildPolicyMoveContext(TRICKY_FEN);
+    const { san, uci } = softmaxPolicyByContext(policy, ctx);
+
+    const expectedSan = maskAndSoftmax(policy, TRICKY_FEN);
+    const expectedUci = maskAndSoftmaxUci(policy, TRICKY_FEN);
+
+    expect(Object.keys(san).sort()).toEqual(Object.keys(expectedSan).sort());
+    for (const key of Object.keys(expectedSan)) {
+      expect(san[key]).toBeCloseTo(expectedSan[key] ?? NaN, 10);
+    }
+    expect(Object.keys(uci).sort()).toEqual(Object.keys(expectedUci).sort());
+    for (const key of Object.keys(expectedUci)) {
+      expect(uci[key]).toBeCloseTo(expectedUci[key] ?? NaN, 10);
+    }
+    // Sanity: the tricky position really does expose all four underpromotion
+    // lanes plus the en-passant capture (guards against a FEN typo silently
+    // degrading this test to a trivial case).
+    expect(uci['e2e1q']).toBeDefined();
+    expect(uci['e2e1r']).toBeDefined();
+    expect(uci['e2e1b']).toBeDefined();
+    expect(uci['e2e1n']).toBeDefined();
+    expect(uci['e4d3']).toBeDefined();
+  });
+
+  it('proves the batching is real: ONE context reused across several DIFFERENT policy tensors still reproduces the per-rung reference output for each', () => {
+    const ctx = buildPolicyMoveContext(START_FEN);
+    const policies = [nonUniformPolicy(7, 3), nonUniformPolicy(11, 5), nonUniformPolicy(13, 2)];
+
+    for (const policy of policies) {
+      const { san, uci } = softmaxPolicyByContext(policy, ctx);
+      const expectedSan = maskAndSoftmax(policy, START_FEN);
+      const expectedUci = maskAndSoftmaxUci(policy, START_FEN);
+
+      expect(Object.keys(san).sort()).toEqual(Object.keys(expectedSan).sort());
+      for (const key of Object.keys(expectedSan)) {
+        expect(san[key]).toBeCloseTo(expectedSan[key] ?? NaN, 10);
+      }
+      expect(Object.keys(uci).sort()).toEqual(Object.keys(expectedUci).sort());
+      for (const key of Object.keys(expectedUci)) {
+        expect(uci[key]).toBeCloseTo(expectedUci[key] ?? NaN, 10);
+      }
+    }
+  });
+
+  it('a checkmate FEN (no legal moves) yields empty SAN/UCI maps, never NaN', () => {
+    const policy = nonUniformPolicy(7, 3);
+    const ctx = buildPolicyMoveContext(CHECKMATE_FEN);
+    expect(ctx.vocabIndices).toHaveLength(0);
+
+    const { san, uci } = softmaxPolicyByContext(policy, ctx);
+    expect(Object.keys(san)).toHaveLength(0);
+    expect(Object.keys(uci)).toHaveLength(0);
   });
 });
 

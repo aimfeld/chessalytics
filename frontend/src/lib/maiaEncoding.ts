@@ -224,6 +224,23 @@ function moveVocabIndex(from: string, to: string, promotion?: string): number {
 // ─── Legal-move masking + softmax (MAIA-03) ─────────────────────────────────────
 
 /**
+ * Numerically-stable softmax over raw per-move scores — the SAME arithmetic
+ * (max, `exp(s - max)`, sum reduced in array order, `e/sum` guarded against a
+ * zero sum) `maskAndSoftmax`, `maskAndSoftmaxUci`, and `softmaxPolicyByContext`
+ * (quick 260731-s0z FIX-7) all share. Extracted so all three functions stay
+ * byte-identical in arithmetic by construction rather than by hand-copied
+ * duplication; the operation ORDER is load-bearing (that's what makes the
+ * FIX-7 parity tests meaningful) and must never change without re-verifying
+ * every caller's parity tests.
+ */
+function softmaxOverScores(scores: number[]): number[] {
+  const max = scores.length > 0 ? Math.max(...scores) : 0;
+  const exps = scores.map((s) => Math.exp(s - max));
+  const sum = exps.reduce((a, b) => a + b, 0);
+  return exps.map((e) => (sum > 0 ? e / sum : 0));
+}
+
+/**
  * Masks the model's flat policy logits to the current FEN's legal moves (via
  * chess.js) and applies a numerically-stable softmax, returning a normalized
  * per-legal-move probability distribution keyed by SAN. Illegal moves are never
@@ -243,13 +260,11 @@ export function maskAndSoftmax(policy: Float32Array, fen: string): Record<string
     return policy[idx] ?? Number.NEGATIVE_INFINITY;
   });
 
-  const max = scores.length > 0 ? Math.max(...scores) : 0;
-  const exps = scores.map((s) => Math.exp(s - max));
-  const sum = exps.reduce((a, b) => a + b, 0);
+  const probs = softmaxOverScores(scores);
 
   const probabilities: Record<string, number> = {};
   legalMoves.forEach((move, i) => {
-    probabilities[move.san] = sum > 0 ? (exps[i] ?? 0) / sum : 0;
+    probabilities[move.san] = probs[i] ?? 0;
   });
   return probabilities;
 }
@@ -317,15 +332,95 @@ export function maskAndSoftmaxUci(policy: Float32Array, fen: string): Record<str
     scores.push(policy[idx] ?? Number.NEGATIVE_INFINITY);
   }
 
-  const max = scores.length > 0 ? Math.max(...scores) : 0;
-  const exps = scores.map((s) => Math.exp(s - max));
-  const sum = exps.reduce((a, b) => a + b, 0);
+  const probs = softmaxOverScores(scores);
 
   const probabilities: Record<string, number> = {};
   ucis.forEach((uci, i) => {
-    probabilities[uci] = sum > 0 ? (exps[i] ?? 0) / sum : 0;
+    probabilities[uci] = probs[i] ?? 0;
   });
   return probabilities;
+}
+
+// ─── Rung-invariant policy move context (quick 260731-s0z, FIX-7) ──────────────
+
+/**
+ * Rung-invariant per-move context for one FEN: the flat policy-vocab index,
+ * UCI key, and SAN key for every legal move, in chess.js's legal-move
+ * enumeration order. The arrays are index-aligned (`vocabIndices[i]` pairs
+ * with `ucis[i]`/`sans[i]`) — that alignment IS the contract. Built ONCE per
+ * FEN via `buildPolicyMoveContext` and reused across every ELO rung's
+ * `softmaxPolicyByContext` call — only the policy LOGITS differ per rung; the
+ * legal-move set, vocab indices, and UCI/SAN keys do not.
+ */
+export interface PolicyMoveContext {
+  vocabIndices: number[];
+  ucis: string[];
+  sans: string[];
+}
+
+/**
+ * Builds the rung-invariant move context for a FEN: one `new Chess(fen)`, one
+ * `chess.moves({ verbose: true })` call, and one pass filling the three
+ * parallel arrays. Applies the SAME black-to-move `mirrorSquare` translation
+ * on `from`/`to` before `moveVocabIndex` that both `maskAndSoftmax` and
+ * `maskAndSoftmaxUci` apply, and builds the UCI key in `maskAndSoftmaxUci`'s
+ * exact form (from + to + optional promotion, UNMIRRORED — UCI keys always
+ * refer to the real board, never the model's mirrored frame).
+ *
+ * The verbose call is used deliberately because SAN is needed once anyway
+ * (this context serves both the SAN-keyed chart and the UCI-keyed engine
+ * consumer from a single legal-move enumeration): chess.js 1.4.0's
+ * `moves({ verbose: true })` and the private `_moves({ legal: true })`
+ * (which `maskAndSoftmaxUci` reads) enumerate legal moves in IDENTICAL order
+ * (verified on the start position, a 4-lane promotion FEN, and an en-passant
+ * FEN), so a context built from the verbose call reproduces both reference
+ * functions' softmax summation order — and therefore their exact arithmetic.
+ */
+export function buildPolicyMoveContext(fen: string): PolicyMoveContext {
+  const chess = new Chess(fen);
+  const isBlackToMove = fen.split(' ')[1] === 'b';
+  const legalMoves = chess.moves({ verbose: true });
+
+  const vocabIndices: number[] = [];
+  const ucis: string[] = [];
+  const sans: string[] = [];
+  for (const move of legalMoves) {
+    const from = isBlackToMove ? mirrorSquare(move.from) : move.from;
+    const to = isBlackToMove ? mirrorSquare(move.to) : move.to;
+    vocabIndices.push(moveVocabIndex(from, to, move.promotion));
+    ucis.push(`${move.from}${move.to}${move.promotion ?? ''}`);
+    sans.push(move.san);
+  }
+  return { vocabIndices, ucis, sans };
+}
+
+/**
+ * Runs ONE numerically-stable softmax over `policy` at `ctx`'s vocab indices
+ * (same `?? Number.NEGATIVE_INFINITY` fallback `maskAndSoftmax`/
+ * `maskAndSoftmaxUci` use) via the shared `softmaxOverScores` — identical
+ * arithmetic, and therefore numerically identical output — to calling
+ * `maskAndSoftmax`/`maskAndSoftmaxUci` directly for this FEN/policy pair.
+ * Returns BOTH the SAN-keyed and UCI-keyed distributions from that single
+ * pass. Handles the empty-legal-move (terminal position) case exactly as
+ * today: both records come back empty, never NaN.
+ */
+export function softmaxPolicyByContext(
+  policy: Float32Array,
+  ctx: PolicyMoveContext,
+): { san: Record<string, number>; uci: Record<string, number> } {
+  const scores = ctx.vocabIndices.map((idx) => policy[idx] ?? Number.NEGATIVE_INFINITY);
+  const probs = softmaxOverScores(scores);
+
+  const san: Record<string, number> = {};
+  const uci: Record<string, number> = {};
+  for (let i = 0; i < scores.length; i++) {
+    const p = probs[i] ?? 0;
+    const sanKey = ctx.sans[i];
+    const uciKey = ctx.ucis[i];
+    if (sanKey !== undefined) san[sanKey] = p;
+    if (uciKey !== undefined) uci[uciKey] = p;
+  }
+  return { san, uci };
 }
 
 // ─── Expected score (CONTRACT §e, D-04) ─────────────────────────────────────────

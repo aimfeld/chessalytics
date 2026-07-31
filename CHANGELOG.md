@@ -22,6 +22,8 @@ in `YYYY-MM-DD` (Europe/Zurich).
 
 - The Moves-by-Rating chart no longer leaks its engine results past the shared cache's size limit; its lookups now share the same bounded cache as the rest of the analysis page. (Phase 197)
 
+- The Maia panel no longer stops updating after you toggle it off mid-analysis and back on. The analysis board no longer reuses one position's engine hints on a later, unrelated position after switching an engine off and back on. The engine recovers instead of hanging when its Stockfish workers die or stop responding to a request to stop. The board no longer briefly shows the previous position's engine line right after you move. (quick 260731-s0z)
+
 ### Tests
 
 - Two engine ideas were measured end to end and deliberately not shipped, with the measurements committed: using Maia's own win/draw/loss estimate as the value of deep search-tree leaves (rejected at a pre-declared move-quality gate: it goes blind to forced tactics) (Phase 197), and rewriting the engine's dispatch loop for continuous policy/grade overlap (a modelled 29–35% speedup, closed as measured-not-shipped after the determinism design failed two independent reviews and surfaced that browser grades were never bit-reproducible to begin with — SEED-130) (Phase 198).
