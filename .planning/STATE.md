@@ -1,32 +1,26 @@
 ---
 gsd_state_version: 1.0
-milestone: v2.10
-milestone_name: FlawChess Engine Improvements
-current_phase: 999.1
-current_phase_name: BACKLOG
+milestone: v2.11
+milestone_name: Train Solve Surface & Push Reminders
 status: planning
-stopped_at: Completed 199-07-PLAN.md — Phase 199 complete, parity HOLDS
-last_updated: "2026-08-01T08:06:04.210Z"
+last_updated: "2026-08-01T08:26:26.265Z"
 last_activity: 2026-08-01
-last_activity_desc: Phase 199 complete, transitioned to Phase 999.1
 progress:
-  total_phases: 6
-  completed_phases: 5
-  total_plans: 32
-  completed_plans: 29
-  percent: 83
+  total_phases: 0
+  completed_phases: 0
+  total_plans: 0
+  completed_plans: 0
+  percent: 0
 ---
 
 # Project State: FlawChess
 
 ## Current Position
 
-Phase: 999.1 — Password Reset (BACKLOG)
-Plan: Not started
-Status: Ready to plan
-Last activity: 2026-08-01 — Phase 199 complete, transitioned to Phase 999.1
-
-Prior: Phase 198 (mctsSearch continuous dispatch) CLOSED after wave 5 of 8, measured not shipped by operator risk judgement — see `reports/continuous-dispatch/report.md` §8
+Phase: Not started (defining requirements)
+Plan: —
+Status: Defining requirements
+Last activity: 2026-08-01 — Milestone v2.11 started
 
 ## Project Reference
 
