@@ -8,6 +8,14 @@ in `YYYY-MM-DD` (Europe/Zurich).
 
 ## [Unreleased]
 
+### Added
+
+- The Train solve screen now explains itself. After you solve, each move gets its own card carrying a small arrow in the exact color of its arrow on the board, so you can tell at a glance which line is which. Hovering a card (or tapping it on mobile) spotlights just that move and clears every other arrow and badge off the board, and clicking a card snaps the board back to that move from wherever you had stepped to. Drawn alternatives are collected into a compact "Also fine" row. Inaccuracies no longer render in a separate yellow: they read as good moves, while the eval badge still discloses the drop. (Phase 200)
+
+- You can now explore "why didn't my move work" without leaving Train. Once a puzzle is revealed, just move a piece: the cards give way to a Stockfish engine card plus the analysis page's move list, seeded with whatever line you had stepped into. Play freely, click moves inside the engine's lines to play them in, branch off into sidelines that survive as their own blocks, and press Solution (or the card's ×) to return to the full reveal. Next and Analyze leave no residue behind. (Phase 200)
+
+## [v2.10] FlawChess Engine Improvements — 2026-08-01
+
 ### Changed
 
 - Bot moves and analysis-board searches are faster: positions deep in the engine's search tree are now graded at a shallower Stockfish depth, chosen from measurement so move quality is preserved, instead of every position at full depth. A follow-up measurement tightened the ladder further, landing at roughly 1.4× faster searches end to end. (Phase 195)
@@ -27,6 +35,7 @@ in `YYYY-MM-DD` (Europe/Zurich).
 ### Tests
 
 - Two engine ideas were measured end to end and deliberately not shipped, with the measurements committed: using Maia's own win/draw/loss estimate as the value of deep search-tree leaves (rejected at a pre-declared move-quality gate: it goes blind to forced tactics) (Phase 197), and rewriting the engine's dispatch loop for continuous policy/grade overlap (a modelled 29–35% speedup, closed as measured-not-shipped after the determinism design failed two independent reviews and surfaced that browser grades were never bit-reproducible to begin with — SEED-130) (Phase 198).
+- Re-measured bot strength against the shipped grading ladder with a 5-cell parity sweep plus a game-level timing comparison, since the ladder turned out to be the only strength change of the three originally planned for this milestone. Verdict: parity holds in both anchor families, and real games show at least the wall-clock speedup the ladder's own fixture predicted. No bot-strength labels changed. (Phase 199)
 ## [v2.9] Train — Spaced-Repetition Blunder Drills — 2026-07-30
 
 ### Added
@@ -1232,7 +1241,8 @@ bookmarks, game cards, and rating / stats pages.
 - Rating history, global stats, openings W/D/L charts.
 - Multi-user auth with data isolation.
 
-[Unreleased]: https://github.com/flawchess/flawchess/compare/v2.9...HEAD
+[Unreleased]: https://github.com/flawchess/flawchess/compare/v2.10...HEAD
+[v2.10]: https://github.com/flawchess/flawchess/compare/v2.9...v2.10
 [v2.9]: https://github.com/flawchess/flawchess/compare/v2.8...v2.9
 [v2.8]: https://github.com/flawchess/flawchess/compare/v2.7...v2.8
 [v2.7]: https://github.com/flawchess/flawchess/compare/v2.6...v2.7

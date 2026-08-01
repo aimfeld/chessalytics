@@ -1182,7 +1182,7 @@ function anchorSpecLabel(anchorSpec) {
 }
 
 /** Shared column contract with Plan 02's downstream tooling — clean header, no leading comment. */
-const RAW_LEDGER_COLUMNS = [
+export const RAW_LEDGER_COLUMNS = [
   'pass',
   'bot_elo',
   'bot_blend',
@@ -1202,12 +1202,14 @@ const RAW_LEDGER_COLUMNS = [
   'sf_agree',
   'maia_comparable',
   'maia_agree',
+  'elapsed_ms', // NEW (D-08): total wall-clock ms for the WHOLE game, all plies/both movers
+  'mean_move_ms', // NEW (D-08): mean wall-clock ms per BOT-ONLY move (search cost)
 ];
 
 const LEDGER_COL_INDEX = new Map(RAW_LEDGER_COLUMNS.map((name, i) => [name, i]));
 
 /** One completed game rendered as a raw-ledger TSV line (both passes stream here). */
-function ledgerRowLine(row) {
+export function ledgerRowLine(row) {
   const nf = row.nearFree;
   return [
     row.pass,
@@ -1229,11 +1231,13 @@ function ledgerRowLine(row) {
     nf.sfAgree,
     nf.maiaComparable,
     nf.maiaAgree,
+    row.elapsedMs,
+    row.meanMoveMs === null || row.meanMoveMs === undefined ? '' : row.meanMoveMs,
   ].join('\t');
 }
 
 /** Durable per-game ledger writer (one `writeRow` the instant each game finishes, WR-01). */
-function openLedgerWriter(filePath, { append = false } = {}) {
+export function openLedgerWriter(filePath, { append = false } = {}) {
   fs.mkdirSync(path.dirname(filePath), { recursive: true });
   const stream = fs.createWriteStream(filePath, { encoding: 'utf8', flags: append ? 'a' : 'w' });
   if (!append) stream.write(`${RAW_LEDGER_COLUMNS.join('\t')}\n`);
@@ -1285,6 +1289,13 @@ async function playCellAnchorGames({ Chess, providers, pool, botElo, botBlend, a
       `[calibration-harness] game ${idx} (${pass}): elo=${botElo} blend=${botBlend} ` +
         `anchor=${anchorSpecLabel(anchorSpec)} opening=${opening.name} botIsWhite=${botIsWhite}`,
     );
+    // D-08: per-game wall-clock accumulators — elapsedMs sums EVERY ply (both
+    // movers); botMoveMsSum/botMoveCount track BOT-ONLY moves for the mean
+    // search cost. Ledger-only (RAW_LEDGER_COLUMNS); never threaded into the
+    // near-free/-cells.tsv aggregate machinery this phase.
+    let elapsedMs = 0;
+    let botMoveMsSum = 0;
+    let botMoveCount = 0;
     const result = await playGame({
       Chess,
       providers,
@@ -1295,8 +1306,14 @@ async function playCellAnchorGames({ Chess, providers, pool, botElo, botBlend, a
       startFen: opening.fen,
       botIsWhite,
       gameRng,
-      onPly: (p) =>
-        console.log(`[calibration-harness]   ply ${p.ply} (${p.mover}) ${p.uci} took ${(p.moveMs / 1000).toFixed(2)}s`),
+      onPly: (p) => {
+        console.log(`[calibration-harness]   ply ${p.ply} (${p.mover}) ${p.uci} took ${(p.moveMs / 1000).toFixed(2)}s`);
+        elapsedMs += p.moveMs;
+        if (p.mover === 'bot') {
+          botMoveMsSum += p.moveMs;
+          botMoveCount++;
+        }
+      },
       // Phase 184 CAL-04: forwarded (undefined for the existing bot-cell sweep
       // paths below — a future persona-cell sweep script passes a real
       // BotStyleParams bundle here).
@@ -1319,6 +1336,8 @@ async function playCellAnchorGames({ Chess, providers, pool, botElo, botBlend, a
       seed: args.seed,
       gitSha,
       nearFree: result.nearFree,
+      elapsedMs: Math.round(elapsedMs),
+      meanMoveMs: botMoveCount > 0 ? botMoveMsSum / botMoveCount : null,
     });
     foldGameIntoCellAnchor(stat, { result: result.result, botIsWhite, plies: result.plies, nearFree: result.nearFree });
     moves += result.plies;
@@ -1406,7 +1425,7 @@ async function measureCellPass({ Chess, providers, pool, botElo, botBlend, brack
 // ─── --resume: replay the raw ledger (mirrors calibration-anchor-ladder.mjs) ───
 
 /** Parses one prior raw-ledger line into a reconstructed game record. */
-function parsePriorLedgerRow(line, filePath) {
+export function parsePriorLedgerRow(line, filePath) {
   const cells = line.split('\t');
   if (cells.length !== RAW_LEDGER_COLUMNS.length) {
     throw new Error(`--resume: malformed ledger row in ${filePath} (${cells.length} columns): ${line}`);
@@ -1435,11 +1454,15 @@ function parsePriorLedgerRow(line, filePath) {
       maiaComparable: int('maia_comparable'),
       maiaAgree: int('maia_agree'),
     },
+    elapsedMs: int('elapsed_ms'),
+    // D-08: an empty/absent mean_move_ms cell (e.g. a zero-bot-move game) must
+    // reconstruct as null, not NaN — Number.parseFloat('') is NaN.
+    meanMoveMs: get('mean_move_ms') === '' ? null : Number.parseFloat(get('mean_move_ms')),
   };
 }
 
 /** Reads + validates a prior raw ledger — refuses (WR-02) a truncated final line or schema mismatch. */
-function readPriorLedgerRows(filePath) {
+export function readPriorLedgerRows(filePath) {
   let content;
   try {
     content = fs.readFileSync(filePath, 'utf8');

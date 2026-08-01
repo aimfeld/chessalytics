@@ -45,7 +45,8 @@
 - ✅ **v2.7 Bot Personas & Playstyle Layer** — Phases 182–185 (shipped 2026-07-23; deployed to production, PRs through #275) — a roster of 24 named bot personas (4 styles × 6 ELO rungs, 800–1800) on the Bots page, each a complete pinned opponent (preset, calibrated ELO, style params, opening book, resign/draw-offer policy, avatar, bio). Style levers land first (Phase 182), then the persona registry + Bots page UI (Phase 183), then per-persona harness calibration replaces the provisional labels with measured values (Phase 184, `PERSONA_CALIBRATION_MEASURED=true`), then the roster is re-laid-out as a rung-ladder grid with per-persona win stars (Phase 185) (SEED-098) — see [milestones/v2.7-ROADMAP.md](milestones/v2.7-ROADMAP.md)
 - ✅ **v2.8 Import Filters and Guest Data Cleanup** — Phases 186–188 (shipped 2026-07-24) — user-facing import filters (time-control multiselect + per-platform game cap) on the Import tab to keep storage and Stockfish compute in check, with backward backfill on filter upgrades and grandfathering for existing users (Phase 186, SEED-117); a daily background job that prunes game data for guests inactive ≥30 days while keeping the guest account + auth (Phase 187, SEED-116); and import/eval pipeline cleanup retiring completed backfill machinery while keeping `resweep_holed_games` and tiers 4/4b as permanent safety nets (Phase 188, SEED-115) — see [milestones/v2.8-ROADMAP.md](milestones/v2.8-ROADMAP.md)
 - ✅ **v2.9 Train — Spaced-Repetition Blunder Drills** — Phases 189–193 (incl. 190.1) (shipped 2026-07-30; deployed to production, releases through #290) — a new import-gated `/train` page turns the user's own blunders into spaced-repetition puzzles: a per-(user, flaw) drill pool + interval-ladder scheduler (Phase 189), the full client-graded solve loop with binary position read, single-move attempt and reveal (Phase 190), an engine-consistent reveal with arrows and three steppable lines (Phase 190.1), weekly schedule + nav badge + celebrations + honest mastered/parked counts (Phase 191), a precomputed MultiPV-5-vetted global red-herring position pool replacing the structurally-broken `game_best_moves` sourcing (Phase 192, SEED-120), and a session-tick streak with a depletable 7-pip shield replacing the weekly streak (Phase 193, SEED-121) — see [milestones/v2.9-ROADMAP.md](milestones/v2.9-ROADMAP.md)
-- ⏳ **v2.10 FlawChess Engine Improvements** — Phases 194–199 (in progress) — eliminate the engine's measured structural waste (main-thread jank, undersized thrashing provider caches, an over-deep flat grading ladder, a discarded Maia WDL head, Maia/Stockfish idling against each other), then light up dormant Stockfish root injection on the analysis board and re-establish honest bot strength labels in one final calibration sweep (SEED-126, SEED-127, SEED-118)
+- ✅ **v2.10 FlawChess Engine Improvements** — Phases 194–199 (shipped 2026-08-01) — eliminate the engine's measured structural waste (main-thread jank, undersized thrashing provider caches, an over-deep flat grading ladder, a discarded Maia WDL head, Maia/Stockfish idling against each other), then light up dormant Stockfish root injection on the analysis board and re-establish honest bot strength labels in one final calibration sweep (SEED-126, SEED-127, SEED-118) — see [milestones/v2.10-ROADMAP.md](milestones/v2.10-ROADMAP.md)
+- ⏳ **v2.11 Train Solve Surface & Push Reminders** — Phases 200–202 (in progress) — make the Train solve screen readable and self-contained (sidebar-as-legend with per-move arrow glyphs + hover/tap spotlight, `inaccuracy`-tier alternatives recolored green, inline sideline exploration that never leaves the flow), then close the retention loop with web push reminders on the days the scheduler actually picked (push infrastructure + reminder job, then a one-shot-permission-safe pre-prompt UX) (SEED-131, SEED-132 Phase A)
 
 ## Progress
 
@@ -157,11 +158,14 @@
 | 196. Analysis-board Stockfish root injection (SEED-118, v2.10) | 3/3 | Complete | 2026-07-31 |
 | 197. Maia WDL leaf values (SEED-126 Phase 6, v2.10) | 4/4 | Complete (measured, not shipped — LEAF-01 rejected) | 2026-07-31 |
 | 198. mctsSearch continuous dispatch (SEED-127, v2.10) | 5/8 | Closed (measured, not shipped — operator risk judgement) | 2026-07-31 |
-| 199. Bot re-calibration sweep + strength curve refit (v2.10) | 0/TBD | Not started | - |
+| 199. Bot re-calibration sweep + strength curve refit (v2.10) | 7/7 | Complete (parity HOLDS, no calibration artifact refit) | 2026-08-01 |
+| 200. Train Solve Screen — Board Legend & Inline Sideline Exploration (SEED-131, v2.11) | 4/4 | Complete | 2026-08-01 |
+| 201. Push Infrastructure & Train Reminders (SEED-132 Phase A, v2.11) | 0/TBD | Not started | - |
+| 202. Reminder Permission UX (SEED-132 Phase A, v2.11) | 0/TBD | Not started | - |
 
 ## v2.10 FlawChess Engine Improvements (In Progress)
 
-Eliminate the engine's measured structural waste — main-thread jank, undersized thrashing provider caches, an over-deep flat grading ladder, a discarded Maia WDL head, and Maia/Stockfish idling against each other — then light up dormant Stockfish root injection on the analysis board and re-establish honest bot strength labels in one final calibration sweep. Sourced from SEED-126 (throughput + main-thread cost, measured 2026-07-30), SEED-127 (continuous dispatch), and SEED-118 (analysis-board root injection); no project-level research pass was run — the three seeds carry the measured wall-clock data, per-file breadcrumbs, rejected alternatives, and locked design decisions that stand in for it. Sequencing is load-bearing and non-negotiable — all five source units edit `dispatchExpansion`, so the committed order is **194 → 195 → 196 → 197 → 198 → 199**: Phase 194 (cheap, no calibration dependency) lands first; Phase 195 (the depth ladder) lands next with its own calibration recorded before anything else touches leaf evaluation; Phase 196 (root injection, small and localised) follows, made cheap by Phase 194's cache work and Phase 195's throughput win; Phase 197 (Maia WDL leaves, its own calibration) re-validates Phase 196's headline number after landing; Phase 198 (continuous dispatch) is the riskiest change in the codebase, rewriting the same `dispatchExpansion` region Phase 196 touched and requiring a paper design + cross-AI review before implementation; Phase 199 closes the milestone with one combined calibration sweep covering Phases 195/197/198's strength changes together — an accepted trade-off (2026-07-30) that forfeits per-change attribution to spend operator hours once rather than three times.
+Eliminate the engine's measured structural waste — main-thread jank, undersized thrashing provider caches, an over-deep flat grading ladder, a discarded Maia WDL head, and Maia/Stockfish idling against each other — then light up dormant Stockfish root injection on the analysis board and re-establish honest bot strength labels in one final calibration sweep. Sourced from SEED-126 (throughput + main-thread cost, measured 2026-07-30), SEED-127 (continuous dispatch), and SEED-118 (analysis-board root injection); no project-level research pass was run — the three seeds carry the measured wall-clock data, per-file breadcrumbs, rejected alternatives, and locked design decisions that stand in for it. Sequencing is load-bearing and non-negotiable — all five source units edit `dispatchExpansion`, so the committed order is **194 → 195 → 196 → 197 → 198 → 199**: Phase 194 (cheap, no calibration dependency) lands first; Phase 195 (the depth ladder) lands next with its own calibration recorded before anything else touches leaf evaluation; Phase 196 (root injection, small and localised) follows, made cheap by Phase 194's cache work and Phase 195's throughput win; Phase 197 (Maia WDL leaves, its own calibration) re-validates Phase 196's headline number after landing; Phase 198 (continuous dispatch) is the riskiest change in the codebase, rewriting the same `dispatchExpansion` region Phase 196 touched and requiring a paper design + cross-AI review before implementation; Phase 199 closes the milestone with a 5-cell parity check plus a timing measurement against Phase 195's grading ladder — the only one of the three anticipated strength changes that actually shipped (197's leaf value was rejected, 198 was never built), which makes Phase 199 a single-change gate rather than the combined-sweep-with-forfeited-attribution originally planned.
 
 ### Phase 194: Engine main-thread + cache hygiene
 
@@ -387,21 +391,144 @@ Plans:
 
 ### Phase 199: Bot re-calibration sweep + strength curve refit
 
-**Goal**: Run one combined, operator-supervised overnight `calibration-harness.mjs` sweep against the fully-changed engine (ladder + Maia WDL leaves + continuous dispatch, all present together) and refit the shipping bot-strength lookup and the 24 persona ELO labels from it — the sweep itself is the deliverable, in the same resume-on-crash shape as v2.7 Phase 184, with the combined-sweep attribution trade-off recorded explicitly rather than implied.
+**Goal**: Answer one question with measurement — does the shipped bot still play at roughly the
+same strength after Phase 195's grading ladder, and how much wall clock did the ladder actually buy
+in real games? A 5-cell parity sweep (1 null control + 4 exposed cells, pinned to the recorded
+2026-07-21 anchor brackets) plus 2 persona spot-checks, compared against the committed 2026-07-21
+numbers under a threshold pre-registered before the run, with a game-level D-08 timing measurement.
+Not a refit: `bot-strength-lookup.json`/`botStrengthCurves.ts`/`persona-calibration.json` are
+refit only if parity fails, and that refit is a separate operator decision outside this phase (D-04).
 
-**Depends on**: Phase 195 (ladder), Phase 197 (Maia WDL leaves), Phase 198 (continuous dispatch) — all three strength-changing phases must be present in the engine before this sweep runs
+**Depends on**: Phase 195 (the grading ladder) — the only one of the milestone's three anticipated
+strength changes that actually shipped; Phase 197's Maia WDL leaf value was rejected (mechanism
+stripped) and Phase 198's continuous dispatch was never built, so this phase does not depend on either
 
 **Requirements**: RECAL-01, RECAL-02, RECAL-03, RECAL-04, RECAL-05
 
 **Success Criteria** (what must be TRUE):
 
-  1. A full `calibration-harness.mjs` sweep runs against the final engine (ladder + Maia WDL leaves + continuous dispatch all present together), producing a durable per-cell strength-map ledger (RECAL-01).
-  2. `reports/data/bot-strength-lookup.json` and the generated `frontend/src/generated/botStrengthCurves.ts` are refit from the new sweep and pass the CI drift check (RECAL-02).
-  3. The 24 persona ELO labels reflect the refit curves, keeping the D-04 within-style monotonicity and the D-07 ceiling clamp honest (RECAL-03).
-  4. The sweep survives a crash (the known wasm OOB failure mode on long runs) via resume rather than restarting from zero, operator-supervised overnight the same way as v2.7 Phase 184 (RECAL-04).
-  5. The milestone artifacts explicitly record the combined-sweep attribution limitation: the measured strength delta is a property of the whole milestone, not assignable to the ladder, Maia WDL leaves, or continuous dispatch individually (RECAL-05).
+  1. A 5-cell parity sweep (1 blend-0 null control + 4 blend>0 exposed cells) runs `calibration-harness.mjs` against the shipped engine on each cell's pinned 2026-07-21 four-anchor bracket, producing a durable per-game ledger with wall-clock timing columns (RECAL-01).
+  2. `reports/data/bot-strength-lookup.json` and `frontend/src/generated/botStrengthCurves.ts` are refit **only if parity fails** — a separate authorized operator decision outside this phase; if parity holds, both stay byte-identical and the CI drift check passes because nothing regenerated (RECAL-02, **conditional, untriggered — parity held**).
+  3. The 8 rung-1600/1800 persona ELO labels (not 24 — the other 16 are structurally immune, `HUMAN_BLEND`) are relabelled only under RECAL-02's condition (RECAL-03, **conditional, untriggered — parity held**).
+  4. The ledger `--resume` byte-identity contract and the supervisor's crash loop are plumbing-verified, with the pinned anchor set threaded through so a resumed relaunch matches (RECAL-04).
+  5. The report attributes the measured delta (or its absence) to Phase 195's grading ladder alone, with three stated fidelity limits: SEED-130 hash-clearing divergence, the achieved pooled resolution per family, and the blend-0 16-persona immunity (RECAL-05).
+
+**Plans:** 7/7 plans complete
+
+> **Re-scoped 2026-07-31** from an originally-planned combined three-change sweep (ladder + Maia
+> WDL leaves + continuous dispatch) to the 5-cell parity check above, once it turned out only the
+> ladder shipped a strength change. Authoritative scope: `199-CONTEXT.md` `<domain>`. Verdict:
+> parity HOLDS (`reports/bot-parity-199/report.md`).
+
+Plans:
+
+**Wave 1**
+
+- [x] 199-01-PLAN.md — Wave 1. Ledger instrument: append `elapsed_ms`/`mean_move_ms` to the harness raw ledger, export the five ledger symbols, prove the path with a tiny end-to-end run, and pin the schema with a new `.check.mjs` (RECAL-01, RECAL-04)
+- [x] 199-02-PLAN.md — Wave 1. Pre-register the parity threshold before any data exists: `accept-rule.md` plus `calibration_parity_verdict.py` with the per-family constants (85.0 Maia / 50.0 SF pooled, 165.0 / 149.0 null-control) and a synthetic `--self-test` (RECAL-01, RECAL-02, RECAL-03)
+- [x] 199-03-PLAN.md — Wave 1. Runner seams: `PRESET_SUPERVISOR_ANCHORS` so pinned brackets keep crash supervision, and `PERSONA_SWEEP_DATA_DIR` so the persona spot-check does not silently no-op against the 2026-07-23 out-dirs (RECAL-01, RECAL-03, RECAL-04)
+
+**Wave 2** *(blocked on Wave 1)*
+
+- [x] 199-04-PLAN.md — Wave 2. Commit the runbook, lock the pre-registration behind a blocking decision checkpoint, and launch the 5 pinned-bracket cells under the supervisor. Operator-run (RECAL-01, RECAL-04)
+
+**Wave 3** *(blocked on Wave 2)*
+
+- [x] 199-05-PLAN.md — Wave 3. Runs while the sweep is in flight: parse the local pre-195 run logs into a committed KB-scale timing baseline, with a self-tested parser that refuses the retired `maia900` scale (RECAL-01, RECAL-05)
+- [x] 199-06-PLAN.md — Wave 3. Sweep completion gate, the 2 persona spot-checks (`attacker-1600` + `wall-1800`, fit suppressed, fresh tree), and the `git add -f` that gets the evidence past `.gitignore`. Operator-run (RECAL-01, RECAL-03, RECAL-04)
+
+**Wave 4** *(blocked on Wave 3)*
+
+- [x] 199-07-PLAN.md — Wave 4. Compute the verdict against the unedited pre-registration (HOLDS), write the report (verdict / timing / attribution / limits), and write the re-scoped RECAL-01..05 back into REQUIREMENTS.md and this ROADMAP (RECAL-01..05)
+
+Wave ordering is load-bearing for a different reason than usual: everything that cannot be fixed
+after launch — the ledger columns, the pre-registered threshold, the pinned-bracket seam — is
+front-loaded into Wave 1, because the operator's working style for this phase is "start it and
+observe early results". Plan 05 is deliberately concurrent with plan 06's multi-hour wait.
+
+## v2.11 Train Solve Surface & Push Reminders (In Progress)
+
+Make the Train solve screen readable and self-contained, then close the retention loop with web push reminders on the days the scheduler actually picked. Sourced from two `/gsd-explore` sessions: SEED-131 (solve-screen legend + inline sideline exploration, 2026-07-31) and SEED-132 Phase A (push notifications, 2026-08-01); no project-level research pass was run — both seeds carry locked decisions, named rejected alternatives, and per-file implementation anchors that stand in for it. Sequencing is a milestone-start decision, not re-derived here: **SEED-131 ships first (Phase 200)** because it is frontend-only with no migration and no external dependency, so **SEED-132's phases (201, 202)** run afterward without competing for the same files — the two tracks share no source files. Within SEED-132, Phase 201 (push infrastructure + the reminder job) must land before Phase 202 (the permission UX) can mean anything — there is no point prompting a user to enable reminders that no scheduler can yet send. SEED-132 Phase B (install promotion, desktop→phone QR handoff, Android `beforeinstallprompt`, the iOS install-then-permission path) is deliberately deferred out of this milestone on a BrowserStack dependency the operator does not have, and does not appear as a phase here — the seed stays open in `.planning/seeds/`.
+
+### Phase 200: Train Solve Screen — Board Legend & Inline Sideline Exploration
+
+**Goal**: Make the post-solve reveal board self-explanatory instead of an unreadable stack of overlapping arrows, and let a user explore "why didn't my move work" without ever leaving the Train solve screen — frontend-only, no backend or puzzle-pool change.
+
+**Depends on**: Nothing (first phase of v2.11; continues after Phase 199)
+
+**Requirements**: LEGEND-01, LEGEND-02, LEGEND-03, LEGEND-04, LEGEND-05, LEGEND-06, EXPLORE-01, EXPLORE-02, EXPLORE-03, EXPLORE-04, EXPLORE-05, EXPLORE-06, EXPLORE-07
+
+**Plan-time decisions to resolve explicitly (not default)**: which Stockfish instance powers inline exploration is a real open question, not a default — reusing the session-scoped, already-warm `useTrainGradingEngine` vs. mounting the Analysis page's Stockfish hook alongside it. Two concurrent WASM engines on one page runs into the mobile OOM history documented for the Maia iOS work; the grading engine's API is search-task-shaped (`gradeMove`, `startGameMoveSearch`) while live exploration wants continuous MultiPV eval of an arbitrary FEN with cancel-on-position-change semantics. Resolve during phase research whether the grading engine can serve both without disturbing in-flight grading of the next puzzle, or whether a shared engine with a priority queue is needed.
+
+**Success Criteria** (what must be TRUE):
+
+  1. Each reveal line box (Your move / Best move / Played in game, including a coincidence-merged box such as "Your move / Best move") carries a small arrow glyph in that move's exact board-arrow color before its title, so the sidebar functions as the board's own legend (LEGEND-01).
+  2. Hovering a sidebar arrow glyph on desktop, or tapping it on mobile at 375px, hides every other arrow and quality badge on the board — leaving only that box's move visible — and releasing or tapping away restores the full overlay (LEGEND-02, LEGEND-06).
+  3. The reveal board shows no yellow: `inaccuracy`-tier alternatives render in the same green as `good`-tier ones (matching the grading verdict's own language), and any alternatives beyond the drawn arrows appear in a compact "Also fine: Nc4, Rd8" sidebar row (SAN tokens only, no steppable lines) whose green glyph participates in the spotlight; the spotlight filter and the green recolor live in the pure `trainArrows.ts` overlay builder and are unit-tested, so a regression fails CI rather than only showing up on a board (LEGEND-03, LEGEND-04, LEGEND-05).
+  4. Post-solve, moving a piece anywhere on the shared board — including from a position stepped into via a reveal line box, whose stepped prefix moves seed the exploration move list (the "why didn't my move work" flow) — starts sideline exploration immediately with no mode toggle to discover and no second board (EXPLORE-01, EXPLORE-02).
+  5. The moment exploration starts, the reveal boxes give way to a Stockfish engine-lines card plus a move list of the explored line (no Maia card, no FlawChess engine card) and the solution arrows clear; the Solution button exits exploration and restores the full reveal (boxes + arrows) alongside its `solutionNonce` stepper reset; the Analyze button still deep-links unchanged to the full Analysis page; exploration state and any running engine search tear down cleanly on puzzle transition, Next, and unmount, with no search outliving its position or disturbing grading of the next puzzle; and all of this — including the sidebar swap — renders correctly in the mobile below-board layout at 375px (EXPLORE-03, EXPLORE-04, EXPLORE-05, EXPLORE-06, EXPLORE-07).
+
+**Plans**: 4 plans in 4 strictly sequential waves — parallelism is zero by construction, because all four touch `TrainReveal.tsx` and `TrainSolveScreen.tsx`.
+
+**Plan-time decision resolved**: inline exploration mounts a SECOND, independent `useStockfishEngine` instance scoped `enabled: isExploring`, alongside the untouched session-scoped `useTrainGradingEngine`. Neither a repurposed grading engine nor a shared priority queue: grading is idle throughout the reveal/exploration window, the two are separate `Worker` objects, and `useStockfishEngine` already ships the debounce, stale-search discard, and teardown-on-`enabled`-toggle EXPLORE-05 needs. Recorded as an `add-alongside` assumption delta in `200-03-PLAN.md`.
+
+Plans:
+**Wave 1**
+
+- [x] 200-01-PLAN.md — Wave 1. Legend spotlight tracer: pure `applyTrainSpotlight` + `trainGlyphColor`, `ArrowGlyphIcon`, `Card`/`CardHeader` line boxes (D-01), desktop card-hover vs mobile glyph-tap split (LEGEND-01, LEGEND-02, LEGEND-05, LEGEND-06)
+
+**Wave 2** *(blocked on Wave 1 completion)*
+
+- [x] 200-02-PLAN.md — Wave 2. Yellow removal across all five reveal sites via `toDisplayQuality`, plus the compact "Also fine" row derived from a new `alsoFineMoves` overlay field (LEGEND-01, LEGEND-03, LEGEND-04, LEGEND-05, LEGEND-06)
+
+**Wave 3** *(blocked on Wave 2 completion)*
+
+- [x] 200-03-PLAN.md — Wave 3. `prefixUci` threading, `useTrainExploration`, the post-verdict `handlePieceDrop` branch, Solution exit + visibility gate, and the second Stockfish instance (EXPLORE-01, EXPLORE-02, EXPLORE-03, EXPLORE-04, EXPLORE-05, EXPLORE-06)
+
+**Wave 4** *(blocked on Wave 3 completion)*
+
+- [x] 200-04-PLAN.md — Wave 4. Exploration UI swap: `TrainExplorationLine`, the `EngineLines` card, PV click-to-play, and a blocking 375px browser UAT (EXPLORE-03, EXPLORE-07, LEGEND-06)
+
+**UI hint**: yes
+
+### Phase 201: Push Infrastructure & Train Reminders
+
+**Goal**: The backend can reliably deliver a Train session reminder to any of a user's subscribed devices, on the day their schedule picks and at their chosen local hour, with no blocking call on the event loop and no push vendor or paid dependency — a capability with no user-facing surface yet (Phase 202 builds that).
+
+**Depends on**: Phase 200 (sequencing decision, not a technical dependency — SEED-131 ships first per the milestone-start scope call, since the two tracks share no source files; landing it first keeps them from competing over the same review window)
+
+**Requirements**: PUSH-01, PUSH-02, PUSH-03, PUSH-04, PUSH-05, PUSH-06, REMIND-01, REMIND-02, REMIND-03, REMIND-04, REMIND-05, REMIND-06, REMIND-07, REMIND-08
+
+**Plan-time decisions to resolve explicitly (not default)**: the web-push library choice is an unresolved research blocker owned by this phase, not a milestone-level decision — `pywebpush` depends on `requests`, which CLAUDE.md prohibits ("always use `httpx.AsyncClient` — `requests` blocks the event loop"). Evaluate the three named candidates (a maintained async web-push library, `pywebpush` run in a threadpool executor, or hand-rolled VAPID JWT + `aes128gcm` payload encryption on `cryptography` over `httpx`) and resolve before planning — the choice decides whether the send path is a thin wrapper or a real crypto implementation task and materially affects this phase's size. Also decide and document, rather than discover: the VAPID rotation policy (rotation invalidates every existing subscription — acceptable, or does it need a migration path?); the fan-out rule for a user with several subscribed devices (all devices vs. most-recently-active); and the scheduler's placement (the natural seam is beside `run_periodic_guest_cleanup` as another `asyncio.create_task` in `app/main.py`, but it needs the REMIND-05 idempotency guard) and its dev-testability path, since the reminder job has no request context and cannot read `X-Dev-Clock-Offset-Minutes`.
+
+**Success Criteria** (what must be TRUE):
+
+  1. A `push_subscriptions` table stores one row per device-per-browser with a CASCADE FK to `user_id`, so a desktop subscription and a phone subscription expire independently; a subscription the push service reports as `410 Gone` (or `404`) is pruned automatically, so dead endpoints never accumulate and silently degrade fan-out (PUSH-01, PUSH-02).
+  2. Every push is signed by a locally generated VAPID keypair (public key delivered to the client at subscribe time, private key only in `/opt/flawchess/.env`, never committed, with its rotation effect on existing subscriptions decided and documented rather than discovered), sent with no push vendor, Firebase SDK, or paid developer-program dependency, and the send path makes no blocking HTTP call from the event loop — `requests` never enters the request or scheduler path (PUSH-03, PUSH-04, PUSH-05).
+  3. `push-sw.js` supplies the `push` and `notificationclick` handlers via `workbox.importScripts`, with the existing hand-tuned `generateSW` workbox config (navigateFallback, globIgnores, wasm/onnx exclusions, `/api/*` NetworkOnly ordering) left completely unchanged (PUSH-06).
+  4. `train_settings` carries `reminder_enabled` and `reminder_hour` (default 18 local), defaulted through `get_or_create_settings` the same way as the existing `weekday_mask`/`puzzles_per_session` fields; a background job ticking at least every 15 minutes sends a reminder only on a day the user's `weekday_mask` schedules (reusing `train_scheduler`'s existing day predicates rather than re-deriving weekday math) and only once per user per day even across a backend restart inside the tick window (REMIND-01, REMIND-02, REMIND-03, REMIND-05).
+  5. A user who already completed a session that day receives no reminder even after their configured hour has passed; a user with several subscribed devices is fanned out to by one explicit, documented rule (not by accident); guests never receive a reminder (no puzzle pool exists for them); and a developer can trigger a reminder send on demand in development without waiting for the real clock hour (REMIND-04, REMIND-06, REMIND-07, REMIND-08).
 
 **Plans**: TBD
+
+### Phase 202: Reminder Permission UX
+
+**Goal**: A user who has just proven Train is worth their time can opt into push reminders through a flow that can never trigger a permanent browser-level denial, and can manage that choice from Settings at any point afterward — the user-facing surface that makes Phase 201's infrastructure worth having.
+
+**Depends on**: Phase 201 (push infrastructure and the reminder job must exist for a permission grant to mean anything)
+
+**Requirements**: PERM-01, PERM-02, PERM-03, PERM-04
+
+**Success Criteria** (what must be TRUE):
+
+  1. After completing their first Train session, a user sees a custom in-app pre-prompt on `TrainScoreScreen` with Yes / Not now; only the Yes path calls the real browser permission API (PERM-01).
+  2. Choosing "Not now" leaves the user able to opt in later and is never repeated as a nag — no path pushes the user toward the one browser prompt that can permanently deny them (PERM-02).
+  3. `TrainScheduleSettings` hosts a master reminder toggle and an hour picker with the same auto-saving behavior as its existing weekday and session-size pickers, so a user who declined the pre-prompt can subscribe later from Settings (PERM-03).
+  4. Turning the master toggle off immediately silences reminders inside FlawChess without touching the underlying browser permission grant, so a user who turns it back on later is still reachable (PERM-04).
+
+**Plans**: TBD
+
+**UI hint**: yes
 
 ## Backlog
 

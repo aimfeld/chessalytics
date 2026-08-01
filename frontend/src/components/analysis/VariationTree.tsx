@@ -27,6 +27,8 @@ import type { HorizontalMoveItem } from '@/components/board/HorizontalMoveList';
 import { BlunderIcon, MistakeIcon } from '@/components/icons/SeverityGlyphIcon';
 import { GemIcon } from '@/components/icons/GemIcon';
 import { GreatMoveIcon } from '@/components/icons/GreatMoveIcon';
+import { BestMoveIcon } from '@/components/icons/BestMoveIcon';
+import { GoodMoveIcon } from '@/components/icons/GoodMoveIcon';
 import { BookIcon } from '@/components/icons/BookIcon';
 import { GemMoveBadge } from '@/components/analysis/GemMoveBadge';
 import { moveLabel } from '@/lib/moveNumberLabel';
@@ -53,7 +55,8 @@ function zebraBg(rowIdx: number): string {
 
 /**
  * Icon + visibility for a flaw entry's move-list marker. Precedence chain
- * `severity > gem/great > book` (163-REVIEW WR-05; extended Phase 172,
+ * `severity > gem/great > best/good > book` (163-REVIEW WR-05; extended Phase
+ * 172,
  * SEED-106 D-08; extended Phase 175, SEED-108 with great sitting alongside
  * gem in the same tier). Severity wins over gem/great: within the live
  * pipeline they are mutually exclusive by construction, but a BACKEND
@@ -85,6 +88,13 @@ function resolveMarkerIcon(flaw: FlawMarkerEntry | undefined): {
   if (flaw?.great) {
     return { show: true, Icon: GreatMoveIcon, isGem: false, isGreat: true };
   }
+  // Phase 200 UAT: the positive non-Maia tiers, set only by Train's free-play
+  // move list (`useTrainFreePlay`). The Analysis page never populates them, so
+  // its own markers are unchanged. They sit BELOW gem/great deliberately: a
+  // surface that has Maia available should still say "gem", and a surface that
+  // does not (Train) simply labels the same move `best`.
+  if (flaw?.best) return { show: true, Icon: BestMoveIcon, isGem: false, isGreat: false };
+  if (flaw?.good) return { show: true, Icon: GoodMoveIcon, isGem: false, isGreat: false };
   // IN-01 (172-deferred-review-findings.md): the `isBook` field this function
   // used to also return was never read by any caller (MoveListMarker below
   // only destructures show/Icon/isGem/isGreat) — dropped as dead output
@@ -239,6 +249,20 @@ export interface FlawMarkerEntry {
    * severity, gem, and great all override it.
    */
   book?: boolean;
+  /**
+   * Phase 200 UAT: this node's arrival move is the engine's own best move —
+   * renders `BestMoveIcon`. Set only by Train's free-play move list, which
+   * runs no Maia and therefore labels what the Analysis page would call a gem
+   * or a great move simply "best". The Analysis page never sets this.
+   */
+  best?: boolean;
+  /**
+   * Phase 200 UAT: this node's arrival move is clean but not the best move —
+   * renders `GoodMoveIcon`. Same Train-only provenance as `best`; an
+   * inaccuracy is presentation-collapsed into this tier by the caller
+   * (`toDisplayQuality`), matching the Train reveal board.
+   */
+  good?: boolean;
   /** FlawMarker.ply — passed to onPvChipClick for the useTacticLines fetch key
    *  (this node's own flaw — allowed chip + severity glyph). */
   ply: number;

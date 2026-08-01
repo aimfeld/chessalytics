@@ -42,6 +42,16 @@
 #   bin/run_persona_calibration_sweep.sh --no-fit        # sweep only; skip combine + fit
 #   bin/run_persona_calibration_sweep.sh --personas attacker-1200,wall-1800  # a subset (testing)
 #
+# Env overrides (optional, default preserves the original behavior):
+#   PERSONA_SWEEP_DATA_DIR  base data dir for this run (default reports/data). A
+#                           persona re-measurement (e.g. Phase 199's spot-check
+#                           of attacker-1600/wall-1800) must NOT reuse
+#                           reports/data/persona-sweep-<id>/ — that dir already
+#                           holds a completed aggregate, and preset-supervisor.sh's
+#                           cells_present completion check would treat the stale
+#                           aggregate as "already done" and exit without playing
+#                           a single game (Phase 199, first caller of this override).
+#
 # Resume: each persona's out-dir holds its own ledger; a killed run auto-
 # resumes via the supervisor loop on the next invocation. Personas that
 # already have a `-cells.tsv` (cells_present, per preset-supervisor.sh) are
@@ -56,7 +66,7 @@ GAMES_PER_CELL=24
 RUN_FIT=1
 PERSONAS_FILTER=""
 
-DATA_DIR="reports/data"
+DATA_DIR="${PERSONA_SWEEP_DATA_DIR:-reports/data}"
 HOOK="./scripts/lib/frontend-alias-hook.mjs"
 SUPERVISOR="bin/preset-supervisor.sh"
 FITTER="scripts/calibration_persona_fit.py"

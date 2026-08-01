@@ -264,10 +264,14 @@ describe('Train solve loop (end-to-end tracer)', () => {
     });
 
     await waitFor(() => expect(screen.getByTestId('train-verdict-guess')).not.toBeNull());
-    expect(screen.getByTestId('train-verdict-guess').textContent).toContain('✓');
-    // UAT round 3: the move verdict is the Your-move box's header mark, not a
-    // separate row.
-    expect(screen.getByTestId('train-line-box-your-move').textContent).toContain('✓');
+    expect(screen.getByTestId('train-verdict-guess-points').textContent).toBe('+1');
+    // UAT round 3: the move verdict is the Your-move box's own score chip
+    // (a good move scores 2), not a separate row and no longer a check mark.
+    expect(
+      screen
+        .getByTestId('train-line-box-your-move')
+        .querySelector('[data-testid="train-line-stepper-points"]')?.textContent,
+    ).toBe('+2');
     expect(screen.getByTestId('btn-train-next')).not.toBeNull();
 
     // 190-05 D-08: once the reveal opens, the board snaps back to the puzzle
@@ -525,8 +529,12 @@ describe('Train solve loop (end-to-end tracer)', () => {
     // next unsolved (which the general formula would report as 2 of 2).
     expect(screen.getByTestId('train-progress').textContent).toBe('1 of 2');
     // Verdicts render from the cache: guess correct, move incorrect.
-    expect(screen.getByTestId('train-verdict-guess').textContent).toContain('✓');
-    expect(screen.getByTestId('train-line-box-your-move').textContent).toContain('✗');
+    expect(screen.getByTestId('train-verdict-guess-points').textContent).toBe('+1');
+    expect(
+      screen
+        .getByTestId('train-line-box-your-move')
+        .querySelector('[data-testid="train-line-stepper-points"]')?.textContent,
+    ).toBe('+0');
     // No mount grading search for an already-solved puzzle — the engine
     // handshakes but never receives a `go`.
     expect(fakeWorker.goCount).toBe(0);

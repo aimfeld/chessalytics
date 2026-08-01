@@ -33,7 +33,7 @@
  */
 
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import type { ReactElement } from 'react';
+import type { CSSProperties, ReactElement } from 'react';
 import { Chess, type Move } from 'chess.js';
 import { Loader2, Search, Volume2, VolumeX } from 'lucide-react';
 import { Link } from 'react-router-dom';
@@ -48,6 +48,7 @@ import type { TrainRevealStep } from '@/components/train/TrainReveal';
 import type { SolveResponse, TrainPuzzle } from '@/types/train';
 import type { UseTrainSessionResult } from '@/hooks/useTrainSession';
 import { useFitBoardToViewport } from '@/hooks/useFitBoardToViewport';
+import { useTrainFreePlay, uciFromDrop } from '@/hooks/useTrainFreePlay';
 import type { GradeResult, TrainEngineLine, TrainGradingEngine } from '@/hooks/useTrainGradingEngine';
 import { evalToExpectedScore, sideToMoveFromFen } from '@/lib/liveFlaw';
 import { useMarkPlayActive } from '@/lib/playActive';
@@ -57,6 +58,8 @@ import type { CachedTrainReveal } from '@/lib/trainRevealCache';
 import { GUESS_LABELS } from '@/lib/trainGuessLabels';
 import type { Guess } from '@/lib/trainGuessLabels';
 import {
+  applyTrainSpotlight,
+  buildTrainFreePlayArrows,
   buildTrainRevealOverlay,
   buildTrainStepArrows,
   buildTrainStepMarkers,
@@ -146,6 +149,7 @@ const TRAIN_POINTS_FLASH_COLORS: Record<number, { bg: string; fg: string }> = {
   3: { bg: ZONE_SUCCESS, fg: TRAIN_POINTS_FG_ON_DARK },
 };
 
+
 export function TrainSolveScreen({
   puzzle,
   trainSession,
@@ -195,6 +199,37 @@ export function TrainSolveScreen({
   // a quality-colored square highlight, and the line's next move renders as a
   // blue engine arrow.
   const [lineStep, setLineStep] = useState<TrainRevealStep | null>(null);
+  // Phase 200 (EXPLORE-01/02), reworked per Phase 200 UAT: the free-play
+  // branching move tree — reachable only once the verdict has landed
+  // (handlePieceDrop's post-verdict branch below). Seeded from the
+  // stepped-line prefix when there is one (EXPLORE-02), or an empty prefix
+  // from the pristine reveal. Torn down by handleShowSolution (EXPLORE-04) and
+  // the per-puzzle reset effect (EXPLORE-05).
+  //
+  // The hook owns its OWN Stockfish Worker (EXPLORE-05: a second, independent
+  // useStockfishEngine — never a repurposed useTrainGradingEngine) and grades
+  // every freely played move from it. See useTrainFreePlay's docstring.
+  //
+  // `seedEval` hands it the grading engine's verdict for the puzzle position,
+  // so the FIRST free move is graded without waiting for the free-play engine
+  // to re-search a position the solve loop already searched.
+  const freePlaySeedEval = useMemo(
+    () =>
+      gradeResult === null
+        ? null
+        : {
+            cp: gradeResult.bestLine.evalCp,
+            mate: gradeResult.bestLine.evalMate,
+            bestUci: gradeResult.bestMoveUci,
+          },
+    [gradeResult],
+  );
+  const freePlay = useTrainFreePlay({ startFen: puzzle.fen, seedEval: freePlaySeedEval });
+  // Phase 200 (LEGEND-02/D-09): the single active legend spotlight entry —
+  // exactly one line box's move is spotlit at a time, or none. Set by
+  // TrainReveal's hover/focus/tap handlers via onSpotlightChange, filtered
+  // into the board overlay below via applyTrainSpotlight.
+  const [spotlight, setSpotlight] = useState<{ key: string; ucis: string[] } | null>(null);
   // 190.1 UAT round 3: the Solution/Analyze/Next row lives HERE, below the
   // board (each button a third of the board's width). Solution bumps this
   // nonce; the reveal's steppers key their reset on it, snapping the board
@@ -206,6 +241,13 @@ export function TrainSolveScreen({
   // cleared on puzzle transition. The element's CSS animation ends at
   // opacity 0 with fill-mode forwards, so no unmount timer is needed.
   const [pointsFlash, setPointsFlash] = useState<number | null>(null);
+  // Phase 200 UAT round 5: board orientation. Defaults to the solver's own
+  // color (a black-to-move puzzle starts flipped, as it always has) and is
+  // toggled by the free-play board-controls strip. Reset on every puzzle
+  // transition by the same effect that resets the rest of the solve state —
+  // orientation is a per-position affordance, not a session preference.
+  const [flipped, setFlipped] = useState(puzzle.side_to_move === 'black');
+  const handleFlipBoard = useCallback(() => setFlipped((prev) => !prev), []);
   // 191 UAT: the board column shrinks to whatever vertical room the viewport
   // actually leaves (see useFitBoardToViewport) — measured, not a hard-coded
   // chrome estimate, so the button row below the board always keeps its
@@ -278,14 +320,21 @@ export function TrainSolveScreen({
     setGameMoveUci(null);
     setGameMoveLine(null);
     setLineStep(null);
+    setSpotlight(null);
     setPointsFlash(null);
+    setFlipped(puzzle.side_to_move === 'black');
+    // Phase 200 (EXPLORE-05): a puzzle transition tears down any active
+    // exploration session (and, via the hook's `enabled: isExploring` engine
+    // in task 3, its Worker) — the next puzzle always starts in the pristine
+    // reveal state, never mid-sideline.
+    freePlay.reset();
     trainSession.resetSolve();
     if (restoredSolve === null) startGrading(puzzle.fen);
     return () => {
       abortGrading();
     };
-    // eslint-disable-next-line react-hooks/exhaustive-deps -- trainSession.resetSolve is a stable useCallback([]) from the hook; including the whole trainSession object would re-fire this effect every render. restoredSolve only ever changes together with puzzle.fen (Train.tsx pairs them), so puzzle.fen already covers it.
-  }, [puzzle.fen, startGrading, abortGrading]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- trainSession.resetSolve is a stable useCallback([]) from the hook; including the whole trainSession object would re-fire this effect every render. restoredSolve only ever changes together with puzzle.fen (Train.tsx pairs them), so puzzle.fen already covers it — as does puzzle.side_to_move, which is a function of the FEN. freePlay.reset's identity is keyed on puzzle.fen alone, so it changes with (and only with) that dep.
+  }, [puzzle.fen, startGrading, abortGrading, freePlay.reset]);
 
   async function gradeAndSolve(playedGuess: Guess, playedUci: string): Promise<void> {
     setIsGrading(true);
@@ -362,7 +411,36 @@ export function TrainSolveScreen({
     // D-05: board locked until the binary guess is committed.
     if (guess === null) return false;
     // SOLV-02: exactly one attempt per puzzle.
-    if (moveApplied) return false;
+    if (moveApplied) {
+      // Phase 200 (EXPLORE-01/02/D-12): once the verdict has landed, a
+      // further drop starts (or extends) a free-play sideline on this SAME
+      // board — no mode toggle, no second board, no second grading attempt.
+      // Guardrail (Pitfall 3, extended): this branch sits STRICTLY after the
+      // guess and moveApplied guards above, which are what hold SOLV-02 at
+      // exactly one graded attempt — do not reorder them, and do not widen
+      // the graded path (below) to read displayFen.
+      if (verdict === null) return false; // solve/grading still pending
+      // Already in free play: the move tree validates (and forks) the drop
+      // itself, exactly as the analysis board does.
+      if (freePlay.isExploring) {
+        const played = freePlay.playMove(source, target);
+        if (played) {
+          setLineStep(null);
+          setSpotlight(null);
+        }
+        return played;
+      }
+      // Opening move of a free-play session: validate against displayFen —
+      // D-12: the LIVE position on the board (a stepped-into line position, or
+      // the puzzle position), never the frozen boardFen — to derive the UCI
+      // the tree is seeded with.
+      const exploreUci = uciFromDrop(displayFen, source, target);
+      if (exploreUci === null) return false;
+      freePlay.start(lineStep?.prefixUci ?? [], exploreUci);
+      setLineStep(null);
+      setSpotlight(null);
+      return true;
+    }
 
     const chess = new Chess(boardFen);
     let move: Move;
@@ -412,6 +490,17 @@ export function TrainSolveScreen({
   const lastMove = puzzle.last_move_uci
     ? { from: puzzle.last_move_uci.slice(0, 2), to: puzzle.last_move_uci.slice(2, 4) }
     : null;
+
+  // Phase 200 (D-12): the live board position — while exploring, the
+  // exploration hook's replayed FEN is the single source of truth for both
+  // the RENDERED board and handlePieceDrop's exploration-branch move
+  // validation above. Deliberately never `boardFen`: every existing
+  // `setBoardFen` call site is untouched by this plan, so `boardFen` stays
+  // frozen at the pristine/stepped position for the whole exploration
+  // session — validating a sideline drop against it would silently re-impose
+  // a one-color restriction the moment the sideline's side to move flips
+  // (see handlePieceDrop's own comment for the full mechanism).
+  const displayFen = freePlay.isExploring ? (freePlay.fen ?? boardFen) : boardFen;
 
   // T-190-12: the verdict/Next/solve-error row only appears once the local
   // grade+solve pipeline has settled (moveApplied && !isGrading && no
@@ -485,24 +574,77 @@ export function TrainSolveScreen({
     );
   }, [verdict, gradeResult, lastPlayedUci, playedMoveQuality, gameMoveUci, gameMoveQuality]);
 
+  /**
+   * Phase 200 UAT: the moves the PRISTINE (un-spotlit) reveal board draws —
+   * only "Your move" and "Best move". The played-in-game arrow and the "Also
+   * fine" alternatives are hover/tap-only: they surface (alone) while their
+   * own legend card is spotlit, and are otherwise off the board entirely.
+   *
+   * Expressed as a DEFAULT active set for `applyTrainSpotlight` rather than a
+   * second drawing rule, so the un-spotlit board and a spotlit one go through
+   * exactly the same filter. A verdict cannot land without a `gradeResult` and
+   * a played move (both live and restored paths set them together), so this is
+   * non-empty whenever the overlay itself is non-empty — the empty case would
+   * hit `applyTrainSpotlight`'s no-op and simply show everything.
+   */
+  const pristineOverlayUcis = useMemo(
+    () =>
+      [lastPlayedUci, gradeResult?.bestMoveUci ?? null].filter((uci): uci is string => uci !== null),
+    [lastPlayedUci, gradeResult],
+  );
+
+  // Phase 200 (LEGEND-02): the reveal overlay filtered down to the spotlit
+  // legend entry's own arrow(s)/badge, or — with nothing spotlit — down to the
+  // pristine your/best pair above.
+  const spotlitOverlay = useMemo(
+    () => applyTrainSpotlight(revealOverlay, spotlight?.ucis ?? pristineOverlayUcis),
+    [revealOverlay, spotlight, pristineOverlayUcis],
+  );
+
   // 190.1 UAT stepping mode: while a reveal line is stepped away from its
   // start, the solution overlay is cleared; the only marks are the stepped
   // move's quality-colored square highlight and a blue arrow for the line's
-  // next move. Back at the start (lineStep === null), the full overlay and
-  // the puzzle's own arrival-move highlight return.
-  const boardArrows = lineStep !== null ? buildTrainStepArrows(lineStep.nextMoveUci) : revealOverlay.arrows;
+  // next move. Back at the start (lineStep === null), the full overlay
+  // (spotlight-filtered, Pitfall 1: a stray hover while stepping must never
+  // touch the step overlay's own blue next-move arrow) and the puzzle's own
+  // arrival-move highlight return.
+  // Phase 200 UAT round 5: while exploring, the single arrow is the free-play
+  // engine's own top move for the shown position — the analysis board's blue
+  // Stockfish pointer, in free play too. Memoized so a re-render that doesn't
+  // change the best move hands `ChessBoard` the same array identity (the old
+  // "no arrows while exploring" rule used a module constant for exactly that).
+  const freePlayArrows = useMemo(
+    () => buildTrainFreePlayArrows(freePlay.bestMoveUci),
+    [freePlay.bestMoveUci],
+  );
+  const boardArrows = freePlay.isExploring
+    ? freePlayArrows
+    : lineStep !== null
+      ? buildTrainStepArrows(lineStep.nextMoveUci)
+      : spotlitOverlay.arrows;
   // 190.1 UAT round 4: while stepping, the line's FIRST move keeps its
   // quality icon badge on the moved-to square (deeper steps show none).
-  const boardMarkers =
-    lineStep !== null
+  // Phase 200 UAT: while exploring, the badge is the FREELY PLAYED move's own
+  // live grade (useTrainFreePlay) — the original EXPLORE-03 rule of "no badges
+  // at all" was reversed, since grading the sideline is the point.
+  const boardMarkers = freePlay.isExploring
+    ? freePlay.boardMarkers
+    : lineStep !== null
       ? buildTrainStepMarkers(lineStep.lastMoveUci, lineStep.quality, lineStep.isFirstMove)
-      : revealOverlay.markers;
-  const boardLastMove =
-    lineStep !== null
+      : spotlitOverlay.markers;
+  const boardLastMove = freePlay.isExploring
+    ? freePlay.lastMove
+    : lineStep !== null
       ? { from: lineStep.lastMoveUci.slice(0, 2), to: lineStep.lastMoveUci.slice(2, 4) }
       : lastMove;
-  const boardLastMoveColor =
-    lineStep !== null && lineStep.quality !== null ? TRAIN_STEP_HIGHLIGHT[lineStep.quality] : undefined;
+  // Phase 200 UAT: the free-play last-move highlight is quality-colored too
+  // (undefined while the move is still ungraded — the board then falls back to
+  // its ordinary highlight rather than flashing a wrong color).
+  const boardLastMoveColor = freePlay.isExploring
+    ? freePlay.lastMoveColor
+    : lineStep !== null && lineStep.quality !== null
+      ? TRAIN_STEP_HIGHLIGHT[lineStep.quality]
+      : undefined;
 
   // 190.1 UAT rounds 6+7 / SEED-119: the reveal plays a per-score result
   // sound AND pops the "Points: +N" flash over the board the moment a LIVE
@@ -514,8 +656,19 @@ export function TrainSolveScreen({
   // ref keeps StrictMode's dev-only double effect invocation (and any later
   // re-render with the same response object) from playing it twice;
   // playSound itself honors the shared mute preference.
+  //
+  // Bug fix (Phase 200 UAT round 7): the ref is seeded with whatever verdict
+  // the solve mutation ALREADY holds at mount, not with null. The solve
+  // mutation lives on `useTrainSession` in the page above, which outlives this
+  // screen — so a remount (dev-clock time travel drops back to the landing and
+  // starts a NEW session, and Train.tsx's `returnToLanding` unmounts/remounts
+  // this component) used to see the PREVIOUS session's last verdict as
+  // "unsounded" and replayed its result sound (and the points flash) over the
+  // first puzzle of the fresh session. A mount-time response is by definition
+  // not a live landing: only a response that arrives while this screen is
+  // mounted may sound.
   const liveSolveResponse = trainSession.lastSolveResponse;
-  const soundedSolveRef = useRef<SolveResponse | null>(null);
+  const soundedSolveRef = useRef<SolveResponse | null>(liveSolveResponse);
   useEffect(() => {
     if (liveSolveResponse === null || soundedSolveRef.current === liveSolveResponse) return;
     soundedSolveRef.current = liveSolveResponse;
@@ -523,6 +676,31 @@ export function TrainSolveScreen({
     playSound(points === TRAIN_POINTS_PER_PUZZLE ? 'game-win' : points > 0 ? 'low-time' : 'game-loss');
     setPointsFlash(points);
   }, [liveSolveResponse]);
+
+  // Phase 200 UAT round 3: stepping a line back to its START position restores
+  // the pristine solution board, and that board must show the FULL solution —
+  // both the Your-move and the Best-move arrow. Without this, the card the user
+  // stepped inside is still spotlit (desktop: the pointer never left it while
+  // clicking prev; mobile: the tap that opened the line is still active), so
+  // the restored "solution" showed that one card's move alone. Only a real
+  // non-null -> null transition reaches this (React bails out on an unchanged
+  // null), so a stepper's own mount report can never clear a live spotlight.
+  //
+  // UAT round 9 carve-out: a CARD CLICK also ends the stepped line (it snaps
+  // the board back to the solution position), but there the whole point is to
+  // spotlight the clicked card — so `returnToSolution` arms this ref and the
+  // clear is skipped exactly once. A ref rather than extra state: the flag must
+  // be read in the very effect run this transition triggers, and re-rendering
+  // for it would be pointless.
+  const keepSpotlightRef = useRef(false);
+  useEffect(() => {
+    if (lineStep !== null) return;
+    if (keepSpotlightRef.current) {
+      keepSpotlightRef.current = false;
+      return;
+    }
+    setSpotlight(null);
+  }, [lineStep]);
 
   // D-08: as the reveal opens (the solve POST has actually succeeded), the
   // board snaps back to the puzzle position and becomes the stage for
@@ -536,6 +714,12 @@ export function TrainSolveScreen({
 
   const handleNext = onNext ?? trainSession.advance;
 
+  // Phase 200 (D-11) + UAT round 9: the board has left the pristine reveal —
+  // a line is stepped, or exploration is running. Gates the Solution button's
+  // visibility, and tells the reveal panel that a card click must first bring
+  // the board back before spotlighting itself.
+  const isBoardDeparted = lineStep !== null || freePlay.isExploring;
+
   // SEED-119: the badge's color pair for the current pointsFlash tier,
   // falling back to the 0-point entry (never an unreadable bg/fg pair) when
   // pointsFlash holds a value outside the known 0-3 range. The `!` is safe:
@@ -545,10 +729,31 @@ export function TrainSolveScreen({
       ? (TRAIN_POINTS_FLASH_COLORS[pointsFlash] ?? TRAIN_POINTS_FLASH_COLORS[0]!)
       : undefined;
 
-  function handleShowSolution(): void {
+  /**
+   * Phase 200 UAT round 9: brings the board back to the pristine solution
+   * position — every stepper reset (solutionNonce), the board FEN, no stepped
+   * line, no exploration — WITHOUT touching the spotlight. Wired to a reveal
+   * card click, which re-applies its OWN spotlight right after (and so arms
+   * `keepSpotlightRef` above, since ending the stepped line would otherwise
+   * clear it again on the next commit).
+   */
+  function returnToSolution(): void {
+    if (lineStep !== null) keepSpotlightRef.current = true;
     setSolutionNonce((n) => n + 1);
     setBoardFen(puzzle.fen);
     setLineStep(null);
+    // Phase 200 (EXPLORE-04): one press does both jobs — exit exploration AND
+    // the existing stepper reset, so the board always snaps to the pristine
+    // reveal in a single tap regardless of which departed state it was in.
+    freePlay.reset();
+  }
+
+  function handleShowSolution(): void {
+    returnToSolution();
+    // The Solution button restores the FULL overlay, so it drops the spotlight
+    // too. Safe alongside the ref `returnToSolution` may have just armed: that
+    // ref only suppresses the effect's own clear, never this explicit one.
+    setSpotlight(null);
   }
 
   // 190.1 UAT round 5: leaving the reveal via Analyze caches the full
@@ -578,12 +783,29 @@ export function TrainSolveScreen({
 
   return (
     <div
-      className="flex w-full flex-col items-center gap-4 lg:flex-row lg:items-start lg:justify-center lg:gap-8"
+      // The board column's fitted width, published as a custom property so the
+      // MOBILE stack can cap itself with a class (`max-w-[var(...)]`) that
+      // `lg:max-w-none` can still override — an inline `max-width` could not be
+      // beaten by a breakpoint utility. Below `lg` this makes the reveal panel
+      // exactly as wide as the board column, which the sticky pinning below
+      // depends on: a wider reveal would scroll past the pinned column's
+      // background and show two strips of moving cards flanking the board.
+      style={{ '--train-col-max': `${boardMaxWidthPx}px` } as CSSProperties}
+      className="mx-auto flex w-full max-w-[var(--train-col-max)] flex-col items-center gap-4 lg:mx-0 lg:max-w-none lg:flex-row lg:items-start lg:justify-center lg:gap-8"
       data-testid="train-solve-screen"
     >
       <div
         ref={columnRef}
-        className="flex w-full flex-col items-center gap-4"
+        // Mobile: the board column (progress + board + Solution/Analyze/Next)
+        // pins to the top of the viewport so the board never scrolls out of
+        // sight while the reveal panel is read beneath it — the reveal's
+        // arrows/spotlight are meaningless when the board they annotate is off
+        // screen. Desktop already sits the reveal in its own column, so the
+        // whole treatment is `max-lg:`. The opaque background is what the
+        // scrolled-under content passes behind; `pb-3` keeps the first reveal
+        // card off the button row (and, being inside the measured column, is
+        // honestly accounted for by `useFitBoardToViewport`).
+        className="flex w-full flex-col items-center gap-4 max-lg:sticky max-lg:top-0 max-lg:z-10 max-lg:bg-background max-lg:pb-3"
         style={{ maxWidth: boardMaxWidthPx }}
       >
       <div className="flex w-full flex-col gap-1">
@@ -609,8 +831,8 @@ export function TrainSolveScreen({
       </div>
       <div ref={boardRef} className="relative w-full">
         <ChessBoard
-          position={boardFen}
-          flipped={puzzle.side_to_move === 'black'}
+          position={displayFen}
+          flipped={flipped}
           lastMove={boardLastMove}
           lastMoveColor={boardLastMoveColor}
           onPieceDrop={handlePieceDrop}
@@ -644,14 +866,22 @@ export function TrainSolveScreen({
           puzzle.ply itself would land one half-move too late. */}
       {verdict !== null && (
         <div className="flex w-full items-center gap-2">
-          <Button
-            variant="brand-outline"
-            className={cn('flex-1', TRAIN_BUTTON_CLASS)}
-            data-testid="btn-train-solution"
-            onClick={handleShowSolution}
-          >
-            Solution
-          </Button>
+          {/* Phase 200 (D-11): visibility-gated, not always present — shown
+              only once the board has departed the pristine reveal (a line is
+              stepped, or exploration is active). Both of Solution's jobs
+              still fire together on a press (handleShowSolution): exit
+              exploration AND the existing stepper reset. Label stays
+              "Solution" — no relabel, no hint line. */}
+          {isBoardDeparted && (
+            <Button
+              variant="brand-outline"
+              className={cn('flex-1', TRAIN_BUTTON_CLASS)}
+              data-testid="btn-train-solution"
+              onClick={handleShowSolution}
+            >
+              Solution
+            </Button>
+          )}
           {/* D-09 (Phase 192): hidden — not disabled — when the herring's
               source game link is null. Nothing else on the reveal
               references the game at that point, so a disabled control
@@ -793,6 +1023,16 @@ export function TrainSolveScreen({
           onGameMoveLineChange={setGameMoveLine}
           onLineStep={setLineStep}
           solutionNonce={solutionNonce}
+          spotlightKey={spotlight?.key ?? null}
+          onSpotlightChange={setSpotlight}
+          isBoardDeparted={isBoardDeparted}
+          onReturnToSolution={returnToSolution}
+          alsoFineMoves={revealOverlay.alsoFineMoves}
+          isExploring={freePlay.isExploring}
+          freePlay={freePlay}
+          onExitExploration={handleShowSolution}
+          flipped={flipped}
+          onFlipBoard={handleFlipBoard}
         />
       )}
     </div>

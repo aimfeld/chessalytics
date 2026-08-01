@@ -19,8 +19,15 @@
 # Usage: preset-supervisor.sh <name> <blend> <elo-csv> [adopt-pid]
 #
 # Env overrides (all optional, defaults preserve the original Phase-180 behavior):
-#   PRESET_SUPERVISOR_DIR    out-dir for this run (default reports/data/sweep-<name>)
-#   PRESET_SUPERVISOR_GAMES  --games-per-cell for the harness (default 24)
+#   PRESET_SUPERVISOR_DIR      out-dir for this run (default reports/data/sweep-<name>)
+#   PRESET_SUPERVISOR_GAMES    --games-per-cell for the harness (default 24)
+#   PRESET_SUPERVISOR_ANCHORS  comma-separated --anchors token list for a pinned
+#                              bracket (default: unset, harness uses its default
+#                              10-anchor pool). Example (Phase 199, D-02 pinned
+#                              bracket under the crash supervisor):
+#                                PRESET_SUPERVISOR_DIR=reports/data/199-cell-a \
+#                                PRESET_SUPERVISOR_ANCHORS=maia1300,maia1600,sf2 \
+#                                bin/preset-supervisor.sh 199-cell-a 0.5 1700
 set -uo pipefail
 cd "$(dirname "$0")/.."   # bin/ -> repo root
 
@@ -35,6 +42,10 @@ ADOPT_PID="${4:-}"
 # fast-crash guard aborted after three 0-second "runs".
 DIR="${PRESET_SUPERVISOR_DIR:-reports/data/sweep-${NAME}}"
 GAMES_PER_CELL="${PRESET_SUPERVISOR_GAMES:-24}"
+# D-02 pinned brackets vs RECAL-04 resume-on-crash (Phase 199): empty by
+# default, so an unset override reproduces today's behavior exactly (the
+# harness's own default 10-anchor pool).
+ANCHORS="${PRESET_SUPERVISOR_ANCHORS:-}"
 LOG="${DIR}/run.log"
 HOOK="./scripts/lib/frontend-alias-hook.mjs"
 HARNESS="scripts/calibration-harness.mjs"
@@ -57,11 +68,20 @@ launch() {
   # when a ledger actually exists.
   local resume_args=()
   [ -n "$ledger" ] && resume_args=(--resume "$ledger")
+  # Threaded here (not only on the cold-start branch) because launch() is the
+  # SINGLE code path for both the cold start and every crash-resume relaunch —
+  # the harness refuses to resume a ledger whose recorded anchor is absent
+  # from the current anchor pool (calibration-harness.mjs's applyPriorLedgerRows),
+  # so a pinned bracket must re-present the same pinned pool on every relaunch,
+  # not just the first one. Empty by default so an unset override matches
+  # today's command line exactly (no --anchors flag, default 10-anchor pool).
+  local anchor_args=()
+  [ -n "$ANCHORS" ] && anchor_args=(--anchors "$ANCHORS")
   nohup node --import "$HOOK" "$HARNESS" \
     --blends "$BLEND" --elo "$ELO" \
     --games-per-cell "$GAMES_PER_CELL" --stockfish-procs 4 \
     --seed 1 --out-dir "$DIR" \
-    "${resume_args[@]}" >> "$LOG" 2>&1 &
+    "${resume_args[@]}" "${anchor_args[@]}" >> "$LOG" 2>&1 &
   echo $!
 }
 

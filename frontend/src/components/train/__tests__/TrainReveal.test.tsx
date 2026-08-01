@@ -14,9 +14,12 @@ import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { MemoryRouter } from 'react-router-dom';
 import type { ComponentProps } from 'react';
 import { TrainReveal } from '@/components/train/TrainReveal';
+import { TooltipProvider } from '@/components/ui/tooltip';
 import { formatScore } from '@/components/analysis/EngineLines';
 import { formatDateWithYear } from '@/lib/utils';
 import type { GradeResult, TrainEngineLine, TrainGradingEngine } from '@/hooks/useTrainGradingEngine';
+import type { TrainFreePlayState } from '@/hooks/useTrainFreePlay';
+import type { PvLine } from '@/hooks/uciParser';
 import type { PuzzleRevealResponse, SolveResponse, TrainPuzzle } from '@/types/train';
 import type { GameFlawCard } from '@/types/library';
 
@@ -47,6 +50,25 @@ vi.mock('@/api/client', async () => {
 vi.mock('@/lib/sounds', () => ({
   playSound: vi.fn(),
 }));
+
+// ─── matchMedia stub (Phase 200: useIsDesktop) ─────────────────────────────
+// Controllable per test (Bots.test.tsx L221 jsdom-shim precedent, with a
+// settable `matches` instead of a fixed `false`) so both the desktop-hover
+// (D-06) and mobile-tap (D-08) paths are exercisable in the same file.
+let matchMediaMatches = true;
+Object.defineProperty(window, 'matchMedia', {
+  writable: true,
+  value: vi.fn().mockImplementation((query: string) => ({
+    matches: matchMediaMatches,
+    media: query,
+    onchange: null,
+    addEventListener: vi.fn(),
+    removeEventListener: vi.fn(),
+    addListener: vi.fn(),
+    removeListener: vi.fn(),
+    dispatchEvent: vi.fn(),
+  })),
+});
 
 // ─── Fixtures ───────────────────────────────────────────────────────────────
 
@@ -159,6 +181,38 @@ function makeGame(overrides: Partial<GameFlawCard> = {}): GameFlawCard {
   };
 }
 
+/** Stub `TrainFreePlayState` (Phase 200 plan 04, reworked per Phase 200 UAT) —
+ * a fixed one-node tree, since none of this file's free-play-swap tests
+ * exercise the hook's own navigation/grading logic (that's
+ * `useTrainFreePlay.test.ts`'s job). */
+function makeFreePlayState(overrides: Partial<TrainFreePlayState> = {}): TrainFreePlayState {
+  return {
+    isExploring: true,
+    fen: START_FEN,
+    lastMove: null,
+    lastMoveColor: undefined,
+    boardMarkers: [],
+    nodes: new Map(),
+    mainLine: [],
+    currentNodeId: null,
+    rootPly: 0,
+    moveListMarkers: new Map(),
+    pvLines: [],
+    isAnalyzing: false,
+    start: vi.fn(),
+    playMove: vi.fn(),
+    playLine: vi.fn(),
+    goToNode: vi.fn(),
+    deleteLine: vi.fn(),
+    reset: vi.fn(),
+    ...overrides,
+  };
+}
+
+function makePvLine(overrides: Partial<PvLine> = {}): PvLine {
+  return { multipv: 1, depth: 12, moves: ['e7e5', 'g1f3'], evalCp: 30, evalMate: null, ...overrides };
+}
+
 function renderReveal(
   props: Partial<ComponentProps<typeof TrainReveal>> = {},
   queryClient?: QueryClient,
@@ -181,7 +235,9 @@ function renderReveal(
   const result = render(
     <MemoryRouter>
       <QueryClientProvider client={client}>
-        <TrainReveal {...fullProps} />
+        <TooltipProvider>
+          <TrainReveal {...fullProps} />
+        </TooltipProvider>
       </QueryClientProvider>
     </MemoryRouter>,
   );
@@ -190,6 +246,7 @@ function renderReveal(
 
 describe('TrainReveal', () => {
   beforeEach(() => {
+    matchMediaMatches = true; // desktop by default — see the module-scope stub
     revealPuzzle.mockReset();
     getGame.mockReset();
     revealPuzzle.mockResolvedValue(makeReveal());
@@ -202,25 +259,27 @@ describe('TrainReveal', () => {
 
   // ─── Verdict rows (190.1-03 D-03) ─────────────────────────────────────────
 
-  it('verdict-guess row states the spelled-out critical-option wording and the incorrect mark for a wrong critical guess', () => {
+  // Phase 200 UAT round 3: the ✓/✗ marks became score chips stating the
+  // points actually earned (guess: 1 or 0).
+  it('verdict-guess row states the spelled-out critical-option wording and a +0 chip for a wrong critical guess', () => {
     renderReveal({ guess: 'critical', verdict: makeVerdict({ correct_guess: false }) });
     const text = screen.getByTestId('train-verdict-guess').textContent ?? '';
     expect(text).toContain('One critical move');
-    expect(text).toContain('✗');
-    expect(text).not.toContain('+1 point');
+    expect(text).not.toContain('✗');
+    expect(screen.getByTestId('train-verdict-guess-points').textContent).toBe('+0');
   });
 
-  it('verdict-guess row states the spelled-out several-fine wording without a points suffix (UAT round 3)', () => {
+  it('verdict-guess row states the spelled-out several-fine wording with a +1 chip for a correct guess', () => {
     renderReveal({ guess: 'several', verdict: makeVerdict({ correct_guess: true }) });
     const text = screen.getByTestId('train-verdict-guess').textContent ?? '';
     expect(text).toContain('Several fine moves');
-    expect(text).toContain('✓');
-    expect(text).not.toContain('+1 point');
+    expect(text).not.toContain('✓');
+    expect(screen.getByTestId('train-verdict-guess-points').textContent).toBe('+1');
   });
 
-  it('the move verdict renders as the Your-move box header: SAN (not raw UCI) plus the check mark (UAT round 3)', async () => {
+  it('the move verdict renders as the Your-move box header: SAN (not raw UCI) plus the earned-points chip (UAT round 3)', async () => {
     // A correct-but-not-best move (soft puzzle): the Your-move box stands
-    // alone, so the header is exactly "Your move: <san> ✓".
+    // alone, so the header is exactly "Your move: <san> [+2]".
     const gradeResult = makeGradeResult({
       bestLine: makeEngineLine({ moves: ['e2e4'] }),
       playedLine: makeEngineLine({ moves: ['d2d4'] }),
@@ -229,21 +288,24 @@ describe('TrainReveal', () => {
       guess: 'critical',
       playedMoveUci: 'd2d4',
       gradeResult,
-      verdict: makeVerdict({ correct_move: true, puzzle_type: 'soft' }),
+      verdict: makeVerdict({ correct_move: true, move_quality: 'good', puzzle_type: 'soft' }),
     });
-    await waitFor(() => expect(screen.getByTestId('train-line-box-your-move')).not.toBeNull());
+    const yourBox = await waitFor(() => screen.getByTestId('train-line-box-your-move'));
     const title =
-      screen
-        .getByTestId('train-line-box-your-move')
-        .querySelector('[data-testid="train-line-stepper-title"]')?.textContent ?? '';
+      yourBox.querySelector('[data-testid="train-line-stepper-title"]')?.textContent ?? '';
     expect(title).toContain('Your move: d4');
     expect(title.includes('d2d4')).toBe(false);
-    expect(title).toContain('✓');
+    expect(title).not.toContain('✓');
+    expect(
+      yourBox.querySelector('[data-testid="train-line-stepper-points"]')?.textContent,
+    ).toBe('+2');
     // The old standalone move-verdict row is gone.
     expect(screen.queryByTestId('train-verdict-move')).toBeNull();
   });
 
-  it('an incorrect move keeps the Your-move box FIRST and marks it with the cross (UAT round 5, reversing round 3)', async () => {
+  // Phase 200 UAT round 3: the chip reads the three-way scoring tier, so an
+  // inaccuracy scores +1 — the boolean correct_move could not express that.
+  it('an inaccuracy scores +1 on the Your-move chip, not the 0 its correct_move=false would suggest', async () => {
     const gradeResult = makeGradeResult({
       correctMove: false,
       bestLine: makeEngineLine({ moves: ['e2e4'] }),
@@ -253,25 +315,73 @@ describe('TrainReveal', () => {
       guess: 'critical',
       playedMoveUci: 'd2d4',
       gradeResult,
-      verdict: makeVerdict({ correct_move: false }),
+      verdict: makeVerdict({ correct_move: false, move_quality: 'inaccuracy' }),
+    });
+    const yourBox = await waitFor(() => screen.getByTestId('train-line-box-your-move'));
+    expect(
+      yourBox.querySelector('[data-testid="train-line-stepper-points"]')?.textContent,
+    ).toBe('+1');
+  });
+
+  it('an incorrect move keeps the Your-move box FIRST and chips it +0 (UAT round 5, reversing round 3)', async () => {
+    const gradeResult = makeGradeResult({
+      correctMove: false,
+      bestLine: makeEngineLine({ moves: ['e2e4'] }),
+      playedLine: makeEngineLine({ moves: ['d2d4'] }),
+    });
+    renderReveal({
+      guess: 'critical',
+      playedMoveUci: 'd2d4',
+      gradeResult,
+      verdict: makeVerdict({ correct_move: false, move_quality: 'wrong' }),
     });
     await waitFor(() => expect(screen.getByTestId('train-line-box-your-move')).not.toBeNull());
     const bestBox = screen.getByTestId('train-line-box-best-move');
     const yourBox = screen.getByTestId('train-line-box-your-move');
     // DOM order: Your move on top of Best move, even on a miss.
     expect(yourBox.compareDocumentPosition(bestBox) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
-    const yourTitle =
-      yourBox.querySelector('[data-testid="train-line-stepper-title"]')?.textContent ?? '';
-    expect(yourTitle).toContain('✗');
+    expect(
+      yourBox.querySelector('[data-testid="train-line-stepper-points"]')?.textContent,
+    ).toBe('+0');
     const bestTitle =
       bestBox.querySelector('[data-testid="train-line-stepper-title"]')?.textContent ?? '';
     expect(bestTitle).toContain('Best move: e4');
-    expect(bestTitle).not.toContain('✗');
+    // The best-move box carries no chip at all — only the user's own move
+    // scored anything.
+    expect(bestBox.querySelector('[data-testid="train-line-stepper-points"]')).toBeNull();
   });
 
-  // ─── Outcome copy (D-11, 190.1-03 assumption-delta) ───────────────────────
+  // Phase 200 UAT round 8: the Your-move box leads the whole panel, above the
+  // guess card, on both viewports (one component serves both).
+  it('the Your-move box renders ABOVE the guess card', async () => {
+    renderReveal({
+      guess: 'critical',
+      playedMoveUci: 'd2d4',
+      gradeResult: makeGradeResult({
+        correctMove: false,
+        bestLine: makeEngineLine({ moves: ['e2e4'] }),
+        playedLine: makeEngineLine({ moves: ['d2d4'] }),
+      }),
+    });
+    const yourBox = await waitFor(() => screen.getByTestId('train-line-box-your-move'));
+    const guessCard = screen.getByTestId('train-verdict-guess');
+    expect(
+      yourBox.compareDocumentPosition(guessCard) & Node.DOCUMENT_POSITION_FOLLOWING,
+    ).toBeTruthy();
+    // ...and the best-move box still follows the guess card, where the rest of
+    // the line boxes live.
+    expect(
+      guessCard.compareDocumentPosition(screen.getByTestId('train-line-box-best-move')) &
+        Node.DOCUMENT_POSITION_FOLLOWING,
+    ).toBeTruthy();
+  });
 
-  it('a herring renders the herring sentence, never a miss sentence', async () => {
+  // ─── Outcome copy — fully retired (Phase 200 UAT round 7) ─────────────────
+  // Round 3 retired the miss sentence; round 7 retired the last one standing,
+  // the herring "You handled this well in the game" line. The guess card's
+  // body now holds the Also fine list or nothing at all.
+
+  it('a herring renders no outcome sentence — the herring sentence is retired too', async () => {
     renderReveal({
       verdict: makeVerdict({
         correct_move: false,
@@ -281,10 +391,8 @@ describe('TrainReveal', () => {
         streak: null,
       }),
     });
-    await waitFor(() => expect(screen.getByTestId('train-outcome-copy')).not.toBeNull());
-    expect(screen.getByTestId('train-outcome-copy').textContent).toBe(
-      'You handled this well in the game — several moves are fine.',
-    );
+    await waitFor(() => expect(getGame).toHaveBeenCalled());
+    expect(screen.queryByTestId('train-outcome-copy')).toBeNull();
   });
 
   it('a genuine miss (non-herring) renders no outcome sentence at all — the miss sentence is retired', async () => {
@@ -337,11 +445,13 @@ describe('TrainReveal', () => {
     rerender(
       <MemoryRouter>
         <QueryClientProvider client={client}>
-          <TrainReveal
-            {...props}
-            puzzle={makePuzzle({ position: 6 })}
-            verdict={makeVerdict({ item_status: 'mastered', due_date: null })}
-          />
+          <TooltipProvider>
+            <TrainReveal
+              {...props}
+              puzzle={makePuzzle({ position: 6 })}
+              verdict={makeVerdict({ item_status: 'mastered', due_date: null })}
+            />
+          </TooltipProvider>
         </QueryClientProvider>
       </MemoryRouter>,
     );
@@ -358,6 +468,64 @@ describe('TrainReveal', () => {
     renderReveal();
     await waitFor(() => expect(getGame).toHaveBeenCalled());
     expect(screen.queryByTestId('train-line-stepper')).toBeNull();
+  });
+
+  // Phase 200 UAT: a line box shows at most 12 plies (six full moves — raised
+  // from 10 in UAT round 3).
+  it('a long engine line is capped at 12 SAN tokens — the deep tail of the PV never renders', async () => {
+    const longLine = [
+      'e2e4', 'e7e5', 'g1f3', 'b8c6', 'f1c4', 'f8c5',
+      'c2c3', 'g8f6', 'd2d3', 'd7d6', 'b1d2', 'c8e6',
+      'c4b3', 'd8d7',
+    ];
+    renderReveal({
+      guess: 'critical',
+      playedMoveUci: 'e2e4',
+      gradeResult: makeGradeResult({
+        bestLine: makeEngineLine({ moves: longLine }),
+        playedLine: makeEngineLine({ moves: longLine }),
+      }),
+    });
+    const box = await waitFor(() => screen.getByTestId('train-line-box-your-move'));
+    const tokens = within(box).getAllByTestId(/^train-line-stepper-token-/);
+    expect(tokens).toHaveLength(12);
+    // The cap slices the HEAD of the line, so the last token is the 12th ply
+    // (Be6) and the 13th/14th (Bb3, Qd7) are gone.
+    expect(tokens.at(-1)?.textContent).toBe('Be6');
+    expect(box.textContent).not.toContain('Bb3');
+  });
+
+  // Phase 200 UAT item 2: exactly one line box owns the board position, so
+  // exactly one may paint a move cursor. Stepping box B used to leave box A's
+  // brown badge lit, showing two cursors for one board.
+  it('only the box currently stepped shows the brown move cursor — stepping a second box clears the first one', async () => {
+    revealPuzzle.mockResolvedValue(
+      makeReveal({ played_in_game_san: 'Nf3', played_in_game_move_uci: 'g1f3' }),
+    );
+    renderReveal({
+      guess: 'critical',
+      playedMoveUci: 'd2d4',
+      gradeResult: makeGradeResult({
+        bestLine: makeEngineLine({ moves: ['e2e4', 'e7e5'] }),
+        playedLine: makeEngineLine({ moves: ['d2d4', 'd7d5'] }),
+      }),
+    });
+    const yourBox = await waitFor(() => screen.getByTestId('train-line-box-your-move'));
+    const bestBox = screen.getByTestId('train-line-box-best-move');
+    const cursors = (): Element[] => [...document.querySelectorAll('[data-active="true"]')];
+
+    // Nothing stepped yet — no cursor anywhere.
+    expect(cursors()).toHaveLength(0);
+
+    fireEvent.click(within(yourBox).getByTestId('train-line-stepper-token-0'));
+    expect(cursors()).toHaveLength(1);
+    expect(within(yourBox).getByTestId('train-line-stepper-token-0').dataset.active).toBe('true');
+
+    // Stepping the OTHER box hands the cursor over — never a second one.
+    fireEvent.click(within(bestBox).getByTestId('train-line-stepper-token-0'));
+    expect(cursors()).toHaveLength(1);
+    expect(within(bestBox).getByTestId('train-line-stepper-token-0').dataset.active).toBe('true');
+    expect(within(yourBox).getByTestId('train-line-stepper-token-0').dataset.active).toBeUndefined();
   });
 
   it('three distinct moves render all three line boxes, each with its own eval', async () => {
@@ -412,6 +580,48 @@ describe('TrainReveal', () => {
     expect(box.textContent).toContain('Your move');
     expect(box.textContent).toContain('Best move');
     expect(screen.queryByTestId('train-line-box-best-move')).toBeNull();
+  });
+
+  // ─── Phase 200 (LEGEND-01/D-01): one glyph per box, Card/CardHeader shell ──
+
+  it('a coincidence-merged played==best box renders exactly ONE glyph button, matching the single blue arrow actually drawn', async () => {
+    const gradeResult = makeGradeResult({
+      bestLine: makeEngineLine({ moves: ['e2e4'], evalCp: 50, evalMate: null }),
+      playedLine: makeEngineLine({ moves: ['e2e4'], evalCp: 50, evalMate: null }),
+    });
+    renderReveal({ guess: 'critical', playedMoveUci: 'e2e4', gradeResult });
+    await waitFor(() => expect(screen.getByTestId('train-line-box-your-move')).not.toBeNull());
+    const box = screen.getByTestId('train-line-box-your-move');
+    const glyphButtons = box.querySelectorAll('[data-testid^="train-reveal-glyph-"]');
+    expect(glyphButtons).toHaveLength(1);
+    expect(glyphButtons[0]?.getAttribute('data-testid')).toBe('train-reveal-glyph-your');
+  });
+
+  it('every rendered line box exposes exactly one glyph button and one title', async () => {
+    revealPuzzle.mockResolvedValue(
+      makeReveal({ played_in_game_san: 'Nf3', played_in_game_move_uci: 'g1f3' }),
+    );
+    const gradeResult = makeGradeResult({
+      bestLine: makeEngineLine({ moves: ['e2e4'], evalCp: 50, evalMate: null }),
+      playedLine: makeEngineLine({ moves: ['d2d4'], evalCp: 10, evalMate: null }),
+    });
+    renderReveal({
+      guess: 'critical',
+      playedMoveUci: 'd2d4',
+      gradeResult,
+      gradingEngine: makeGradingEngine({
+        startGameMoveSearch: vi
+          .fn()
+          .mockResolvedValue(makeEngineLine({ moves: ['g1f3'], evalCp: -20, evalMate: null })),
+      }),
+    });
+    await waitFor(() => expect(screen.getByTestId('train-line-box-your-move')).not.toBeNull());
+    await waitFor(() => expect(screen.getByTestId('train-line-box-game-move')).not.toBeNull());
+    for (const testid of ['train-line-box-your-move', 'train-line-box-best-move', 'train-line-box-game-move']) {
+      const box = screen.getByTestId(testid);
+      expect(box.querySelectorAll('[data-testid^="train-reveal-glyph-"]')).toHaveLength(1);
+      expect(box.querySelectorAll('[data-testid="train-line-stepper-title"]')).toHaveLength(1);
+    }
   });
 
   it('game move equals best move merges into a single box under train-line-box-best-move with no reveal-time search dispatched', async () => {
@@ -564,7 +774,9 @@ describe('TrainReveal', () => {
     rerender(
       <MemoryRouter>
         <QueryClientProvider client={client}>
-          <TrainReveal {...props} verdict={makeVerdict()} />
+          <TooltipProvider>
+            <TrainReveal {...props} verdict={makeVerdict()} />
+          </TooltipProvider>
         </QueryClientProvider>
       </MemoryRouter>,
     );
@@ -668,6 +880,24 @@ describe('TrainReveal', () => {
     expect(bestIcon?.getAttribute('data-quality')).toBe('best');
   });
 
+  it('a played inaccuracy renders the GOOD quality icon in the CardHeader, never the severity glyph — the fifth D-05 recolor site (LEGEND-03)', async () => {
+    const gradeResult = makeGradeResult({
+      bestLine: makeEngineLine({ moves: ['e2e4'] }),
+      playedLine: makeEngineLine({ moves: ['d2d4'] }),
+    });
+    renderReveal({
+      guess: 'critical',
+      playedMoveUci: 'd2d4',
+      gradeResult,
+      playedMoveQuality: 'inaccuracy',
+    });
+    await waitFor(() => expect(screen.getByTestId('train-line-box-your-move')).not.toBeNull());
+    const yourIcon = screen
+      .getByTestId('train-line-box-your-move')
+      .querySelector('[data-testid="train-line-stepper-quality"]');
+    expect(yourIcon?.getAttribute('data-quality')).toBe('good');
+  });
+
   it('stepping a line reports the stepped move with its quality (first move = box quality, deeper = good/green), and back-to-start reports null', async () => {
     const gradeResult = makeGradeResult({
       bestLine: makeEngineLine({ moves: ['e2e4'] }),
@@ -692,6 +922,9 @@ describe('TrainReveal', () => {
       quality: 'blunder',
       nextMoveUci: 'd7d5',
       isFirstMove: true,
+      // Phase 200 (EXPLORE-02): the reveal-level prefix is the complete chain
+      // already played from puzzle.fen — here, exactly the first move itself.
+      prefixUci: ['d2d4'],
     });
 
     // Deeper into the line: an engine continuation, reported as 'good' so the
@@ -702,6 +935,7 @@ describe('TrainReveal', () => {
       quality: 'good',
       nextMoveUci: null,
       isFirstMove: false,
+      prefixUci: ['d2d4', 'd7d5'],
     });
 
     fireEvent.click(within(yourBox).getByTestId('btn-train-step-prev'));
@@ -733,12 +967,554 @@ describe('TrainReveal', () => {
     rerender(
       <MemoryRouter>
         <QueryClientProvider client={client}>
-          <TrainReveal {...props} solutionNonce={1} />
+          <TooltipProvider>
+            <TrainReveal {...props} solutionNonce={1} />
+          </TooltipProvider>
         </QueryClientProvider>
       </MemoryRouter>,
     );
     // The steppers' own index-0 reports land back on the puzzle position.
     expect(onLineStep).toHaveBeenLastCalledWith(null);
     expect(onFenChange).toHaveBeenLastCalledWith(makePuzzle().fen);
+  });
+
+  // ─── Phase 200 (D-06/D-07/D-08/D-09): desktop hover vs mobile tap split ───
+
+  /** Renders three genuinely distinct line boxes (your/best/game all
+   * separate UCIs) — the shared fixture for the spotlight interaction tests
+   * below, mirroring the "three distinct moves" coverage above. */
+  async function renderThreeBoxReveal(
+    onSpotlightChange = vi.fn(),
+    spotlightKey: string | null = null,
+    extraProps: Partial<ComponentProps<typeof TrainReveal>> = {},
+  ) {
+    revealPuzzle.mockResolvedValue(
+      makeReveal({ played_in_game_san: 'Nf3', played_in_game_move_uci: 'g1f3' }),
+    );
+    const gradeResult = makeGradeResult({
+      bestLine: makeEngineLine({ moves: ['e2e4'], evalCp: 50, evalMate: null }),
+      playedLine: makeEngineLine({ moves: ['d2d4'], evalCp: 10, evalMate: null }),
+    });
+    const result = renderReveal({
+      guess: 'critical',
+      playedMoveUci: 'd2d4',
+      gradeResult,
+      gradingEngine: makeGradingEngine({
+        startGameMoveSearch: vi
+          .fn()
+          .mockResolvedValue(makeEngineLine({ moves: ['g1f3'], evalCp: -20, evalMate: null })),
+      }),
+      spotlightKey,
+      onSpotlightChange,
+      ...extraProps,
+    });
+    await waitFor(() => expect(screen.getByTestId('train-line-box-your-move')).not.toBeNull());
+    await waitFor(() => expect(screen.getByTestId('train-line-box-game-move')).not.toBeNull());
+    return result;
+  }
+
+  it('desktop: hovering a card reports its own spotlight entry and clears on pointer-leave', async () => {
+    matchMediaMatches = true; // desktop path
+    const onSpotlightChange = vi.fn();
+    await renderThreeBoxReveal(onSpotlightChange);
+    const bestBox = screen.getByTestId('train-line-box-best-move');
+
+    fireEvent.pointerEnter(bestBox);
+    expect(onSpotlightChange).toHaveBeenLastCalledWith({
+      key: 'train-line-box-best-move',
+      ucis: ['e2e4'],
+    });
+
+    fireEvent.pointerLeave(bestBox);
+    expect(onSpotlightChange).toHaveBeenLastCalledWith(null);
+  });
+
+  it('desktop: the spotlit card (spotlightKey prop) carries data-spotlight="true", and only that card', async () => {
+    matchMediaMatches = true;
+    await renderThreeBoxReveal(vi.fn(), 'train-line-box-best-move');
+    const bestBox = screen.getByTestId('train-line-box-best-move');
+    const yourBox = screen.getByTestId('train-line-box-your-move');
+    expect(bestBox.getAttribute('data-spotlight')).toBe('true');
+    expect(yourBox.getAttribute('data-spotlight')).toBeNull();
+  });
+
+  it('mobile: pointer-enter/leave on the card do nothing — only the glyph tap drives the spotlight', async () => {
+    matchMediaMatches = false;
+    const onSpotlightChange = vi.fn();
+    await renderThreeBoxReveal(onSpotlightChange);
+    const bestBox = screen.getByTestId('train-line-box-best-move');
+    fireEvent.pointerEnter(bestBox);
+    fireEvent.pointerLeave(bestBox);
+    expect(onSpotlightChange).not.toHaveBeenCalled();
+  });
+
+  it('mobile: tapping a glyph sets the spotlight, tapping it again clears it, and tapping a different glyph switches it — never more than one active at once (D-08/D-09)', async () => {
+    matchMediaMatches = false;
+    const onSpotlightChange = vi.fn();
+    const { rerender, client, props } = await renderThreeBoxReveal(onSpotlightChange, null);
+
+    function withSpotlight(key: string | null) {
+      rerender(
+        <MemoryRouter>
+          <QueryClientProvider client={client}>
+            <TrainReveal {...props} spotlightKey={key} onSpotlightChange={onSpotlightChange} />
+          </QueryClientProvider>
+        </MemoryRouter>,
+      );
+    }
+
+    // Tap the best-move glyph: sets it.
+    fireEvent.click(screen.getByTestId('train-reveal-glyph-best'));
+    expect(onSpotlightChange).toHaveBeenLastCalledWith({
+      key: 'train-line-box-best-move',
+      ucis: ['e2e4'],
+    });
+    withSpotlight('train-line-box-best-move');
+    expect(
+      document.querySelectorAll('[data-testid="train-reveal"] [data-spotlight="true"]'),
+    ).toHaveLength(1);
+
+    // Tap it again: clears.
+    fireEvent.click(screen.getByTestId('train-reveal-glyph-best'));
+    expect(onSpotlightChange).toHaveBeenLastCalledWith(null);
+    withSpotlight(null);
+    expect(
+      document.querySelectorAll('[data-testid="train-reveal"] [data-spotlight="true"]'),
+    ).toHaveLength(0);
+
+    // Tap a DIFFERENT glyph: switches directly (never two active).
+    fireEvent.click(screen.getByTestId('train-reveal-glyph-your'));
+    expect(onSpotlightChange).toHaveBeenLastCalledWith({
+      key: 'train-line-box-your-move',
+      ucis: ['d2d4'],
+    });
+    withSpotlight('train-line-box-your-move');
+    const active = document.querySelectorAll('[data-testid="train-reveal"] [data-spotlight="true"]');
+    expect(active).toHaveLength(1);
+    expect(active[0]).toBe(screen.getByTestId('train-line-box-your-move'));
+  });
+
+  // WR-01 regression. A real tap is focus-THEN-click, not click alone: the
+  // browser focuses the glyph button on pointer-down and React's onFocus
+  // (focusin) BUBBLES to the tabIndex={0} Card. When the Card's onFocus was
+  // ungated it set the spotlight before click fired, and the glyph's own
+  // toggle then read that fresh state and turned it straight back OFF — the
+  // first tap on every glyph was silently swallowed. Every other mobile test
+  // here uses fireEvent.click alone, which never synthesizes the preceding
+  // focus, so the whole suite was structurally blind to it.
+  it('mobile: the FIRST tap on a glyph sets the spotlight even though the tap focuses the card first (WR-01)', async () => {
+    matchMediaMatches = false;
+    const onSpotlightChange = vi.fn();
+    await renderThreeBoxReveal(onSpotlightChange, null);
+
+    const glyph = screen.getByTestId('train-reveal-glyph-best');
+
+    // The focus a real tap produces, bubbling up to the card.
+    fireEvent.focus(glyph);
+    // On mobile this must be inert — the glyph's tap toggle is the only driver.
+    expect(onSpotlightChange).not.toHaveBeenCalled();
+
+    fireEvent.click(glyph);
+    expect(onSpotlightChange).toHaveBeenCalledTimes(1);
+    expect(onSpotlightChange).toHaveBeenLastCalledWith({
+      key: 'train-line-box-best-move',
+      ucis: ['e2e4'],
+    });
+  });
+
+  it('desktop: focus still drives the spotlight, so keyboard tabbing keeps working (WR-01 guard is desktop-only)', async () => {
+    matchMediaMatches = true;
+    const onSpotlightChange = vi.fn();
+    await renderThreeBoxReveal(onSpotlightChange, null);
+
+    fireEvent.focus(screen.getByTestId('train-reveal-glyph-best'));
+    expect(onSpotlightChange).toHaveBeenLastCalledWith({
+      key: 'train-line-box-best-move',
+      ucis: ['e2e4'],
+    });
+
+    fireEvent.blur(screen.getByTestId('train-reveal-glyph-best'));
+    expect(onSpotlightChange).toHaveBeenLastCalledWith(null);
+  });
+
+  // ─── Phase 200 UAT: the WHOLE card is the mobile tap target ───────────────
+
+  it('mobile: tapping the card body (not just the glyph) toggles the spotlight', async () => {
+    matchMediaMatches = false;
+    const onSpotlightChange = vi.fn();
+    await renderThreeBoxReveal(onSpotlightChange, null);
+
+    // A tap on the card's own title text, well away from the glyph button.
+    const bestBox = screen.getByTestId('train-line-box-best-move');
+    fireEvent.click(within(bestBox).getByTestId('train-line-stepper-title'));
+    expect(onSpotlightChange).toHaveBeenLastCalledWith({
+      key: 'train-line-box-best-move',
+      ucis: ['e2e4'],
+    });
+
+    // Already spotlit: the same tap clears it (same toggle as the glyph).
+    cleanup();
+    onSpotlightChange.mockClear();
+    await renderThreeBoxReveal(onSpotlightChange, 'train-line-box-best-move');
+    fireEvent.click(
+      within(screen.getByTestId('train-line-box-best-move')).getByTestId('train-line-stepper-title'),
+    );
+    expect(onSpotlightChange).toHaveBeenLastCalledWith(null);
+  });
+
+  // ─── Phase 200 UAT round 9: a card click brings the board back ────────────
+
+  it('a card click while the board has departed the solution asks for the solution board and keeps its own spotlight — on both viewports', async () => {
+    for (const isDesktop of [true, false]) {
+      matchMediaMatches = isDesktop;
+      const onSpotlightChange = vi.fn();
+      const onReturnToSolution = vi.fn();
+      // Already spotlit: the departed branch must NOT toggle it off, or the
+      // board would come back showing everything except the clicked card.
+      await renderThreeBoxReveal(onSpotlightChange, 'train-line-box-best-move', {
+        isBoardDeparted: true,
+        onReturnToSolution,
+      });
+
+      const bestBox = screen.getByTestId('train-line-box-best-move');
+      fireEvent.click(within(bestBox).getByTestId('train-line-stepper-title'));
+
+      expect(onReturnToSolution).toHaveBeenCalledTimes(1);
+      expect(onSpotlightChange).toHaveBeenLastCalledWith({
+        key: 'train-line-box-best-move',
+        ucis: ['e2e4'],
+      });
+      cleanup();
+    }
+  });
+
+  it('a click on a move control inside the card never asks for the solution board — stepping is its own job', async () => {
+    matchMediaMatches = true;
+    const onReturnToSolution = vi.fn();
+    await renderThreeBoxReveal(vi.fn(), null, { isBoardDeparted: true, onReturnToSolution });
+
+    const bestBox = screen.getByTestId('train-line-box-best-move');
+    fireEvent.click(within(bestBox).getByTestId('btn-train-step-next'));
+    expect(onReturnToSolution).not.toHaveBeenCalled();
+  });
+
+  // Phase 200 UAT round 8: interacting with a card's move controls highlights
+  // that card, so the user can see which box owns the board while stepping.
+  it('mobile: tapping a move control INSIDE the card highlights the card', async () => {
+    matchMediaMatches = false;
+    const onSpotlightChange = vi.fn();
+    await renderThreeBoxReveal(onSpotlightChange, null);
+    const bestBox = screen.getByTestId('train-line-box-best-move');
+    const entry = { key: 'train-line-box-best-move', ucis: ['e2e4'] };
+
+    fireEvent.click(within(bestBox).getByTestId('train-line-stepper-token-0'));
+    expect(onSpotlightChange).toHaveBeenLastCalledWith(entry);
+
+    onSpotlightChange.mockClear();
+    fireEvent.click(within(bestBox).getByTestId('btn-train-step-next'));
+    expect(onSpotlightChange).toHaveBeenLastCalledWith(entry);
+  });
+
+  it('mobile: a move control on an ALREADY spotlit card never toggles it off — stepping must not strobe the highlight', async () => {
+    matchMediaMatches = false;
+    const onSpotlightChange = vi.fn();
+    await renderThreeBoxReveal(onSpotlightChange, 'train-line-box-best-move');
+    const bestBox = screen.getByTestId('train-line-box-best-move');
+
+    fireEvent.click(within(bestBox).getByTestId('btn-train-step-next'));
+    fireEvent.click(within(bestBox).getByTestId('btn-train-step-prev'));
+    fireEvent.click(within(bestBox).getByTestId('train-line-stepper-token-0'));
+    expect(onSpotlightChange).not.toHaveBeenCalled();
+  });
+
+  // Phase 200 UAT item 1: the arrow glyph used to be a button that TOGGLED the
+  // spotlight. On desktop the card is spotlit simply by being hovered, so
+  // clicking the glyph immediately un-spotlit the card under the pointer.
+  it('desktop: clicking the arrow glyph on a hovered (spotlit) card does NOT unselect it — the glyph carries no handler of its own', async () => {
+    matchMediaMatches = true;
+    const onSpotlightChange = vi.fn();
+    await renderThreeBoxReveal(onSpotlightChange, null);
+    const bestBox = screen.getByTestId('train-line-box-best-move');
+
+    fireEvent.pointerEnter(bestBox);
+    expect(onSpotlightChange).toHaveBeenLastCalledWith({
+      key: 'train-line-box-best-move',
+      ucis: ['e2e4'],
+    });
+    onSpotlightChange.mockClear();
+
+    fireEvent.click(screen.getByTestId('train-reveal-glyph-best'));
+    expect(onSpotlightChange).not.toHaveBeenCalled();
+  });
+
+  it('mobile: tapping the arrow glyph selects the card exactly like tapping the card body — one toggle, never two', async () => {
+    matchMediaMatches = false;
+    const onSpotlightChange = vi.fn();
+    await renderThreeBoxReveal(onSpotlightChange, null);
+
+    fireEvent.click(screen.getByTestId('train-reveal-glyph-best'));
+    expect(onSpotlightChange).toHaveBeenCalledTimes(1);
+    expect(onSpotlightChange).toHaveBeenLastCalledWith({
+      key: 'train-line-box-best-move',
+      ucis: ['e2e4'],
+    });
+  });
+
+  it('desktop: a card tap is inert — hover is the only spotlight driver there, so a click must not undo the hover that just fired', async () => {
+    matchMediaMatches = true;
+    const onSpotlightChange = vi.fn();
+    await renderThreeBoxReveal(onSpotlightChange, 'train-line-box-best-move');
+    onSpotlightChange.mockClear();
+
+    fireEvent.click(
+      within(screen.getByTestId('train-line-box-best-move')).getByTestId('train-line-stepper-title'),
+    );
+    expect(onSpotlightChange).not.toHaveBeenCalled();
+  });
+
+  it('mobile: a pointerdown outside the reveal panel clears the spotlight (D-08 tap-away)', async () => {
+    matchMediaMatches = false;
+    const onSpotlightChange = vi.fn();
+    await renderThreeBoxReveal(onSpotlightChange, 'train-line-box-best-move');
+
+    fireEvent.pointerDown(document.body);
+    expect(onSpotlightChange).toHaveBeenCalledWith(null);
+  });
+
+  it('mobile: a pointerdown INSIDE the reveal panel (e.g. the glyph tap itself) does not clear the spotlight', async () => {
+    matchMediaMatches = false;
+    const onSpotlightChange = vi.fn();
+    await renderThreeBoxReveal(onSpotlightChange, 'train-line-box-best-move');
+    onSpotlightChange.mockClear();
+
+    const panel = screen.getByTestId('train-reveal');
+    fireEvent.pointerDown(panel);
+    expect(onSpotlightChange).not.toHaveBeenCalledWith(null);
+  });
+
+  // ─── Also fine, inside the guess card (Phase 200 LEGEND-04/D-02/D-03; UAT
+  // round 6 folded the standalone row into the guess card) ──────────────────
+
+  it('renders no Also fine list — and no green legend glyph — when alsoFineMoves is empty (the default)', () => {
+    renderReveal();
+    expect(screen.queryByTestId('train-reveal-also-fine')).toBeNull();
+    expect(screen.queryByTestId('train-reveal-glyph-also-fine')).toBeNull();
+  });
+
+  it('renders the Also fine list in the guess card body, listing the SAN of every entry, with a single non-interactive glyph in the card header', () => {
+    renderReveal({
+      alsoFineMoves: [
+        { uci: 'd2d4', quality: 'good' },
+        { uci: 'g1f3', quality: 'inaccuracy' },
+      ],
+    });
+    const card = screen.getByTestId('train-verdict-guess');
+    const list = within(card).getByTestId('train-reveal-also-fine');
+    expect(list.textContent).toContain('d4');
+    expect(list.textContent).toContain('Nf3');
+    expect(within(card).getByTestId('train-reveal-glyph-also-fine')).not.toBeNull();
+    // Phase 200 UAT: NO button anywhere in the card — the card itself is the
+    // single spotlight target (D-02: no per-token granularity), and the glyph
+    // carries no handler of its own so it can never toggle the card off.
+    expect(within(card).queryAllByRole('button')).toHaveLength(0);
+  });
+
+  it('the guess card keeps the verdict and its score chip in the header, and only the Also fine list in the body (round 7: the herring sentence is gone)', async () => {
+    renderReveal({
+      verdict: makeVerdict({
+        correct_guess: true,
+        correct_move: false,
+        puzzle_type: 'herring',
+        item_status: null,
+        due_date: null,
+        streak: null,
+      }),
+      alsoFineMoves: [{ uci: 'd2d4', quality: 'good' }],
+    });
+    const card = screen.getByTestId('train-verdict-guess');
+    expect(card.textContent).toContain('Guess:');
+    expect(within(card).getByTestId('train-verdict-guess-points').textContent).toBe('+1');
+    await waitFor(() => expect(getGame).toHaveBeenCalled());
+    expect(within(card).queryByTestId('train-outcome-copy')).toBeNull();
+    expect(within(card).getByTestId('train-reveal-also-fine').textContent).toContain('d4');
+  });
+
+  it('desktop: hovering the guess card reports ONE spotlight entry covering ALL the Also fine UCIs together, and clears on pointer-leave', () => {
+    matchMediaMatches = true;
+    const onSpotlightChange = vi.fn();
+    renderReveal({
+      alsoFineMoves: [
+        { uci: 'd2d4', quality: 'good' },
+        { uci: 'g1f3', quality: 'good' },
+      ],
+      onSpotlightChange,
+    });
+    const card = screen.getByTestId('train-verdict-guess');
+    fireEvent.pointerEnter(card);
+    expect(onSpotlightChange).toHaveBeenLastCalledWith({
+      key: 'train-reveal-also-fine',
+      ucis: ['d2d4', 'g1f3'],
+    });
+    fireEvent.pointerLeave(card);
+    expect(onSpotlightChange).toHaveBeenLastCalledWith(null);
+  });
+
+  it('desktop: a guess card with no alternatives never spotlights — an empty UCI set would filter every arrow off the board', () => {
+    matchMediaMatches = true;
+    const onSpotlightChange = vi.fn();
+    renderReveal({ alsoFineMoves: [], onSpotlightChange });
+    fireEvent.pointerEnter(screen.getByTestId('train-verdict-guess'));
+    expect(onSpotlightChange).not.toHaveBeenCalled();
+  });
+
+  it('mobile: tapping the Also fine glyph toggles the spotlight, and the guess card carries data-spotlight="true" while active', () => {
+    matchMediaMatches = false;
+    const onSpotlightChange = vi.fn();
+    const { rerender, client, props } = renderReveal({
+      alsoFineMoves: [{ uci: 'd2d4', quality: 'good' }],
+      onSpotlightChange,
+    });
+
+    fireEvent.click(screen.getByTestId('train-reveal-glyph-also-fine'));
+    expect(onSpotlightChange).toHaveBeenLastCalledWith({
+      key: 'train-reveal-also-fine',
+      ucis: ['d2d4'],
+    });
+
+    rerender(
+      <MemoryRouter>
+        <QueryClientProvider client={client}>
+          <TooltipProvider>
+            <TrainReveal
+              {...props}
+              spotlightKey="train-reveal-also-fine"
+              onSpotlightChange={onSpotlightChange}
+            />
+          </TooltipProvider>
+        </QueryClientProvider>
+      </MemoryRouter>,
+    );
+    expect(screen.getByTestId('train-verdict-guess').getAttribute('data-spotlight')).toBe('true');
+
+    fireEvent.click(screen.getByTestId('train-reveal-glyph-also-fine'));
+    expect(onSpotlightChange).toHaveBeenLastCalledWith(null);
+  });
+
+  // ─── Free-play swap (Phase 200 D-10/D-13/D-14, reworked per Phase 200 UAT) ──
+
+  it('while exploring, the line boxes and the Also fine list are absent and the free-play surface renders instead', async () => {
+    renderReveal({
+      isExploring: true,
+      freePlay: makeFreePlayState(),
+      alsoFineMoves: [{ uci: 'd2d4', quality: 'good' }],
+    });
+    expect(screen.queryByTestId('train-line-box-your-move')).toBeNull();
+    expect(screen.queryByTestId('train-line-box-best-move')).toBeNull();
+    expect(screen.queryByTestId('train-line-box-game-move')).toBeNull();
+    expect(screen.queryByTestId('train-reveal-also-fine')).toBeNull();
+    expect(screen.getByTestId('train-reveal-exploration')).not.toBeNull();
+    expect(screen.getByTestId('train-exploration-engine-card')).not.toBeNull();
+    // Phase 200 UAT: the bespoke single-chain stepper is gone — the move list
+    // is the Analysis page's own VariationTree.
+    expect(screen.getByTestId('train-exploration-moves-card')).not.toBeNull();
+    expect(screen.getByTestId('analysis-variation-tree')).not.toBeNull();
+  });
+
+  // Phase 200 UAT item 6: the × in the Stockfish header is a second, always-
+  // in-reach route back to the solution (the Solution button lives below the
+  // board, which can be scrolled away on mobile).
+  it('the × in the Stockfish card header calls onExitExploration', () => {
+    const onExitExploration = vi.fn();
+    renderReveal({ isExploring: true, freePlay: makeFreePlayState(), onExitExploration });
+    fireEvent.click(screen.getByTestId('btn-train-exploration-close'));
+    expect(onExitExploration).toHaveBeenCalledTimes(1);
+  });
+
+  it('D-10: the game footer stays pinned while exploring', async () => {
+    renderReveal({ isExploring: true, freePlay: makeFreePlayState() });
+    await waitFor(() => expect(screen.getByTestId('train-reveal-footer')).not.toBeNull());
+  });
+
+  // The guess card used to be pinned alongside the footer. It is hidden now:
+  // by the time free play is running the board shows the user's own
+  // exploration, so neither the guess verdict nor the Also fine legend inside
+  // the card has anything left on screen to describe.
+  it('hides the guess card while exploring, on both viewports', async () => {
+    for (const isDesktop of [true, false]) {
+      matchMediaMatches = isDesktop;
+      renderReveal({
+        isExploring: true,
+        freePlay: makeFreePlayState(),
+        guess: 'critical',
+        alsoFineMoves: [{ uci: 'g1f3', quality: 'good' }],
+      });
+      await waitFor(() => expect(screen.getByTestId('train-reveal-exploration')).not.toBeNull());
+      expect(screen.queryByTestId('train-verdict-guess')).toBeNull();
+      expect(screen.queryByTestId('train-reveal-also-fine')).toBeNull();
+      cleanup();
+    }
+  });
+
+  it('restores the guess card the moment exploration ends', async () => {
+    const { rerender, client, props } = renderReveal({
+      isExploring: true,
+      freePlay: makeFreePlayState(),
+      guess: 'critical',
+    });
+    await waitFor(() => expect(screen.getByTestId('train-reveal-exploration')).not.toBeNull());
+    expect(screen.queryByTestId('train-verdict-guess')).toBeNull();
+
+    rerender(
+      <MemoryRouter>
+        <QueryClientProvider client={client}>
+          <TooltipProvider>
+            <TrainReveal {...props} isExploring={false} />
+          </TooltipProvider>
+        </QueryClientProvider>
+      </MemoryRouter>,
+    );
+    expect(screen.getByTestId('train-verdict-guess')).not.toBeNull();
+  });
+
+  it('shows the engine-lines skeleton when the free-play PV lines are empty, and EngineLines once they are not', async () => {
+    const { rerender, client, props } = renderReveal({
+      isExploring: true,
+      freePlay: makeFreePlayState({ pvLines: [] }),
+    });
+    expect(screen.getByLabelText('Loading engine lines')).not.toBeNull();
+    expect(screen.queryByTestId('analysis-engine-lines')).toBeNull();
+
+    rerender(
+      <MemoryRouter>
+        <QueryClientProvider client={client}>
+          <TooltipProvider>
+            <TrainReveal
+              {...props}
+              freePlay={makeFreePlayState({ pvLines: [makePvLine()] })}
+            />
+          </TooltipProvider>
+        </QueryClientProvider>
+      </MemoryRouter>,
+    );
+    expect(screen.getByTestId('analysis-engine-lines')).not.toBeNull();
+    expect(screen.queryByLabelText('Loading engine lines')).toBeNull();
+  });
+
+  it('PV lines render in the supplied multipv order (best line first)', async () => {
+    // Black to move (after 1.e4) so 'e7e5'/'c7c5' are legal SAN e5/c5 —
+    // START_FEN itself is white-to-move, which would fall back to raw UCI.
+    const afterE4Fen = 'rnbqkbnr/pppppppp/8/8/4P3/8/PPPP1PPP/RNBQKBNR b KQkq e3 0 1';
+    renderReveal({
+      isExploring: true,
+      freePlay: makeFreePlayState({
+        fen: afterE4Fen,
+        pvLines: [
+          makePvLine({ multipv: 1, moves: ['e7e5'], evalCp: 40 }),
+          makePvLine({ multipv: 2, moves: ['c7c5'], evalCp: 10 }),
+        ],
+      }),
+    });
+    expect(screen.getByTestId('engine-line-0-move-0').textContent).toBe('e5');
+    expect(screen.getByTestId('engine-line-1-move-0').textContent).toBe('c5');
   });
 });

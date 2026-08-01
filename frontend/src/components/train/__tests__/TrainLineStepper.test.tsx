@@ -85,10 +85,33 @@ describe('TrainLineStepper', () => {
     expect((screen.getByTestId('btn-train-step-prev') as HTMLButtonElement).disabled).toBe(false);
   });
 
-  it('a one-element line disables both controls', () => {
-    render(<TrainLineStepper moves={['e4']} startFen={START_FEN} />);
-    expect((screen.getByTestId('btn-train-step-prev') as HTMLButtonElement).disabled).toBe(true);
-    expect((screen.getByTestId('btn-train-step-next') as HTMLButtonElement).disabled).toBe(true);
+  // Phase 200 UAT round 3 (bug fix): a one-element line used to disable BOTH
+  // controls while its token stayed clickable — stepping into the move left
+  // the user stranded at ply 1 with no way back to the solution position.
+  it('a one-element line steps forward into its move and back out again', () => {
+    const onFenChange = vi.fn();
+    render(<TrainLineStepper moves={['e4']} startFen={START_FEN} onFenChange={onFenChange} />);
+    const prev = () => screen.getByTestId('btn-train-step-prev') as HTMLButtonElement;
+    const next = () => screen.getByTestId('btn-train-step-next') as HTMLButtonElement;
+    expect(prev().disabled).toBe(true); // already at the start
+    expect(next().disabled).toBe(false);
+
+    fireEvent.click(next());
+    expect(onFenChange).toHaveBeenLastCalledWith(expectedFens(['e4'], START_FEN)[1]);
+    expect(next().disabled).toBe(true); // end of the line
+    expect(prev().disabled).toBe(false);
+
+    fireEvent.click(prev());
+    expect(onFenChange).toHaveBeenLastCalledWith(START_FEN);
+  });
+
+  it('a token click on a one-element line is reversible via prev (the ply-1 trap)', () => {
+    const onStepChange = vi.fn();
+    render(<TrainLineStepper moves={['e4']} startFen={START_FEN} onStepChange={onStepChange} />);
+    fireEvent.click(screen.getByTestId('train-line-stepper-token-0'));
+    expect(onStepChange).toHaveBeenLastCalledWith(expect.objectContaining({ index: 1 }));
+    fireEvent.click(screen.getByTestId('btn-train-step-prev'));
+    expect(onStepChange).toHaveBeenLastCalledWith(expect.objectContaining({ index: 0 }));
   });
 
   it('clicking a token derives the same FEN as the equivalent number of successive next presses (array indexing, not a character offset)', () => {
@@ -182,25 +205,6 @@ describe('TrainLineStepper', () => {
     expect(mockPlaySound).not.toHaveBeenCalled();
   });
 
-  it('omits the title/eval heading entirely when neither is supplied (190.1-01)', () => {
-    render(<TrainLineStepper moves={OPENING_MOVES} startFen={START_FEN} />);
-    expect(screen.queryByTestId('train-line-stepper-title')).toBeNull();
-    expect(screen.queryByTestId('train-line-stepper-eval')).toBeNull();
-  });
-
-  it('renders both the title and eval heading when supplied (190.1-01)', () => {
-    render(
-      <TrainLineStepper
-        moves={OPENING_MOVES}
-        startFen={START_FEN}
-        title="Played in game"
-        evalLabel="+0.3"
-      />,
-    );
-    expect(screen.getByTestId('train-line-stepper-title').textContent).toContain('Played in game');
-    expect(screen.getByTestId('train-line-stepper-eval').textContent).toBe('+0.3');
-  });
-
   it('onStepChange reports index, last-move UCI, and next-move UCI at each step (190.1 UAT)', () => {
     const onStepChange = vi.fn();
     const fens = expectedFens(OPENING_MOVES, START_FEN);
@@ -213,6 +217,7 @@ describe('TrainLineStepper', () => {
       index: 0,
       lastMoveUci: null,
       nextMoveUci: 'e2e4',
+      prefixUci: [],
     });
     fireEvent.click(screen.getByTestId('btn-train-step-next'));
     expect(onStepChange).toHaveBeenLastCalledWith({
@@ -220,6 +225,7 @@ describe('TrainLineStepper', () => {
       index: 1,
       lastMoveUci: 'e2e4',
       nextMoveUci: 'e7e5',
+      prefixUci: [],
     });
     // Jump to the end: the last step has no next move.
     fireEvent.click(screen.getByTestId(`train-line-stepper-token-${OPENING_MOVES.length - 1}`));
@@ -228,7 +234,45 @@ describe('TrainLineStepper', () => {
       index: OPENING_MOVES.length,
       lastMoveUci: 'b8c6',
       nextMoveUci: null,
+      // Phase 200 (EXPLORE-02): prefixUci is the ordered UCIs BEFORE
+      // lastMoveUci — the first 3 of the 4-move OPENING_MOVES line.
+      prefixUci: ['e2e4', 'e7e5', 'g1f3'],
     });
+  });
+
+  it('Phase 200 (EXPLORE-02): prefixUci has length 0 at stepper index 1, and replaying prefixUci + lastMoveUci from startFen reproduces the reported FEN at every index', () => {
+    const onStepChange = vi.fn();
+    render(
+      <TrainLineStepper moves={OPENING_MOVES} startFen={START_FEN} onStepChange={onStepChange} />,
+    );
+    for (let i = 0; i < OPENING_MOVES.length; i++) {
+      fireEvent.click(screen.getByTestId('btn-train-step-next'));
+      const step = onStepChange.mock.calls[onStepChange.mock.calls.length - 1]?.[0] as {
+        fen: string;
+        index: number;
+        lastMoveUci: string | null;
+        prefixUci: string[];
+      };
+      if (step.index === 1) {
+        expect(step.prefixUci).toEqual([]);
+      }
+      // Round-trip invariant (EXPLORE-02's provable seeding): replaying
+      // prefixUci then lastMoveUci from startFen must reproduce exactly the
+      // reported step.fen — this is what makes exploration's seed correct
+      // rather than plausible-looking.
+      const chess = new Chess(START_FEN);
+      for (const uci of step.prefixUci) {
+        chess.move({ from: uci.slice(0, 2), to: uci.slice(2, 4), promotion: uci.slice(4, 5) || undefined });
+      }
+      if (step.lastMoveUci !== null) {
+        chess.move({
+          from: step.lastMoveUci.slice(0, 2),
+          to: step.lastMoveUci.slice(2, 4),
+          promotion: step.lastMoveUci.slice(4, 5) || undefined,
+        });
+      }
+      expect(chess.fen()).toBe(step.fen);
+    }
   });
 
   it('bumping resetNonce snaps the stepper back to the start position (190.1 UAT Solution button)', () => {
@@ -255,25 +299,6 @@ describe('TrainLineStepper', () => {
     expect(onStepChange).toHaveBeenLastCalledWith(
       expect.objectContaining({ fen: START_FEN, index: 0, lastMoveUci: null }),
     );
-  });
-
-  it('renders the quality icon next to the eval when a quality is supplied, and omits it otherwise (190.1 UAT)', () => {
-    const { unmount } = render(
-      <TrainLineStepper
-        moves={OPENING_MOVES}
-        startFen={START_FEN}
-        title="Best move"
-        evalLabel="+0.5"
-        quality="best"
-      />,
-    );
-    expect(screen.getByTestId('train-line-stepper-quality').getAttribute('data-quality')).toBe('best');
-    unmount();
-
-    render(
-      <TrainLineStepper moves={OPENING_MOVES} startFen={START_FEN} title="Played in game" evalLabel="+0.1" />,
-    );
-    expect(screen.queryByTestId('train-line-stepper-quality')).toBeNull();
   });
 
   it('a long line renders every token inside the height-capped scrolling block, never growing the container past the cap', () => {
