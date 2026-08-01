@@ -49,6 +49,7 @@ import type { SolveResponse, TrainPuzzle } from '@/types/train';
 import type { UseTrainSessionResult } from '@/hooks/useTrainSession';
 import { useFitBoardToViewport } from '@/hooks/useFitBoardToViewport';
 import { useTrainFreePlay, uciFromDrop } from '@/hooks/useTrainFreePlay';
+import { useWakeLock } from '@/hooks/useWakeLock';
 import type { GradeResult, TrainEngineLine, TrainGradingEngine } from '@/hooks/useTrainGradingEngine';
 import { evalToExpectedScore, sideToMoveFromFen } from '@/lib/liveFlaw';
 import { useMarkPlayActive } from '@/lib/playActive';
@@ -161,6 +162,13 @@ export function TrainSolveScreen({
   // needs the vertical space (ProtectedLayout reads this flag; same pattern
   // as BotsGame).
   useMarkPlayActive();
+
+  // Keep the phone awake while a puzzle or its reveal is on screen — both are
+  // long reading states with no touch input, so the OS auto-lock timer would
+  // otherwise fire mid-solve. Scoped to this component on purpose: the start
+  // and score screens must NOT hold the lock (a user who walks away there
+  // should get their normal auto-lock).
+  useWakeLock();
 
   // 190.1 UAT round 4: reveal-line stepping plays move sounds — same shared
   // mute preference (and toggle iconography) as bot games.

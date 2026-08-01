@@ -16,6 +16,8 @@ in `YYYY-MM-DD` (Europe/Zurich).
 
 - The Train solve screen now explains itself. After you solve, each move gets its own card carrying a small arrow in the exact color of its arrow on the board, so you can tell at a glance which line is which. Hovering a card (or tapping it on mobile) spotlights just that move and clears every other arrow and badge off the board, and clicking a card snaps the board back to that move from wherever you had stepped to. Drawn alternatives are collected into a compact "Also fine" row. Inaccuracies no longer render in a separate yellow: they read as good moves, while the eval badge still discloses the drop. (Phase 200)
 
+- Your phone no longer dims or locks itself while you are studying a Train puzzle or reading its solution. The screen stays awake for as long as a puzzle is open and goes back to normal on the session's start and score screens. Requires iOS 16.4+ or a recent Android browser, and iOS Low Power Mode overrides it.
+
 - You can now explore "why didn't my move work" without leaving Train. Once a puzzle is revealed, just move a piece: the cards give way to a Stockfish engine card plus the analysis page's move list, seeded with whatever line you had stepped into. Play freely, click moves inside the engine's lines to play them in, branch off into sidelines that survive as their own blocks, and press Solution (or the card's ×) to return to the full reveal. Next and Analyze leave no residue behind. (Phase 200)
 
 ## [v2.10] FlawChess Engine Improvements — 2026-08-01
