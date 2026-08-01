@@ -40,6 +40,11 @@ export function moveTierFromSeverity(severity: FlawSeverity | null): TrainMoveTi
   return 'wrong';
 }
 
+/** Points awarded for a correct guess (SEED-119: the guess is worth exactly 1,
+ * independently of the move). Named so the reveal's guess chip and
+ * `scorePuzzle` can never disagree on it. */
+export const GUESS_POINTS = 1;
+
 /** Ratio (score/max) at or above which a session rates green (UI-SPEC). */
 export const TRAIN_RATING_GREEN_MIN = 0.75;
 /** Ratio at or above which a session rates yellow; below this rates red (UI-SPEC). */
@@ -57,7 +62,7 @@ export const TRAIN_PERCENTAGE_MULTIPLIER = 100;
 
 /** Per-puzzle score: 1 for the guess (0 otherwise) plus the tiered move points. */
 export function scorePuzzle(correctGuess: boolean, moveTier: TrainMoveTier): number {
-  return (correctGuess ? 1 : 0) + MOVE_TIER_POINTS[moveTier];
+  return (correctGuess ? GUESS_POINTS : 0) + MOVE_TIER_POINTS[moveTier];
 }
 
 /** Session aggregation over per-puzzle scores. */

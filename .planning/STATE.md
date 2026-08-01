@@ -2,25 +2,29 @@
 gsd_state_version: 1.0
 milestone: v2.11
 milestone_name: Train Solve Surface & Push Reminders
-status: planning
-last_updated: "2026-08-01T11:00:00.000Z"
+current_phase: 200
+current_phase_name: train-solve-screen-board-legend-inline-sideline-exploration
+status: complete
+stopped_at: Phase 200 shipped (squash-merged to main)
+last_updated: "2026-08-01T17:48:43.371Z"
 last_activity: 2026-08-01
+last_activity_desc: Phase 200 shipped — UAT passed, squash-merged to main
 progress:
   total_phases: 3
-  completed_phases: 0
-  total_plans: 0
-  completed_plans: 0
-  percent: 0
+  completed_phases: 1
+  total_plans: 4
+  completed_plans: 4
+  percent: 33
 ---
 
 # Project State: FlawChess
 
 ## Current Position
 
-Phase: 200 of 3 (Train Solve Screen — Board Legend & Inline Sideline Exploration)
-Plan: — of TBD
-Status: Ready to plan
-Last activity: 2026-08-01 — ROADMAP.md created for v2.11 (Phases 200–202); all 31 requirements mapped, 100% coverage
+Phase: 200 (train-solve-screen-board-legend-inline-sideline-exploration) — COMPLETE
+Plan: 4 of 4
+Status: Shipped — verification passed (7/7 criteria), UAT passed (3/3) after 10 fix rounds, squash-merged to main
+Last activity: 2026-08-01 — Phase 200 shipped
 
 ## Project Reference
 
@@ -554,6 +558,15 @@ v1.29 Live-Engine Analysis Page shipped 2026-06-29 — 5 phases (136–140), 14 
 - [Phase ?]: 199-06: Curve sweep (git_sha b59f3b2b) and persona sweep (git_sha e7329f01) legitimately differ — persona pass launched ~4.5h later, after the 199-05 completion commit landed
 - [Phase ?]: Phase 199 parity verdict: HOLDS in both anchor families (Maia -57.7 vs 85.0 threshold, SF -9.9 vs 50.0); no shipping calibration artifact refit
 - [Phase ?]: D-08 timing: raw 1.72x total-hours ratio overstates the ladder; locate-pass-adjusted per-game ratio is 1.50x, and the null control's per-move ratio (1.69x) shows the per-move metric is confounded by non-ladder engine changes
+- [Phase ?]: 200-01: glyph onClick toggles the spotlight in BOTH desktop and mobile modes (not gated on isDesktop) — harmless on desktop since pointer-leave already clears regardless of any click
+- [Phase ?]: 200-01: LineBoxHeader factored into one shared module-scope component used by both the resolved-line and standalone-game-move render branches, to keep TrainReveal.tsx within nesting/LOC limits
+- [Phase ?]: 200-01: tap-away-to-clear implemented as a raw document pointerdown listener scoped to the panel's effect lifetime, not a Radix popover or generic click-outside utility
+- [Phase ?]: Phase 200-02: split combined TrainReveal.tsx implementation into two atomic commits along task boundaries via build-then-split (implement full end state, revert Task 2 pieces, commit Task 1, reapply Task 2, commit)
+- [Phase ?]: Phase 200-02: Also fine row hover/focus/ring handlers live on the row container (mirroring line-box Card whole-card hover); the glyph button carries only the click/tap toggle
+- [Phase ?]: [Phase 200-03]: exploration validates the post-verdict drop against a new displayFen const (never boardFen), so the sideline's side-to-move check tracks the chain instead of re-pinning to the user's original color once it flips sides (D-12).
+- [Phase ?]: [Phase 200-03]: explorationPvLines is computed with its staleness guard but void'd (not yet consumed) — wiring it into TrainReveal's UI is plan 200-04's job, outside this plan's own task scope.
+- [Phase ?]: TrainExplorationPanel is a required-prop function component (not inline JSX) so exploration: TrainExplorationState narrows safely inside onMoveClick, sidestepping TS closure-narrowing limits
+- [Phase ?]: Exploration engine card reuses EngineLines/EngineLinesSkeleton/MAX_LINES verbatim from Analysis.tsx, never forked or edited, keeping the two engine cards bit-identical
 
 ### Pending Todos
 
@@ -610,6 +623,7 @@ None active.
 | 260729-a86 | `_claim_tier3_derived` Step 1 — the remaining picker hotspot after 260728-soo, at 89.8% of all prod DB time (10,376 calls x 221ms mean over 7.5h, 71k buffers/call). NOT an index problem: `ix_games_needs_engine_full_evals` and `ix_games_lichess_pv_backfill_pending` already exist and are already `btree(user_id)` partials, so there is no migration here. The defect was query SHAPE — both branches sat inside ONE `EXISTS` containing an `OR`, and because `u.is_guest` was correlated inside it, Postgres BitmapOr'd the two partials (cheap, 22ms/1.3k buffers) and then heap-fetched all 255,218 matching game rows (70,274 heap blocks) into a Hash Right Semi Join just to evaluate the guest guard, to select 21 users out of 418 — O(backlog), re-paid every call. Distributing the OR into two correlated `EXISTS` with the guest guard hoisted to an outer conjunct of branch (a) is logically identical (`u.is_guest` does not depend on `g`) and gives per-user Index Only Scan probes on both partials: prod-measured 360ms → 2.4ms and 71,612 → 1,443 buffers, cost now O(users). Equivalence proven on prod with EXCEPT both directions (21 = 21, 0 rows either way), and the shipped code's literally-emitted SQL re-EXPLAIN'd on prod rather than a hand-written approximation. `_es_weighted_user_pick` gained a mutually-exclusive `candidate_where_sql` param so the ES key stays single-sourced while tier-4 blob/bestmove SQL stays byte-identical (test-pinned). Gap found and closed during review: the executor's 7 tests ALL passed with the fix fully reverted (semantically identical shapes, and the dev DB is too small for a plan assertion), so an 8th test pins the emitted Step-1 shape — mutation-proven to fail on re-collapse. Backend 3931 passed, ruff/ty clean. Prod re-verification of pg_stat_statements is HUMAN-UAT after deploy | 2026-07-29 | 62c9e2b9 | [260729-a86-user-id-leading-partial-indexes-for-the-](./quick/260729-a86-user-id-leading-partial-indexes-for-the-/) |
 | 260729-sod | Fixed the iOS Maia WASM OOM behind reported random crashes during bot play. Root cause found in Sentry (FLAWCHESS-92, iPhone/Mobile Safari on `/bots`): `no available backend found. ERR: [wasm] RangeError: Out of memory` — a literal WASM heap allocation failure on an 8 GB device, so NOT an old-device capacity problem. `maia-worker.js`'s WebGPU→WASM fallback did `importScripts` a SECOND ORT runtime into the same worker global after the WebGPU attempt failed, while `session = null` freed nothing (ORT needs an explicit `release()`, and WASM linear memory never shrinks) — two full heaps in one worker, plus the 43.6 MB model fetched twice. iOS 18.2+ ships WebGPU on iPhone, so modern iPhones ENTER that branch, which is why this hit a 16 Pro Max. Measured with instrumented `WebAssembly.Memory` on the real vendored model: **226 MB of WASM heap per Maia session**, identical at batch 1 and batch 21 (so the 21-rung ELO ladder is NOT a factor) and flat across repeated inferences (the SEED-113 dispose fix holds — no leak); `enableCpuMemArena`/`enableMemPattern` move nothing. Four fixes: (1) the worker now reports `webgpu-unavailable` and the main thread respawns a fresh WASM-pinned worker — a new worker is the only way to reclaim heap #1 — with the Firefox lazy-`Clip`-shader warmup deliberately KEPT; (2) distinct `maia_failure` Sentry tag so the OOM stops hiding inside FLAWCHESS-92's `Load failed` events; (3) new `maiaWorkerHost.ts` shares ONE Maia worker across `/analysis`'s three consumers (live chart, gem sweep, FlawChess engine), reversing Phase 154 D-04 on memory grounds — 2 workers/~452 MB on mobile, up to 3/~678 MB on desktop, now 1/~226 MB; both consumer disciplines (drop-and-reissue vs no-drop FIFO) stay above the host, which owns transport only and adds a priority flag so the chart isn't starved behind MCTS/sweep calls; (4) 30-day cache headers for `/maia/*` + `/engine/*` (NOT `immutable` — ORT resolves its own wasm/mjs filenames from `wasmPaths`, so renaming would break resolution), with `maia-worker.js` carved out to `no-cache` since its protocol changed. Frontend 2840/2840 passed, lint/knip/`tsc -b` clean; the singleton guard mutation-proven (4 tests fail when disabled). Real-device iOS confirmation is HUMAN-UAT after deploy — no unit test allocates a real WASM heap | 2026-07-29 | 01f5e425 | [260729-sod-fix-maia-wasm-oom-on-ios-worker-respawn-](./quick/260729-sod-fix-maia-wasm-oom-on-ios-worker-respawn-/) |
 | 260731-s0z | Fixed 7 post-ship review findings from phases 194–198: Maia disable-mid-inference wedge, stale extraRootMoves freeze when an engine side is toggled off, grade() hang on a fully dead pool, abort-wedged stopping slots (new stop-bestmove watchdog), stale post-FEN-change commits in both engine hooks, Stockfish pv-commit throttle, and a once-per-FEN Maia legal-move context replacing 42 per-rung movegens | 2026-07-31 | 4d1caacc | [260731-s0z-fix-engine-review-findings-from-phases-1](./quick/260731-s0z-fix-engine-review-findings-from-phases-1/) |
+| 43 | Mobile Train reveal: pin the board column, collapse line boxes into tap-to-expand rows, hide dev clock in-session | 2026-08-01 | f717558f1 | — |
 
 ## Deferred Items
 
@@ -662,9 +676,9 @@ Items acknowledged and deferred at **v1.29 milestone close on 2026-06-29** (user
 
 ## Session Continuity
 
-**Stopped at:** Completed 199-07-PLAN.md — Phase 199 complete, parity HOLDS
+**Stopped at:** Completed 200-04-PLAN.md
 
-**Last session:** 2026-08-01T07:57:29.932Z
+**Last session:** 2026-08-01T13:28:08.072Z
 
 **Resume file:**
 
@@ -779,6 +793,10 @@ None
 | Phase 199 P05 | 22min | 2 tasks | 2 files |
 | Phase 199 P06 | 9h41m | 3 tasks | 21 files |
 | Phase 199 P07 | 50min | 3 tasks | 6 files |
+| Phase 200 P01 | 55min | 3 tasks | 10 files |
+| Phase 200 P02 | 55min | 2 tasks | 6 files |
+| Phase 200 P03 | 45min | 3 tasks | 8 files |
+| Phase 200 P04 | 35min | 2 tasks | 6 files |
 
 ## Performance Metrics
 

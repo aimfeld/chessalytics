@@ -159,7 +159,7 @@
 | 197. Maia WDL leaf values (SEED-126 Phase 6, v2.10) | 4/4 | Complete (measured, not shipped — LEAF-01 rejected) | 2026-07-31 |
 | 198. mctsSearch continuous dispatch (SEED-127, v2.10) | 5/8 | Closed (measured, not shipped — operator risk judgement) | 2026-07-31 |
 | 199. Bot re-calibration sweep + strength curve refit (v2.10) | 7/7 | Complete (parity HOLDS, no calibration artifact refit) | 2026-08-01 |
-| 200. Train Solve Screen — Board Legend & Inline Sideline Exploration (SEED-131, v2.11) | 0/TBD | Not started | - |
+| 200. Train Solve Screen — Board Legend & Inline Sideline Exploration (SEED-131, v2.11) | 4/4 | Complete | 2026-08-01 |
 | 201. Push Infrastructure & Train Reminders (SEED-132 Phase A, v2.11) | 0/TBD | Not started | - |
 | 202. Reminder Permission UX (SEED-132 Phase A, v2.11) | 0/TBD | Not started | - |
 
@@ -468,7 +468,26 @@ Make the Train solve screen readable and self-contained, then close the retentio
   4. Post-solve, moving a piece anywhere on the shared board — including from a position stepped into via a reveal line box, whose stepped prefix moves seed the exploration move list (the "why didn't my move work" flow) — starts sideline exploration immediately with no mode toggle to discover and no second board (EXPLORE-01, EXPLORE-02).
   5. The moment exploration starts, the reveal boxes give way to a Stockfish engine-lines card plus a move list of the explored line (no Maia card, no FlawChess engine card) and the solution arrows clear; the Solution button exits exploration and restores the full reveal (boxes + arrows) alongside its `solutionNonce` stepper reset; the Analyze button still deep-links unchanged to the full Analysis page; exploration state and any running engine search tear down cleanly on puzzle transition, Next, and unmount, with no search outliving its position or disturbing grading of the next puzzle; and all of this — including the sidebar swap — renders correctly in the mobile below-board layout at 375px (EXPLORE-03, EXPLORE-04, EXPLORE-05, EXPLORE-06, EXPLORE-07).
 
-**Plans**: TBD
+**Plans**: 4 plans in 4 strictly sequential waves — parallelism is zero by construction, because all four touch `TrainReveal.tsx` and `TrainSolveScreen.tsx`.
+
+**Plan-time decision resolved**: inline exploration mounts a SECOND, independent `useStockfishEngine` instance scoped `enabled: isExploring`, alongside the untouched session-scoped `useTrainGradingEngine`. Neither a repurposed grading engine nor a shared priority queue: grading is idle throughout the reveal/exploration window, the two are separate `Worker` objects, and `useStockfishEngine` already ships the debounce, stale-search discard, and teardown-on-`enabled`-toggle EXPLORE-05 needs. Recorded as an `add-alongside` assumption delta in `200-03-PLAN.md`.
+
+Plans:
+**Wave 1**
+
+- [x] 200-01-PLAN.md — Wave 1. Legend spotlight tracer: pure `applyTrainSpotlight` + `trainGlyphColor`, `ArrowGlyphIcon`, `Card`/`CardHeader` line boxes (D-01), desktop card-hover vs mobile glyph-tap split (LEGEND-01, LEGEND-02, LEGEND-05, LEGEND-06)
+
+**Wave 2** *(blocked on Wave 1 completion)*
+
+- [x] 200-02-PLAN.md — Wave 2. Yellow removal across all five reveal sites via `toDisplayQuality`, plus the compact "Also fine" row derived from a new `alsoFineMoves` overlay field (LEGEND-01, LEGEND-03, LEGEND-04, LEGEND-05, LEGEND-06)
+
+**Wave 3** *(blocked on Wave 2 completion)*
+
+- [x] 200-03-PLAN.md — Wave 3. `prefixUci` threading, `useTrainExploration`, the post-verdict `handlePieceDrop` branch, Solution exit + visibility gate, and the second Stockfish instance (EXPLORE-01, EXPLORE-02, EXPLORE-03, EXPLORE-04, EXPLORE-05, EXPLORE-06)
+
+**Wave 4** *(blocked on Wave 3 completion)*
+
+- [x] 200-04-PLAN.md — Wave 4. Exploration UI swap: `TrainExplorationLine`, the `EngineLines` card, PV click-to-play, and a blocking 375px browser UAT (EXPLORE-03, EXPLORE-07, LEGEND-06)
 
 **UI hint**: yes
 

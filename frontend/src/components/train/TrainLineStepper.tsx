@@ -21,6 +21,12 @@
  * then `chess.move(san)` per step, breaking rather than throwing on an
  * illegal SAN) — and reports the derived FEN at the current index via
  * `onFenChange`, which the reveal wires to the shared board's position state.
+ *
+ * Phase 200 (D-01): the header row (glyph / title / verdict mark / quality
+ * icon / eval badge) that used to render here moved into `TrainReveal.tsx`'s
+ * `CardHeader` — this component now renders only the prev/next + token row.
+ * The four testids it used to own (`train-line-stepper-title`/`-mark`/
+ * `-quality`/`-eval`) moved with it, unchanged.
  */
 
 import { useEffect, useMemo, useRef, useState } from 'react';
@@ -28,12 +34,9 @@ import type { ReactElement } from 'react';
 import { Chess } from 'chess.js';
 import { ChevronLeft, ChevronRight } from 'lucide-react';
 import { Button } from '@/components/ui/button';
-import { MoveQualityIcon } from '@/components/icons/MoveQualityIcon';
 import { cn } from '@/lib/utils';
 import { playSound } from '@/lib/sounds';
 import type { SoundEvent } from '@/lib/sounds';
-import { BEST_MOVE_ARROW, TRAIN_VERDICT_CORRECT, TRAIN_VERDICT_INCORRECT } from '@/lib/theme';
-import type { TrainMoveQuality } from '@/lib/trainArrows';
 
 /**
  * Height cap (T-190-19, DoS mitigation): a mate-in-many line's token list
@@ -57,6 +60,14 @@ export interface TrainLineStep {
   index: number;
   lastMoveUci: string | null;
   nextMoveUci: string | null;
+  /**
+   * Phase 200 (EXPLORE-02): the ordered list of UCIs from the line's START up
+   * to (but NOT including) the move that led to the CURRENT position — so
+   * both index 0 and index 1 report an empty array (the move that led to
+   * index 1 is `lastMoveUci`, not part of the prefix). Replaying `prefixUci`
+   * then `lastMoveUci` from `startFen` reproduces exactly `fen`.
+   */
+  prefixUci: string[];
 }
 
 export interface TrainLineStepperProps {
@@ -69,26 +80,6 @@ export interface TrainLineStepperProps {
   moves: string[];
   /** FEN of the position BEFORE the first move in `moves`. */
   startFen: string;
-  /**
-   * Heading text (190.1-01, D-03) — e.g. a reveal line's role label
-   * ("Played in game").
-   */
-  title?: string | null;
-  /** Eval label rendered as a right-floated blue badge (190.1 UAT round 3 —
-   * same solid-blue/white-ink treatment as the analysis board's PV badge) —
-   * pass the caller's own `formatScore(evalCp, evalMate)` output; this
-   * component does no eval formatting itself. Rendered only when `title` is
-   * also non-null, mirroring `depthLabel`'s dependency on `motifLabel`. */
-  evalLabel?: string | null;
-  /** Move quality of the line's FIRST move (190.1 UAT) — renders the matching
-   * quality icon (star for best, etc.) floated right next to the eval badge.
-   * Omitted/null while the quality isn't known yet. Rendered only when
-   * `title` is also non-null, like `evalLabel`. */
-  quality?: TrainMoveQuality | null;
-  /** Correctness mark rendered right after `title` (190.1 UAT round 3) — a
-   * green check / red cross for the Your-move box's verdict. Omitted/null for
-   * every box that carries no verdict (best/game-only boxes, tactic lines). */
-  mark?: 'correct' | 'incorrect' | null;
   /** Bump to force the stepper back to index 0 (190.1 UAT "Solution" button)
    * without changing the line content. */
   resetNonce?: number;
@@ -107,6 +98,14 @@ export interface TrainLineStepperProps {
    * move that led to the shown position, and draw the next-move arrow.
    */
   onStepChange?: (step: TrainLineStep) => void;
+  /**
+   * Phase 200 UAT: false suppresses the active-token (brown) highlight in this
+   * stepper. Exactly one line box owns the board position at a time, so only
+   * that box may show a move cursor — a box stepped earlier keeps its index
+   * (so prev/next resume where the user left off) but stops painting a second,
+   * misleading cursor. Defaults to true.
+   */
+  showCursor?: boolean;
   /** Board id passed through only if this component were ever to mount its
    * own board (it does not, by design — kept for API-shape parity/future
    * reversibility, per the plan's `<files_to_read>` guidance on distinct
@@ -152,11 +151,8 @@ function replayLine(
 export function TrainLineStepper({
   moves,
   startFen,
-  title = null,
-  evalLabel = null,
-  quality = null,
-  mark = null,
   resetNonce = 0,
+  showCursor = true,
   onFenChange,
   onStepChange,
 }: TrainLineStepperProps): ReactElement {
@@ -191,20 +187,25 @@ export function TrainLineStepper({
       index,
       lastMoveUci: index > 0 ? (ucis[index - 1] ?? null) : null,
       nextMoveUci: ucis[index] ?? null,
+      // Phase 200 (EXPLORE-02): `ucis[index - 1]` is already reported as
+      // `lastMoveUci` above, so the prefix stops one short of it — a naive
+      // `ucis.slice(0, index)` would double-count the last move once a
+      // caller concatenates prefix + lastMove + a freshly played move.
+      prefixUci: ucis.slice(0, Math.max(0, index - 1)),
     });
     // eslint-disable-next-line react-hooks/exhaustive-deps -- onFenChange/onStepChange are caller-provided callbacks (not expected to be re-created reactively per render); reacting only to index/line avoids a possible infinite loop if the caller passes an inline arrow.
   }, [index, line]);
 
-  // A one-move line has nothing to step through — there is exactly one
-  // meaningful frame (the move itself), so both controls are hard-disabled
-  // regardless of the general index math below (which would otherwise leave
-  // "next" enabled at the initial index=0/startFen state for any line with
-  // >=1 move). This is a deliberate special case, not an off-by-one bug —
-  // see the plan's must_haves: "A one-move line renders the stepper with
-  // both prev and next controls disabled."
-  const isSingleMove = moves.length === 1;
-  const canGoBack = !isSingleMove && index > 0;
-  const canGoForward = !isSingleMove && index < lastIndex;
+  // Bug fix (Phase 200 UAT round 3): a one-move line used to hard-disable BOTH
+  // controls (190-05's must_have, written when index 0 was thought to carry no
+  // meaning of its own). Its token stayed clickable, though, so a user could
+  // step INTO the move and then had no way back — prev was dead, and the only
+  // escape from ply 1 was the Solution button. Index 0 is now a first-class
+  // frame (it IS the solution position: the full reveal overlay, no Solution
+  // button), so the general index math governs both controls and every line
+  // length behaves the same way.
+  const canGoBack = index > 0;
+  const canGoForward = index < lastIndex;
 
   // 190.1 UAT round 5: on mobile the token row is a single horizontally
   // scrolling line, so stepping past the visible ~5 plies must bring the
@@ -242,38 +243,6 @@ export function TrainLineStepper({
 
   return (
     <div className="flex flex-col gap-2" data-testid="train-line-stepper">
-      {title != null && (
-        <div className="flex items-center justify-between gap-2">
-          <p className="min-w-0 truncate text-xl font-semibold" data-testid="train-line-stepper-title">
-            {title}
-            {mark != null && (
-              <span
-                className="ml-1"
-                data-testid="train-line-stepper-mark"
-                style={{ color: mark === 'correct' ? TRAIN_VERDICT_CORRECT : TRAIN_VERDICT_INCORRECT }}
-              >
-                {mark === 'correct' ? '✓' : '✗'}
-              </span>
-            )}
-          </p>
-          <span className="flex shrink-0 items-center gap-1.5">
-            {quality != null && (
-              <span data-testid="train-line-stepper-quality" data-quality={quality}>
-                <MoveQualityIcon quality={quality} className="h-4 w-4" />
-              </span>
-            )}
-            {evalLabel != null && (
-              <span
-                className="rounded px-1.5 py-0.5 text-sm font-semibold text-white"
-                style={{ backgroundColor: BEST_MOVE_ARROW }}
-                data-testid="train-line-stepper-eval"
-              >
-                {evalLabel}
-              </span>
-            )}
-          </span>
-        </div>
-      )}
       <div className="flex items-center gap-2">
         <Button
           variant="ghost"
@@ -299,15 +268,19 @@ export function TrainLineStepper({
             // index `moveIdx` is reached at stepper index `moveIdx + 1`
             // (fens[0] is startFen, before any move).
             const tokenIndex = moveIdx + 1;
+            // Phase 200 UAT: `showCursor` gates the brown badge only — the
+            // stepper's own index is untouched, so a suppressed box still
+            // resumes from where it was stepped.
+            const isCursor = showCursor && tokenIndex === index;
             return (
               <button
                 key={`${moveIdx}-${san}`}
                 type="button"
                 data-testid={`train-line-stepper-token-${moveIdx}`}
-                data-active={tokenIndex === index ? 'true' : undefined}
+                data-active={isCursor ? 'true' : undefined}
                 className={cn(
                   'shrink-0 rounded px-1.5 py-0.5 text-sm font-semibold',
-                  tokenIndex === index
+                  isCursor
                     ? 'bg-brand-brown text-white'
                     : 'text-muted-foreground hover:bg-muted',
                 )}

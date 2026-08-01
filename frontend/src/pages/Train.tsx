@@ -119,6 +119,15 @@ export default function TrainPage(): ReactElement {
     setRestoredReveal(null);
     setHasEnteredLoop(false);
     setShowScoreScreen(false);
+    // Phase 200 UAT round 7: drop the last solve verdict too, so the session
+    // just left cannot bleed into the next one. Without this the mutation
+    // still held the previous session's response when the user pressed Start
+    // again (dev-clock time travel is the fast way to hit this), and the
+    // freshly mounted solve screen replayed its result sound and points flash
+    // over the first puzzle. TrainSolveScreen guards its own mount as well —
+    // this keeps the page state honest to the "as a fresh page mount would"
+    // contract above.
+    trainSession.resetSolve();
     startSession();
   }
 
@@ -133,7 +142,15 @@ export default function TrainPage(): ReactElement {
     // 191.1 UAT: same horizontal padding as the Import page content
     // (`px-4 py-6 md:px-6` in Import.tsx) instead of a flat `p-6`.
     <div className="px-4 py-6 md:px-6" data-testid="train-page">
-      {DEV_CLOCK_ENABLED && <TrainDevClock onChange={handleDevClockChange} />}
+      {/* Landing screen only: the strip is vertical chrome above the solve
+          screen's board column, which on mobile is pinned and sized to the
+          viewport — every row above it comes straight out of the board. Time
+          travel is only ever ARMED from the landing screen anyway (a change
+          bounces back here via handleDevClockChange), so nothing is lost by
+          hiding it once a session is running. Same gate as TrainStartScreen. */}
+      {DEV_CLOCK_ENABLED && !showLoop && !showScoreScreen && !restoredActive && (
+        <TrainDevClock onChange={handleDevClockChange} />
+      )}
       {!showLoop && !showScoreScreen && !restoredActive && (
         <TrainStartScreen
           session={trainSession.session}

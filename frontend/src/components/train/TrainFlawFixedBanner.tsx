@@ -13,10 +13,21 @@
 import type { ReactElement } from 'react';
 import { Chess } from 'chess.js';
 import { MiniBoard } from '@/components/board/MiniBoard';
+import { Card } from '@/components/ui/card';
+import { useIsDesktop } from '@/hooks/useIsDesktop';
+import { FLAWCHESS_ENGINE_ACCENT } from '@/lib/theme';
 
 /** Thumbnail size — small enough to sit beside the heading/subline without
- * pushing the reveal panel wider than the board column (UI-SPEC E7). */
+ * pushing the reveal panel wider than the board column (UI-SPEC E7). Mobile
+ * gets a 50% larger board (UAT round 10): the reveal column is full-width
+ * there, so a 48px position reads as an unidentifiable smudge on a phone. */
 const FLAW_FIXED_THUMB_SIZE = 48;
+const FLAW_FIXED_THUMB_SIZE_MOBILE = 72;
+
+/** Bronze border + halo, identical to the homepage feature-card treatment
+ * (`Home.tsx`) so the mastery celebration reads as the same "brand glow". */
+const FLAW_FIXED_GLOW =
+  'border border-[rgba(205,127,50,0.85)] shadow-[0_0_24px_rgba(205,127,50,0.35)]';
 
 export interface TrainFlawFixedBannerProps {
   fen: string;
@@ -38,21 +49,24 @@ function isRenderableFen(fen: string): boolean {
 
 export function TrainFlawFixedBanner({ fen, flipped }: TrainFlawFixedBannerProps): ReactElement {
   const showThumbnail = isRenderableFen(fen);
+  const isDesktop = useIsDesktop();
+  const thumbSize = isDesktop ? FLAW_FIXED_THUMB_SIZE : FLAW_FIXED_THUMB_SIZE_MOBILE;
 
   return (
-    <div
-      className="flex items-center gap-2 rounded border border-brand-brown-light/60 bg-brand-brown-highlight/40 p-3 text-brand-brown-hover"
+    <Card
+      className={`flex items-center gap-3 p-3 ${FLAW_FIXED_GLOW}`}
+      style={{ color: FLAWCHESS_ENGINE_ACCENT }}
       data-testid="train-flaw-fixed-banner"
     >
       {showThumbnail && (
         <div data-testid="train-flaw-fixed-thumb">
-          <MiniBoard fen={fen} size={FLAW_FIXED_THUMB_SIZE} flipped={flipped} />
+          <MiniBoard fen={fen} size={thumbSize} flipped={flipped} />
         </div>
       )}
       <div className="min-w-0">
         <p className="text-xl font-semibold">Flaw fixed!</p>
-        <p className="text-sm">You&apos;ve mastered this position.</p>
+        <p className="text-sm opacity-80">You&apos;ve mastered this position.</p>
       </div>
-    </div>
+    </Card>
   );
 }

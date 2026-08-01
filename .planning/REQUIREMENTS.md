@@ -35,21 +35,21 @@
 
 ### Reveal Board Legend (SEED-131 A)
 
-- [ ] **LEGEND-01**: Each reveal line box (Your move / Best move / Played in game) carries a small arrow glyph in that move's exact board-arrow color before the box title; a coincidence-merged box ("Your move / Best move") shows one glyph matching the single arrow actually drawn
-- [ ] **LEGEND-02**: Hovering or tapping a sidebar arrow glyph hides every other arrow and quality badge on the board, leaving only that box's move visible, and restores the full overlay on release/tap-away — tap-driven on touch, not hover-only
-- [ ] **LEGEND-03**: `inaccuracy`-tier alternatives render in the same green as `good`-tier ones, so yellow disappears from the reveal board; the line eval still discloses the eval drop for anyone who digs in
-- [ ] **LEGEND-04**: Alternatives get a compact "Also fine: Nc4, Rd8" sidebar row with the green arrow glyph that participates in the spotlight — SAN tokens only, no steppable lines and no full line boxes
-- [ ] **LEGEND-05**: The spotlight filter and the green recolor live in the pure `trainArrows.ts` overlay builder and are unit-tested, so a regression in either fails CI rather than only showing up on a board
+- [x] **LEGEND-01**: Each reveal line box (Your move / Best move / Played in game) carries a small arrow glyph in that move's exact board-arrow color before the box title; a coincidence-merged box ("Your move / Best move") shows one glyph matching the single arrow actually drawn
+- [x] **LEGEND-02**: Hovering or tapping a sidebar arrow glyph hides every other arrow and quality badge on the board, leaving only that box's move visible, and restores the full overlay on release/tap-away — tap-driven on touch, not hover-only
+- [x] **LEGEND-03**: `inaccuracy`-tier alternatives render in the same green as `good`-tier ones, so yellow disappears from the reveal board; the line eval still discloses the eval drop for anyone who digs in
+- [x] **LEGEND-04**: Alternatives get a compact "Also fine: Nc4, Rd8" sidebar row with the green arrow glyph that participates in the spotlight — SAN tokens only, no steppable lines and no full line boxes
+- [x] **LEGEND-05**: The spotlight filter and the green recolor live in the pure `trainArrows.ts` overlay builder and are unit-tested, so a regression in either fails CI rather than only showing up on a board
 - [ ] **LEGEND-06**: The legend glyphs and the tap spotlight work in the mobile below-board sidebar layout at 375px
 
 ### Inline Sideline Exploration (SEED-131 B)
 
-- [ ] **EXPLORE-01**: Post-solve, moving a piece on the shared board starts exploration immediately — no mode toggle to discover, no second board
-- [ ] **EXPLORE-02**: Exploration can start from a stepped-into line-box position, and the stepped prefix moves seed the exploration move list (the "why didn't my move work" flow)
-- [ ] **EXPLORE-03**: The moment exploration starts, the reveal boxes give way to a Stockfish engine-lines card plus a move list of the explored line, and the solution arrows clear — no Maia card and no FlawChess engine card
-- [ ] **EXPLORE-04**: The existing Solution button exits exploration and restores the full reveal state (boxes + arrows) alongside its current `solutionNonce` stepper reset
-- [ ] **EXPLORE-05**: Exploration state and any running engine search tear down cleanly on puzzle transition, Next, and unmount — no search outlives its position, and no exploration search disturbs grading of the next puzzle
-- [ ] **EXPLORE-06**: The Analyze button still deep-links to the full Analysis page unchanged, keeping Maia, the FlawChess engine, and whole-game context available there
+- [x] **EXPLORE-01**: Post-solve, moving a piece on the shared board starts exploration immediately — no mode toggle to discover, no second board
+- [x] **EXPLORE-02**: Exploration can start from a stepped-into line-box position, and the stepped prefix moves seed the exploration move list (the "why didn't my move work" flow)
+- [x] **EXPLORE-03**: The moment exploration starts, the reveal boxes give way to a Stockfish engine-lines card plus a move list of the explored line, and the solution arrows clear — no Maia card and no FlawChess engine card
+- [x] **EXPLORE-04**: The existing Solution button exits exploration and restores the full reveal state (boxes + arrows) alongside its current `solutionNonce` stepper reset
+- [x] **EXPLORE-05**: Exploration state and any running engine search tear down cleanly on puzzle transition, Next, and unmount — no search outlives its position, and no exploration search disturbs grading of the next puzzle
+- [x] **EXPLORE-06**: The Analyze button still deep-links to the full Analysis page unchanged, keeping Maia, the FlawChess engine, and whole-game context available there
 - [ ] **EXPLORE-07**: The swap-to-analysis view renders correctly in the mobile below-board layout at 375px
 
 ### Push Infrastructure (SEED-132 A)
@@ -106,19 +106,19 @@
 
 | Requirement | Phase | Status |
 |-------------|-------|--------|
-| LEGEND-01 | Phase 200 | Pending |
-| LEGEND-02 | Phase 200 | Pending |
-| LEGEND-03 | Phase 200 | Pending |
-| LEGEND-04 | Phase 200 | Pending |
-| LEGEND-05 | Phase 200 | Pending |
-| LEGEND-06 | Phase 200 | Pending |
-| EXPLORE-01 | Phase 200 | Pending |
-| EXPLORE-02 | Phase 200 | Pending |
-| EXPLORE-03 | Phase 200 | Pending |
-| EXPLORE-04 | Phase 200 | Pending |
-| EXPLORE-05 | Phase 200 | Pending |
-| EXPLORE-06 | Phase 200 | Pending |
-| EXPLORE-07 | Phase 200 | Pending |
+| LEGEND-01 | Phase 200 | Complete |
+| LEGEND-02 | Phase 200 | Complete |
+| LEGEND-03 | Phase 200 | Complete |
+| LEGEND-04 | Phase 200 | Complete |
+| LEGEND-05 | Phase 200 | Complete |
+| LEGEND-06 | Phase 200 | Pending (375px browser pass unrun) |
+| EXPLORE-01 | Phase 200 | Complete |
+| EXPLORE-02 | Phase 200 | Complete |
+| EXPLORE-03 | Phase 200 | Complete |
+| EXPLORE-04 | Phase 200 | Complete |
+| EXPLORE-05 | Phase 200 | Complete |
+| EXPLORE-06 | Phase 200 | Complete |
+| EXPLORE-07 | Phase 200 | Pending (375px browser pass unrun) |
 | PUSH-01 | Phase 201 | Pending |
 | PUSH-02 | Phase 201 | Pending |
 | PUSH-03 | Phase 201 | Pending |

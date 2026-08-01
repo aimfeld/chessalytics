@@ -56,6 +56,15 @@ export function useFitBoardToViewport({
     const column = columnRef.current;
     const board = boardRef.current;
     if (column === null || board === null) return;
+    // Bug fix (mobile reveal pinning): a STICKY column reports a scroll-shifted
+    // rect once it is pinned — `rect.top` stops falling with the scroll while
+    // `window.scrollY` keeps climbing, so the document-relative `columnTop`
+    // below inflates by the whole scroll offset and collapses the board to
+    // `minPx`. The measurement is only meaningful with the page at the top, so
+    // skip it while scrolled and keep the last good fit. (A resize taken while
+    // scrolled therefore lands on the next measurement at scroll top; on mobile
+    // the board is width-bound anyway, so a briefly stale fit is invisible.)
+    if (window.scrollY > 0) return;
     const nonBoardHeight = column.offsetHeight - board.offsetHeight;
     // Document-relative (not viewport-relative) so a scrolled page measures
     // the same as an unscrolled one.
