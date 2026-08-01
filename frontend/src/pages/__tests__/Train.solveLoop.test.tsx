@@ -18,7 +18,15 @@
  * exact-match fast path (no second search needed to reach a verdict).
  */
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { act, cleanup, render, screen, waitFor, fireEvent } from '@testing-library/react';
+import {
+  act,
+  cleanup,
+  configure,
+  render,
+  screen,
+  waitFor,
+  fireEvent,
+} from '@testing-library/react';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { MemoryRouter } from 'react-router-dom';
 import { saveTrainRevealCache } from '@/lib/trainRevealCache';
@@ -60,6 +68,17 @@ vi.mock('@/components/board/ChessBoard', () => ({
     </div>
   ),
 }));
+
+// Flake fix: the per-test `}, 15000)` timeouts below were necessary but NOT
+// sufficient. testing-library's async utilities carry their own, independent
+// ceiling — `waitFor` defaults to 1000ms regardless of the Vitest test timeout —
+// so on a loaded machine under the full parallel `vitest run` a single
+// `waitFor` could blow while the test as a whole had 15s of headroom left. That
+// surfaced as a bare `waitFor` stack with no assertion message. This file's
+// slowest test measures ~6s even on an idle box, so give the async utils
+// headroom proportional to the per-test budget.
+const ASYNC_UTIL_TIMEOUT_MS = 10000;
+configure({ asyncUtilTimeout: ASYNC_UTIL_TIMEOUT_MS });
 
 // ─── trainApi mock ──────────────────────────────────────────────────────────
 

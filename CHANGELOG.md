@@ -8,6 +8,10 @@ in `YYYY-MM-DD` (Europe/Zurich).
 
 ## [Unreleased]
 
+### Tests
+
+- Fixed three test flakes that only surfaced under the full parallel suite, each at its real cause rather than by loosening an assertion: the real-Stockfish contract tests now lift `evaluate()`'s 2s wall-clock guard for themselves (the engine runs under `SCHED_IDLE`, so a depth-15 search is starved past 2s when every xdist worker competes for the same cores; the production constant is untouched); the tier-3 residual-fallback lottery test no longer requires that no other eligible backlog row exists anywhere in the database, and its stale fixture moved from 180 to 90 days so both probabilistic assertions sit many sigma from their thresholds; and the three heaviest frontend suites now raise testing-library's `asyncUtilTimeout`, whose 1000ms `waitFor` ceiling is independent of the per-test timeout those files already raised.
+
 ### Added
 
 - The Train solve screen now explains itself. After you solve, each move gets its own card carrying a small arrow in the exact color of its arrow on the board, so you can tell at a glance which line is which. Hovering a card (or tapping it on mobile) spotlights just that move and clears every other arrow and badge off the board, and clicking a card snaps the board back to that move from wherever you had stepped to. Drawn alternatives are collected into a compact "Also fine" row. Inaccuracies no longer render in a separate yellow: they read as good moves, while the eval badge still discloses the drop. (Phase 200)

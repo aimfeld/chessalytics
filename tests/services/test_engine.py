@@ -36,9 +36,32 @@ NEAR_EQUAL_AFTER_E4 = "rnbqkbnr/pppppppp/8/8/4P3/8/PPPP1PPP/RNBQKBNR b KQkq - 0 
 MATE_IN_1_WHITE = "6k1/5ppp/8/8/8/8/5PPP/R5K1 w - - 0 1"  # Ra8# is mate in 1
 MATE_IN_1_BLACK = "1r4k1/5ppp/8/8/8/8/5PPP/6K1 b - - 0 1"  # Rb1# is mate in 1 for black
 
+# Flake fix: these tests failed at random under `pytest -n auto` with
+# `assert (None is not None)`. evaluate() returns (None, None) on its defensive
+# per-eval wall-clock guard (_TIMEOUT_S = 2.0s), which is sized for a mostly
+# idle box — the depth-15 mean is ~0.09s. But every Stockfish subprocess is
+# spawned under SCHED_IDLE (see _sched_idle_preexec in app/services/engine.py),
+# so the kernel preempts it the instant any other runnable task wants CPU. With
+# one xdist worker per core all competing, the search is starved almost
+# continuously and a depth-15 eval genuinely exceeds 2s wall-clock — a property
+# of the loaded test box, not a regression in the wrapper.
+#
+# These tests assert the SCORE, never the latency, so give the search a
+# generous wall-clock budget here. The production constant is deliberately left
+# alone: 2.0s is a real prod guard and must not be relaxed to appease a test.
+_TEST_EVAL_TIMEOUT_S: float = 30.0
+
+
+@pytest.fixture
+def generous_eval_timeout(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Lift evaluate()'s wall-clock guard for the real-engine contract tests."""
+    import app.services.engine as engine_module
+
+    monkeypatch.setattr(engine_module, "_TIMEOUT_S", _TEST_EVAL_TIMEOUT_S)
+
 
 @skip_if_no_stockfish
-@pytest.mark.usefixtures("engine_started")
+@pytest.mark.usefixtures("engine_started", "generous_eval_timeout")
 class TestEngineWrapper:
     async def test_white_winning_returns_positive_cp(self) -> None:
         cp, mate = await evaluate(chess.Board(KQ_VS_K_WHITE_WINS))
