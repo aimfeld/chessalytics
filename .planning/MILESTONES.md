@@ -1,5 +1,34 @@
 # Milestones: FlawChess
 
+## v2.10 FlawChess Engine Improvements (Shipped: 2026-08-01)
+
+**Phases completed:** 6 phases (194, 195, 196, 197, 198, 199), 29 plans, 19 squash-merged commits over 3 days (240 files, +48,561 / −602 since `v2.9`)
+
+**Delivered:** The engine got measurably faster where it was structurally wasteful, two attractive-looking optimizations were measured and deliberately *not* shipped, and bot strength was re-verified against the engine that actually ships — so the difficulty labels users see are known-honest rather than assumed-still-valid.
+
+**Key accomplishments:**
+
+- **Phase 194 — Engine main-thread + cache hygiene (SEED-126 Phases 2–5, 4 plans, CACHE-01..06).** Single-pass policy conversion instead of per-move re-parsing, lazily-built board snapshots, abort-aware search so abandoning a position actually cancels queued Stockfish grading instead of letting it run to completion, and right-sized caches so long analysis sessions stop evicting results they are about to need. Two removal candidates SEED-126 flagged were deliberately *retained* with in-code notes naming their downstream consumer (`wdlByElo` → 197, `workerPool` priority queue → 198).
+- **Phase 195 — Depth-scaled grading ladder (SEED-126 Phase 1, 6 plans, LADDER-01..05).** Positions deep in the search tree are graded at a shallower Stockfish depth chosen from measurement rather than every position at full depth, preserving move quality. A follow-up measurement tightened the ladder to roughly 1.4× faster searches end to end.
+- **Phase 196 — Analysis-board Stockfish root injection (SEED-118, 3 plans, INJECT-01..07).** Stockfish's recommended move is now reliably among the candidates the practical engine considers; it could previously be dropped twice (probability-mass cut, then root-candidate cap), so the "what would the engine play instead" comparison went missing exactly when the disagreement mattered most. The phase also **corrected its own premise in REQUIREMENTS.md**: the disagreement re-run had been specified as "largely a cache replay", and measurement contradicted that for production (the 79.1% harness hit rate assumes two completed searches sharing a cache; the browser aborts ~1.7–2s in, giving a ~4.5% ceiling). Later phases were explicitly barred from assuming a cheap re-run.
+- **Phase 197 — Maia WDL leaf values (SEED-126 Phase 6, 4 plans). LEAF-01 rejected at a pre-declared gate.** Using Maia's own win/draw/loss estimate as the value of deep search-tree leaves was measured end to end and rejected: it goes blind to forced tactics. The six supporting requirements shipped; the headline idea did not. A real cache leak was fixed in passing (Moves-by-Rating no longer escapes the shared bounded cache).
+- **Phase 198 — mctsSearch continuous dispatch (SEED-127). Closed at 5/8 plans, measured but not shipped.** A modelled 29–35% speedup from overlapping policy and grading, closed on operator risk judgement after the determinism design failed two independent reviews — which surfaced the more valuable finding that browser grades were **never bit-reproducible to begin with** (SEED-130). DISPATCH-03..08 recorded as Rejected rather than quietly dropped.
+- **Phase 199 — Bot re-calibration sweep (7 plans, RECAL-01..05). Parity HOLDS.** Re-scoped mid-milestone from a three-change refit to a pre-registered 5-cell parity check, because 197 and 198 both closed unshipped and the grading ladder turned out to be the *only* strength change that actually reached users. Thresholds were committed to git ~10 hours before the first sweep game (D-03), then never edited. Result: Maia pooled shift −57.7 (SE 40.4) vs ±85.0; SF pooled −9.9 vs ±50.0; null control clear; shape guard did not fire. Per D-04 this was stop-and-report — no ladder revert, no refit — so all four shipping calibration artifacts stayed byte-identical, which is precisely how RECAL-02's CI-drift criterion is satisfied.
+
+**Requirements:** 38 rows across the six phases. 31 Complete, 7 Rejected (LEAF-01, DISPATCH-03..08) — every rejection recorded with its measurement rather than silently dropped. Five of six phases carry a passing VERIFICATION.md; Phase 198 has none by design (closed before verification).
+
+**What this milestone got right, and its honest limits:**
+
+- **Three of six phases ended in "measured, not shipped."** 197 rejected its headline idea, 198 closed unshipped, and 199 explicitly declined to refit. That is the pre-registration discipline working as intended, not three failures.
+- **Phase 199's timing attribution nearly went wrong and was caught.** The raw 1.72× engine-hours ratio folds in the removed locate-pass; worse, the blend-0 null control — which never invokes the grading ladder at all — showed a 1.69× *per-move* speedup as large as every ladder-exposed cell. Per-move timing therefore cannot isolate the ladder (it conflates it with Phase 194's work). The trustworthy figure is the game-level, locate-pass-adjusted **~1.50×**, which the null control validates at 1.02×, and which sits at or above the ladder fixture's own 1.37× prediction — the first game-level test that fixture claim has ever had.
+- **RECAL-04 is recorded as *not observed*, not verified.** Zero crashes fired across 704 games, so the crash-resume path was exercised only by a unit test. A clean run is not proof of a recovery mechanism.
+- **Stated fidelity limits (D-09):** SEED-130 browser/harness Stockfish-hash divergence; achieved pooled resolution ±79.1 internal ELO (Maia) / ±66.0 (SF), so a smaller real shift would not have been detectable; and blend-0 immunity leaving 16 of 24 personas structurally unmeasurable by this design.
+- **Per D-10, the named revert target is not a safe undo** — the committed curves were measured against flat depth 14 plus a 2500 ms movetime cap, a third configuration distinct from both the live ladder and the revert target.
+
+**Deferred:** SEED-133 — the full 24-persona recalibration against the post-v2.10 engine. Published persona labels still derive from the pre-195 2026-07-22/23 run; Phase 199 found no detectable shift in the two personas it spot-checked, but that check could not resolve below roughly ±70–90 ELO and two of its four family deltas were confounded by auto-locate choosing different anchor brackets. The seed records the run command, two silent-no-op traps, and the bracket-pinning question to settle first.
+
+---
+
 ## v2.9 Train — Spaced-Repetition Blunder Drills (Shipped: 2026-07-30)
 
 **Phases completed:** 6 phases (189, 190, 190.1, 191, 192, 193), 31 plans, 107 commits over 6 days (309 files, +68,178 / −2,386 since `v2.8`)

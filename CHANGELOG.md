@@ -8,6 +8,8 @@ in `YYYY-MM-DD` (Europe/Zurich).
 
 ## [Unreleased]
 
+## [v2.10] FlawChess Engine Improvements — 2026-08-01
+
 ### Changed
 
 - Bot moves and analysis-board searches are faster: positions deep in the engine's search tree are now graded at a shallower Stockfish depth, chosen from measurement so move quality is preserved, instead of every position at full depth. A follow-up measurement tightened the ladder further, landing at roughly 1.4× faster searches end to end. (Phase 195)
@@ -1233,7 +1235,8 @@ bookmarks, game cards, and rating / stats pages.
 - Rating history, global stats, openings W/D/L charts.
 - Multi-user auth with data isolation.
 
-[Unreleased]: https://github.com/flawchess/flawchess/compare/v2.9...HEAD
+[Unreleased]: https://github.com/flawchess/flawchess/compare/v2.10...HEAD
+[v2.10]: https://github.com/flawchess/flawchess/compare/v2.9...v2.10
 [v2.9]: https://github.com/flawchess/flawchess/compare/v2.8...v2.9
 [v2.8]: https://github.com/flawchess/flawchess/compare/v2.7...v2.8
 [v2.7]: https://github.com/flawchess/flawchess/compare/v2.6...v2.7
