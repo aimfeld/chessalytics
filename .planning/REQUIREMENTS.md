@@ -106,13 +106,43 @@
 
 | Requirement | Phase | Status |
 |-------------|-------|--------|
-| _(filled by roadmap)_ | | |
+| LEGEND-01 | Phase 200 | Pending |
+| LEGEND-02 | Phase 200 | Pending |
+| LEGEND-03 | Phase 200 | Pending |
+| LEGEND-04 | Phase 200 | Pending |
+| LEGEND-05 | Phase 200 | Pending |
+| LEGEND-06 | Phase 200 | Pending |
+| EXPLORE-01 | Phase 200 | Pending |
+| EXPLORE-02 | Phase 200 | Pending |
+| EXPLORE-03 | Phase 200 | Pending |
+| EXPLORE-04 | Phase 200 | Pending |
+| EXPLORE-05 | Phase 200 | Pending |
+| EXPLORE-06 | Phase 200 | Pending |
+| EXPLORE-07 | Phase 200 | Pending |
+| PUSH-01 | Phase 201 | Pending |
+| PUSH-02 | Phase 201 | Pending |
+| PUSH-03 | Phase 201 | Pending |
+| PUSH-04 | Phase 201 | Pending |
+| PUSH-05 | Phase 201 | Pending |
+| PUSH-06 | Phase 201 | Pending |
+| REMIND-01 | Phase 201 | Pending |
+| REMIND-02 | Phase 201 | Pending |
+| REMIND-03 | Phase 201 | Pending |
+| REMIND-04 | Phase 201 | Pending |
+| REMIND-05 | Phase 201 | Pending |
+| REMIND-06 | Phase 201 | Pending |
+| REMIND-07 | Phase 201 | Pending |
+| REMIND-08 | Phase 201 | Pending |
+| PERM-01 | Phase 202 | Pending |
+| PERM-02 | Phase 202 | Pending |
+| PERM-03 | Phase 202 | Pending |
+| PERM-04 | Phase 202 | Pending |
 
 **Coverage:**
 
 - v1 requirements: 31 total
-- Mapped to phases: 0/31 (pending roadmap)
-- Unmapped: 31
+- Mapped to phases: 31/31
+- Unmapped: 0
 
 ---
 *Requirements defined: 2026-08-01*
