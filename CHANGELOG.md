@@ -27,6 +27,7 @@ in `YYYY-MM-DD` (Europe/Zurich).
 ### Tests
 
 - Two engine ideas were measured end to end and deliberately not shipped, with the measurements committed: using Maia's own win/draw/loss estimate as the value of deep search-tree leaves (rejected at a pre-declared move-quality gate: it goes blind to forced tactics) (Phase 197), and rewriting the engine's dispatch loop for continuous policy/grade overlap (a modelled 29–35% speedup, closed as measured-not-shipped after the determinism design failed two independent reviews and surfaced that browser grades were never bit-reproducible to begin with — SEED-130) (Phase 198).
+- Re-measured bot strength against the shipped grading ladder with a 5-cell parity sweep plus a game-level timing comparison, since the ladder turned out to be the only strength change of the three originally planned for this milestone. Verdict: parity holds in both anchor families, and real games show at least the wall-clock speedup the ladder's own fixture predicted. No bot-strength labels changed. (Phase 199)
 ## [v2.9] Train — Spaced-Repetition Blunder Drills — 2026-07-30
 
 ### Added

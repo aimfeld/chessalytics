@@ -2,29 +2,31 @@
 gsd_state_version: 1.0
 milestone: v2.10
 milestone_name: FlawChess Engine Improvements
-current_phase: 198
-current_phase_name: mctsSearch continuous dispatch
-status: phase_closed
-stopped_at: Completed quick 260731-s0z (fix engine review findings from Phases 194-198)
-last_updated: "2026-07-31T18:51:32.903Z"
-last_activity: 2026-07-31
-last_activity_desc: Fixed 7 engine review findings from Phases 194-198 (quick 260731-s0z); phases 194-198 remain closed/integrated to main
+current_phase: 999.1
+current_phase_name: BACKLOG
+status: planning
+stopped_at: Completed 199-07-PLAN.md — Phase 199 complete, parity HOLDS
+last_updated: "2026-08-01T08:06:04.210Z"
+last_activity: 2026-08-01
+last_activity_desc: Phase 199 complete, transitioned to Phase 999.1
 progress:
   total_phases: 6
   completed_phases: 5
-  total_plans: 25
-  completed_plans: 22
-  percent: 88
+  total_plans: 32
+  completed_plans: 29
+  percent: 83
 ---
 
 # Project State: FlawChess
 
 ## Current Position
 
-Phase: 198 (mctsSearch continuous dispatch) — CLOSED, measured not shipped (2026-07-31)
-Plan: closed after wave 5 of 8 (waves 6–8 cancelled, zero `frontend/` changes)
-Status: Phase closed by operator risk judgement — see `reports/continuous-dispatch/report.md` §8
-Last activity: 2026-07-31 — Completed quick task 260731-s0z: fixed 7 post-ship engine review findings from phases 194–198
+Phase: 999.1 — Password Reset (BACKLOG)
+Plan: Not started
+Status: Ready to plan
+Last activity: 2026-08-01 — Phase 199 complete, transitioned to Phase 999.1
+
+Prior: Phase 198 (mctsSearch continuous dispatch) CLOSED after wave 5 of 8, measured not shipped by operator risk judgement — see `reports/continuous-dispatch/report.md` §8
 
 ## Project Reference
 
@@ -544,6 +546,17 @@ v1.29 Live-Engine Analysis Page shipped 2026-06-29 — 5 phases (136–140), 14 
 - [Phase ?]: 198-02: D-08's stop-rule distribution gets a single committed TSV + report table, not its own accept-rule-style gate (RESEARCH.md Open Question 3 resolved as anticipated)
 - [Phase ?]: FIX-2's step 2a reuses the SAME NO_EXTRA_ROOT_MOVES identity-preserving updater step 4 uses, so a disabled-side re-render never destabilizes useFlawChessEngine's search-restart deps
 - [Phase ?]: FIX-4's two rewritten workerPool.test.ts tests intentionally change from 'no Sentry capture ever' to 'no capture before the stop bound, one static capture after it' -- the plan's declared semantics change, re-verified RED against the old expectation
+- [Phase ?]: Scenario (d)'s anchor-pool guard tested end-to-end via child-process CLI spawn (applyPriorLedgerRows is internal, not among the five exported names)
+- [Phase ?]: Reverted requirements.mark-complete's RECAL-01/RECAL-04 checkbox flip: per 199-01-PLAN.md's requirements_rescope block, both are covered across multiple plans (199-01, 199-03, 199-04, 199-06 for RECAL-01; 199-01, 199-03 for RECAL-04) — 199-01 alone only delivers the ledger instrument + resume round-trip check, a partial delivery. Left [ ] Pending (mirrors the MAIA-04/PLAY-11 precedent)
+- [Phase ?]: 199-02: Adopted per-family D-03 thresholds verbatim from plan (Maia 85.0/165.0, SF 50.0/149.0); parity_verdict() identifies null control by bot_blend==0.0 rather than a hardcoded key
+- [Phase ?]: 199-03: Threaded PRESET_SUPERVISOR_ANCHORS inside launch() (not cold-start-only) since it's the single path for both cold start and crash-resume relaunch; harness refuses to resume a ledger whose anchor is absent from the current pool.
+- [Phase ?]: 199-04: Both blocking checkpoints (pre-registration lock, sweep launch) were answered by the orchestrator as delegated operator after explicit hand-off ('run the full ladder... I'm going to sleep now'); lock-and-launch selected since all four preconditions were green and thresholds derive from committed CIs with no new data.
+- [Phase ?]: 199-04: Launched the 5-cell sweep directly from the orchestrator's own shell, not a subagent — a subagent's backgrounded nohup children die when it returns (see project_executor_backgrounded_runs_die).
+- [Phase ?]: [Phase 199-05]: Extended the timing-baseline join to tolerate crash-orphaned partial-game segments discovered on real sweep-light/sweep-deep logs (3-4 supervised crashes each); all 5 D-05 curve cells found present in the pre-195 logs (plan expected 1 absent).
+- [Phase ?]: 199-06: RECAL-04 recorded as not-observed (zero crashes in 480+224 games), not verified — a fault-free run is not evidence the resume mitigation works under an actual fault
+- [Phase ?]: 199-06: Curve sweep (git_sha b59f3b2b) and persona sweep (git_sha e7329f01) legitimately differ — persona pass launched ~4.5h later, after the 199-05 completion commit landed
+- [Phase ?]: Phase 199 parity verdict: HOLDS in both anchor families (Maia -57.7 vs 85.0 threshold, SF -9.9 vs 50.0); no shipping calibration artifact refit
+- [Phase ?]: D-08 timing: raw 1.72x total-hours ratio overstates the ladder; locate-pass-adjusted per-game ratio is 1.50x, and the null control's per-move ratio (1.69x) shows the per-move metric is confounded by non-ladder engine changes
 
 ### Pending Todos
 
@@ -652,9 +665,9 @@ Items acknowledged and deferred at **v1.29 milestone close on 2026-06-29** (user
 
 ## Session Continuity
 
-**Stopped at:** Completed quick 260731-s0z (fix engine review findings from Phases 194-198)
+**Stopped at:** Completed 199-07-PLAN.md — Phase 199 complete, parity HOLDS
 
-**Last session:** 2026-07-31T18:51:32.871Z
+**Last session:** 2026-08-01T07:57:29.932Z
 
 **Resume file:**
 
@@ -762,6 +775,13 @@ None
 | Phase 198 P01 | 32min | 3 tasks | 3 files |
 | Phase 198 P02 | 13min | 3 tasks | 3 files |
 | Phase quick-260731-s0z P01 | ~25min | 4 tasks | 13 files |
+| Phase 199 P01 | 11min | 2 tasks | 2 files |
+| Phase 199 P02 | 30min | 2 tasks | 2 files |
+| Phase 199 P03 | 8min | 2 tasks | 2 files |
+| Phase 199 P04 | 12min | 3 tasks | 1 files |
+| Phase 199 P05 | 22min | 2 tasks | 2 files |
+| Phase 199 P06 | 9h41m | 3 tasks | 21 files |
+| Phase 199 P07 | 50min | 3 tasks | 6 files |
 
 ## Performance Metrics
 

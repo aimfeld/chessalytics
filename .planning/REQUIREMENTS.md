@@ -88,13 +88,18 @@
 - [ ] **DISPATCH-10**: SEED-118's `extraRootMoves` union and hard-cap exemption survive the `dispatchExpansion` rewrite unchanged in behaviour
 - [ ] **DISPATCH-11**: `fallbackExpectimax.ts`'s ENGINE-06 independence story and the frozen `guardrail.ts` `SearchRunner` contract are preserved
 
-### Bot Re-Calibration (combined, final)
+### Bot Re-Calibration (parity check + timing measurement)
 
-- [ ] **RECAL-01**: A full `calibration-harness.mjs` sweep runs against the final engine — ladder, Maia WDL leaves, and continuous dispatch together
-- [ ] **RECAL-02**: `reports/data/bot-strength-lookup.json` and the generated `frontend/src/generated/botStrengthCurves.ts` are refit from the new sweep and pass the CI drift check
-- [ ] **RECAL-03**: The 24 persona ELO labels reflect the refit curves, keeping the D-04 within-style monotonicity and the D-07 ceiling clamp honest
-- [ ] **RECAL-04**: The sweep is resumable across crashes (the known wasm OOB failure mode on long runs), so an overnight failure does not restart from zero
-- [ ] **RECAL-05**: The combined-sweep attribution limitation is recorded in the milestone artifacts — the measured strength delta is a property of the milestone, not assignable to any single engine change
+**Re-scoped 2026-07-31 during Phase 199 planning: only one of the three anticipated strength
+changes (ladder + Maia WDL leaves + continuous dispatch) actually shipped — Phase 197's leaf
+value was rejected and Phase 198 was never built. The text below replaces the original
+combined-sweep premise; see `199-CONTEXT.md`'s `<domain>` section for the full reasoning.**
+
+- [x] **RECAL-01 (re-scoped)**: A 5-cell parity sweep — one blend-0 null control plus four blend>0 exposed cells — runs `calibration-harness.mjs` against the shipped v2.10 engine using each cell's own pinned 2026-07-21 four-anchor bracket and the same `--seed 1`, producing a durable per-game ledger that carries wall-clock timing. This is a parity check against the committed 2026-07-21 numbers, not a full 15-cell sweep and not a sweep of three combined strength changes.
+- [x] **RECAL-02 (re-scoped, conditional)**: `reports/data/bot-strength-lookup.json` and `frontend/src/generated/botStrengthCurves.ts` are refit only if parity fails, and that refit is a separate authorized operator decision outside this phase (D-04). Parity HELD (`reports/bot-parity-199/report.md`), so both files stay byte-identical and the CI drift check passes because nothing regenerated — the drift criterion is satisfied by *not* changing the files.
+- [x] **RECAL-03 (re-scoped, conditional)**: Persona ELO labels are relabelled only under RECAL-02's condition, and the exposed surface is the 8 rung-1600/1800 personas (all blend>0, verified per-persona from `reports/data/persona-calibration.json` — never derived via `RUNG_BLEND`, A-03), not 24. The 16 rung-800/1000/1200/1400 personas are on `HUMAN_BLEND` and structurally cannot be reached by the ladder. Parity HELD, so `reports/data/persona-calibration.json` and `frontend/src/generated/personaCalibration.ts` stay untouched.
+- [x] **RECAL-04 (re-scoped)**: Resumability is a plumbing verification of the existing ledger `--resume` byte-identity contract and `bin/preset-supervisor.sh`'s crash loop, not new work — the only new work was threading the pinned anchor set through the supervisor. Recorded honestly: zero crashes occurred across the 704-game run, so the resume path itself was exercised only by 199-01's unit test, not in production (`199-06-SUMMARY.md`).
+- [x] **RECAL-05 (re-scoped)**: An attribution statement, not a limitation disclosure. The measured delta (parity HOLDS) is attributable to Phase 195's grading ladder alone, recorded with three stated fidelity limits (D-09): SEED-130 browser/harness Stockfish-hash divergence; the pooled resolution limit (achieved ±79.1 internal ELO Maia family, ±66.0 SF family); and blend-0 immunity leaving 16 of 24 personas unmeasured.
 
 ## Future Requirements (deferred)
 
@@ -182,11 +187,11 @@
 > the re-baseline measurement stands. Evidence: `reports/continuous-dispatch/report.md` (§8 records
 > the decision). Follow-up: `.planning/seeds/SEED-130-browser-grade-nondeterminism-uncleared-stockfish-hash.md`
 > (stays open).
-| RECAL-01 | Phase 199 | Pending |
-| RECAL-02 | Phase 199 | Pending |
-| RECAL-03 | Phase 199 | Pending |
-| RECAL-04 | Phase 199 | Pending |
-| RECAL-05 | Phase 199 | Pending |
+| RECAL-01 | Phase 199 | Complete |
+| RECAL-02 | Phase 199 | Complete (conditional, untriggered — parity held) |
+| RECAL-03 | Phase 199 | Complete (conditional, untriggered — parity held) |
+| RECAL-04 | Phase 199 | Complete |
+| RECAL-05 | Phase 199 | Complete |
 
 **Coverage:**
 
@@ -203,7 +208,7 @@
 | 196 — Analysis-board Stockfish root injection | SEED-118 | INJECT-01..07 |
 | 197 — Maia WDL leaf values | SEED-126 Phase 6 | LEAF-01..07 |
 | 198 — mctsSearch continuous dispatch | SEED-127 | DISPATCH-01..11 |
-| 199 — Bot re-calibration sweep + strength curve refit | combined, final | RECAL-01..05 |
+| 199 — Bot re-calibration sweep + strength curve refit | parity check + timing measurement | RECAL-01..05 |
 
 ---
 *Requirements defined: 2026-07-30*

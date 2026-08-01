@@ -1,0 +1,181 @@
+{
+  "description": "Pre-195 (pre-grading-ladder) game-level wall-clock timing baseline for Phase 199's D-08 before/after comparison. Derived by scripts/parse_calibration_timing_baseline.py from local, gitignored run.log files (2026-07-19/23 mtimes) joined against their sibling committed raw ledger TSVs. See `limits` below before using these numbers.",
+  "generated_at_utc": "2026-07-31T22:22:47.842026+00:00",
+  "generator": "scripts/parse_calibration_timing_baseline.py",
+  "cells": {
+    "1100,0.0": {
+      "bot_elo": 1100,
+      "bot_blend": 0.0,
+      "role": "human null control",
+      "status": "present",
+      "source": "sweep-human",
+      "game_count": 104,
+      "ply_count": 5535,
+      "total_elapsed_ms": 2173440.0,
+      "mean_game_elapsed_ms": 20898.5,
+      "mean_bot_move_ms": 184.4
+    },
+    "1300,0.05": {
+      "bot_elo": 1300,
+      "bot_blend": 0.05,
+      "role": "light dip (non-monotone, most fragile point on the curve)",
+      "status": "present",
+      "source": "sweep-light",
+      "game_count": 112,
+      "ply_count": 7110,
+      "total_elapsed_ms": 26301140.0,
+      "mean_game_elapsed_ms": 234831.6,
+      "mean_bot_move_ms": 6779.3
+    },
+    "1900,0.05": {
+      "bot_elo": 1900,
+      "bot_blend": 0.05,
+      "role": "light top end",
+      "status": "present",
+      "source": "sweep-light",
+      "game_count": 112,
+      "ply_count": 8069,
+      "total_elapsed_ms": 25958470.0,
+      "mean_game_elapsed_ms": 231772.1,
+      "mean_bot_move_ms": 5788.2
+    },
+    "1500,0.5": {
+      "bot_elo": 1500,
+      "bot_blend": 0.5,
+      "role": "deep low end",
+      "status": "present",
+      "source": "sweep-deep",
+      "game_count": 112,
+      "ply_count": 7958,
+      "total_elapsed_ms": 28122220.0,
+      "mean_game_elapsed_ms": 251091.2,
+      "mean_bot_move_ms": 6436.4
+    },
+    "2300,0.5": {
+      "bot_elo": 2300,
+      "bot_blend": 0.5,
+      "role": "deep 2300 \u2014 shared with all four rung-1800 personas post-retargeting",
+      "status": "present",
+      "source": "sweep-deep",
+      "game_count": 112,
+      "ply_count": 7227,
+      "total_elapsed_ms": 22330190.0,
+      "mean_game_elapsed_ms": 199376.7,
+      "mean_bot_move_ms": 5539.5
+    }
+  },
+  "personas": {
+    "attacker-1600": {
+      "bot_elo": 1900,
+      "bot_blend": 0.05,
+      "status": "present",
+      "source": "persona-sweep-attacker-1600",
+      "game_count": 112,
+      "ply_count": 8049,
+      "total_elapsed_ms": 27044400.0,
+      "mean_game_elapsed_ms": 241467.9,
+      "mean_bot_move_ms": 6071.8
+    },
+    "wall-1800": {
+      "bot_elo": 2300,
+      "bot_blend": 0.5,
+      "status": "present",
+      "source": "persona-sweep-wall-1800",
+      "game_count": 104,
+      "ply_count": 8372,
+      "total_elapsed_ms": 28810030.0,
+      "mean_game_elapsed_ms": 277019.5,
+      "mean_bot_move_ms": 6265.1
+    }
+  },
+  "provenance": {
+    "sources": [
+      {
+        "label": "sweep-human",
+        "role": "curve cell source (Human preset)",
+        "log_path": "reports/data/sweep-human/run.log",
+        "log": {
+          "mtime_utc": "2026-07-20T00:38:41.403847+00:00",
+          "size_bytes": 1922982
+        },
+        "ledger_path": "reports/data/sweep-human/calibration-harness-2026-07-19T21-13-45-244Z.tsv",
+        "git_sha_captured": "562bdd84",
+        "skipped_line_count": 1619,
+        "total_lines_matched": 29950,
+        "orphan_segment_count": 0,
+        "orphan_ply_count": 0
+      },
+      {
+        "label": "sweep-light",
+        "role": "curve cell source (Light preset)",
+        "log_path": "reports/data/sweep-light/run.log",
+        "log": {
+          "mtime_utc": "2026-07-21T09:02:12.741225+00:00",
+          "size_bytes": 2332163
+        },
+        "ledger_path": "reports/data/sweep-light/calibration-harness-2026-07-19T21-13-45-294Z.tsv",
+        "git_sha_captured": "562bdd84",
+        "skipped_line_count": 1774,
+        "total_lines_matched": 36464,
+        "orphan_segment_count": 4,
+        "orphan_ply_count": 103
+      },
+      {
+        "label": "sweep-deep",
+        "role": "curve cell source (Deep preset)",
+        "log_path": "reports/data/sweep-deep/run.log",
+        "log": {
+          "mtime_utc": "2026-07-21T09:15:12.847119+00:00",
+          "size_bytes": 2476710
+        },
+        "ledger_path": "reports/data/sweep-deep/calibration-harness-2026-07-19T21-13-45-259Z.tsv",
+        "git_sha_captured": "562bdd84",
+        "skipped_line_count": 1777,
+        "total_lines_matched": 38906,
+        "orphan_segment_count": 4,
+        "orphan_ply_count": 212
+      },
+      {
+        "label": "persona-sweep-attacker-1600",
+        "role": "persona spot-check source (attacker-1600)",
+        "log_path": "reports/data/persona-sweep-attacker-1600/run.log",
+        "log": {
+          "mtime_utc": "2026-07-23T16:24:54.262920+00:00",
+          "size_bytes": 512730
+        },
+        "ledger_path": "reports/data/persona-sweep-attacker-1600/calibration-harness-2026-07-22T15-14-27-256Z.tsv",
+        "git_sha_captured": "a13e5fe9",
+        "skipped_line_count": 375,
+        "total_lines_matched": 8049,
+        "orphan_segment_count": 0,
+        "orphan_ply_count": 0
+      },
+      {
+        "label": "persona-sweep-wall-1800",
+        "role": "persona spot-check source (wall-1800)",
+        "log_path": "reports/data/persona-sweep-wall-1800/run.log",
+        "log": {
+          "mtime_utc": "2026-07-23T16:24:54.255920+00:00",
+          "size_bytes": 529799
+        },
+        "ledger_path": "reports/data/persona-sweep-wall-1800/calibration-harness-2026-07-23T05-43-01-643Z.tsv",
+        "git_sha_captured": "c49caa7c",
+        "skipped_line_count": 349,
+        "total_lines_matched": 8372,
+        "orphan_segment_count": 0,
+        "orphan_ply_count": 0
+      }
+    ],
+    "current_head_sha_at_generation": "c2563a26",
+    "new_sweep_launch_sha": "b59f3b2b",
+    "new_sweep_launch_note": "Plan 199-04 launched the actual post-195 5-cell parity sweep (PIDs 1111151-1111155, out-dirs reports/data/sweep-199-*) under this git sha, ~2026-07-31T21:57Z, resolved via `git log --oneline -1 --before=\"2026-07-31T22:00:00Z\"` and cross-checked against 199-04-SUMMARY.md. This baseline artifact itself was generated at current_head_sha_at_generation, a later commit in the same phase (199-05) \u2014 the new sweep's own per-game ledger rows (once plan 06 completes) carry their own git_sha, which is the true 'after' side of the comparison."
+  },
+  "limits": {
+    "local_only_fidelity": "The five raw run.log files this artifact is derived from are gitignored (.gitignore lines 237-238) and were never committed \u2014 they exist only on the machine that ran the original 2026-07-19/23 sweeps. If those local files are lost, this derivation cannot be re-run, and the numbers in this JSON become the only surviving record of the pre-195 side of the timing comparison.",
+    "retired_scale_exclusion": "reports/data/calibration-fullgrid-run.log and reports/data/calibration-blend0-run.log were deliberately excluded: they use the retired maia900 anchor token and blend values {0, 0.5, 1} from the 2026-07-12 clamped-run incident, not the current Phase-173/180 anchor scale (blends {0, 0.05, 0.5}).",
+    "locate_pass_inclusion": "These baseline numbers include each cell's locate-pass games (the two-pass locate-then-bracket schedule Phase 180 used before D-02 pinned brackets), which the new post-195 sweep skips entirely per D-02. A raw ratio of these numbers against the new sweep's timing therefore overstates the grading ladder's own contribution unless the locate-pass games are accounted for separately.",
+    "cell_absence": "All 5 target curve cells (per 199-CONTEXT.md D-05) were found present with real game data in reports/data/sweep-{human,light,deep}/run.log \u2014 every one of the 5 (bot_elo, bot_blend) pairs D-05 selected is drawn from the same Phase-180 grid these logs already cover (see RESEARCH.md's verified per-cell bracket table, which independently shows 96 verified games for every one of the 5 cells). The phase plan (199-05-PLAN.md) anticipated one cell would be absent; that expectation did not hold once actually checked against these files, so no cell is recorded as absent here \u2014 see the plan's SUMMARY for this deviation.",
+    "crash_orphan_note": "reports/data/sweep-light and reports/data/sweep-deep each had 4 crash-orphaned partial-game segments (a supervised process crash mid-game, replayed at the same game_index on resume \u2014 see their supervisor.log), which the parser discarded rather than folding into any cell. See provenance.sources[].orphan_segment_count/orphan_ply_count for the exact counts per source.",
+    "seed_130_note": "This baseline, like the new sweep it will be compared against, is measured by the harness, which clears the Stockfish hash before every grading call \u2014 the shipped browser never does (SEED-130, open). Neither side of this timing comparison is bit-identical to shipped browser wall-clock behavior."
+  }
+}

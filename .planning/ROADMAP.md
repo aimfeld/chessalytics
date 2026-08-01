@@ -157,11 +157,11 @@
 | 196. Analysis-board Stockfish root injection (SEED-118, v2.10) | 3/3 | Complete | 2026-07-31 |
 | 197. Maia WDL leaf values (SEED-126 Phase 6, v2.10) | 4/4 | Complete (measured, not shipped — LEAF-01 rejected) | 2026-07-31 |
 | 198. mctsSearch continuous dispatch (SEED-127, v2.10) | 5/8 | Closed (measured, not shipped — operator risk judgement) | 2026-07-31 |
-| 199. Bot re-calibration sweep + strength curve refit (v2.10) | 0/TBD | Not started | - |
+| 199. Bot re-calibration sweep + strength curve refit (v2.10) | 7/7 | Complete (parity HOLDS, no calibration artifact refit) | 2026-08-01 |
 
 ## v2.10 FlawChess Engine Improvements (In Progress)
 
-Eliminate the engine's measured structural waste — main-thread jank, undersized thrashing provider caches, an over-deep flat grading ladder, a discarded Maia WDL head, and Maia/Stockfish idling against each other — then light up dormant Stockfish root injection on the analysis board and re-establish honest bot strength labels in one final calibration sweep. Sourced from SEED-126 (throughput + main-thread cost, measured 2026-07-30), SEED-127 (continuous dispatch), and SEED-118 (analysis-board root injection); no project-level research pass was run — the three seeds carry the measured wall-clock data, per-file breadcrumbs, rejected alternatives, and locked design decisions that stand in for it. Sequencing is load-bearing and non-negotiable — all five source units edit `dispatchExpansion`, so the committed order is **194 → 195 → 196 → 197 → 198 → 199**: Phase 194 (cheap, no calibration dependency) lands first; Phase 195 (the depth ladder) lands next with its own calibration recorded before anything else touches leaf evaluation; Phase 196 (root injection, small and localised) follows, made cheap by Phase 194's cache work and Phase 195's throughput win; Phase 197 (Maia WDL leaves, its own calibration) re-validates Phase 196's headline number after landing; Phase 198 (continuous dispatch) is the riskiest change in the codebase, rewriting the same `dispatchExpansion` region Phase 196 touched and requiring a paper design + cross-AI review before implementation; Phase 199 closes the milestone with one combined calibration sweep covering Phases 195/197/198's strength changes together — an accepted trade-off (2026-07-30) that forfeits per-change attribution to spend operator hours once rather than three times.
+Eliminate the engine's measured structural waste — main-thread jank, undersized thrashing provider caches, an over-deep flat grading ladder, a discarded Maia WDL head, and Maia/Stockfish idling against each other — then light up dormant Stockfish root injection on the analysis board and re-establish honest bot strength labels in one final calibration sweep. Sourced from SEED-126 (throughput + main-thread cost, measured 2026-07-30), SEED-127 (continuous dispatch), and SEED-118 (analysis-board root injection); no project-level research pass was run — the three seeds carry the measured wall-clock data, per-file breadcrumbs, rejected alternatives, and locked design decisions that stand in for it. Sequencing is load-bearing and non-negotiable — all five source units edit `dispatchExpansion`, so the committed order is **194 → 195 → 196 → 197 → 198 → 199**: Phase 194 (cheap, no calibration dependency) lands first; Phase 195 (the depth ladder) lands next with its own calibration recorded before anything else touches leaf evaluation; Phase 196 (root injection, small and localised) follows, made cheap by Phase 194's cache work and Phase 195's throughput win; Phase 197 (Maia WDL leaves, its own calibration) re-validates Phase 196's headline number after landing; Phase 198 (continuous dispatch) is the riskiest change in the codebase, rewriting the same `dispatchExpansion` region Phase 196 touched and requiring a paper design + cross-AI review before implementation; Phase 199 closes the milestone with a 5-cell parity check plus a timing measurement against Phase 195's grading ladder — the only one of the three anticipated strength changes that actually shipped (197's leaf value was rejected, 198 was never built), which makes Phase 199 a single-change gate rather than the combined-sweep-with-forfeited-attribution originally planned.
 
 ### Phase 194: Engine main-thread + cache hygiene
 
@@ -387,21 +387,60 @@ Plans:
 
 ### Phase 199: Bot re-calibration sweep + strength curve refit
 
-**Goal**: Run one combined, operator-supervised overnight `calibration-harness.mjs` sweep against the fully-changed engine (ladder + Maia WDL leaves + continuous dispatch, all present together) and refit the shipping bot-strength lookup and the 24 persona ELO labels from it — the sweep itself is the deliverable, in the same resume-on-crash shape as v2.7 Phase 184, with the combined-sweep attribution trade-off recorded explicitly rather than implied.
+**Goal**: Answer one question with measurement — does the shipped bot still play at roughly the
+same strength after Phase 195's grading ladder, and how much wall clock did the ladder actually buy
+in real games? A 5-cell parity sweep (1 null control + 4 exposed cells, pinned to the recorded
+2026-07-21 anchor brackets) plus 2 persona spot-checks, compared against the committed 2026-07-21
+numbers under a threshold pre-registered before the run, with a game-level D-08 timing measurement.
+Not a refit: `bot-strength-lookup.json`/`botStrengthCurves.ts`/`persona-calibration.json` are
+refit only if parity fails, and that refit is a separate operator decision outside this phase (D-04).
 
-**Depends on**: Phase 195 (ladder), Phase 197 (Maia WDL leaves), Phase 198 (continuous dispatch) — all three strength-changing phases must be present in the engine before this sweep runs
+**Depends on**: Phase 195 (the grading ladder) — the only one of the milestone's three anticipated
+strength changes that actually shipped; Phase 197's Maia WDL leaf value was rejected (mechanism
+stripped) and Phase 198's continuous dispatch was never built, so this phase does not depend on either
 
 **Requirements**: RECAL-01, RECAL-02, RECAL-03, RECAL-04, RECAL-05
 
 **Success Criteria** (what must be TRUE):
 
-  1. A full `calibration-harness.mjs` sweep runs against the final engine (ladder + Maia WDL leaves + continuous dispatch all present together), producing a durable per-cell strength-map ledger (RECAL-01).
-  2. `reports/data/bot-strength-lookup.json` and the generated `frontend/src/generated/botStrengthCurves.ts` are refit from the new sweep and pass the CI drift check (RECAL-02).
-  3. The 24 persona ELO labels reflect the refit curves, keeping the D-04 within-style monotonicity and the D-07 ceiling clamp honest (RECAL-03).
-  4. The sweep survives a crash (the known wasm OOB failure mode on long runs) via resume rather than restarting from zero, operator-supervised overnight the same way as v2.7 Phase 184 (RECAL-04).
-  5. The milestone artifacts explicitly record the combined-sweep attribution limitation: the measured strength delta is a property of the whole milestone, not assignable to the ladder, Maia WDL leaves, or continuous dispatch individually (RECAL-05).
+  1. A 5-cell parity sweep (1 blend-0 null control + 4 blend>0 exposed cells) runs `calibration-harness.mjs` against the shipped engine on each cell's pinned 2026-07-21 four-anchor bracket, producing a durable per-game ledger with wall-clock timing columns (RECAL-01).
+  2. `reports/data/bot-strength-lookup.json` and `frontend/src/generated/botStrengthCurves.ts` are refit **only if parity fails** — a separate authorized operator decision outside this phase; if parity holds, both stay byte-identical and the CI drift check passes because nothing regenerated (RECAL-02, **conditional, untriggered — parity held**).
+  3. The 8 rung-1600/1800 persona ELO labels (not 24 — the other 16 are structurally immune, `HUMAN_BLEND`) are relabelled only under RECAL-02's condition (RECAL-03, **conditional, untriggered — parity held**).
+  4. The ledger `--resume` byte-identity contract and the supervisor's crash loop are plumbing-verified, with the pinned anchor set threaded through so a resumed relaunch matches (RECAL-04).
+  5. The report attributes the measured delta (or its absence) to Phase 195's grading ladder alone, with three stated fidelity limits: SEED-130 hash-clearing divergence, the achieved pooled resolution per family, and the blend-0 16-persona immunity (RECAL-05).
 
-**Plans**: TBD
+**Plans:** 7/7 plans complete
+
+> **Re-scoped 2026-07-31** from an originally-planned combined three-change sweep (ladder + Maia
+> WDL leaves + continuous dispatch) to the 5-cell parity check above, once it turned out only the
+> ladder shipped a strength change. Authoritative scope: `199-CONTEXT.md` `<domain>`. Verdict:
+> parity HOLDS (`reports/bot-parity-199/report.md`).
+
+Plans:
+
+**Wave 1**
+
+- [x] 199-01-PLAN.md — Wave 1. Ledger instrument: append `elapsed_ms`/`mean_move_ms` to the harness raw ledger, export the five ledger symbols, prove the path with a tiny end-to-end run, and pin the schema with a new `.check.mjs` (RECAL-01, RECAL-04)
+- [x] 199-02-PLAN.md — Wave 1. Pre-register the parity threshold before any data exists: `accept-rule.md` plus `calibration_parity_verdict.py` with the per-family constants (85.0 Maia / 50.0 SF pooled, 165.0 / 149.0 null-control) and a synthetic `--self-test` (RECAL-01, RECAL-02, RECAL-03)
+- [x] 199-03-PLAN.md — Wave 1. Runner seams: `PRESET_SUPERVISOR_ANCHORS` so pinned brackets keep crash supervision, and `PERSONA_SWEEP_DATA_DIR` so the persona spot-check does not silently no-op against the 2026-07-23 out-dirs (RECAL-01, RECAL-03, RECAL-04)
+
+**Wave 2** *(blocked on Wave 1)*
+
+- [x] 199-04-PLAN.md — Wave 2. Commit the runbook, lock the pre-registration behind a blocking decision checkpoint, and launch the 5 pinned-bracket cells under the supervisor. Operator-run (RECAL-01, RECAL-04)
+
+**Wave 3** *(blocked on Wave 2)*
+
+- [x] 199-05-PLAN.md — Wave 3. Runs while the sweep is in flight: parse the local pre-195 run logs into a committed KB-scale timing baseline, with a self-tested parser that refuses the retired `maia900` scale (RECAL-01, RECAL-05)
+- [x] 199-06-PLAN.md — Wave 3. Sweep completion gate, the 2 persona spot-checks (`attacker-1600` + `wall-1800`, fit suppressed, fresh tree), and the `git add -f` that gets the evidence past `.gitignore`. Operator-run (RECAL-01, RECAL-03, RECAL-04)
+
+**Wave 4** *(blocked on Wave 3)*
+
+- [x] 199-07-PLAN.md — Wave 4. Compute the verdict against the unedited pre-registration (HOLDS), write the report (verdict / timing / attribution / limits), and write the re-scoped RECAL-01..05 back into REQUIREMENTS.md and this ROADMAP (RECAL-01..05)
+
+Wave ordering is load-bearing for a different reason than usual: everything that cannot be fixed
+after launch — the ledger columns, the pre-registered threshold, the pinned-bracket seam — is
+front-loaded into Wave 1, because the operator's working style for this phase is "start it and
+observe early results". Plan 05 is deliberately concurrent with plan 06's multi-hour wait.
 
 ## Backlog
 

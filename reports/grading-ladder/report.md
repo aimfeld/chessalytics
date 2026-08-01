@@ -244,7 +244,11 @@ why §4's frontier verdicts were overridden rather than taken at face value.
 - **The position set is curated, not a random sample.** 21 positions balanced across opening,
   middlegame, sharp/tactical and endgame, chosen so the run is reproducible from the repository —
   not a statistical sample of real games.
-- **Phase 199's combined recalibration sweep is what measures strength, and it will calibrate
-  against this ladder.** If that sweep shows a regression, this ladder is what to revert. If it
-  shows headroom, the more aggressive candidates measured here (`[14]`/floor 10 reached 2.11× at
+- **Phase 199's parity check is what measures strength, and it calibrates against this ladder**
+  (re-scoped from an originally-planned combined recalibration sweep to a 5-cell parity check once
+  it turned out only this ladder shipped a strength change — see `reports/bot-parity-199/report.md`,
+  which found parity HOLDS). If a future sweep shows a regression, this ladder is what to revert
+  (though see that report's D-10 note: the named `[14,14,14]` target is not a safe undo — it
+  restores neither the calibrated configuration nor Phase 199's measured one). If it shows
+  headroom, the more aggressive candidates measured here (`[14]`/floor 10 reached 2.11× at
   50 nodes) are already measured and available without a new run.
