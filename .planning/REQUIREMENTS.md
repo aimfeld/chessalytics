@@ -1,215 +1,118 @@
-# Requirements: FlawChess v2.10 FlawChess Engine Improvements
+# Requirements: FlawChess v2.11 Train Solve Surface & Push Reminders
 
-**Defined:** 2026-07-30
-**Core Value:** Position-precise WDL analysis on the user's own games; the FlawChess engine is what turns that into a *practical* score at the user's own ELO — this milestone makes that engine fast enough and honest enough to be used on every surface it feeds.
-**Source:** SEED-126 (throughput + main-thread cost, measured 2026-07-30), SEED-127 (continuous dispatch), SEED-118 (analysis-board root injection). No project-level research pass — the seeds carry measured wall-clock data, per-file breadcrumbs, rejected alternatives, and locked design decisions.
+**Defined:** 2026-08-01
+**Core Value:** Position-precise WDL analysis on the user's own games. Train is the surface that turns that analysis into practice — this milestone makes its solve screen readable enough to learn from, and makes the habit loop reach the user on the days the scheduler picked.
+**Source:** SEED-131 (solve-screen legend + inline sideline exploration, `/gsd-explore` 2026-07-31), SEED-132 Phase A (push notifications, `/gsd-explore` 2026-08-01). No project-level research pass — both seeds carry locked decisions, named rejected alternatives, and per-file implementation anchors.
 
-## Scope decisions taken at milestone start (2026-07-30)
+## Scope decisions taken at milestone start (2026-08-01)
 
-- **Full chain in one milestone.** All five source units ship in v2.10: SEED-126 Phases 2–5, SEED-126 Phase 1, SEED-118, SEED-126 Phase 6, SEED-127. The three-sweep cost was raised and the full scope was reaffirmed.
-- **One combined calibration sweep at the end**, not one per strength-changing phase. **Accepted trade-off:** both SEED-126 and SEED-127 warn that a shared sweep cannot attribute a strength change to any single engine change. A post-milestone bot strength delta will therefore be a property of the milestone, not of the ladder, Maia WDL leaves, or continuous dispatch individually.
-- **SEED-126 Phases 2–5 collapse into one phase** (four independent, quick-task-sized units sharing no calibration dependency).
-- **The 14/12/10 ladder is a hypothesis, not a spec** — it was derived from 3–4 positions. A widened A/B run selects the rungs.
-- **SEED-114 (stronger bots above ~1900) stays dormant** — a bot-strength product goal, not engine performance.
+- **SEED-132 Phase B is deferred**, not descoped-by-omission. Install promotion (desktop→phone QR handoff, Android `beforeinstallprompt`, the iOS install→revisit→permission path, and its dismissal-persistence rule) needs BrowserStack — the operator has no iPhone (confirmed 2026-08-01). Phase A is independently shippable and delivers the reminder to everyone who can already receive push without installing anything. The seed stays open in `.planning/seeds/`.
+- **Order is 131 before 132.** SEED-131 is frontend-only with no migration and no external dependency; SEED-132 Phase A then runs without competing for the same files. The two are otherwise independent — no shared source files.
+- **Nothing else joins the milestone.** The 999.x backlog (Password Reset) and SEED-133 (full 24-persona recalibration, deferred from v2.10) stay out.
 
-## Sequencing constraints (load-bearing)
+## Premises already settled — do not re-derive
 
-- All five units edit `dispatchExpansion`. SEED-118's `extraRootMoves` union lands **before** SEED-127's rewrite of that region, and SEED-127 must preserve it.
-- SEED-118's disagreement re-run is a second full search; it is gated on the ladder (cost) and on the cache work (so the re-run is a cache replay, not a recompute).
-- SEED-127's cost model depends on post-ladder grade latencies — re-baseline after the ladder, before designing.
-- Two removal candidates are deliberately **not** removed in Phase 194: the `wdlByElo` worker transfer (Phase 197 consumes it) and the `workerPool` priority queue (Phase 198 revives it).
+- **Installing the PWA is NOT a prerequisite for push** on desktop Chrome/Edge/Firefox or Android Chrome; the Push API is available to an ordinary tabbed site. The install-gates-push framing holds on **iOS only** (Safari 16.4+, home-screen PWA), which is exactly why iOS lives in the deferred Phase B.
+- **Web Push has no vendor and no per-message cost.** Chrome's `fcm.googleapis.com` endpoint does *not* imply Firebase (no project, no server key, no GCP billing). Apple Web Push on Safari 16.4+ does *not* require the $99 Developer Program — that applied to the legacy macOS proprietary-APNs flow. VAPID is a self-signed JWT from a locally generated keypair.
+- **Email was evaluated and rejected as a channel.** There is zero email infrastructure in the project (no SMTP, no Resend/SendGrid/Mailgun/`aiosmtplib`), so it would be built from scratch and would carry deliverability, domain-reputation, and unsubscribe-compliance surface that push does not. At ~1,500 messages/month it is also the channel that costs money.
+- **Notification permission is a one-shot, non-renewable resource.** Chrome and Safari both hard-block re-prompting after a browser-level deny, with no in-app recovery. This is the entire justification for the custom pre-prompt indirection (PERM-01) and for the in-app master toggle outranking the hour picker (PERM-04).
+- **The yellow-arrow problem is a display-language problem** and gets a display fix. Upstream puzzle curation was considered and rejected — no backend or puzzle-pool side effects for a rendering concern.
+
+## Hard constraints (load-bearing)
+
+- **Do NOT switch the service worker to `strategies: 'injectManifest'`.** `frontend/vite.config.ts:56` runs VitePWA in `generateSW` mode with a `workbox` block hand-tuned against four real production bugs: `navigateFallback: null` (so the SW never serves `index.html` for the OAuth callback, commit `b953abad`), `globIgnores` excluding all HTML (precaching `index.html` made installed Android PWAs launch a many-deploys-old shell), `*.wasm` and the ~44 MB Maia `*.onnx` excluded for the iOS Cache API ~50 MB limit, and a two-rule `runtimeCaching` order where `/api/*` NetworkOnly is registered first. `importScripts` keeps all of it untouched.
+- **`pywebpush` is built on `requests`, which CLAUDE.md prohibits** ("always use `httpx.AsyncClient` — `requests` blocks the event loop"). This is a blocker to resolve in phase research, not an implementation detail: the three candidates (a maintained async web-push library, `pywebpush` in a threadpool executor, or hand-rolled VAPID JWT + `aes128gcm` payload encryption on `cryptography` over `httpx`) differ by an order of magnitude in size.
+- **Both tracks carry mobile parity as a requirement, not a follow-up.** The solve screen has one shared board with the sidebar rendering below it on mobile.
+
+## Open questions for phase research (deliberately not decided here)
+
+1. **Which Stockfish instance powers inline exploration** — reuse the session-scoped, already-warm `useTrainGradingEngine` vs. mounting the Analysis page's Stockfish hook alongside it. Two concurrent WASM engines on one page runs into the mobile OOM history. The grading engine's API is search-task-shaped (`gradeMove`, `startGameMoveSearch`) while live exploration wants continuous MultiPV eval of an arbitrary FEN with cancel-on-position-change; check whether it can serve that without disturbing in-flight grading of the *next* puzzle, or whether a shared single engine with a priority queue is needed.
+2. **The web-push library decision** behind PUSH-04 (see hard constraints).
+3. **VAPID rotation policy** — rotation invalidates every existing subscription. Decide whether that is acceptable or needs a migration path (PUSH-03).
+4. **Scheduler placement** — slots in beside `run_periodic_guest_cleanup` as another `asyncio.create_task` in `app/main.py:120`, but needs the REMIND-05 idempotency guard.
 
 ## v1 Requirements
 
-### Main-Thread Cost (SEED-126 Phases 2, 4)
+### Reveal Board Legend (SEED-131 A)
 
-- [x] **JANK-01**: Policy results are converted to a UCI-keyed distribution in a single pass over legal moves, without constructing a `Chess` instance and replaying a move per candidate
-- [x] **JANK-02**: A parity test asserts the fast conversion path matches `moves({verbose:true})`-derived UCIs key-for-key on a fixture that includes an underpromotion position, so a chess.js version bump fails CI loudly instead of silently corrupting the policy distribution
-- [x] **JANK-03**: Search snapshots are built lazily — a consumer reading only `rootMove`/`practicalScore`/`childScoreSpread` pays nothing for `modalPath`/`modalStats` — while `onSnapshot` still fires after every completed backup (D-10 preserved exactly)
-- [x] **JANK-04**: Measured main-thread blocking per complete search drops materially at both the 50-node bot budget and the 400-node analysis budget, verified by `scripts/engine-mainthread-cost.mjs` with ranked-line output bit-identical to the baseline. **This is a jank requirement, not a latency one** — the affected work is ~1.4% of search wall clock and no success criterion may claim the search finishes sooner
-- [x] **JANK-05**: The transient `--candidate fast` prototype and flag in `engine-mainthread-cost.mjs` are deleted once the fast path ships, so the baseline pass measures shipped code
+- [ ] **LEGEND-01**: Each reveal line box (Your move / Best move / Played in game) carries a small arrow glyph in that move's exact board-arrow color before the box title; a coincidence-merged box ("Your move / Best move") shows one glyph matching the single arrow actually drawn
+- [ ] **LEGEND-02**: Hovering or tapping a sidebar arrow glyph hides every other arrow and quality badge on the board, leaving only that box's move visible, and restores the full overlay on release/tap-away — tap-driven on touch, not hover-only
+- [ ] **LEGEND-03**: `inaccuracy`-tier alternatives render in the same green as `good`-tier ones, so yellow disappears from the reveal board; the line eval still discloses the eval drop for anyone who digs in
+- [ ] **LEGEND-04**: Alternatives get a compact "Also fine: Nc4, Rd8" sidebar row with the green arrow glyph that participates in the spotlight — SAN tokens only, no steppable lines and no full line boxes
+- [ ] **LEGEND-05**: The spotlight filter and the green recolor live in the pure `trainArrows.ts` overlay builder and are unit-tested, so a regression in either fails CI rather than only showing up on a board
+- [ ] **LEGEND-06**: The legend glyphs and the tap spotlight work in the mobile below-board sidebar layout at 375px
 
-### Abort Propagation (SEED-126 Phase 3)
+### Inline Sideline Exploration (SEED-131 B)
 
-- [x] **ABORT-01**: The abort signal is threaded from `mctsSearch` into `WorkerPool.grade` (the already-present, never-passed third parameter), so an aborted search stops in-flight Stockfish work instead of grinding for up to `GRADING_MOVETIME_SAFETY_CAP_MS`
-- [x] **ABORT-02**: All four `useBotGame` abort sites (resign, new game, unmount, deadline cut) stop Stockfish work; a `createDeadlineSearch` cut plays its move without waiting out the current round of grades
-- [x] **ABORT-03**: `WorkerPool` remains structurally assignable to the frozen 2-arg `EngineProviders.grade` contract, so the locked Phase 153 contract survives
+- [ ] **EXPLORE-01**: Post-solve, moving a piece on the shared board starts exploration immediately — no mode toggle to discover, no second board
+- [ ] **EXPLORE-02**: Exploration can start from a stepped-into line-box position, and the stepped prefix moves seed the exploration move list (the "why didn't my move work" flow)
+- [ ] **EXPLORE-03**: The moment exploration starts, the reveal boxes give way to a Stockfish engine-lines card plus a move list of the explored line, and the solution arrows clear — no Maia card and no FlawChess engine card
+- [ ] **EXPLORE-04**: The existing Solution button exits exploration and restores the full reveal state (boxes + arrows) alongside its current `solutionNonce` stepper reset
+- [ ] **EXPLORE-05**: Exploration state and any running engine search tear down cleanly on puzzle transition, Next, and unmount — no search outlives its position, and no exploration search disturbs grading of the next puzzle
+- [ ] **EXPLORE-06**: The Analyze button still deep-links to the full Analysis page unchanged, keeping Maia, the FlawChess engine, and whole-game context available there
+- [ ] **EXPLORE-07**: The swap-to-analysis view renders correctly in the mobile below-board layout at 375px
 
-### Provider Caches (SEED-126 Phase 5)
+### Push Infrastructure (SEED-132 A)
 
-- [x] **CACHE-01**: Both provider caches are sized to hold a full search's distinct-FEN working set plus some navigation history, so a single search no longer thrashes its own cache before cross-search reuse is even possible
-- [x] **CACHE-02**: Both caches evict LRU rather than FIFO, so the root and upper tree — the nodes a PUCT selection walk re-descends most — are retained instead of dropped first
-- [x] **CACHE-03**: `cacheGrades` merges into an existing entry rather than replacing the whole map, so a same-FEN request with a shifted candidate set cannot destroy the prior entry
-- [x] **CACHE-04**: A partial cache hit grades only the missing candidate subset — **or**, if subset-graded values are empirically shown to differ from full-set-graded ones for the same `(fen, depth)` (because `searchmoves` changes what Stockfish searches), the all-or-nothing read is kept and that finding is recorded in-code
-- [x] **CACHE-05**: The analysis board's Maia ELO-ladder chart and the engine's root policy call share one cache keyed `fen|elo`, so a navigated position is not re-inferred at ~130 ms per position; `maiaWorkerHost.ts`'s "caches stay separate" header note is reversed
-- [x] **CACHE-06**: The two removal candidates SEED-126 identified are deliberately retained with in-code notes recording their downstream consumer: the `wdlByElo` worker transfer (Phase 197) and the `workerPool` priority queue (Phase 198)
+- [ ] **PUSH-01**: A `push_subscriptions` table stores one row per device-per-browser, 1-to-many on `user_id` with a CASCADE FK, so a desktop subscription and a phone subscription expire independently
+- [ ] **PUSH-02**: A subscription returning `410 Gone` (or `404`) from the push service is pruned, so dead endpoints cannot accumulate and silently degrade fan-out
+- [ ] **PUSH-03**: A locally-generated VAPID keypair signs every send; the public key reaches the client at subscribe time, the private key lives only in `/opt/flawchess/.env` and is never committed, and rotation's effect on existing subscriptions is decided and documented rather than discovered
+- [ ] **PUSH-04**: The send path makes no blocking HTTP call from the event loop — CLAUDE.md's async-only constraint holds, and `requests` never enters the request or scheduler path
+- [ ] **PUSH-05**: No push vendor, Firebase SDK, or paid developer-program dependency is added — standard Web Push with VAPID only
+- [ ] **PUSH-06**: `push-sw.js` supplies the `push` and `notificationclick` handlers via `workbox.importScripts`, with the existing `generateSW` workbox config (navigateFallback, globIgnores, wasm/onnx exclusions, `/api/*` NetworkOnly ordering) unchanged
 
-### Depth-Scaled Grading Ladder (SEED-126 Phase 1)
+### Train Reminders (SEED-132 A)
 
-- [x] **LADDER-01**: A widened `engine-grading-depth-ab.mjs` run (≥20 positions via `--openings`/`--fens`) produces committed per-depth wall-clock and agreement data, and **that data selects the ladder rungs** — the 3-position 14/12/10 pilot is an input, not the answer
-- [x] **LADDER-02**: Grading depth varies by tree depth per the selected ladder, replacing the flat `GRADING_TARGET_DEPTH`
-- [x] **LADDER-03**: The grade cache keys strictly on `(fen, depth)`, and a deeper cached grade **never** satisfies a shallower request — so a transposed position's grade depth cannot depend on which visit order reached it first (ENGINE-07 determinism)
-- [x] **LADDER-04**: The `GRADING_MOVETIME_SAFETY_CAP_MS` divergence between the shipped `go` shape and the depth-only calibration harness is resolved (cap removed, or harness adopts it), so the shipped engine and the calibrated engine grade identically and delivered depth stops being device-dependent
-- [x] **LADDER-05**: End-to-end search wall clock improves measurably at both the 50-node and 400-node budgets, with top-move and full-ranked-order agreement against the flat-depth-14 baseline reported alongside — so a changed top move can be read as tie-perturbation or real
+- [ ] **REMIND-01**: `train_settings` gains `reminder_enabled` and `reminder_hour` (default 18 local), defaulted through `get_or_create_settings` the same way the existing `weekday_mask` and `puzzles_per_session` fields are
+- [ ] **REMIND-02**: The scheduler ticks at least every 15 minutes, so half- and quarter-hour IANA offsets (India +5:30, Nepal +5:45, Chatham +12:45) still land on the user's chosen local hour
+- [ ] **REMIND-03**: A reminder fires only on a day the user's `weekday_mask` schedules, reusing `train_scheduler`'s existing day predicates rather than re-deriving weekday math
+- [ ] **REMIND-04**: A **send-time** check suppresses the reminder if the user already completed a session that day — someone who trains at 17:00 does not get the 18:00 reminder
+- [ ] **REMIND-05**: An "already sent today" guard makes the job idempotent, so a backend restart inside the tick window cannot double-send
+- [ ] **REMIND-06**: A user with several subscribed devices is handled by one explicit, documented fan-out rule (all devices vs. most-recently-active), not by accident
+- [ ] **REMIND-07**: Guests never receive reminders — guest games are never bulk-analysed, so guests have no puzzle pool and no Train feature to be reminded about
+- [ ] **REMIND-08**: A reminder can be triggered on demand in development without waiting for the real clock hour, since the background job has no request context and cannot read the `X-Dev-Clock-Offset-Minutes` header
 
-### Analysis-Board Root Injection (SEED-118)
+### Reminder Permission UX (SEED-132 A)
 
-- [x] **INJECT-01**: `applyRootCandidateHardCap` no longer silently drops `extraRootMoves` when the root exceeds `ROOT_CANDIDATE_HARD_CAP`; a regression test covers a simultaneous injection at T=2.0 on a high-branching position
-- [x] **INJECT-02**: Injected root moves are seeded with a prior on the same scale as organic candidates (renormalized, or findability read from `SearchTreeNode.rawMaiaProb`) rather than `0`, so `rankScore` is not comparing incommensurable scales
-- [x] **INJECT-03**: `useFlawChessEngine` accepts `extraRootMoves`, and the analysis board supplies the free run's settled `pvLines[0..1].moves[0]` — zero extra Stockfish compute, since MultiPV=2 already runs on the same position
-- [x] **INJECT-04**: The FlawChess search re-runs once on `freeRunCommitted`, and only when Stockfish's move is not already a root candidate; first-paint instant-start behaviour (DISPLAY-01) is unchanged
-- [x] **INJECT-05**: The disagreement re-run's provider cache hit rate is **measured** and reported as this requirement's evidence, not assumed
-  - **Correction (Phase 196, 2026-07-31):** the mandate above (measure and report, don't assume) was met — see `reports/root-injection/report.md`. But this requirement was originally worded "is measured to be **largely a cache replay** rather than a recompute", and the measurement **contradicts** that prediction for production. The report's headline 79.1% hit rate describes a harness scenario where two *fully completed* searches share a cache; the browser aborts the organic search ~1.7–2s in (~2–4% of a 400-node search's life), and the report derives a **~4.5% ceiling** for that real path. In production the disagreement re-run is **essentially a fresh recompute, not a replay.** Phases 197–199 must not assume a cheap re-run.
-- [x] **INJECT-06**: On disagreement the analysis board shows a practical score for Stockfish's preferred move through the existing top-pick comparison / verdict row — no ranked-list changes, no provenance badge (findability demotion *is* the product's opinion)
-- [x] **INJECT-07**: `mctsSearch.ts`'s header claim that the union gives "guaranteed inclusion" is corrected to describe actual behaviour
-
-### Maia WDL Leaf Values (SEED-126 Phase 6)
-
-- [x] **LEAF-01** *(REJECTED — not shipped)*: The Maia WDL head already computed and transferred on every `policy()` call is consumed as the leaf value for deep tree nodes, eliminating the Stockfish grade call at those nodes
-- [x] **LEAF-02**: The handoff depth between Stockfish-graded and Maia-WDL leaves is chosen from measurement and stated explicitly against the Phase 195 ladder (the shallowest rung is the natural candidate for replacement)
-- [x] **LEAF-03**: The Maia WDL leaf value respects `leafScore.ts`'s root-relative frame invariant (D-06) — verified, not assumed, since `softmaxWdl`/`expectedScore` are root-relative-agnostic
-- [x] **LEAF-04**: Move quality under Maia WDL leaves is evaluated on its own terms before the change is accepted — **this is an engine-design change, not an optimization**, and a speed win alone does not satisfy this requirement
-- [x] **LEAF-05**: The ELO-conditioning question is answered in writing: whether an ELO-conditioned leaf value is more correct for a practical-score engine, or double-counts the human modelling the expectimax averaging already does
-- [x] **LEAF-06**: `docs/flawchess-engine-explained-2026-07-06.md` §2's "Stockfish is the sole quality axis" claim is revised to match the shipped design
-- [x] **LEAF-07**: SEED-118's headline datum (a practical score for the injected Stockfish move) is re-validated after this change, with a large shift read as a signal about this phase rather than about injection
-
-### Continuous Dispatch (SEED-127)
-
-- [x] **DISPATCH-01**: A written apply-order/determinism design is produced and reviewed **before** implementation, resolving the central tension: how much apply-order freedom can be given up while keeping bit-identical reproducibility at a fixed concurrency
-  - **Outcome (2026-07-31):** produced and reviewed 3× — and the review is what stopped the phase. Two independent reviews each returned NOT SOUND (3 confirmed highs each); the second surfaced SEED-130 (the bit-identity being preserved does not hold in the shipped browser). The requirement's purpose — design-first catches the problems before code — was fulfilled; no sign-off was ever granted.
-- [x] **DISPATCH-02**: A post-ladder re-baseline measures the policy/grade wall split and the `policy peak in-flight` telltale, and models the achievable ceiling before any code is written — if grade latency dominates post-ladder, that is a cheap thing to learn early
-- [ ] **DISPATCH-03**: `mctsSearch` keeps `budget.concurrency` expansions permanently in flight, starting a new selection the moment one completes, instead of draining and refilling in lockstep rounds behind a `Promise.all` barrier
-- [ ] **DISPATCH-04**: Output remains deterministic per concurrency level (ENGINE-07/D-03) — repeated runs at the same `budget.concurrency` are bit-identical regardless of provider resolution jitter
-- [ ] **DISPATCH-05**: `isPending`, `isClosed` (WR-01 closure propagation) and `selectPath`'s null return are re-verified for a long-lived heterogeneous pending set, including the case where "nothing selectable" now means "the tree is saturated with in-flight work" rather than "this round is full"
-- [ ] **DISPATCH-06**: Node-budget accounting neither over- nor under-dispatches against `budget.maxNodes` when there is no batch to count against
-- [ ] **DISPATCH-07**: The `earlyStop`/`stopRuleSatisfied` rolling `stableCheckCount` behaves defensibly under the new apply order, and its effect on when the bot stops is recorded as a calibration input
-- [ ] **DISPATCH-08**: `scripts/lib/calibration-determinism.check.mjs` passes — the app and `calibration-harness.mjs` agree bit-for-bit at `FLAWCHESS_BOT_CONCURRENCY = 4`
-- [ ] **DISPATCH-09**: The `workerPool` priority queue is activated with real values (priority from the root ancestor's current `practicalScore`, tie-broken by depth-from-root) now that in-flight expansions exceed free slots and requests genuinely queue
-- [ ] **DISPATCH-10**: SEED-118's `extraRootMoves` union and hard-cap exemption survive the `dispatchExpansion` rewrite unchanged in behaviour
-- [ ] **DISPATCH-11**: `fallbackExpectimax.ts`'s ENGINE-06 independence story and the frozen `guardrail.ts` `SearchRunner` contract are preserved
-
-### Bot Re-Calibration (parity check + timing measurement)
-
-**Re-scoped 2026-07-31 during Phase 199 planning: only one of the three anticipated strength
-changes (ladder + Maia WDL leaves + continuous dispatch) actually shipped — Phase 197's leaf
-value was rejected and Phase 198 was never built. The text below replaces the original
-combined-sweep premise; see `199-CONTEXT.md`'s `<domain>` section for the full reasoning.**
-
-- [x] **RECAL-01 (re-scoped)**: A 5-cell parity sweep — one blend-0 null control plus four blend>0 exposed cells — runs `calibration-harness.mjs` against the shipped v2.10 engine using each cell's own pinned 2026-07-21 four-anchor bracket and the same `--seed 1`, producing a durable per-game ledger that carries wall-clock timing. This is a parity check against the committed 2026-07-21 numbers, not a full 15-cell sweep and not a sweep of three combined strength changes.
-- [x] **RECAL-02 (re-scoped, conditional)**: `reports/data/bot-strength-lookup.json` and `frontend/src/generated/botStrengthCurves.ts` are refit only if parity fails, and that refit is a separate authorized operator decision outside this phase (D-04). Parity HELD (`reports/bot-parity-199/report.md`), so both files stay byte-identical and the CI drift check passes because nothing regenerated — the drift criterion is satisfied by *not* changing the files.
-- [x] **RECAL-03 (re-scoped, conditional)**: Persona ELO labels are relabelled only under RECAL-02's condition, and the exposed surface is the 8 rung-1600/1800 personas (all blend>0, verified per-persona from `reports/data/persona-calibration.json` — never derived via `RUNG_BLEND`, A-03), not 24. The 16 rung-800/1000/1200/1400 personas are on `HUMAN_BLEND` and structurally cannot be reached by the ladder. Parity HELD, so `reports/data/persona-calibration.json` and `frontend/src/generated/personaCalibration.ts` stay untouched.
-- [x] **RECAL-04 (re-scoped)**: Resumability is a plumbing verification of the existing ledger `--resume` byte-identity contract and `bin/preset-supervisor.sh`'s crash loop, not new work — the only new work was threading the pinned anchor set through the supervisor. Recorded honestly: zero crashes occurred across the 704-game run, so the resume path itself was exercised only by 199-01's unit test, not in production (`199-06-SUMMARY.md`).
-- [x] **RECAL-05 (re-scoped)**: An attribution statement, not a limitation disclosure. The measured delta (parity HOLDS) is attributable to Phase 195's grading ladder alone, recorded with three stated fidelity limits (D-09): SEED-130 browser/harness Stockfish-hash divergence; the pooled resolution limit (achieved ±79.1 internal ELO Maia family, ±66.0 SF family); and blend-0 immunity leaving 16 of 24 personas unmeasured.
+- [ ] **PERM-01**: After the user's first completed session, `TrainScoreScreen` shows a custom in-app pre-prompt with Yes / Not now; only the Yes path calls the real browser permission API
+- [ ] **PERM-02**: "Not now" stays recoverable and does not become a nag — the user is never pushed toward the one browser prompt that can permanently deny them
+- [ ] **PERM-03**: `TrainScheduleSettings` is the permanent fallback surface, hosting the master toggle and hour picker with the same auto-saving behavior as the existing pickers, so a user who declined can subscribe later
+- [ ] **PERM-04**: Turning the master toggle off silences reminders inside FlawChess without touching the browser permission grant, keeping the user reachable
 
 ## Future Requirements (deferred)
 
-- **Retune `FLAWCHESS_ENGINE_MAX_NODES = 400`** — the 400-node analysis budget is effectively unreachable today (166–223 s). SEED-126 explicitly says to revisit the constant *after* the ladder lands, not as part of it
-- **`Analysis.tsx` render volume** — ~400 full re-renders of a 3100+ line component per 400-node search, because snapshots arrive every ~450 ms and clear the 150 ms `RAPID_STEP_DEBOUNCE_MS` throttle. Whether that needs its own treatment is a question SEED-126 does not answer
-- **SEED-114 stronger bots above ~1900** — needs an anchor-ladder extension (the ladder tops out at sf10) plus a raised search budget; a third calibration concern
-- **Per-ELO leaf sigmoids fit from the benchmark DB** (CAL-01, a clean ENGINE-05 swap), trap-finder / branch-point UI, time-pressure clock conditioning, SharedArrayBuffer multithreading — deferred by design at v2.0 close
+**SEED-132 Phase B — install promotion + iOS push** (stays in `.planning/seeds/SEED-132-*.md`, gated on BrowserStack):
+
+- Desktop→phone QR handoff (a desktop page cannot install anything on a phone, and there is no SMS channel, so QR is the only option)
+- Android `beforeinstallprompt` install nudge, framed as "train on the go" — **not** "so we can notify you", which would bait a permission desktop users have already granted
+- The iOS path: Safari has no `beforeinstallprompt`, so installation can only be explained ("tap Share → Add to Home Screen") and the permission prompt is unavailable until the user is in standalone mode — install → later visit → permission, two sessions minimum with a drop-off cliff between them
+- A dismissal-persistence rule so the install nudge cannot become a nag
+
+**Do not invert the order** — promotion-first would ship an install nag promising a notification feature that does not exist yet.
 
 ## Out of Scope
 
-- **Tree-level transposition sharing (turning the tree into a DAG)** — would change what the prior-weighted backup means (`backup.ts` D-01/D-02) and is a much larger design question. At a measured 3.5–12% duplicate rate it is not worth the risk. Omission is deliberate, not an oversight
-- **Maia batching over positions** — measured at ~1.12x (single-thread WASM is compute-bound, no per-run overhead to amortize) and rejected 2026-07-30. **Do not re-litigate.** The Maia win is overlapping (SEED-127), not batching
-- **The conservative SEED-127 variant** (keep the `Promise.all` apply barrier, only prefetch round N+1's policy) — offered and explicitly rejected in favour of the full redesign. If the determinism work proves intractable that is a checkpoint decision to raise, not a default to retreat into
-- **Separate per-phase calibration sweeps** — explicitly traded away for one combined sweep at milestone end
-- **A provenance flag or ranked-list UI change for injected moves** — an injected move is indistinguishable from an organic low-probability candidate once the prior is fixed; a badge would draw a false category line
+- **Email as a channel** — no infrastructure exists; push is strictly cheaper to build and operate, and does not cost money at this volume
+- **Reminders for guests** — no puzzle pool exists for them
+- **Any notification other than the Train session reminder** — no import-complete, no analysis-finished, no marketing pushes. Each additional notification type raises the revocation risk on a permission that cannot be re-requested
+- **Switching the service worker to `injectManifest`** — see hard constraints
+- **Backend or puzzle-pool changes for the legend work** — SEED-131 decision 3 rejected upstream curation
+- **Maia or FlawChess engine cards in the inline exploration view** — SEED-131 decision 7; that is what the Analyze deep-link is for
+- **Changes to the full Analysis page or the Analyze deep-link target** — SEED-131 decision 9
+- **Deadline / loss-aversion reminder timing** ("your shield drops at midnight") — makes the notification about punishment rather than practice, and the shield already delivers the consequence
+- **Adaptive or learned reminder timing** — more failure modes, and too little per-user history at current scale
 
 ## Traceability
 
 | Requirement | Phase | Status |
 |-------------|-------|--------|
-| JANK-01 | Phase 194 | Complete |
-| JANK-02 | Phase 194 | Complete |
-| JANK-03 | Phase 194 | Complete |
-| JANK-04 | Phase 194 | Complete |
-| JANK-05 | Phase 194 | Complete |
-| ABORT-01 | Phase 194 | Complete |
-| ABORT-02 | Phase 194 | Complete |
-| ABORT-03 | Phase 194 | Complete |
-| CACHE-01 | Phase 194 | Complete |
-| CACHE-02 | Phase 194 | Complete |
-| CACHE-03 | Phase 194 | Complete |
-| CACHE-04 | Phase 194 | Complete |
-| CACHE-05 | Phase 194 | Complete |
-| CACHE-06 | Phase 194 | Complete |
-| LADDER-01 | Phase 195 | Complete |
-| LADDER-02 | Phase 195 | Complete |
-| LADDER-03 | Phase 195 | Complete |
-| LADDER-04 | Phase 195 | Complete |
-| LADDER-05 | Phase 195 | Complete |
-| INJECT-01 | Phase 196 | Complete |
-| INJECT-02 | Phase 196 | Complete |
-| INJECT-03 | Phase 196 | Complete |
-| INJECT-04 | Phase 196 | Complete |
-| INJECT-05 | Phase 196 | Complete |
-| INJECT-06 | Phase 196 | Complete |
-| INJECT-07 | Phase 196 | Complete |
-| LEAF-01 | Phase 197 | Rejected |
-| LEAF-02 | Phase 197 | Complete |
-| LEAF-03 | Phase 197 | Complete |
-| LEAF-04 | Phase 197 | Complete |
-| LEAF-05 | Phase 197 | Complete |
-| LEAF-06 | Phase 197 | Complete |
-| LEAF-07 | Phase 197 | Complete |
-
-> **`Rejected` (LEAF-01)** is a status this table did not previously use. Phase 197 built the
-> Maia-WDL leaf-value mechanism end to end, measured it, and rejected it at a pre-declared blocking
-> move-quality gate: no handoff depth was both fast and safe (depths 2 and 3 miss a forced mate-in-3
-> on the committed Maia-blindness fixture; depth 4 passes only by being behaviourally inert).
-> `WDL_LEAF_HANDOFF_DEPTH` is `null` — the production path does not run. LEAF-02..07 are genuinely
-> Complete: the depth was chosen from measurement, the frame invariant verified, move quality
-> evaluated on its own terms (that evaluation is what rejected it), the ELO question answered in
-> writing, the engine doc updated, and Phase 196's headline datum re-verified as unchanged.
-> Evidence: `reports/leaf-wdl/report.md`. Follow-up: `.planning/seeds/SEED-128-wdl-leaf-backup-reweighting.md`.
-| DISPATCH-01 | Phase 198 | Complete |
-| DISPATCH-02 | Phase 198 | Complete |
-| DISPATCH-03 | Phase 198 | Rejected |
-| DISPATCH-04 | Phase 198 | Rejected |
-| DISPATCH-05 | Phase 198 | Rejected |
-| DISPATCH-06 | Phase 198 | Rejected |
-| DISPATCH-07 | Phase 198 | Rejected |
-| DISPATCH-08 | Phase 198 | Rejected |
-| DISPATCH-09 | Phase 198 | Rejected |
-| DISPATCH-10 | Phase 198 | Rejected |
-| DISPATCH-11 | Phase 198 | Rejected |
-
-> **`Rejected` (DISPATCH-03..11), 2026-07-31.** Phase 198 was closed as **measured, not shipped** —
-> the same first-class outcome Phase 197 established, with one honest difference: the pre-declared
-> accept rule's measurement CLEARED the 25% build line at both budgets (34.84% bot / 28.61%
-> analysis), so this close is a **risk judgement by the operator, not the rule's exit branch**. The
-> apply-order design failed two independent reviews (NOT SOUND, 3 confirmed highs each), and the
-> second surfaced SEED-130: the bit-identity the design exists to preserve does not hold in the
-> shipped browser (uncleared Stockfish hash, 97% warm-vs-cleared grade divergence), and DISPATCH-08's
-> parity gate is structurally blind to it. Not one line under `frontend/` was modified. DISPATCH-01
-> and DISPATCH-02 are genuinely Complete: the design-first mandate is what caught the problem, and
-> the re-baseline measurement stands. Evidence: `reports/continuous-dispatch/report.md` (§8 records
-> the decision). Follow-up: `.planning/seeds/SEED-130-browser-grade-nondeterminism-uncleared-stockfish-hash.md`
-> (stays open).
-| RECAL-01 | Phase 199 | Complete |
-| RECAL-02 | Phase 199 | Complete (conditional, untriggered — parity held) |
-| RECAL-03 | Phase 199 | Complete (conditional, untriggered — parity held) |
-| RECAL-04 | Phase 199 | Complete |
-| RECAL-05 | Phase 199 | Complete |
+| _(filled by roadmap)_ | | |
 
 **Coverage:**
 
-- v1 requirements: 49 total (this document's original Coverage block said "42" — a stale placeholder written before the requirement list above was finalized; 49 is the actual count of `[ ]` requirement IDs in this file)
-- Mapped to phases: 49/49
-- Unmapped: 0
-
-**Phase mapping (per the 2026-07-30 milestone-start decision, not re-derived by the roadmapper):**
-
-| Phase | Source | Requirement IDs |
-|-------|--------|------------------|
-| 194 — Engine main-thread + cache hygiene | SEED-126 Phases 2–5 | JANK-01..05, ABORT-01..03, CACHE-01..06 |
-| 195 — Depth-scaled grading ladder | SEED-126 Phase 1 | LADDER-01..05 |
-| 196 — Analysis-board Stockfish root injection | SEED-118 | INJECT-01..07 |
-| 197 — Maia WDL leaf values | SEED-126 Phase 6 | LEAF-01..07 |
-| 198 — mctsSearch continuous dispatch | SEED-127 | DISPATCH-01..11 |
-| 199 — Bot re-calibration sweep + strength curve refit | parity check + timing measurement | RECAL-01..05 |
+- v1 requirements: 31 total
+- Mapped to phases: 0/31 (pending roadmap)
+- Unmapped: 31
 
 ---
-*Requirements defined: 2026-07-30*
-*Roadmap mapping added: 2026-07-30*
+*Requirements defined: 2026-08-01*
