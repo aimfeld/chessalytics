@@ -60,6 +60,7 @@ already position-keyed at the correct row; do NOT use _apply_full_eval_results.
 import functools
 import hmac
 import io
+import logging
 from collections.abc import Sequence
 from datetime import datetime, timezone
 from typing import Annotated, Literal
@@ -143,6 +144,8 @@ from app.services.eval_queue_service import (
     release_job,
 )
 from app.services.flaws_service import _classify_tactic_gated, _recompute_fen_map
+
+logger = logging.getLogger(__name__)
 
 # Worker identity for the remote eval worker — distinct from WORKER_ID_SERVER_POOL
 # ("server-pool") so the eval_jobs.leased_by column is traceable per worker type.
@@ -1062,41 +1065,31 @@ def _report_path_c_capacity_reached(
 ) -> None:
     """Path-C reporting for the atomic-submit lane (R1).
 
-    Sentry capture_message (not logger.warning) — the router lane wants this
-    expected-but-notable cap-path outcome visible in Sentry. Variables go via
-    set_context/set_tag, never embedded in the message string (CLAUDE.md rule),
-    so every occurrence groups as one Sentry issue.
+    Deliberately logger.warning, not a Sentry event (260803): this lane used
+    sentry_sdk.capture_message, which fired ~30x/hour in production (FLAWCHESS-8B,
+    5550 events) for an expected, already-understood cap-path outcome — pure quota
+    noise with no actionable signal, exactly the FLAWCHESS-5V mistake the drain
+    lane's _log_path_c_capacity_reached already avoids. Sentry's logging
+    integration keeps WARNING as a breadcrumb only, so this never creates an event.
 
-    worker_id/last_ip (260725-da3, FLAWCHESS-8B): the event previously carried no
-    worker identity at all, and eval_jobs.leased_by is NULL for this whole
-    population (tier-3 idle-lottery claims), so a holed game could not be traced
-    to a machine. CAVEAT for future readers: this names only the LAST of the
+    worker_id/last_ip (260725-da3): eval_jobs.leased_by is NULL for this whole
+    population (tier-3 idle-lottery claims), so a holed game cannot otherwise be
+    traced to a machine. CAVEAT for future readers: this names only the LAST of the
     up-to-MAX_EVAL_ATTEMPTS attempters — each attempt can come from a different
     worker — so do NOT over-trust it for attribution. The per-worker
     holes_submitted/plies_leased counters on worker_heartbeats are the real
-    attribution mechanism; this is a convenience breadcrumb on the event.
-    worker_id remains self-reported/advisory and is never an authz input
-    (T-123-03) — telemetry only.
-
-    The message string MUST stay byte-identical: ~1602 existing events group into
-    FLAWCHESS-8B on it.
+    attribution mechanism; this is a convenience breadcrumb. worker_id remains
+    self-reported/advisory and is never an authz input (T-123-03) — telemetry only.
     """
-    sentry_sdk.set_context(
-        "eval",
-        {
-            "game_id": game_id,
-            "hole_count": failed_ply_count,
-            "attempts": new_attempts,
-            "worker_id": worker_id,
-            "last_ip": last_ip,
-        },
-    )
-    sentry_sdk.set_tag("source", source)
-    # Filterable dimension in Sentry search, alongside `source`.
-    sentry_sdk.set_tag("worker_id", worker_id)
-    sentry_sdk.capture_message(
-        "atomic-submit: stamping complete after MAX_EVAL_ATTEMPTS with residual holes",
-        level="warning",
+    _ = source  # accepted for signature parity with the drain lane's callback
+    logger.warning(
+        "atomic-submit: stamping complete after MAX_EVAL_ATTEMPTS with residual holes "
+        "(game_id=%s hole_count=%s attempts=%s worker_id=%s last_ip=%s)",
+        game_id,
+        failed_ply_count,
+        new_attempts,
+        worker_id,
+        last_ip,
     )
 
 
