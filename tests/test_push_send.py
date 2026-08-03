@@ -14,6 +14,9 @@ Coverage:
   `sentry_sdk.set_context` value (T-201-02).
 - send_to_user: fan-out counts, idempotent pruning across two calls, and the
   zero-result short-circuit when VAPID is unconfigured.
+- Phase 204 D-01/D-02: the `ttl` header carries a caller-supplied
+  `ttl_seconds` value, and defaults to a non-zero module constant when
+  omitted (never the old hardcoded "0").
 
 Uses dependency injection for `send_to_subscription`'s `client` parameter
 (the signature already takes it -- cleaner than patching `httpx.AsyncClient`,
@@ -367,6 +370,35 @@ async def test_no_key_leak_on_transport_error_branch(monkeypatch: pytest.MonkeyP
 # ---------------------------------------------------------------------------
 # send_to_user: fan-out, idempotent prune, unconfigured short-circuit
 # ---------------------------------------------------------------------------
+
+
+# ---------------------------------------------------------------------------
+# Phase 204 D-01/D-02: ttl_seconds threading through send_to_subscription
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+@pytest.mark.usefixtures("vapid_keypair")
+async def test_send_to_subscription_explicit_ttl_seconds_sets_header() -> None:
+    p256dh, auth = _fresh_subscription_keys()
+    client = _mock_client(201)
+    await push_send.send_to_subscription(
+        client, endpoint=_ENDPOINT, p256dh=p256dh, auth=auth, payload=_PAYLOAD, ttl_seconds=7200
+    )
+    assert client.post.call_args.kwargs["headers"]["ttl"] == "7200"
+
+
+@pytest.mark.asyncio
+@pytest.mark.usefixtures("vapid_keypair")
+async def test_send_to_subscription_default_ttl_seconds_is_not_zero() -> None:
+    p256dh, auth = _fresh_subscription_keys()
+    client = _mock_client(201)
+    await push_send.send_to_subscription(
+        client, endpoint=_ENDPOINT, p256dh=p256dh, auth=auth, payload=_PAYLOAD
+    )
+    ttl_header = client.post.call_args.kwargs["headers"]["ttl"]
+    assert ttl_header == str(push_send._DEFAULT_PUSH_TTL_SECONDS)
+    assert ttl_header != "0"
 
 
 async def _seed_subscriptions(session: AsyncSession, *, user_id: int, count: int) -> list[str]:

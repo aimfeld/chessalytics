@@ -26,7 +26,16 @@ Per-candidate step order (`_process_candidate`) is load-bearing -- see
      mid-fan-out or a second ticker.
   7. `push_send.send_to_user` -- the fan-out to every live subscription
      (D-05) is already implemented there; this module calls it once per
-     claimed candidate.
+     claimed candidate, now carrying a TTL bounded by the same
+     end-of-local-day rule step 2's hour gate already relies on
+     (Phase 204 D-01).
+  8. (Phase 204 D-13/D-14) `train_reminder_repository.release_reminder_claim`
+     -- runs ONLY when the fan-out delivered to nobody (`attempted == 0` or
+     `attempted == pruned`), and ONLY as the next statement after step 7
+     returns normally (never from an exception handler, so a crash
+     mid-fan-out leaves the claim standing per D-07). Un-claiming the day
+     lets a same-day device re-sync (Plan 01) still produce a reminder
+     today rather than tomorrow.
 """
 
 from __future__ import annotations
@@ -41,7 +50,12 @@ import sentry_sdk
 from app.core.database import async_session_maker
 from app.repositories import train_reminder_repository, train_repository
 from app.services import push_send
-from app.services.train_scheduler import is_scheduled_day, local_hour, local_today
+from app.services.train_scheduler import (
+    is_scheduled_day,
+    local_hour,
+    local_today,
+    seconds_until_end_of_local_day,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -177,7 +191,26 @@ async def _process_candidate(user_id: int, now_utc: datetime.datetime) -> _Candi
             return _CandidateOutcome(eligible=True, claimed=False, sent=False, pruned=0, failed=0)
 
         payload = build_reminder_payload(streak_count=view.settled.streak_count)
-        result = await push_send.send_to_user(session, user_id=user_id, payload=payload)
+        ttl_seconds = seconds_until_end_of_local_day(row.timezone, now_utc)  # D-01
+        result = await push_send.send_to_user(
+            session, user_id=user_id, payload=payload, ttl_seconds=ttl_seconds
+        )
+        # Step 8 (D-13/D-14/D-15): release today's claim when, and only when,
+        # the fan-out delivered to nobody (attempted == 0 or attempted ==
+        # pruned) -- `failed` is deliberately excluded, since a construction
+        # or encryption exception also means nothing reached the network,
+        # but the predicate is kept narrow on purpose (the wider variant is
+        # recorded as deferred in 204-DECISIONS.md). This must be the NEXT
+        # statement after the fan-out returns NORMALLY, inside this same
+        # session block, and unreachable from any exception handler -- a
+        # crash mid-fan-out must leave the claim standing (D-07). Enables a
+        # same-day device re-sync (Plan 01) to still produce a reminder
+        # today rather than tomorrow.
+        if result.attempted == 0 or result.attempted == result.pruned:
+            await train_reminder_repository.release_reminder_claim(
+                session, user_id=user_id, today=today
+            )
+            await session.commit()
         return _CandidateOutcome(
             eligible=True, claimed=True, sent=True, pruned=result.pruned, failed=result.failed
         )

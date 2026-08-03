@@ -6,12 +6,18 @@
  * user-facing error (UI-SPEC E6), so the `queryFn` swallows it rather than
  * letting it throw into the global `QueryCache.onError` Sentry capture.
  *
- * Scoped to the Train reminder surfaces only — never an app-level provider,
- * because the key endpoint is unauthenticated and guests are out of scope.
- * Consumers today: `TrainReminderButton`, `TrainScheduleSettings`, and
- * `TrainReminderResurfaceBanner` (Phase 203). Deliberately not enumerated as a
+ * Consumers today: `TrainReminderButton`, `TrainScheduleSettings`,
+ * `TrainReminderResurfaceBanner` (Phase 203), and the app-wide
+ * `useDevicePushResync` (Phase 204, D-07). Deliberately not enumerated as a
  * fixed count — the earlier "the two consuming components" wording went stale
  * the moment Phase 203 added the third (203-REVIEW.md WR-02).
+ *
+ * `options.enabled` (Phase 204): the app-wide consumer MUST pass the same
+ * guest gate `ProtectedLayout` passes `useReminderResurfaceRedirect`, so a
+ * guest's app load still issues no `GET /push/vapid-public-key` (mirrors the
+ * CR-01 fix already documented at `App.tsx:551-557`). The three pre-existing
+ * Train-page-scoped consumers call this with no arguments and keep their
+ * current behavior (default `enabled: true`).
  */
 import axios from 'axios';
 import { useQuery } from '@tanstack/react-query';
@@ -30,7 +36,7 @@ export interface PushCapability {
   permission: NotificationPermission;
 }
 
-export function usePushCapability(): PushCapability {
+export function usePushCapability(options?: { enabled?: boolean }): PushCapability {
   const supported = isPushSupported();
 
   const query = useQuery<string | null>({
@@ -46,7 +52,7 @@ export function usePushCapability(): PushCapability {
         throw error;
       }
     },
-    enabled: supported,
+    enabled: supported && (options?.enabled ?? true),
     staleTime: Infinity,
     gcTime: Infinity,
     retry: false,

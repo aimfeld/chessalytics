@@ -36,6 +36,7 @@ import { useUserFlag, setUserFlag } from '@/hooks/useUserFlag';
 import { useReadiness } from '@/hooks/useReadiness';
 import { useTrainProgress } from '@/hooks/useTrainProgress';
 import { useReminderResurfaceRedirect } from '@/hooks/useReminderResurface';
+import { useDevicePushResync } from '@/hooks/useDevicePushResync';
 import { captureHandoffMarker } from '@/lib/handoffMarker';
 
 // First React.lazy boundary in the app — keeps the Stockfish JS/WASM bundle off
@@ -556,6 +557,9 @@ function ProtectedLayout() {
   // the same fix `useTrainProgress`'s `enabled` option applies at the nav
   // badge call sites (T-191-21).
   useReminderResurfaceRedirect({ enabled: profile != null && !profile.is_guest });
+  // Phase 204 D-07: a device whose push_subscriptions row was pruned
+  // re-registers itself on the next app load, with no user gesture.
+  useDevicePushResync({ enabled: profile != null && !profile.is_guest });
 
   useEffect(() => {
     if (isOpeningsRoute && profile?.email) {

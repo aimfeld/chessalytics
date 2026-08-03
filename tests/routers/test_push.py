@@ -176,6 +176,73 @@ async def test_dev_trigger_sends_real_encrypted_push_end_to_end(
     assert b"train-reminder" not in content
 
 
+@pytest.mark.usefixtures("vapid_keypair")
+async def test_resubscribe_after_prune_restores_delivery(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """PUSHREL-01/PUSHREL-06 (Phase 204, SEED-135 D2): the desync-and-recover
+    round trip at the HTTP layer.
+
+    The unsubscribe call stands in for a server-side prune's row deletion --
+    the resulting server state (no `push_subscriptions` row, device still
+    holds the subscription) is identical either way, and the prune path
+    itself is already covered by `tests/test_push_send.py`'s status-branch
+    table. Re-POSTing the identical body is exactly what
+    `resyncExistingSubscription` (`frontend/src/lib/push.ts`) does -- a
+    blind, idempotent re-POST to the existing `POST /push/subscribe`, relying
+    on `upsert_subscription`'s `ON CONFLICT DO UPDATE` on `endpoint`.
+    """
+    monkeypatch.setattr(config_settings, "ENVIRONMENT", "development")
+    _user_id, token = await _register_and_login("push-resubscribe@example.com")
+    auth_header = {"Authorization": f"Bearer {token}"}
+    p256dh, auth = _fresh_subscription_keys()
+    endpoint = "https://fcm.googleapis.com/fcm/send/resubscribe-endpoint"
+    subscribe_body = {"endpoint": endpoint, "keys": {"p256dh": p256dh, "auth": auth}}
+
+    async with httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=app), base_url="http://test"
+    ) as client:
+        sub_resp = await client.post(SUBSCRIBE_ENDPOINT, headers=auth_header, json=subscribe_body)
+        assert sub_resp.status_code == 201, sub_resp.text
+
+        # Stands in for a 404/410 prune -- leaves the exact state a pruned
+        # device is in: no server-side row, device still holds the
+        # subscription.
+        unsub_resp = await client.post(
+            UNSUBSCRIBE_ENDPOINT, headers=auth_header, json={"endpoint": endpoint}
+        )
+        assert unsub_resp.status_code == 204, unsub_resp.text
+
+        mock_post = AsyncMock(return_value=MagicMock(status_code=201))
+        fake_client = _FakePushHttpClient(mock_post)
+        with patch("app.services.push_send.push_http_client", return_value=fake_client):
+            # The dark state SEED-135 describes: the device is unreachable.
+            dark_trigger_resp = await client.post(DEV_TRIGGER_ENDPOINT, headers=auth_header)
+        assert dark_trigger_resp.status_code == 200, dark_trigger_resp.text
+        assert dark_trigger_resp.json()["attempted"] == 0
+
+        # The blind idempotent re-POST `resyncExistingSubscription` performs
+        # -- the identical body, no new endpoint.
+        resync_resp = await client.post(
+            SUBSCRIBE_ENDPOINT, headers=auth_header, json=subscribe_body
+        )
+        assert resync_resp.status_code == 201, resync_resp.text
+
+        mock_post_after_resync = AsyncMock(return_value=MagicMock(status_code=201))
+        fake_client_after_resync = _FakePushHttpClient(mock_post_after_resync)
+        with patch(
+            "app.services.push_send.push_http_client", return_value=fake_client_after_resync
+        ):
+            recovered_trigger_resp = await client.post(DEV_TRIGGER_ENDPOINT, headers=auth_header)
+
+    assert recovered_trigger_resp.status_code == 200, recovered_trigger_resp.text
+    recovered_body = recovered_trigger_resp.json()
+    # attempted == 1, not 2 -- the ON CONFLICT DO UPDATE idempotency proof.
+    # A duplicate row from the re-POST would make this 2.
+    assert recovered_body["attempted"] == 1
+    assert recovered_body["pruned"] == 0
+
+
 # ---------------------------------------------------------------------------
 # Unsubscribe scoping (V4/IDOR)
 # ---------------------------------------------------------------------------

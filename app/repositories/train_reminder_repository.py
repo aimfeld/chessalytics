@@ -97,6 +97,52 @@ async def claim_reminder_day(session: AsyncSession, *, user_id: int, today: date
     return claimed is not None
 
 
+async def release_reminder_claim(
+    session: AsyncSession, *, user_id: int, today: datetime.date
+) -> bool:
+    """Undo THIS tick's claim when the fan-out delivered to nobody (Phase 204 D3).
+
+    Released when, and only when,
+    `train_reminder_service._process_candidate`'s fan-out attempted zero
+    sends or every attempted send came back pruned (`attempted == 0 or
+    attempted == pruned`) -- see 204-DECISIONS.md for the full reasoning and
+    the rejected alternatives. `failed` never triggers this (D-15): a
+    construction/encryption exception is deliberately excluded from the
+    predicate.
+
+    The `reminder_last_sent_on == today` guard is deliberately NARROWER than
+    `claim_reminder_day`'s predicate above -- no `or_`, no `.is_(None)`,
+    equality with `today` only (D-14). This means the release can only ever
+    un-claim the day THIS tick claimed, never a later claim written by a
+    second ticker, which keeps the D-07 double-send invariant structural
+    rather than resting on "there is only one process". 404/410 are terminal
+    statuses under RFC 8030 Sec. 7, so a pruned subscription demonstrably
+    never received the message -- releasing the claim cannot therefore
+    produce a second delivery of a first one that never happened.
+
+    Does NOT commit -- same "caller commits" contract as `claim_reminder_day`.
+    Returns whether THIS call actually released a row (False if the row's
+    `reminder_last_sent_on` was NULL, an earlier date, or absent).
+
+    Args:
+        session: AsyncSession. Caller commits.
+        user_id: Authenticated user's internal PK (V4: never client-supplied).
+        today: The SAME already-resolved local calendar day the claim used --
+            never re-resolved by the caller.
+    """
+    stmt = (
+        update(TrainSettings)
+        .where(
+            TrainSettings.user_id == user_id,
+            TrainSettings.reminder_last_sent_on == today,
+        )
+        .values(reminder_last_sent_on=None)
+        .returning(TrainSettings.user_id)
+    )
+    released = (await session.execute(stmt)).scalar_one_or_none()
+    return released is not None
+
+
 async def has_completed_session_on(
     session: AsyncSession, *, user_id: int, day: datetime.date
 ) -> bool:
@@ -126,4 +172,5 @@ __all__ = [
     "claim_reminder_day",
     "has_completed_session_on",
     "list_reminder_candidate_user_ids",
+    "release_reminder_claim",
 ]
