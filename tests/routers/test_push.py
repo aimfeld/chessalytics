@@ -205,7 +205,14 @@ async def test_unsubscribe_removes_own_endpoint() -> None:
 
 
 @pytest.mark.usefixtures("vapid_keypair")
-async def test_unsubscribe_foreign_endpoint_removes_nothing() -> None:
+async def test_unsubscribe_foreign_endpoint_removes_nothing(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # This test proves the point via the dev-trigger endpoint, which is gated on
+    # ENVIRONMENT == "development" and 404s otherwise. It passed locally (dev .env)
+    # but failed in CI, where ENVIRONMENT is not development -- the gate has to be
+    # forced here the same way the other dev-trigger tests do it.
+    monkeypatch.setattr(config_settings, "ENVIRONMENT", "development")
     _owner_id, owner_token = await _register_and_login("push-unsub-victim@example.com")
     owner_header = {"Authorization": f"Bearer {owner_token}"}
     _attacker_id, attacker_token = await _register_and_login("push-unsub-attacker@example.com")
