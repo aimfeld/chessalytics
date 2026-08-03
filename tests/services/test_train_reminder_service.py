@@ -27,6 +27,7 @@ from __future__ import annotations
 
 import base64
 import datetime
+import logging
 import os
 import uuid
 from unittest.mock import AsyncMock, MagicMock, patch
@@ -750,6 +751,94 @@ class TestFailureIsolation:
         assert summary.sent == 1
         assert summary.failed == 1
         assert mock_capture.call_count == 1
+
+
+class TestTickSummaryLog:
+    """SEED-135 D1: the per-tick summary escalates to WARNING when pruned or
+    failed is non-zero, since app-level INFO is filtered out of prod docker
+    logs. One call site, one format string -- the message shape (everything
+    but the counts) must be byte-identical at both levels."""
+
+    _PREFIX = "Train reminder tick:"
+
+    def _one_summary_record(self, caplog: pytest.LogCaptureFixture) -> logging.LogRecord:
+        records = [r for r in caplog.records if r.getMessage().startswith(self._PREFIX)]
+        assert len(records) == 1, f"expected exactly one summary line, got: {records}"
+        return records[0]
+
+    async def test_pruned_nonzero_logs_summary_at_warning(
+        self,
+        real_session_maker: async_sessionmaker[AsyncSession],
+        caplog: pytest.LogCaptureFixture,
+    ) -> None:
+        await _seed_ready_candidate(real_session_maker)
+        caplog.set_level("INFO", logger="app.services.train_reminder_service")
+        with _mock_send_to_user(pruned=1):
+            summary = await train_reminder_service.send_due_reminders(_NOW)
+
+        assert self._one_summary_record(caplog).levelno == logging.WARNING
+        assert summary.pruned == 1
+
+    async def test_failed_nonzero_logs_summary_at_warning(
+        self,
+        real_session_maker: async_sessionmaker[AsyncSession],
+        caplog: pytest.LogCaptureFixture,
+    ) -> None:
+        await _seed_ready_candidate(real_session_maker)
+        caplog.set_level("INFO", logger="app.services.train_reminder_service")
+        with _mock_send_to_user(failed=1):
+            summary = await train_reminder_service.send_due_reminders(_NOW)
+
+        assert self._one_summary_record(caplog).levelno == logging.WARNING
+        assert summary.failed == 1
+
+    async def test_all_clear_logs_summary_at_info(
+        self,
+        real_session_maker: async_sessionmaker[AsyncSession],
+        caplog: pytest.LogCaptureFixture,
+    ) -> None:
+        await _seed_ready_candidate(real_session_maker)
+        caplog.set_level("INFO", logger="app.services.train_reminder_service")
+        with _mock_send_to_user():
+            summary = await train_reminder_service.send_due_reminders(_NOW)
+
+        assert self._one_summary_record(caplog).levelno == logging.INFO
+        assert summary.pruned == 0
+        assert summary.failed == 0
+
+    async def test_warning_and_info_summaries_share_the_same_message_shape(
+        self,
+        real_session_maker: async_sessionmaker[AsyncSession],
+        caplog: pytest.LogCaptureFixture,
+    ) -> None:
+        """Only the counts differ between the WARNING and INFO cases -- the
+        surrounding format string (one call site, per the plan) never does,
+        so a prod grep for the prefix works regardless of which level fired."""
+        await _seed_ready_candidate(real_session_maker)
+        caplog.set_level("INFO", logger="app.services.train_reminder_service")
+        with _mock_send_to_user(pruned=1):
+            warning_summary = await train_reminder_service.send_due_reminders(_NOW)
+        warning_record = self._one_summary_record(caplog)
+        caplog.clear()
+
+        await _seed_ready_candidate(real_session_maker)
+        with _mock_send_to_user():
+            info_summary = await train_reminder_service.send_due_reminders(_NOW)
+        info_record = self._one_summary_record(caplog)
+
+        # ReminderTickSummary's fields are unaffected by the logging change --
+        # the log level is the only thing that varies.
+        assert (
+            type(warning_summary)
+            is type(info_summary)
+            is train_reminder_service.ReminderTickSummary
+        )
+        # Compare the RAW (pre-%-formatting) format string, not getMessage()
+        # -- the rendered text legitimately differs on scanned/pruned/failed
+        # (this real, non-rollback session accumulates candidates across the
+        # two calls), but "one call site, one format string" means the
+        # %-template itself, record.msg, must be identical either way.
+        assert warning_record.msg == info_record.msg
 
 
 class TestRunPeriodic:
