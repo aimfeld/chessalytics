@@ -62,7 +62,7 @@ import { BEST_MOVE_ARROW, TRAIN_VERDICT_CORRECT, TRAIN_VERDICT_INCORRECT } from 
 import { toDisplayQuality, trainGlyphColor } from '@/lib/trainArrows';
 import type { TrainFineMove, TrainMoveQuality } from '@/lib/trainArrows';
 import { GUESS_POINTS, MOVE_TIER_POINTS } from '@/lib/trainScore';
-import { GUESS_LABELS } from '@/lib/trainGuessLabels';
+import { GUESS_LABELS, guessFeedbackProse } from '@/lib/trainGuessLabels';
 import type { Guess } from '@/lib/trainGuessLabels';
 import { cn, formatDateWithYear } from '@/lib/utils';
 import { formatTimeControl } from '@/lib/formatTimeControl';
@@ -909,6 +909,14 @@ export function TrainReveal({
   // Phase 200 UAT round 6: the Also fine legend lives in the guess card's body,
   // so it needs no free-play gate of its own — the card it sits in is gone.
   const showAlsoFine = alsoFineMoves.length > 0;
+  // Quick 260803-iv6 (Task 3): the guess card states the verdict but never
+  // says WHY it landed where it did — one locked prose sentence, derived
+  // next to `showAlsoFine` since both render inside the same card body.
+  // `verdict.puzzle_type !== 'herring'` is the "came from a played game vs a
+  // red herring" predicate — the SAME one the game footer below already
+  // uses, no extra field needed.
+  const guessProse =
+    guess !== null ? guessFeedbackProse(guess, verdict.correct_guess, verdict.puzzle_type !== 'herring') : null;
   const alsoFineEntry = { key: ALSO_FINE_KEY, ucis: alsoFineMoves.map((f) => f.uci) };
   const isAlsoFineSpotlit = spotlightKey === ALSO_FINE_KEY;
   const alsoFineSanList = alsoFineMoves
@@ -1172,11 +1180,18 @@ export function TrainReveal({
             testid="train-verdict-guess-points"
           />
         </CardHeader>
-        {showAlsoFine && (
+        {(guessProse !== null || showAlsoFine) && (
           <CardBody className="flex flex-col gap-2 p-3">
-            <p className="text-sm" data-testid="train-reveal-also-fine">
-              Also fine: {alsoFineSanList}
-            </p>
+            {guessProse !== null && (
+              <p className="text-sm" data-testid="train-verdict-guess-prose">
+                {guessProse}
+              </p>
+            )}
+            {showAlsoFine && (
+              <p className="text-sm" data-testid="train-reveal-also-fine">
+                Also fine: {alsoFineSanList}
+              </p>
+            )}
           </CardBody>
         )}
       </Card>

@@ -25,10 +25,13 @@ export const GUESS_LABELS: Record<Guess, string> = {
  * reworded or given a sixth variant. Guard-clause returns, no nesting.
  */
 export function guessFeedbackProse(
-  _guess: Guess,
-  _correctGuess: boolean,
-  _fromPlayedGame: boolean,
+  guess: Guess,
+  correctGuess: boolean,
+  fromPlayedGame: boolean,
 ): string {
-  // RED (quick 260803-iv6, Task 3): implemented in the GREEN commit.
-  throw new Error('not implemented');
+  if (guess === 'critical' && !correctGuess) return 'Several moves are fine here.';
+  if (guess === 'critical' && correctGuess) return 'You identified the one critical move.';
+  if (guess === 'several' && !correctGuess) return 'One move is clearly better than the alternatives.';
+  if (guess === 'several' && correctGuess && !fromPlayedGame) return 'Indeed, several moves are fine here.';
+  return 'You handled this fine in your game.';
 }
