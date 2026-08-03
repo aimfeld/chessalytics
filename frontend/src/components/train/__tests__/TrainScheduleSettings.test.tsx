@@ -414,7 +414,7 @@ describe('TrainScheduleSettings', () => {
     await waitFor(() => {
       expect(screen.getByTestId('qr-handoff-settings')).not.toBeNull();
     });
-    expect(screen.getByText('Use FlawChess on your phone')).not.toBeNull();
+    expect(screen.getByText('Reminders work better with FlawChess on your phone')).not.toBeNull();
     const qrBlock = screen.getByTestId('qr-handoff-settings');
     expect(qrBlock.querySelectorAll('button')).toHaveLength(0);
     expect(qrBlock.querySelector('[aria-label*="dismiss" i], [aria-label*="close" i]')).toBeNull();
@@ -446,7 +446,7 @@ describe('TrainScheduleSettings', () => {
       await waitFor(() => {
         expect(screen.getByTestId('btn-install-mobile-settings')).not.toBeNull();
       });
-      expect(screen.getByText('Use FlawChess on your phone')).not.toBeNull();
+      expect(screen.getByText('Reminders work better with FlawChess on your phone')).not.toBeNull();
       expect(screen.queryByTestId('qr-handoff-settings')).toBeNull();
     });
 
@@ -481,7 +481,7 @@ describe('TrainScheduleSettings', () => {
       await waitFor(() => {
         expect(screen.getByTestId('filter-weekday-mo').hasAttribute('disabled')).toBe(false);
       });
-      expect(screen.queryByText('Use FlawChess on your phone')).toBeNull();
+      expect(screen.queryByText('Reminders work better with FlawChess on your phone')).toBeNull();
       expect(screen.queryByTestId('qr-handoff-settings')).toBeNull();
       expect(screen.queryByTestId('btn-install-mobile-settings')).toBeNull();
     });
@@ -497,7 +497,7 @@ describe('TrainScheduleSettings', () => {
       await waitFor(() => {
         expect(screen.getByTestId('filter-weekday-mo').hasAttribute('disabled')).toBe(false);
       });
-      expect(screen.queryByText('Use FlawChess on your phone')).toBeNull();
+      expect(screen.queryByText('Reminders work better with FlawChess on your phone')).toBeNull();
       expect(screen.queryByTestId('qr-handoff-settings')).toBeNull();
       expect(screen.queryByTestId('btn-install-mobile-settings')).toBeNull();
     });

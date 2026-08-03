@@ -412,10 +412,10 @@ export function TrainScheduleSettings({
 
   // UAT item 5 (post-review fix): three mutually exclusive branches, never
   // more than one rendered. `showQr` and `showMobileInstallButton` decide
-  // WHICH content fills the "Use FlawChess on your phone" section;
-  // `showPhoneSection` decides whether the section (heading included)
-  // renders at ALL — a standalone launch, or a mobile browser with no live
-  // `beforeinstallprompt` (iOS has none), gets nothing rather than an
+  // WHICH content fills the "Reminders work better with FlawChess on your
+  // phone" section; `showPhoneSection` decides whether the section (heading
+  // included) renders at ALL — a standalone launch, or a mobile browser with
+  // no live `beforeinstallprompt` (iOS has none), gets nothing rather than an
   // orphaned heading over a dead control.
   const showQr = !isMobile && !isStandalone;
   const showMobileInstallButton = isMobile && !isStandalone && canInstall;
@@ -508,7 +508,7 @@ export function TrainScheduleSettings({
             `showMobileInstallButton`/`showPhoneSection`. */}
         {showPhoneSection && (
           <div className="w-full">
-            <p className="mb-1 text-sm font-semibold">Use FlawChess on your phone</p>
+            <p className="mb-1 text-sm font-semibold">Reminders work better with FlawChess on your phone</p>
             {showQr && <TrainInstallQr testId="qr-handoff-settings" />}
             {showMobileInstallButton && (
               <Button
