@@ -1,6 +1,6 @@
 ---
 id: SEED-132
-status: dormant
+status: implemented
 planted: 2026-08-01
 planted_during: /gsd-explore session on Train reminders and PWA install promotion
 trigger_when: next Train-focused milestone (planned), or whenever Train retention / re-engagement comes up

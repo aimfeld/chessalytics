@@ -4,6 +4,55 @@
 
 > Note: v1.18, v1.19, v1.20, v1.23, v1.25, v1.27, and v2.1–v2.5 closes did not add retrospective sections (only the ROADMAP archives + MILESTONES entries were written). Not backfilled here to avoid reconstructing reflections after the fact; their facts live in the corresponding `milestones/vX.Y-ROADMAP.md` and `MILESTONES.md`.
 
+## Milestone: v2.11 — Train Solve Surface & Push Reminders
+
+**Shipped:** 2026-08-03 (tagged v2.11; **not deployed at close** — `production` remains at v2.10)
+**Phases:** 4 (200, 201, 202, 203) | **Plans:** 14 | **Tasks:** 38
+**Timeline:** 2026-08-01 → 2026-08-03 (11 squash-merged commits on `main`, 102 non-planning files, +14,039 / −467 since `v2.10`)
+
+### What Was Built
+
+The Train solve screen learned to explain itself, and Train grew a habit loop that reaches the user off-site.
+
+Phase 200 (SEED-131) made the reveal sidebar the board's own legend — per-move arrow glyphs in exact board colors, a hover/tap spotlight that strips the board down to one move, `inaccuracy` recolored to green so yellow left the reveal board, and an "Also fine" row — then made the shared board branchable after the verdict with a free-play sideline on its own Stockfish instance. Phase 201 (SEED-132 A) built VAPID-signed `aes128gcm` Web Push over `httpx.AsyncClient` plus a 15-minute lifespan tick that reminds only on scheduled, not-yet-trained days. Phase 202 (SEED-132 A) spent the one-shot browser permission behind a deliberate score-screen press, with Settings as the permanent recovery surface. Phase 203 (SEED-134) reversed the milestone's own opening decision and shipped the install layer: a 14-day / 3-attempt cooldown replacing a permanent dismissal veto, a five-state device-aware reminder slot, and the desktop→phone QR handoff.
+
+### What Worked
+
+- **Seed-driven planning with zero project-level research.** All four phases came from `/gsd-explore` seeds carrying locked decisions, named rejected alternatives, and per-file anchors. Three days from milestone start to close, and no phase needed a research pass to re-derive what the seed already settled.
+- **Writing the "do not re-derive" premises into REQUIREMENTS.md up front.** Web Push has no vendor and no per-message cost; iOS is the only platform where install gates push; `injectManifest` must never replace the hand-tuned `generateSW` block. These were the exact claims most likely to get relitigated mid-phase, and pinning them cost a paragraph.
+- **Reversing a milestone-start decision when the evidence changed.** v2.11 opened by deferring SEED-132 Phase B on a BrowserStack dependency. Two phases in it was obvious that a reminder landing on a desktop at 18:00 is queued past the moment it existed to create, so Phase 203 was added mid-milestone rather than shipping a loop that structurally could not close.
+- **Executing the real service worker in tests.** `push-sw.js` cannot be imported normally, so its focus-or-open and collapse-without-renotify contracts are pinned by running the actual file through `node:vm`. That is the only reason those handlers are covered at all.
+
+### What Was Inefficient
+
+- **Two load-bearing defects survived a fully green test suite and were caught only by code review.** The Android install offer was dead code: `beforeinstallprompt` is one-shot, each hook instance captured it privately, so any late-mounting consumer never saw it. And `useTrainSettings` mounted app-wide with no `enabled` gate, 403ing for every guest on every route.
+- **Three UAT rounds on Phase 203 to converge on one placement rule.** Three separate locked UI decisions (203 D-13, D-15, 202 D-03) were each deviated from in live UAT before the actual invariant surfaced: the score-screen row only ever holds a pressable control, everything else renders below it. That invariant was discoverable on a real screen and not from the spec.
+- **Phase 200 needed 10 UAT fix rounds.** The legend and exploration work is dense visual behavior on a shared board, and jsdom cannot observe any of it — no layout engine, no real tap targets, no composited color.
+- **Stale requirement checkboxes reached milestone close.** LEGEND-06 and EXPLORE-07 still read unchecked despite Phase 200's 375px browser UAT passing 3/3 the day before. Closing the UAT did not write back to REQUIREMENTS.md.
+
+### Patterns Established
+
+- **A one-shot browser event belongs in a module-level singleton, never in hook state.** If the event can fire before any consumer mounts, per-instance capture is a race the tests will not see. The regression test must fire the event *before* mounting.
+- **Every app-wide `useQuery` needs an `enabled` gate keyed to auth state.** This is the second occurrence of the same Sentry-noise pattern (T-191-21). Mounting a query globally means it runs on every route for every visitor class, including the ones that will always 403.
+- **Prove a gap fix by reverting it.** Both Phase 203 defects were confirmed fixed by removing the fix and watching the new test fail. Symbol presence is not evidence.
+- **Ship an unverifiable branch fail-safe rather than deferring it.** The iOS path had no test device, so it is written to degrade to nothing on any unrecognized state, with `push_subscriptions` rows serving as the passive signal after deploy.
+
+### Key Lessons
+
+- **A green suite is evidence about the code you wrote, not about the code paths that exist.** Both Phase 203 defects were invisible to tests, types, lint, and knip, because each was a missing invariant rather than a wrong statement. Code review is the only gate that caught either.
+- **UI placement decisions locked in planning are guesses until a real screen contradicts them.** Three were deviated from in one phase. The cheaper posture is to plan the constraint (what the row is *for*) rather than the layout.
+- **Closing a human UAT is not the same as closing the requirement.** The write-back step has no automation behind it, so a passing UAT can leave its requirement reading unfinished for days.
+
+### Cost Observations
+
+- Four phases, 14 plans, 11 commits over 3 days — the leanest full-product milestone since v2.5, and the first to add an off-site surface (push) to the product.
+- Phase 203 alone carried 5 code-review findings and 3 UAT rounds for 4 plans: the install layer's cost was concentrated almost entirely in verification, not implementation.
+- One new backend dependency (`webpush`) and one new table (`push_subscriptions`); the rest of the reminder path reuses `train_scheduler`'s existing predicates and the existing settings round-trip.
+- Closed `override_closeout` on artifacts only: all four phases verified `passed`, all 46 requirements Complete, all three source seeds closed, with 31 cross-milestone carryover items acknowledged as deferred.
+- Closed **without deploying** at the operator's call, so v2.11's user-facing value is tagged but not yet live.
+
+---
+
 ## Milestone: v2.9 — Train — Spaced-Repetition Blunder Drills
 
 **Shipped:** 2026-07-30 (deployed to production incrementally through releases #286–#290)

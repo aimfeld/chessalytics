@@ -1,5 +1,34 @@
 # Milestones: FlawChess
 
+## v2.11 Train Solve Surface & Push Reminders (Shipped: 2026-08-03)
+
+**Phases completed:** 4 phases (200, 201, 202, 203), 14 plans, 38 tasks, 11 commits on `main` (102 non-planning files, +14,039 / −467 since `v2.10`)
+
+**Delivered:** Train stopped being a screen you bounce off and became a habit loop: the solve reveal now explains itself on the board it already draws, you can branch off any position without leaving the flow, and FlawChess can reach you on the days your own schedule picked — then, at the one moment you've said you want reminders, offer to get itself onto your phone.
+
+**Closeout:** `override_closeout` (artifacts only). All four phases verified `passed`, all 46 requirements Complete, all three source seeds (SEED-131, SEED-132, SEED-134) closed. Known verification overrides: 31 cross-milestone carryover artifacts (see STATE.md Deferred Items). **Not deployed at close** — `production` remains at v2.10.
+
+**Known gaps:** The iOS branch of Phase 203 (install → revisit → permission path, `reminder_intent_at` write, standalone re-surface banner) shipped **unverified on real hardware** — no iPhone available and BrowserStack was not used. It is written to fail safe: on an unrecognized iOS state the affordance renders nothing rather than a broken offer. Verification on a real device is the milestone's one open follow-up.
+
+**Key accomplishments:**
+
+- The Train reveal sidebar is now the board's own legend: every line box carries an arrow glyph in its exact board-arrow color inside a real Card/CardHeader, and hovering (desktop) or tapping the glyph (mobile) filters the shared board down to that one move.
+- The Train reveal board never shows yellow — inaccuracy renders identically to good everywhere, including the user's own played move and the CardHeader glyph — and the sidebar's drawn green alternatives now have their own compact, spotlight-participating "Also fine" row.
+- The shared Train board is now branchable after the verdict lands: any legal piece move starts a free-play sideline seeded from wherever the board already is (including a stepped-into line prefix), validated against the live position so either color stays playable, powered by its own independent Stockfish instance that tears down cleanly on Solution or a puzzle transition — and none of it can ever touch the graded/solve path.
+- The post-verdict sideline now renders a real UI: a Stockfish engine-lines card (reused verbatim from the Analysis page) plus a fully controlled `TrainExplorationLine` move list swap in for the reveal boxes the instant exploration starts, with the guess verdict and game footer staying pinned, and clicking a PV move plays it straight into the sideline.
+- VAPID-signed, aes128gcm-encrypted Web Push send path (webpush + httpx.AsyncClient) proven end to end through a dev-only trigger endpoint, with the full push_subscriptions CRUD, status-branch prune logic, and worker-image dependency isolation.
+- `push-sw.js` push/notificationclick handlers wired into the Workbox-generated `sw.js` via a single-key `workbox.importScripts` addition, with the D-13 focus-or-open and D-14 collapse-without-renotify contracts pinned by a Vitest suite that executes the real file through `node:vm`, plus the Caddy `@nocache` cache-header fix that keeps it revalidating on every deploy.
+- `reminder_enabled`/`reminder_hour`/`reminder_last_sent_on` land on `train_settings` via a hand-written Alembic revision chained off plan 201-01, defaulted through `get_or_create_settings` and round-tripped through `GET`/`PUT /api/train/settings` — the whole reminder surface is curl-testable before Phase 202 writes any UI.
+- A fifth FastAPI lifespan task ticks every 15 minutes, narrows candidates in SQL (D-16), decides schedule/hour/already-trained eligibility in Python via `train_scheduler`'s reused predicates, settles the streak snapshot before building "Day N" copy (D-12), claims the day atomically before any network call (D-07), and fans the notification out to every live subscription via 201-01's `push_send.send_to_user`.
+- Complete browser-side Web Push subscription path (`lib/push.ts`) landed on the Train score screen as a persistent, per-device "Remind me" button that requests permission, subscribes, persists `reminder_enabled` through the existing settings PUT, and confirms in place naming the hour.
+- `TrainScheduleSettings` becomes the permanent PERM-03/PERM-04 recovery surface — a master "Remind me to train" Switch and 24-hour "Remind at" Select that auto-save like the weekday chips, with toggle-ON as the one documented asynchronous exception gated on a real browser grant plus `POST /push/subscribe`.
+- Client-writable `reminder_intent_at` timestamptz column threaded through the full-replace `GET`/`PUT /train/settings` contract on both backend and frontend, with a required-but-nullable schema field proving the omission-422 loud-failure guarantee.
+- 14-day/3-attempt cooldown resolver replaces the permanent install-dismissal veto, the captured `BeforeInstallPromptEvent` survives dismissal, `isStandalone` now ORs `navigator.standalone`, and the drawer/banner are suppressed on Train routes unless a scanned QR's `?src=handoff` marker overrides it.
+- `TrainReminderButton` now resolves five explicit platform states through a single pure resolver, and its confirmed state carries the phase's real payoff: a live-event-gated Android install offer, a credential-free desktop→phone QR handoff shared with `TrainScheduleSettings`'s permanent home, and deliberately nothing for standalone users.
+- The iOS-tabbed reminder slot gets a real "Get reminders" affordance with a synchronous `reminder_intent_at` write and honest two-step instructions, and a standalone launch with recorded install intent actively routes to `/train` and shows a non-blocking re-surface banner — closing the install→reminder two-session cliff — with the whole score-screen slot refactored into a `{ control, belowRow }` hook after three UAT rounds converged on one placement invariant.
+
+---
+
 ## v2.10 FlawChess Engine Improvements (Shipped: 2026-08-01)
 
 **Phases completed:** 6 phases (194, 195, 196, 197, 198, 199), 29 plans, 19 squash-merged commits over 3 days (240 files, +48,561 / −602 since `v2.9`)

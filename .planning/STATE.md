@@ -2,37 +2,56 @@
 gsd_state_version: 1.0
 milestone: v2.11
 milestone_name: Train Solve Surface & Push Reminders
-current_phase: 999.1
-current_phase_name: Password Reset (BACKLOG)
-status: planning
+status: Awaiting next milestone
 stopped_at: Completed 203-04-PLAN.md (phase 203 complete, 4/4 plans)
-last_updated: "2026-08-02T21:12:57.380Z"
-last_activity: 2026-08-02
-last_activity_desc: Phase 203 complete, transitioned to Phase 999.1
+last_updated: "2026-08-03T11:20:19.394Z"
+last_activity: 2026-08-03
+last_activity_desc: Milestone v2.11 completed and archived
 progress:
   total_phases: 4
   completed_phases: 4
   total_plans: 14
   completed_plans: 14
   percent: 100
+current_phase: 999.1
+current_phase_name: Password Reset (BACKLOG)
 ---
 
 # Project State: FlawChess
 
 ## Current Position
 
-Phase: 999.1 — Password Reset (BACKLOG)
-Plan: Not started
-Status: Ready to plan
-Last activity: 2026-08-02 — Phase 203 complete, transitioned to Phase 999.1
+Phase: Milestone v2.11 complete
+Plan: —
+Status: Awaiting next milestone
+Last activity: 2026-08-03 — Milestone v2.11 completed and archived
 
 ## Project Reference
 
-See: .planning/PROJECT.md (updated 2026-08-02 after Phase 201)
+See: .planning/PROJECT.md (updated 2026-08-03 after v2.11 milestone)
 Core value: Position-precise WDL across openings + endgames + time pressure on top of users' actual chess.com / lichess games, with personalized LLM commentary and an auto-generated opening-strengths/weaknesses report.
-Current focus: **v2.11 Train Solve Surface & Push Reminders — ROADMAP CREATED 2026-08-01.** Three phases (200–202), continuing absolute numbering from v2.10's Phase 199: **200 Train Solve Screen — Board Legend & Inline Sideline Exploration** (SEED-131, frontend-only, no migration), **201 Push Infrastructure & Train Reminders** (SEED-132 Phase A — `push_subscriptions` table, VAPID keypair, ≥15-minute scheduler tick, `push-sw.js` via `workbox.importScripts`, the reminder job), **202 Reminder Permission UX** (SEED-132 Phase A — score-screen pre-prompt + `TrainScheduleSettings` toggle/hour picker). Sourced entirely from two `/gsd-explore` seeds (SEED-131 2026-07-31, SEED-132 Phase A 2026-08-01) carrying locked decisions, rejected alternatives, and per-file anchors — no project-level research pass. SEED-131 sequenced before SEED-132 per a milestone-start decision (frontend-only, no shared files, so the tracks don't compete); within SEED-132, 201 (infra + job) precedes 202 (permission UX) because the UX is meaningless without a scheduler that can send. SEED-132 Phase B (install promotion, iOS push) stays deferred on a BrowserStack dependency and is not a phase here. All 31 requirements (LEGEND-01..06, EXPLORE-01..07, PUSH-01..06, REMIND-01..08, PERM-01..04) mapped 1:1, 100% coverage, no orphans. **Phases 200, 201 and 202 are complete (3/4).** Phase 201 closed 2026-08-02: all 14 PUSH/REMIND requirements Complete, verification `passed`, UAT 5/5 including real Chrome-on-Linux delivery and the D-13 focus-and-navigate click. Carried forward: the API is Bearer-token auth (`localStorage.auth_token`), not cookies — which is exactly why Phase 203's iOS `localStorage` gate is a design blocker and not a detail — and Brave needs "Use Google services for push messaging" enabled or `PushManager.subscribe()` throws `AbortError`. **Phase 203 added 2026-08-02** (SEED-134, full seed in one phase): **PWA Install Re-prompting & Train-Anchored Install Offer** — fixes the self-inflicted permanent install-prompt burn, retimes the first offer behind demonstrated value, turns the reminder-confirmed state into the install/QR upsell surface across five explicit device states, and adds the dismissible desktop→phone QR handoff. This re-admits the SEED-132 Phase B work the milestone opened by deferring; the BrowserStack dependency is now a blocking pre-planning research gate inside the phase. Requirements extended 31 → 46 (INSTALL-01..06, OFFER-01..05, HANDOFF-01..04). Next: `/gsd-plan-phase 203`.
+Current focus: **v2.11 shipped 2026-08-03 (tagged, not yet deployed). Awaiting next milestone — run `/gsd-new-milestone`.** v2.11 delivered the Train solve surface and the full push-reminder + PWA-install retention loop across four phases (200–203): a sidebar-as-legend reveal with per-move arrow glyphs and a hover/tap spotlight plus inline sideline exploration on the shared board (200, SEED-131); VAPID-signed Web Push infrastructure, the `push_subscriptions` table and a 15-minute scheduler tick that reminds only on scheduled, not-yet-trained days (201, SEED-132 Phase A); the one-shot-permission-safe score-screen pre-prompt and the Settings master toggle + hour picker (202, SEED-132 Phase A); and the install layer that re-admits the deferred SEED-132 Phase B — a 14-day/3-attempt cooldown replacing the permanent dismissal veto, a five-state device-aware reminder slot, the desktop→phone QR handoff, and the iOS install→revisit→permission path (203, SEED-134). Carried forward into the next milestone: the API is Bearer-token auth (`localStorage.auth_token`), not cookies; Brave needs "Use Google services for push messaging" enabled or `PushManager.subscribe()` throws `AbortError`; and the iOS branch of Phase 203 shipped **unverified but fail-safe** — the operator has no iPhone and BrowserStack was not used, so the iOS path is written to degrade to nothing rather than to a broken affordance. Verifying it on real hardware is the one open follow-up.
+
+### Superseded: focus during v2.11 development
+
+**v2.11 Train Solve Surface & Push Reminders — ROADMAP CREATED 2026-08-01.** Three phases (200–202), continuing absolute numbering from v2.10's Phase 199: **200 Train Solve Screen — Board Legend & Inline Sideline Exploration** (SEED-131, frontend-only, no migration), **201 Push Infrastructure & Train Reminders** (SEED-132 Phase A — `push_subscriptions` table, VAPID keypair, ≥15-minute scheduler tick, `push-sw.js` via `workbox.importScripts`, the reminder job), **202 Reminder Permission UX** (SEED-132 Phase A — score-screen pre-prompt + `TrainScheduleSettings` toggle/hour picker). Sourced entirely from two `/gsd-explore` seeds (SEED-131 2026-07-31, SEED-132 Phase A 2026-08-01) carrying locked decisions, rejected alternatives, and per-file anchors — no project-level research pass. SEED-131 sequenced before SEED-132 per a milestone-start decision (frontend-only, no shared files, so the tracks don't compete); within SEED-132, 201 (infra + job) precedes 202 (permission UX) because the UX is meaningless without a scheduler that can send. SEED-132 Phase B (install promotion, iOS push) stays deferred on a BrowserStack dependency and is not a phase here. All 31 requirements (LEGEND-01..06, EXPLORE-01..07, PUSH-01..06, REMIND-01..08, PERM-01..04) mapped 1:1, 100% coverage, no orphans. **Phases 200, 201 and 202 are complete (3/4).** Phase 201 closed 2026-08-02: all 14 PUSH/REMIND requirements Complete, verification `passed`, UAT 5/5 including real Chrome-on-Linux delivery and the D-13 focus-and-navigate click. Carried forward: the API is Bearer-token auth (`localStorage.auth_token`), not cookies — which is exactly why Phase 203's iOS `localStorage` gate is a design blocker and not a detail — and Brave needs "Use Google services for push messaging" enabled or `PushManager.subscribe()` throws `AbortError`. **Phase 203 added 2026-08-02** (SEED-134, full seed in one phase): **PWA Install Re-prompting & Train-Anchored Install Offer** — fixes the self-inflicted permanent install-prompt burn, retimes the first offer behind demonstrated value, turns the reminder-confirmed state into the install/QR upsell surface across five explicit device states, and adds the dismissible desktop→phone QR handoff. This re-admits the SEED-132 Phase B work the milestone opened by deferring; the BrowserStack dependency is now a blocking pre-planning research gate inside the phase. Requirements extended 31 → 46 (INSTALL-01..06, OFFER-01..05, HANDOFF-01..04). Next: `/gsd-plan-phase 203`.
 
 ## Deferred Items
+
+Items acknowledged and deferred at milestone close on 2026-08-03 (v2.11, `override_closeout` on artifacts only). All four v2.11 phases (200, 201, 202, 203) are complete and verified `passed`, all 46 REQUIREMENTS.md rows are checked off, and all three of the milestone's own seeds (SEED-131, SEED-132, SEED-134) were moved to `.planning/seeds/closed/` at close. LEGEND-06 and EXPLORE-07 were still showing unchecked in REQUIREMENTS.md at close despite Phase 200's 375px browser UAT having passed on 2026-08-02 (3/3, 0 issues); the checkboxes and traceability rows were corrected at close, so this was stale bookkeeping and not a gap. The items below are cross-milestone carryover, not v2.11 gaps:
+
+| Category | Count | Notes |
+|----------|-------|-------|
+| Debug sessions | 2 | `entry-submit-n-plus-1` (fixed_awaiting_deploy — legitimately still awaiting deploy, since v2.11 was closed without promoting to production), `insights-diskfull-shm` (awaiting_human_verify) — both benign, unchanged since v2.6 |
+| Quick tasks | 19 | Same stale 2026-05-31 → 2026-06-16 set as at v2.7/v2.8/v2.9 close — the known audit miscount (missing SUMMARY artifacts, not unfinished work; see `project_stale_gsd_sdk_audit_bug`) |
+| Pending todos | 3 | `172-deferred-review-findings`, bitboard-storage note, WR-01 Tailwind axis label |
+| Dormant seeds | 7 | SEED-042/067/077/114/129/130/133 — all intentionally dormant, surfaced at `/gsd-new-milestone` |
+
+No v2.11 milestone audit doc was generated (`/gsd-audit-milestone` not run): all four phases carry a passing VERIFICATION.md, all 46 requirement rows are Complete, and Phases 200/201/202/203 each ran operator UAT whose findings were fixed in-branch (Phase 203 alone took three UAT rounds plus a 5-finding code review, all closed).
+
+**Deploy status at close:** v2.11 is closed and tagged but NOT deployed. `main` carries phases 200–203; `production` is still at the v2.10 release. Promotion is a separate `main → production` PR plus `bin/deploy.sh`.
+
+### Earlier: items deferred at the v2.9 close (2026-07-30)
 
 Items acknowledged and deferred at milestone close on 2026-07-30 (v2.9, `override_closeout` on artifacts only). All six v2.9 phases (189, 190, 190.1, 191, 192, 193) are complete and verified `passed` — Phase 193's three browser-only UAT items (dev-clock multi-day drain/reset, 7-pip density at 360px, off-day badge at both nav sites) were operator-confirmed at close, clearing the last verification gap. The items below are cross-milestone carryover, not v2.9 gaps:
 

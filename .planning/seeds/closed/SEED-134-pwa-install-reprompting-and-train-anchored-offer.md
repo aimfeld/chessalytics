@@ -1,6 +1,6 @@
 ---
 id: SEED-134
-status: promoted
+status: implemented
 planted: 2026-08-02
 planted_during: /gsd-explore session on getting users onto the mobile PWA (post phases 201/202)
 promoted: 2026-08-02

@@ -8,6 +8,8 @@ in `YYYY-MM-DD` (Europe/Zurich).
 
 ## [Unreleased]
 
+## [v2.11] Train Solve Surface & Push Reminders — 2026-08-03
+
 ### Tests
 
 - Fixed three test flakes that only surfaced under the full parallel suite, each at its real cause rather than by loosening an assertion: the real-Stockfish contract tests now lift `evaluate()`'s 2s wall-clock guard for themselves (the engine runs under `SCHED_IDLE`, so a depth-15 search is starved past 2s when every xdist worker competes for the same cores; the production constant is untouched); the tier-3 residual-fallback lottery test no longer requires that no other eligible backlog row exists anywhere in the database, and its stale fixture moved from 180 to 90 days so both probabilistic assertions sit many sigma from their thresholds; and the three heaviest frontend suites now raise testing-library's `asyncUtilTimeout`, whose 1000ms `waitFor` ceiling is independent of the per-test timeout those files already raised.
@@ -1263,7 +1265,8 @@ bookmarks, game cards, and rating / stats pages.
 - Rating history, global stats, openings W/D/L charts.
 - Multi-user auth with data isolation.
 
-[Unreleased]: https://github.com/flawchess/flawchess/compare/v2.10...HEAD
+[Unreleased]: https://github.com/flawchess/flawchess/compare/v2.11...HEAD
+[v2.11]: https://github.com/flawchess/flawchess/compare/v2.10...v2.11
 [v2.10]: https://github.com/flawchess/flawchess/compare/v2.9...v2.10
 [v2.9]: https://github.com/flawchess/flawchess/compare/v2.8...v2.9
 [v2.8]: https://github.com/flawchess/flawchess/compare/v2.7...v2.8
