@@ -1430,42 +1430,81 @@ describe('TrainReveal', () => {
 
   // ─── Guess-feedback prose (Quick 260803-iv6, Task 3) ──────────────────────
   // One prose sentence stating what the guess verdict MEANS, in the guess
-  // card body above the Also fine line. The five combinations are LOCKED
+  // card body above the Also fine line. The six combinations are LOCKED
   // wording — exact string equality, never a substring/regex match.
 
   describe('guessFeedbackProse', () => {
-    it('critical + wrong', () => {
-      expect(guessFeedbackProse('critical', false, true)).toBe('Several moves are fine here.');
+    it('critical + wrong guess + herring, regardless of the move played', () => {
+      expect(guessFeedbackProse('critical', false, false, 'wrong')).toBe(
+        'Several moves are fine here.',
+      );
+      expect(guessFeedbackProse('critical', false, false, 'good')).toBe(
+        'Several moves are fine here.',
+      );
     });
 
-    it('critical + correct', () => {
-      expect(guessFeedbackProse('critical', true, true)).toBe('You identified the one critical move.');
+    // Same fix as the correct-`several` soft branch below, one branch over: a
+    // bare "Several moves are fine here." read as "nothing happened here" at
+    // one of the user's own blunders. Both guesses share the sentence — the
+    // position fact is independent of what the user guessed about it.
+    it('critical + wrong guess + one of the user own blunders (soft)', () => {
+      expect(guessFeedbackProse('critical', false, true, 'wrong')).toBe(
+        'Several moves are fine here, but not the one you played in the game.',
+      );
+      expect(guessFeedbackProse('critical', false, true, 'good')).toBe(
+        'Several moves are fine here, but not the one you played in the game.',
+      );
+    });
+
+    // The 2026-08-03 fix: a correct `critical` guess no longer claims the user
+    // PLAYED the critical move — only a `good` move earns the praise clause.
+    it('critical + correct + a good move', () => {
+      expect(guessFeedbackProse('critical', true, true, 'good')).toBe(
+        'Right, and you found it: only one move works here.',
+      );
+    });
+
+    it('critical + correct + a non-good move never claims the move was found', () => {
+      expect(guessFeedbackProse('critical', true, true, 'inaccuracy')).toBe(
+        "Right, only one move works here, but that wasn't it.",
+      );
+      expect(guessFeedbackProse('critical', true, true, 'wrong')).toBe(
+        "Right, only one move works here, but that wasn't it.",
+      );
     });
 
     it('several + wrong', () => {
-      expect(guessFeedbackProse('several', false, true)).toBe(
+      expect(guessFeedbackProse('several', false, true, 'wrong')).toBe(
         'One move is clearly better than the alternatives.',
       );
     });
 
-    it('several + correct + NOT from a played game (herring)', () => {
-      expect(guessFeedbackProse('several', true, false)).toBe('Indeed, several moves are fine here.');
+    it('several + correct + NOT one of the user own blunders (herring)', () => {
+      expect(guessFeedbackProse('several', true, false, 'good')).toBe(
+        'Indeed, several moves are fine here.',
+      );
     });
 
-    it('several + correct + from a played game', () => {
-      expect(guessFeedbackProse('several', true, true)).toBe('You handled this fine in your game.');
+    // The other 2026-08-03 fix: this branch is reachable ONLY on a `soft`
+    // puzzle, i.e. one of the user's own blunders — it used to congratulate
+    // them ("You handled this fine in your game.") at the exact position where
+    // they blundered.
+    it('several + correct + one of the user own blunders (soft)', () => {
+      expect(guessFeedbackProse('several', true, true, 'good')).toBe(
+        'Several moves are fine here, but not the one you played in the game.',
+      );
     });
   });
 
   it('renders the exact locked prose sentence in the guess card body, above the Also fine line', () => {
     renderReveal({
       guess: 'critical',
-      verdict: makeVerdict({ correct_guess: true, puzzle_type: 'sharp' }),
+      verdict: makeVerdict({ correct_guess: true, puzzle_type: 'sharp', move_quality: 'good' }),
       alsoFineMoves: [{ uci: 'd2d4', quality: 'good' }],
     });
     const card = screen.getByTestId('train-verdict-guess');
     const prose = within(card).getByTestId('train-verdict-guess-prose');
-    expect(prose.textContent).toBe('You identified the one critical move.');
+    expect(prose.textContent).toBe('Right, and you found it: only one move works here.');
     const alsoFine = within(card).getByTestId('train-reveal-also-fine');
     expect(
       prose.compareDocumentPosition(alsoFine) & Node.DOCUMENT_POSITION_FOLLOWING,
@@ -1488,14 +1527,31 @@ describe('TrainReveal', () => {
     );
   });
 
-  it('several + correct + a played game (sharp/soft) renders the "in your game" sentence', () => {
+  it('several + correct + soft (one of the user own blunders) renders the "not the one you played" sentence', () => {
     renderReveal({
       guess: 'several',
       verdict: makeVerdict({ correct_guess: true, puzzle_type: 'soft' }),
     });
     expect(screen.getByTestId('train-verdict-guess-prose').textContent).toBe(
-      'You handled this fine in your game.',
+      'Several moves are fine here, but not the one you played in the game.',
     );
+  });
+
+  // The reported bug, end to end: guessed "One critical move" correctly but
+  // played a losing move. The prose used to read "You identified the one
+  // critical move.", contradicting the zero-point Your-move chip above it.
+  it('a correct critical guess with a wrong move never claims the move was identified', () => {
+    renderReveal({
+      guess: 'critical',
+      verdict: makeVerdict({
+        correct_guess: true,
+        correct_move: false,
+        move_quality: 'wrong',
+        puzzle_type: 'sharp',
+      }),
+    });
+    const prose = screen.getByTestId('train-verdict-guess-prose');
+    expect(prose.textContent).toBe("Right, only one move works here, but that wasn't it.");
   });
 
   it('several + wrong renders the "one move is clearly better" sentence', () => {
@@ -1508,13 +1564,32 @@ describe('TrainReveal', () => {
     );
   });
 
-  it('critical + wrong renders the "several moves are fine" sentence', () => {
+  // Both fixtures below are server-consistent: a missed `critical` guess means
+  // the puzzle was NOT sharp (`_compute_correct_guess`), so only herring/soft
+  // can reach this prose — the pair that `fromOwnBlunder` splits.
+  it('critical + wrong + herring renders the bare "several moves are fine" sentence', () => {
     renderReveal({
       guess: 'critical',
-      verdict: makeVerdict({ correct_guess: false, puzzle_type: 'sharp' }),
+      verdict: makeVerdict({
+        correct_guess: false,
+        puzzle_type: 'herring',
+        item_status: null,
+        due_date: null,
+        streak: null,
+      }),
     });
     expect(screen.getByTestId('train-verdict-guess-prose').textContent).toBe(
       'Several moves are fine here.',
+    );
+  });
+
+  it('critical + wrong + soft renders the "not the one you played" sentence', () => {
+    renderReveal({
+      guess: 'critical',
+      verdict: makeVerdict({ correct_guess: false, puzzle_type: 'soft' }),
+    });
+    expect(screen.getByTestId('train-verdict-guess-prose').textContent).toBe(
+      'Several moves are fine here, but not the one you played in the game.',
     );
   });
 
@@ -1530,7 +1605,7 @@ describe('TrainReveal', () => {
       alsoFineMoves: [],
     });
     expect(screen.getByTestId('train-verdict-guess-prose').textContent).toBe(
-      'You identified the one critical move.',
+      'Right, and you found it: only one move works here.',
     );
     expect(screen.queryByTestId('train-reveal-also-fine')).toBeNull();
   });

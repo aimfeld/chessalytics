@@ -8,6 +8,10 @@ in `YYYY-MM-DD` (Europe/Zurich).
 
 ## [Unreleased]
 
+### Fixed
+
+- The Train guess card no longer tells you things that aren't true. Guessing "One critical move" correctly but then playing a losing move used to be answered with "You identified the one critical move", which read as praise for a move you never found; it now separates the two ("Right, and you found it: only one move works here." versus "Right, only one move works here, but that wasn't it."). And a correct "Several fine moves" guess on one of your own blunders used to congratulate you with "You handled this fine in your game" at the exact position where you blundered; it now says several moves were fine, but not the one you played. The same clause was missing when you guessed "One critical move" and the position turned out to be one of your blunders with no single answer: a bare "Several moves are fine here" read as if nothing had gone wrong there.
+
 ## [v2.11] Train Solve Surface & Push Reminders — 2026-08-03
 
 ### Tests
