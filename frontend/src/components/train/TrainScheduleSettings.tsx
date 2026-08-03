@@ -507,7 +507,7 @@ export function TrainScheduleSettings({
             see the three-branch comment above `showQr`/
             `showMobileInstallButton`/`showPhoneSection`. */}
         {showPhoneSection && (
-          <div className="w-full">
+          <div className="w-full text-center">
             <p className="mb-1 text-sm font-semibold">Reminders work better with FlawChess on your phone</p>
             {showQr && <TrainInstallQr testId="qr-handoff-settings" />}
             {showMobileInstallButton && (

@@ -55,7 +55,7 @@ export function TrainInstallQr({ testId }: TrainInstallQrProps): ReactElement {
   const payload = `${window.location.origin}${HANDOFF_QR_PATH}`;
 
   return (
-    <div className="w-full" data-testid={testId}>
+    <div className="w-full text-center" data-testid={testId}>
       {/*
         The ONE new non-token colour surface in this phase — fixed
         (#FFFFFF background / #000000 modules) precisely because it must
