@@ -228,6 +228,70 @@ class TestClaimReminderDay:
         assert row == _TODAY
 
 
+class TestReleaseReminderClaim:
+    """release_reminder_claim: Phase 204 D3/D-13/D-14. Mirrors TestClaimReminderDay's shape."""
+
+    async def test_releases_when_equal_to_today(self, db_session: AsyncSession) -> None:
+        await ensure_test_user(db_session, _USER_ID)
+        db_session.add(
+            TrainSettings(
+                user_id=_USER_ID,
+                reminder_enabled=True,
+                reminder_hour=18,
+                reminder_last_sent_on=_TODAY,
+            )
+        )
+        await db_session.flush()
+
+        released = await train_reminder_repository.release_reminder_claim(
+            db_session, user_id=_USER_ID, today=_TODAY
+        )
+        assert released is True
+        row = (
+            await db_session.execute(
+                select(TrainSettings.reminder_last_sent_on).where(TrainSettings.user_id == _USER_ID)
+            )
+        ).scalar_one()
+        assert row is None
+
+    async def test_does_not_release_when_earlier_date(self, db_session: AsyncSession) -> None:
+        """D-14 guard: stands in for 'a second ticker already claimed a later
+        day' -- the release must never touch a claim it did not itself make
+        this tick."""
+        earlier = _TODAY - datetime.timedelta(days=1)
+        await ensure_test_user(db_session, _USER_ID)
+        db_session.add(
+            TrainSettings(
+                user_id=_USER_ID,
+                reminder_enabled=True,
+                reminder_hour=18,
+                reminder_last_sent_on=earlier,
+            )
+        )
+        await db_session.flush()
+
+        released = await train_reminder_repository.release_reminder_claim(
+            db_session, user_id=_USER_ID, today=_TODAY
+        )
+        assert released is False
+        row = (
+            await db_session.execute(
+                select(TrainSettings.reminder_last_sent_on).where(TrainSettings.user_id == _USER_ID)
+            )
+        ).scalar_one()
+        assert row == earlier
+
+    async def test_does_not_release_when_null(self, db_session: AsyncSession) -> None:
+        await ensure_test_user(db_session, _USER_ID)
+        db_session.add(TrainSettings(user_id=_USER_ID, reminder_enabled=True, reminder_hour=18))
+        await db_session.flush()
+
+        released = await train_reminder_repository.release_reminder_claim(
+            db_session, user_id=_USER_ID, today=_TODAY
+        )
+        assert released is False
+
+
 class TestHasCompletedSessionOn:
     async def test_true_for_completed_session_same_date(self, db_session: AsyncSession) -> None:
         await ensure_test_user(db_session, _USER_ID)
@@ -660,6 +724,93 @@ class TestFanOut:
         assert summary.sent == 1
 
 
+class TestClaimReleaseOnTotalNonDelivery:
+    """Phase 204 D3/D-13/D-14/D-15: step 8 of `_process_candidate`. Mirrors
+    TestFanOut's real-encryption/real-post harness."""
+
+    async def test_all_subscriptions_pruned_releases_the_claim(
+        self,
+        real_session_maker: async_sessionmaker[AsyncSession],
+        vapid_keypair: None,
+    ) -> None:
+        user_id = await _seed_ready_candidate(real_session_maker, n_subscriptions=1)
+        mock_post = AsyncMock(return_value=MagicMock(status_code=410))
+        with patch("httpx.AsyncClient.post", new=mock_post):
+            summary = await train_reminder_service.send_due_reminders(_NOW)
+        assert summary.claimed == 1
+        assert summary.pruned == 1
+
+        async with real_session_maker() as session:
+            row = (
+                await session.execute(
+                    select(TrainSettings.reminder_last_sent_on).where(
+                        TrainSettings.user_id == user_id
+                    )
+                )
+            ).scalar_one()
+        assert row is None
+
+    async def test_partial_failure_does_not_release_the_claim(
+        self,
+        real_session_maker: async_sessionmaker[AsyncSession],
+        vapid_keypair: None,
+    ) -> None:
+        user_id = await _seed_ready_candidate(real_session_maker, n_subscriptions=2)
+        mock_post = AsyncMock(side_effect=[MagicMock(status_code=410), MagicMock(status_code=201)])
+        with patch("httpx.AsyncClient.post", new=mock_post):
+            summary = await train_reminder_service.send_due_reminders(_NOW)
+        assert summary.claimed == 1
+        assert summary.pruned == 1
+
+        async with real_session_maker() as session:
+            row = (
+                await session.execute(
+                    select(TrainSettings.reminder_last_sent_on).where(
+                        TrainSettings.user_id == user_id
+                    )
+                )
+            ).scalar_one()
+        assert row == datetime.date(2026, 8, 1)
+
+    async def test_raising_send_to_user_does_not_release_the_claim(
+        self, real_session_maker: async_sessionmaker[AsyncSession]
+    ) -> None:
+        """The D-07 invariant demonstration (ROADMAP criterion 5): a crash
+        mid-fan-out must leave the claim standing. Patches
+        `push_send.send_to_user` itself (NOT `httpx.AsyncClient.post`) --
+        `send_to_user` already isolates per-subscription failures internally,
+        so an httpx-level patch would surface as a normal PushFanoutResult,
+        not an escaping exception."""
+        user_id = await _seed_ready_candidate(real_session_maker, n_subscriptions=1)
+        with (
+            patch(
+                "app.services.train_reminder_service.push_send.send_to_user",
+                new=AsyncMock(side_effect=RuntimeError("simulated fan-out crash")),
+            ),
+            patch("app.services.train_reminder_service.sentry_sdk.capture_exception"),
+        ):
+            summary = await train_reminder_service.send_due_reminders(_NOW)
+        # The exception escapes _process_candidate entirely (it is raised
+        # AFTER the claim's own commit, with no try/except around the
+        # send_to_user call) and is only caught by send_due_reminders' outer
+        # per-candidate loop -- so the tick summary never sees a
+        # _CandidateOutcome for this user: `claimed`/`sent` stay at 0 and
+        # `failed` is incremented at the TICK level, not via outcome.failed.
+        assert summary.claimed == 0
+        assert summary.sent == 0
+        assert summary.failed == 1
+
+        async with real_session_maker() as session:
+            row = (
+                await session.execute(
+                    select(TrainSettings.reminder_last_sent_on).where(
+                        TrainSettings.user_id == user_id
+                    )
+                )
+            ).scalar_one()
+        assert row == datetime.date(2026, 8, 1)
+
+
 class TestSettleBeforeCopy:
     async def test_stale_streak_is_settled_before_copy_is_built(
         self, real_session_maker: async_sessionmaker[AsyncSession]
@@ -678,7 +829,11 @@ class TestSettleBeforeCopy:
         captured_payload: dict[str, object] = {}
 
         async def _capture_send(
-            session: AsyncSession, *, user_id: int, payload: dict[str, object]
+            session: AsyncSession,
+            *,
+            user_id: int,
+            payload: dict[str, object],
+            ttl_seconds: int = 0,
         ) -> push_send.PushFanoutResult:
             captured_payload.update(payload)
             return push_send.PushFanoutResult(attempted=1, pruned=0, failed=0)
@@ -704,7 +859,11 @@ class TestSettleBeforeCopy:
         captured_payload: dict[str, object] = {}
 
         async def _capture_send(
-            session: AsyncSession, *, user_id: int, payload: dict[str, object]
+            session: AsyncSession,
+            *,
+            user_id: int,
+            payload: dict[str, object],
+            ttl_seconds: int = 0,
         ) -> push_send.PushFanoutResult:
             captured_payload.update(payload)
             return push_send.PushFanoutResult(attempted=1, pruned=0, failed=0)

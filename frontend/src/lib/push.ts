@@ -126,6 +126,24 @@ export type DeviceSubscribeResult =
  * error tracking at all. CLAUDE.md requires a manual capture in exactly this
  * shape (a hand-rolled async call's catch block), and the phase plan depends
  * on Sentry data to decide whether Brave's `AbortError` needs special-casing.
+ *
+ * Phase 204 D4: `existing ??` used to reuse whatever `getSubscription()`
+ * returned WITHOUT ever comparing its key, so a VAPID rotation left every
+ * device holding a subscription the push service would 403 forever — and,
+ * critically, made the manual toggle-off/toggle-on recovery useless too,
+ * since it re-read the exact same dead subscription. This function now
+ * reuses `existing` only when `subscriptionKeyMatches` confirms it was
+ * minted under the CURRENT key; on any mismatch (including a `null`
+ * `applicationServerKey`, which is "cannot confirm", not "matches") it
+ * destroys the stale subscription and mints a fresh one under the current
+ * key. This repair is safe with respect to PERM-01: it is reached only
+ * after the permission gate above has already resolved to `granted`, and
+ * `PushManager.subscribe()` does not prompt (and cannot spend the one-shot
+ * permission) when `Notification.permission === 'granted'`. The passive
+ * app-load re-sync (`resyncExistingSubscription`, below) deliberately does
+ * NOT repair a mismatch — it only detects one and does nothing (D-04/D-05).
+ * See `docs/push-vapid-rotation-runbook.md` for the operator-side rotation
+ * procedure this repair exists to make effective.
  */
 export async function ensureDeviceSubscribed(
   vapidPublicKey: string,
@@ -140,24 +158,28 @@ export async function ensureDeviceSubscribed(
     }
     const registration = await navigator.serviceWorker.ready;
     const existing = await registration.pushManager.getSubscription();
-    const subscription =
-      existing ??
-      (await registration.pushManager.subscribe({
+    let subscription: PushSubscription;
+    if (existing !== null && subscriptionKeyMatches(existing, vapidPublicKey)) {
+      subscription = existing;
+    } else {
+      // D4 repair path. `existing` is either absent, minted under a
+      // different (rotated) key, or its key could not be confirmed to
+      // match. Do NOT wrap `unsubscribe()` in its own try/catch: a
+      // rejection there must fall through to this function's outer catch,
+      // which already returns the retryable `{ status: 'error' }` CR-01
+      // established. A rejecting `unsubscribe()` cannot simply be
+      // ignored — Chrome throws `InvalidStateError` from `subscribe()`
+      // when a subscription with a different `applicationServerKey` still
+      // exists, so the destroy must succeed before the recreate.
+      if (existing !== null) {
+        await existing.unsubscribe();
+      }
+      subscription = await registration.pushManager.subscribe({
         userVisibleOnly: true,
         applicationServerKey: urlBase64ToUint8Array(vapidPublicKey),
-      }));
-    const json = subscription.toJSON();
-    if (json.endpoint === undefined) {
-      throw new Error('PushSubscription.toJSON() returned no endpoint');
+      });
     }
-    const body: PushSubscribeRequest = {
-      endpoint: json.endpoint,
-      keys: {
-        p256dh: json.keys?.p256dh ?? '',
-        auth: json.keys?.auth ?? '',
-      },
-    };
-    await pushApi.subscribe(body);
+    await postSubscription(subscription);
     return { status: 'subscribed' };
   } catch (error) {
     // WR-01: the only place a subscribe/permission failure can be reported —
@@ -165,5 +187,82 @@ export async function ensureDeviceSubscribed(
     // MutationCache.onError never sees it.
     Sentry.captureException(error, { tags: { source: 'push' } });
     return { status: 'error', error };
+  }
+}
+
+/**
+ * Phase 204 D-04 (detection half). Byte-compares a live subscription's
+ * `applicationServerKey` against the currently configured VAPID key. Both
+ * sides are the same X9.62 uncompressed point that
+ * `push_crypto.application_server_key_from_pem` emits, so an exact byte
+ * match means "this subscription was minted under the key the server holds
+ * today". `false` means "cannot confirm a match" (a `null` key, a length or
+ * byte difference, or an unreadable property), NOT "definitely different" —
+ * callers that gate a re-POST on this fail closed either way (D-05).
+ *
+ * MDN documents `PushSubscriptionOptions.applicationServerKey` as
+ * `ArrayBuffer | null` — a bare `.byteLength` read on `null` would throw, so
+ * the `null` check comes first and the whole body is wrapped in `try/catch`.
+ */
+export function subscriptionKeyMatches(
+  existing: PushSubscription,
+  currentVapidKey: string,
+): boolean {
+  try {
+    const existingKey = existing.options.applicationServerKey;
+    if (existingKey === null) return false;
+    const existingBytes = new Uint8Array(existingKey);
+    const expectedBytes = urlBase64ToUint8Array(currentVapidKey);
+    if (existingBytes.length !== expectedBytes.length) return false;
+    return existingBytes.every((byte, i) => byte === expectedBytes[i]);
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * Shared tail of both POST paths (D-11): builds the `PushSubscribeRequest`
+ * body from `subscription.toJSON()` and posts it. Module-private — `knip`
+ * fails CI on a dead export and nothing outside this file needs it.
+ */
+async function postSubscription(subscription: PushSubscription): Promise<void> {
+  const json = subscription.toJSON();
+  if (json.endpoint === undefined) {
+    throw new Error('PushSubscription.toJSON() returned no endpoint');
+  }
+  const body: PushSubscribeRequest = {
+    endpoint: json.endpoint,
+    keys: {
+      p256dh: json.keys?.p256dh ?? '',
+      auth: json.keys?.auth ?? '',
+    },
+  };
+  await pushApi.subscribe(body);
+}
+
+/**
+ * Phase 204 D-07/D-10/D-11: the passive re-sync path. Receives an
+ * ALREADY-LIVE `PushSubscription` (from `getDeviceSubscription()`) and
+ * therefore never needs, and never calls, `Notification.requestPermission()`
+ * or `PushManager.subscribe()` — PERM-01 stays structural, not a promise this
+ * function has to keep by convention. The POST is blind and idempotent
+ * because `upsert_subscription` is `ON CONFLICT DO UPDATE` on `endpoint`
+ * (`app/repositories/push_repository.py`), so re-posting an endpoint the
+ * server already holds is a no-op UPSERT, not a duplicate row.
+ *
+ * On any failure, reports to Sentry with a tag distinct from
+ * `ensureDeviceSubscribed`'s `'push'` tag so the two paths group separately
+ * — never the endpoint or the subscription object (T-204-02: the endpoint is
+ * a bearer capability).
+ */
+export async function resyncExistingSubscription(
+  subscription: PushSubscription,
+): Promise<boolean> {
+  try {
+    await postSubscription(subscription);
+    return true;
+  } catch (error) {
+    Sentry.captureException(error, { tags: { source: 'push_resync' } });
+    return false;
   }
 }

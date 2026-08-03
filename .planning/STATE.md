@@ -2,28 +2,28 @@
 gsd_state_version: 1.0
 milestone: v2.11
 milestone_name: Train Solve Surface & Push Reminders
-status: Phase 204 added, not planned
-stopped_at: Added Phase 204 to ROADMAP (unassigned milestone) — not planned yet
-last_updated: "2026-08-03T17:30:00.000Z"
+current_phase: 204
+current_phase_name: push-reminder-delivery-reliability
+status: Phase 204 shipped — squash-merged to main
+stopped_at: Completed 204-03-PLAN.md — Phase 204 fully executed and verified
+last_updated: "2026-08-03T18:46:38.044Z"
 last_activity: 2026-08-03
-last_activity_desc: "Added Phase 204 (Push Reminder Delivery Reliability, SEED-135 D2–D5) under a new neutral Active Phases section — v2.11 is closed and no milestone is open"
 progress:
   total_phases: 1
-  completed_phases: 0
-  total_plans: 0
-  completed_plans: 0
-current_phase: 204
-current_phase_name: Push Reminder Delivery Reliability
+  completed_phases: 1
+  total_plans: 3
+  completed_plans: 3
+last_activity_desc: Phase 204 shipped — squash-merged to main
 ---
 
 # Project State: FlawChess
 
 ## Current Position
 
-Phase: 204 — Push Reminder Delivery Reliability (added, not planned; unassigned milestone — v2.11 is closed)
-Plan: —
-Status: Not planned yet — run `/gsd-plan-phase 204`
-Last activity: 2026-08-03 — Added Phase 204 from SEED-135 (D2–D5; D1 already fixed by quick task 260803-nio)
+Phase: 204 (push-reminder-delivery-reliability) — SHIPPED
+Plan: 3 of 3
+Status: Phase 204 shipped — squash-merged to main
+Last activity: 2026-08-03
 
 ## Project Reference
 
@@ -604,6 +604,13 @@ v1.29 Live-Engine Analysis Page shipped 2026-06-29 — 5 phases (136–140), 14 
 - [Phase ?]: Task execution order deviated from the plan's 1-2-3 listing to 1-3-2: TrainInstallQr (Task 3) was built before rewiring TrainReminderButton (Task 2), because Task 2's action renders <TrainInstallQr /> which did not exist yet — building it first avoided an intermediate broken build between commits.
 - [Phase ?]: [Phase 203-04]: Score-screen reminder slot converged on one invariant across 3 UAT rounds — the row only ever holds a pressable reminder control (confirmed line, error copy, iOS instructions, Android offer, and QR all render below it, per direct user instruction, deviating from D-13/D-15/Phase-202-D-03)
 - [Phase ?]: [Phase 203-04]: Fixed a real useInstallPrompt bug (unguarded window.matchMedia call) surfaced by useReminderResurface becoming an app-wide consumer via ProtectedLayout
+- [Phase ?]: 204-01: D-04/D-05 narrowing implemented — subscriptionKeyMatches wired as a suppressor only on the passive re-sync path; the repair (unsubscribe+resubscribe) is deferred to Plan 03's gesture path
+- [Phase ?]: 204-01: cadence guard is a module-scoped let burned synchronously before the async probe starts, not inside the .then() — closes a double-fire window between near-simultaneous mounts
+- [Phase ?]: 204-01: ensureDeviceSubscribed's existing ?? line left untouched — only its POST tail was extracted into postSubscription; the D-04 repair belongs to Plan 03
+- [Phase ?]: 204-02: Push TTL bounded by user's local day (D-01), never floored/capped, keyword-only defaulted ttl_seconds (D-02)
+- [Phase ?]: 204-02: Release the day's reminder claim only on total non-delivery (attempted==0 or attempted==pruned, D-13); failed never triggers it (D-15); guarded on exact today equality (D-14) so D-07's double-send invariant stays structural
+- [Phase ?]: Confined the VAPID key-mismatch repair to the gesture path only (ensureDeviceSubscribed); the passive app-load re-sync stays detect-only per D-04/D-05, keeping Phase 201 D-02's locked rotation-as-mass-invalidation decision closed.
+- [Phase ?]: VAPID rotation procedure lives at docs/push-vapid-rotation-runbook.md, reachable from app/services/push_send.py and CLAUDE.md — not only in an archived .planning/ file.
 
 ### Pending Todos
 
@@ -717,9 +724,9 @@ Items acknowledged and deferred at **v1.29 milestone close on 2026-06-29** (user
 
 ## Session Continuity
 
-**Stopped at:** Completed 203-04-PLAN.md (phase 203 complete, 4/4 plans)
+**Stopped at:** Completed 204-03-PLAN.md — Phase 204 fully executed and verified
 
-**Last session:** 2026-08-02T20:26:28.190Z
+**Last session:** 2026-08-03T18:23:46.413Z
 
 **Resume file:**
 
@@ -848,6 +855,9 @@ None
 | Phase 203 P02 | 25min | 3 tasks | 10 files |
 | Phase 203 P03 | ~45min | 3 tasks | 10 files |
 | Phase 203 P04 | ~1h20m | 3 tasks | 12 files |
+| Phase 204 P01 | 55min | 3 tasks | 7 files |
+| Phase 204 P02 | 35min | 3 tasks | 7 files |
+| Phase 204 P03 | 25min | 3 tasks | 5 files |
 
 ## Performance Metrics
 

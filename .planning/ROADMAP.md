@@ -163,7 +163,7 @@
 | 201. Push Infrastructure & Train Reminders (SEED-132 Phase A, v2.11) | 4/4 | Complete | 2026-08-02 |
 | 202. Reminder Permission UX (SEED-132 Phase A, v2.11) | 2/2 | Complete | 2026-08-02 |
 | 203. PWA Install Re-prompting & Train-Anchored Install Offer (SEED-134, v2.11) | 4/4 | Complete | 2026-08-02 |
-| 204. Push Reminder Delivery Reliability (SEED-135, unassigned) | 0 plans | Not planned | — |
+| 204. Push Reminder Delivery Reliability (SEED-135, unassigned) | 3/3 | Complete | 2026-08-03 |
 
 ## Active Phases (unassigned milestone)
 
@@ -175,7 +175,7 @@ Phases added after the v2.11 close and not yet assigned to a milestone. `/gsd-ne
 
 **Depends on**: Phase 201 (push infrastructure, `push_subscriptions`, the reminder tick), Phase 202 (`ensureDeviceSubscribed` and the PERM-01 single call site this phase must not violate)
 
-**Requirements**: TBD (derive at planning; source is SEED-135 defects D2, D3, D4, D5)
+**Requirements**: PUSHREL-01, PUSHREL-02, PUSHREL-03, PUSHREL-04, PUSHREL-05, PUSHREL-06 — minted at planning from the six success criteria below (criterion 4 narrowed per 204-CONTEXT.md D-04). There is no active `.planning/REQUIREMENTS.md` (the v2.11 set is archived at `.planning/milestones/v2.11-REQUIREMENTS.md`), so the definitions live in `204-01-PLAN.md` § "Phase 204 requirement IDs". Source is SEED-135 defects D2, D3, D4, D5.
 
 **Source**: [SEED-135](../seeds/SEED-135-push-subscription-prune-is-silent-and-unrecoverable.md) — planted 2026-08-03 from the first real-world reminder after the v2.11 deploy, which never arrived and left no trace anywhere. **D1 (the silent prune) is already fixed** by quick task `260803-nio` (commit `e63c3b7a1`: WARNING log + Sentry capture before the row is deleted, tick summary escalated to WARNING when `pruned > 0 or failed > 0`) and is out of scope here. This phase carries the remaining four.
 
@@ -204,11 +204,19 @@ Phases added after the v2.11 close and not yet assigned to a milestone. `/gsd-ne
 
 **Non-goals**: retries on transient send failure (D-04 stands); releasing the claim on a *partial* failure; distinguishing "Chrome dropped it" from "user revoked permission" server-side (both surface as 410 — noted in the seed as an open question, not a deliverable here); Sentry alert rules on push health (revisit once D5 makes the metrics trustworthy).
 
-**Plans**: 0 plans
+**Plans**: 3 plans
 
 Plans:
+**Wave 1**
 
-- [ ] TBD (run `/gsd-plan-phase 204` to break down)
+- [x] 204-01-PLAN.md — Wave 1 (tracer). Device push re-sync: a pruned device re-registers itself on app load, plus the VAPID key-comparison helper wired in as a detect-only suppressor
+- [x] 204-02-PLAN.md — Wave 1. Backend delivery reliability: TTL bounded by the user's local day, and the day's claim released when the fan-out delivered to nobody, plus the D3 decision log
+
+**Wave 2** *(blocked on Wave 1 completion)*
+
+- [x] 204-03-PLAN.md — Wave 2. VAPID rotation: the gesture path repairs a key mismatch, the runbook is written down, and a real-device checkpoint covers the two manual-only behaviors
+
+**Criterion 4 narrowing** (recorded at planning, per 204-CONTEXT.md D-04): the mismatch repair lives ONLY in the gesture path (`ensureDeviceSubscribed`); the passive app-load re-sync detects a mismatch and deliberately does nothing. Phase 201 D-02 locked rotation as accepted mass invalidation and explicitly rejected a passive self-heal. Verify against the narrowed wording, not the original.
 
 **UI hint**: minimal — the only user-visible surface is the reminder state no longer lying; no new components expected.
 

@@ -28,13 +28,23 @@ import {
   ensureDeviceSubscribed,
   formatReminderHour,
   REMINDER_HOUR_OPTIONS,
+  resyncExistingSubscription,
+  subscriptionKeyMatches,
   urlBase64ToUint8Array,
 } from '../push';
 
 const VAPID_KEY = 'test-vapid-key';
 
+// Phase 204 D4: `options.applicationServerKey` matches VAPID_KEY's own bytes
+// and an `unsubscribe` double is present so pre-existing tests that reuse
+// this fixture as an "already subscribed" double still take the reuse path
+// (not the repair path) after `ensureDeviceSubscribed` started comparing
+// keys. Tests that specifically exercise the repair path build their own
+// mismatched/`null`-key doubles instead of mutating this shared fixture.
 const fakeSubscription = {
   toJSON: () => ({ endpoint: 'https://example.test/ep', keys: { p256dh: 'p', auth: 'a' } }),
+  options: { applicationServerKey: new Uint8Array(urlBase64ToUint8Array(VAPID_KEY)).buffer },
+  unsubscribe: () => Promise.resolve(true),
 };
 
 interface GlobalStubOptions {
@@ -256,6 +266,131 @@ describe('ensureDeviceSubscribed', () => {
     expect(pushApi.subscribe).toHaveBeenCalledTimes(1);
   });
 
+  // Phase 204 D4 — the gesture-path repair. `matchingKeyBytes` is derived
+  // from the module's own `urlBase64ToUint8Array` over the same VAPID_KEY
+  // string these tests already use, so the fixture cannot drift from the
+  // implementation it is meant to pin.
+  describe('D4: key-mismatch repair vs key-match reuse', () => {
+    const matchingKeyBytes = urlBase64ToUint8Array(VAPID_KEY);
+
+    function existingSubscriptionDouble(options: {
+      endpoint: string;
+      applicationServerKey: ArrayBuffer | null;
+      unsubscribe?: ReturnType<typeof vi.fn>;
+    }): PushSubscription {
+      return {
+        toJSON: () => ({
+          endpoint: options.endpoint,
+          keys: { p256dh: 'existing-p', auth: 'existing-a' },
+        }),
+        options: { applicationServerKey: options.applicationServerKey },
+        unsubscribe: options.unsubscribe ?? vi.fn().mockResolvedValue(true),
+      } as unknown as PushSubscription;
+    }
+
+    it('existing subscription with a matching key: reused, no unsubscribe, no re-subscribe', async () => {
+      vi.mocked(pushApi.subscribe).mockResolvedValue({ subscription_id: 1 });
+      const unsubscribe = vi.fn().mockResolvedValue(true);
+      const existing = existingSubscriptionDouble({
+        endpoint: 'https://example.test/existing-ep',
+        applicationServerKey: new Uint8Array(matchingKeyBytes).buffer,
+        unsubscribe,
+      });
+      const { subscribe } = stubBrowserGlobals({
+        getSubscription: vi.fn().mockResolvedValue(existing),
+      });
+
+      const result = await ensureDeviceSubscribed(VAPID_KEY);
+
+      expect(result).toEqual({ status: 'subscribed' });
+      expect(subscribe).not.toHaveBeenCalled();
+      expect(unsubscribe).not.toHaveBeenCalled();
+      expect(pushApi.subscribe).toHaveBeenCalledWith({
+        endpoint: 'https://example.test/existing-ep',
+        keys: { p256dh: 'existing-p', auth: 'existing-a' },
+      });
+    });
+
+    it('existing subscription with a mismatched key: unsubscribes then subscribes with the current key, posts the NEW endpoint', async () => {
+      const newSubscription = {
+        toJSON: () => ({
+          endpoint: 'https://example.test/new-ep',
+          keys: { p256dh: 'new-p', auth: 'new-a' },
+        }),
+      };
+      vi.mocked(pushApi.subscribe).mockResolvedValue({ subscription_id: 1 });
+      const unsubscribe = vi.fn().mockResolvedValue(true);
+      const existing = existingSubscriptionDouble({
+        endpoint: 'https://example.test/stale-ep',
+        applicationServerKey: new Uint8Array([9, 9, 9]).buffer,
+        unsubscribe,
+      });
+      const { subscribe } = stubBrowserGlobals({
+        getSubscription: vi.fn().mockResolvedValue(existing),
+        subscribe: vi.fn().mockResolvedValue(newSubscription),
+      });
+
+      const result = await ensureDeviceSubscribed(VAPID_KEY);
+
+      expect(result).toEqual({ status: 'subscribed' });
+      expect(unsubscribe).toHaveBeenCalledTimes(1);
+      expect(subscribe).toHaveBeenCalledTimes(1);
+      // Asserting call counts alone would pass even if the wrong subscription
+      // object were posted — this pins the endpoint too.
+      expect(pushApi.subscribe).toHaveBeenCalledWith({
+        endpoint: 'https://example.test/new-ep',
+        keys: { p256dh: 'new-p', auth: 'new-a' },
+      });
+    });
+
+    it('existing subscription with applicationServerKey: null takes the repair path, never the reuse path', async () => {
+      vi.mocked(pushApi.subscribe).mockResolvedValue({ subscription_id: 1 });
+      const unsubscribe = vi.fn().mockResolvedValue(true);
+      const existing = existingSubscriptionDouble({
+        endpoint: 'https://example.test/stale-ep',
+        applicationServerKey: null,
+        unsubscribe,
+      });
+      const { subscribe } = stubBrowserGlobals({
+        getSubscription: vi.fn().mockResolvedValue(existing),
+      });
+
+      const result = await ensureDeviceSubscribed(VAPID_KEY);
+
+      expect(result).toEqual({ status: 'subscribed' });
+      expect(unsubscribe).toHaveBeenCalledTimes(1);
+      expect(subscribe).toHaveBeenCalledTimes(1);
+    });
+
+    it('no existing subscription: unchanged — subscribes once, never calls unsubscribe', async () => {
+      vi.mocked(pushApi.subscribe).mockResolvedValue({ subscription_id: 1 });
+      const { subscribe } = stubBrowserGlobals({ getSubscription: vi.fn().mockResolvedValue(null) });
+
+      const result = await ensureDeviceSubscribed(VAPID_KEY);
+
+      expect(result).toEqual({ status: 'subscribed' });
+      expect(subscribe).toHaveBeenCalledTimes(1);
+    });
+
+    it('a rejecting unsubscribe(): the outer catch returns { status: "error" } with one Sentry capture, no rejection escapes', async () => {
+      const boom = new DOMException('destroy failed', 'InvalidStateError');
+      const unsubscribe = vi.fn().mockRejectedValue(boom);
+      const existing = existingSubscriptionDouble({
+        endpoint: 'https://example.test/stale-ep',
+        applicationServerKey: null,
+        unsubscribe,
+      });
+      stubBrowserGlobals({ getSubscription: vi.fn().mockResolvedValue(existing) });
+
+      await expect(ensureDeviceSubscribed(VAPID_KEY)).resolves.toEqual({
+        status: 'error',
+        error: boom,
+      });
+      expect(Sentry.captureException).toHaveBeenCalledTimes(1);
+      expect(Sentry.captureException).toHaveBeenCalledWith(boom, { tags: { source: 'push' } });
+    });
+  });
+
   // D-13: `lib/push.ts` never imports `@sentry/react` (verified structurally
   // — grep the file), so these arms cannot report to Sentry from inside
   // `ensureDeviceSubscribed`. A caller routing the result through a
@@ -321,6 +456,118 @@ describe('urlBase64ToUint8Array', () => {
     const urlSafe = urlBase64ToUint8Array('-_8');
     const standard = urlBase64ToUint8Array('+/8=');
     expect(Array.from(urlSafe)).toEqual(Array.from(standard));
+  });
+});
+
+describe('subscriptionKeyMatches', () => {
+  // Phase 204 D-04 detection half. Derive the matching bytes by running the
+  // module's own urlBase64ToUint8Array over the test VAPID string so the
+  // fixture cannot drift from the implementation.
+  const currentVapidKey = 'ZmFrZS12YXBpZC1rZXk';
+  const expectedBytes = urlBase64ToUint8Array(currentVapidKey);
+
+  function subscriptionWithKey(key: ArrayBuffer | null): PushSubscription {
+    return { options: { applicationServerKey: key } } as unknown as PushSubscription;
+  }
+
+  it('exact byte match -> true', () => {
+    const matchingBuffer = new Uint8Array(expectedBytes).buffer;
+    expect(subscriptionKeyMatches(subscriptionWithKey(matchingBuffer), currentVapidKey)).toBe(
+      true,
+    );
+  });
+
+  it('one byte flipped -> false', () => {
+    const flipped = new Uint8Array(expectedBytes);
+    const firstByte = flipped[0] ?? 0;
+    flipped[0] = firstByte ^ 0xff;
+    expect(subscriptionKeyMatches(subscriptionWithKey(flipped.buffer), currentVapidKey)).toBe(
+      false,
+    );
+  });
+
+  it('a truncated array (length mismatch) -> false', () => {
+    const truncated = expectedBytes.slice(0, expectedBytes.length - 1);
+    expect(subscriptionKeyMatches(subscriptionWithKey(truncated.buffer), currentVapidKey)).toBe(
+      false,
+    );
+  });
+
+  it('applicationServerKey: null -> false', () => {
+    expect(subscriptionKeyMatches(subscriptionWithKey(null), currentVapidKey)).toBe(false);
+  });
+
+  it('an options property getter that throws -> false, never escapes as an exception', () => {
+    const throwingSubscription = {} as PushSubscription;
+    Object.defineProperty(throwingSubscription, 'options', {
+      get(): never {
+        throw new Error('options getter threw');
+      },
+    });
+
+    expect(() => subscriptionKeyMatches(throwingSubscription, currentVapidKey)).not.toThrow();
+    expect(subscriptionKeyMatches(throwingSubscription, currentVapidKey)).toBe(false);
+  });
+});
+
+describe('resyncExistingSubscription', () => {
+  const RESYNC_ENDPOINT = 'https://example.test/resync-endpoint';
+  const resyncSubscription = {
+    toJSON: () => ({
+      endpoint: RESYNC_ENDPOINT,
+      keys: { p256dh: 'resync-p', auth: 'resync-a' },
+    }),
+  } as unknown as PushSubscription;
+
+  it('success: resolves true and posts the endpoint/keys from toJSON()', async () => {
+    vi.mocked(pushApi.subscribe).mockResolvedValue({ subscription_id: 1 });
+
+    await expect(resyncExistingSubscription(resyncSubscription)).resolves.toBe(true);
+    expect(pushApi.subscribe).toHaveBeenCalledWith({
+      endpoint: RESYNC_ENDPOINT,
+      keys: { p256dh: 'resync-p', auth: 'resync-a' },
+    });
+  });
+
+  it('a rejecting pushApi.subscribe: resolves false, reports once, and never leaks the endpoint (T-204-02)', async () => {
+    const boom = new Error('503 push unavailable');
+    vi.mocked(pushApi.subscribe).mockRejectedValue(boom);
+
+    await expect(resyncExistingSubscription(resyncSubscription)).resolves.toBe(false);
+    expect(Sentry.captureException).toHaveBeenCalledTimes(1);
+    const call = vi.mocked(Sentry.captureException).mock.calls[0];
+    expect(call?.[0]).toBe(boom);
+    expect(call?.[1]).toEqual({ tags: { source: 'push_resync' } });
+    // Bearer-capability leak guard: the endpoint must appear in no
+    // captureException argument, not just not be the tagged value.
+    expect(JSON.stringify(call)).not.toContain(RESYNC_ENDPOINT);
+  });
+
+  it('toJSON() returning no endpoint: resolves false via the shared postSubscription throw path', async () => {
+    const noEndpointSubscription = {
+      toJSON: () => ({ endpoint: undefined, keys: { p256dh: 'p', auth: 'a' } }),
+    } as unknown as PushSubscription;
+
+    await expect(resyncExistingSubscription(noEndpointSubscription)).resolves.toBe(false);
+    expect(pushApi.subscribe).not.toHaveBeenCalled();
+    expect(Sentry.captureException).toHaveBeenCalledTimes(1);
+  });
+
+  // Phase 204 D-04/D-05: the destroy-and-recreate repair is confined to
+  // ensureDeviceSubscribed (the gesture path) — the passive re-sync path
+  // must never call unsubscribe(), even when the subscription it receives
+  // happens to expose one.
+  it('never calls unsubscribe() on the subscription it receives (repair stays out of this function)', async () => {
+    vi.mocked(pushApi.subscribe).mockResolvedValue({ subscription_id: 1 });
+    const unsubscribe = vi.fn();
+    const subscriptionWithUnsubscribe = {
+      ...resyncSubscription,
+      unsubscribe,
+    } as unknown as PushSubscription;
+
+    await resyncExistingSubscription(subscriptionWithUnsubscribe);
+
+    expect(unsubscribe).not.toHaveBeenCalled();
   });
 });
 

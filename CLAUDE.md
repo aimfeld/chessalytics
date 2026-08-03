@@ -204,6 +204,7 @@ ssh flawchess "cd /opt/flawchess && docker compose down && docker compose up -d"
 - Alembic migrations run automatically on backend container startup via `deploy/entrypoint.sh`.
 - `.env` on server at `/opt/flawchess/.env` — never commit production secrets.
 - Docker BuildKit cache capped at 3 GB by a daily cron (`/etc/cron.d/docker-builder-prune`, 3am UTC) — each deploy rebuilds images on the server, so the cache fills the disk without it. Inspect with `docker system df` (containerd image store, not `/var/lib/docker/buildkit`).
+- VAPID key rotation (Web Push, only on suspected key compromise): follow `docs/push-vapid-rotation-runbook.md`.
 
 ## Version Control
 

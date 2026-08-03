@@ -20,6 +20,19 @@ entirely by inference because this branch, uniquely, deletes state while
 emitting nothing. The capture never carries the endpoint (a bearer
 capability) or any variable data in its message; only the status code and
 the (about-to-be-deleted) subscription id go into `set_context`.
+
+Phase 204 D5 (2026-08-03): `_PUSH_TTL_SECONDS = 0` was wrong. D-08 already
+declares the scheduler's own hour gate unbounded within the local day --
+asking the push service for zero retention contradicted that stated bound,
+and a discarded (TTL-0, device unreachable) message returns 201 exactly
+like a real delivery, making "sent" mean nothing measurable. `ttl_seconds`
+is now a keyword-only, defaulted parameter (mirroring D1's `subscription_id`
+threading) computed once by the caller via
+`train_scheduler.seconds_until_end_of_local_day` and passed down -- this
+module still does no timezone arithmetic of its own.
+
+VAPID key rotation: see `docs/push-vapid-rotation-runbook.md` for the full
+operator procedure (when to rotate, what breaks, and how devices recover).
 """
 
 from __future__ import annotations
@@ -50,10 +63,18 @@ _PRUNE_STATUS_CODES = frozenset({404, 410})
 # Bounded so one slow/unreachable push service can never stall a fan-out.
 _PUSH_TIMEOUT_SECONDS = 10.0
 
-# RFC 8030 TTL. 0 = deliver only if the device is reachable right now, never
-# stored by the push service. A reminder is worthless once its hour has passed
-# (D-04/D-08 already own lateness), so we do not ask for retention.
-_PUSH_TTL_SECONDS = 0
+# RFC 8030 Sec. 5.2 TTL. Phase 204 D5/D-02: this default exists ONLY so a
+# caller that omits `ttl_seconds` cannot silently reintroduce the
+# discard-immediately bug that `_PUSH_TTL_SECONDS = 0` used to be -- a TTL of
+# 0 tells the push service to deliver only if the device is reachable right
+# now, and a discarded message returns 201 just like a real delivery,
+# indistinguishable server-side. The one production caller
+# (`train_reminder_service._process_candidate`) always passes a computed
+# value (`train_scheduler.seconds_until_end_of_local_day`); in practice only
+# the dev-only trigger endpoint (`POST /api/push/dev/trigger-reminder`,
+# gated on `ENVIRONMENT == "development"`) ever uses this default. MUST
+# NEVER be 0.
+_DEFAULT_PUSH_TTL_SECONDS = 3600
 
 
 @dataclass(frozen=True)
@@ -101,6 +122,7 @@ async def send_to_subscription(
     auth: str,
     payload: dict[str, object],
     subscription_id: int | None = None,
+    ttl_seconds: int = _DEFAULT_PUSH_TTL_SECONDS,
 ) -> bool:
     """Send one push message. Returns True if the subscription should be pruned.
 
@@ -112,10 +134,19 @@ async def send_to_subscription(
             `set_context` can identify which row was deleted (SEED-135 D1)
             without ever carrying the endpoint. Keyword-only and defaulted to
             None rather than required -- `send_to_subscription` is exported
-            in `__all__` and called directly by ~15 tests with the pre-D1
-            signature. Must be set BEFORE `capture_exception` fires (setting
-            it at the `send_to_user` call site would attach to a later
-            event), which is why it is threaded in rather than set outside.
+            in `__all__` and called directly by 10 tests in
+            tests/test_push_send.py with the pre-D1 signature. Must be set
+            BEFORE `capture_exception` fires (setting it at the
+            `send_to_user` call site would attach to a later event), which
+            is why it is threaded in rather than set outside.
+        ttl_seconds: RFC 8030 Sec. 5.2 `Ttl` header value, in seconds.
+            Keyword-only and defaulted (Phase 204 D-02) for the same
+            backward-compatibility reason as `subscription_id` -- the
+            existing test callers must keep compiling unmodified. The
+            CALLER computes this value; this module never derives it. Only
+            `train_reminder_service._process_candidate` passes a real
+            value (via `train_scheduler.seconds_until_end_of_local_day`);
+            every other caller gets the module default.
     """
     if not is_push_configured():
         return False  # D-03: VAPID unconfigured, no-op
@@ -123,7 +154,7 @@ async def send_to_subscription(
         payload=json.dumps(payload).encode(), p256dh=p256dh, auth=auth
     )
     headers = {
-        "ttl": str(_PUSH_TTL_SECONDS),
+        "ttl": str(ttl_seconds),
         "content-encoding": "aes128gcm",
         "authorization": push_crypto.vapid_authorization(
             endpoint=endpoint,
@@ -172,7 +203,11 @@ async def send_to_subscription(
 
 
 async def send_to_user(
-    session: AsyncSession, *, user_id: int, payload: dict[str, object]
+    session: AsyncSession,
+    *,
+    user_id: int,
+    payload: dict[str, object],
+    ttl_seconds: int = _DEFAULT_PUSH_TTL_SECONDS,
 ) -> PushFanoutResult:
     """Fan `payload` out to every one of `user_id`'s live subscriptions (D-05).
 
@@ -188,6 +223,13 @@ async def send_to_user(
         user_id: Authenticated user's internal PK (V4: never client-supplied).
         payload: The notification payload (see
             `app.services.train_reminder_service.build_reminder_payload`).
+        ttl_seconds: RFC 8030 Sec. 5.2 `Ttl` header value, threaded straight
+            into every `send_to_subscription` call in the fan-out below.
+            Keyword-only and defaulted (Phase 204 D-02), same contract as
+            `send_to_subscription`'s own `ttl_seconds`. This module NEVER
+            computes it -- the value is derived by the CALLER, which already
+            holds the user's timezone and the current instant; `push_send`
+            must never import `train_scheduler` or do timezone arithmetic.
     """
     if not is_push_configured():
         return PushFanoutResult(attempted=0, pruned=0, failed=0)
@@ -207,6 +249,7 @@ async def send_to_user(
                     auth=subscription.auth,
                     payload=payload,
                     subscription_id=subscription.id,
+                    ttl_seconds=ttl_seconds,
                 )
             except Exception:
                 # Per-subscription isolation: a construction/encryption error

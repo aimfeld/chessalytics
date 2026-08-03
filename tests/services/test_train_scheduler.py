@@ -49,6 +49,7 @@ from app.services.train_scheduler import (
     local_today,
     next_scheduled_day,
     scheduled_days_per_week,
+    seconds_until_end_of_local_day,
     session_window,
     tick_days,
     week_start,
@@ -275,6 +276,47 @@ class TestLocalHour:
     def test_local_hour_unrecognised_zone_falls_back_to_utc_without_raising(self) -> None:
         now_utc = datetime.datetime(2026, 7, 28, 12, 0, 0, tzinfo=datetime.timezone.utc)
         assert local_hour("Not/AZone", now_utc) == 12
+
+
+class TestSecondsUntilEndOfLocalDay:
+    """seconds_until_end_of_local_day: Phase 204 D-01/D-03. The push TTL bound.
+
+    No floor, no cap -- a near-end-of-day instant returning a small exact
+    count IS the no-floor proof (a hardcoded minimum would fail these).
+    """
+
+    def test_seconds_until_end_of_local_day_mid_day_kolkata_plus_5_30_offset_exact_count(
+        self,
+    ) -> None:
+        # 2026-07-28T10:00:00Z is 2026-07-28 15:30:00 in Asia/Kolkata (+05:30).
+        # 23:59:59 - 15:30:00 = 8:29:59 = 30599 seconds.
+        now_utc = datetime.datetime(2026, 7, 28, 10, 0, 0, tzinfo=datetime.timezone.utc)
+        assert seconds_until_end_of_local_day("Asia/Kolkata", now_utc) == 30599
+
+    def test_seconds_until_end_of_local_day_near_end_of_day_utc_small_exact_count_no_floor(
+        self,
+    ) -> None:
+        # 23:52:00 local -> 23:59:59 - 23:52:00 = 0:07:59 = 479 seconds. A
+        # small exact number under 1000, never a clamped minimum.
+        now_utc = datetime.datetime(2026, 7, 28, 23, 52, 0, tzinfo=datetime.timezone.utc)
+        assert seconds_until_end_of_local_day("UTC", now_utc) == 479
+
+    def test_seconds_until_end_of_local_day_fractional_offset_kathmandu_plus_5_45_uses_local_conversion(
+        self,
+    ) -> None:
+        # 2026-07-28T10:00:00Z is 2026-07-28 15:45:00 in Asia/Kathmandu (+05:45).
+        # 23:59:59 - 15:45:00 = 8:14:59 = 29699 seconds. A UTC-only
+        # implementation (Pitfall: skipping astimezone) would instead compute
+        # against 10:00:00, giving a different (wrong) result.
+        now_utc = datetime.datetime(2026, 7, 28, 10, 0, 0, tzinfo=datetime.timezone.utc)
+        assert seconds_until_end_of_local_day("Asia/Kathmandu", now_utc) == 29699
+
+    def test_seconds_until_end_of_local_day_unrecognised_zone_falls_back_to_default_timezone(
+        self,
+    ) -> None:
+        # DEFAULT_TIMEZONE is "UTC". 23:59:59 - 12:00:00 = 11:59:59 = 43199s.
+        now_utc = datetime.datetime(2026, 7, 28, 12, 0, 0, tzinfo=datetime.timezone.utc)
+        assert seconds_until_end_of_local_day("Not/AZone", now_utc) == 43199
 
 
 class TestIsSessionExpired:

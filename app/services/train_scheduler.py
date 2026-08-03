@@ -153,6 +153,57 @@ def local_hour(tz_name: str, now_utc: datetime.datetime) -> int:
     return now_utc.astimezone(zone).hour
 
 
+# Phase 204 (D-01): the end-of-local-day instant a push TTL is bounded by.
+# 23:59:59 rather than "next local midnight" -- midnight is a nonexistent
+# local time in a handful of midnight-DST-transition zones (Cuba,
+# historically Brazil); `zoneinfo` will not raise either way, but the
+# arithmetic below is only obviously correct against an existing instant.
+_END_OF_DAY_HOUR = 23
+_END_OF_DAY_MINUTE = 59
+_END_OF_DAY_SECOND = 59
+
+
+def seconds_until_end_of_local_day(tz_name: str, now_utc: datetime.datetime) -> int:
+    """Seconds remaining in the user's local calendar day (Phase 204, D-01/D-03).
+
+    Bounds a push message's RFC 8030 TTL by the same end-of-local-day rule
+    the scheduler already claims to hold (D-08's hour gate is unbounded
+    within the local day). Computed as "today at 23:59:59 local minus now",
+    never "next local midnight": midnight is a nonexistent local time in a
+    few zones with midnight DST transitions, so only the end-of-today form
+    is obviously correct.
+
+    Identical fallback shape to `local_today`/`local_hour` (D-03): an
+    unrecognised `tz_name` falls back to DEFAULT_TIMEZONE rather than
+    raising, so one stale/typo'd stored timezone can never crash a tick for
+    every other user.
+
+    No floor and no cap. A tick at 23:52 local yields roughly 480 seconds,
+    and that is correct by design: a reminder that cannot be delivered
+    before the day ends SHOULD expire, reproducing the old TTL-0 behavior
+    only in this degenerate near-midnight case. The `max(..., 0)` below is
+    insurance against a future caller passing a `now_utc` already past
+    end-of-day, not a floor on the intended range.
+
+    Args:
+        tz_name: An IANA timezone string, as stored on `train_settings.timezone`.
+        now_utc: The current UTC instant.
+
+    Returns:
+        Seconds from `now_utc` (converted to local time) to 23:59:59 local,
+        clamped at 0.
+    """
+    try:
+        zone = ZoneInfo(tz_name)
+    except (ZoneInfoNotFoundError, ValueError):
+        zone = ZoneInfo(DEFAULT_TIMEZONE)
+    local_now = now_utc.astimezone(zone)
+    end_of_day = local_now.replace(
+        hour=_END_OF_DAY_HOUR, minute=_END_OF_DAY_MINUTE, second=_END_OF_DAY_SECOND, microsecond=0
+    )
+    return max(int((end_of_day - local_now).total_seconds()), 0)
+
+
 def next_scheduled_day(after: datetime.date, weekday_mask: int) -> datetime.date:
     """Return the first day >= `after` whose weekday bit is set in `weekday_mask`.
 
@@ -583,6 +634,7 @@ __all__ = [
     "local_today",
     "next_scheduled_day",
     "scheduled_days_per_week",
+    "seconds_until_end_of_local_day",
     "session_window",
     "tick_days",
     "week_start",
