@@ -29,7 +29,7 @@
 
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { Chess } from 'chess.js';
-import { parseInfoLine, parseBestmove } from './uciParser';
+import { parseInfoLine, parseBestmove, dedupePvLinesByFirstMove } from './uciParser';
 import type { PvLine } from './uciParser';
 import { classifyLiveSeverity, evalToExpectedScore, sideToMoveFromFen } from '@/lib/liveFlaw';
 import type { MoverColor } from '@/lib/liveFlaw';
@@ -129,7 +129,10 @@ interface RawSearchResult {
    * line" read `evalCp`/`evalMate`/`pv` above (rank 1's convenience values,
    * unchanged shape from before this plan). Never assume `lines.length`
    * equals the requested width: the engine returns only as many ranks as
-   * there are legal moves and never pads.
+   * there are legal moves and never pads — nor that every rank holds a
+   * DISTINCT move before `dedupePvLinesByFirstMove` runs at commit time (see
+   * that helper for the cross-iteration staleness this drops); after it, every
+   * entry's first move is unique.
    */
   lines: PvLine[];
 }
@@ -571,13 +574,13 @@ export function useTrainGradingEngine({
         // sign-normalized to white POV — exactly once, at bestmove. Never
         // assume the requested width was returned (Map may have fewer
         // entries than requested); a width-1 search still yields one entry.
-        const lines: PvLine[] = [...pvMapRef.current.values()]
-          .sort((a, b) => a.multipv - b.multipv)
-          .map((l) => ({
-            ...l,
-            evalCp: l.evalCp === null ? null : l.evalCp * pending.whitePovSign,
-            evalMate: l.evalMate === null ? null : l.evalMate * pending.whitePovSign,
-          }));
+        const lines: PvLine[] = dedupePvLinesByFirstMove(
+          [...pvMapRef.current.values()].sort((a, b) => a.multipv - b.multipv),
+        ).map((l) => ({
+          ...l,
+          evalCp: l.evalCp === null ? null : l.evalCp * pending.whitePovSign,
+          evalMate: l.evalMate === null ? null : l.evalMate * pending.whitePovSign,
+        }));
         const rank1 = lines[0];
         pending.resolve({
           evalCp: rank1 !== undefined ? rank1.evalCp : null,

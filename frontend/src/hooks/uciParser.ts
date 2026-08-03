@@ -133,6 +133,49 @@ export function parseInfoLine(line: string): ParsedInfoLine | null {
 }
 
 /**
+ * Collapse MultiPV ranks that share the same first move down to a single
+ * entry, preserving the input order (i.e. rank order, when the caller sorted
+ * by `multipv` first).
+ *
+ * Bug fix (2026-08-03): a MultiPV map keyed by rank and accumulated across
+ * iterative-deepening iterations can hold the SAME move at two ranks. The
+ * last iteration before the movetime cutoff is usually partial — it re-emits
+ * the low ranks at depth N+1 while the high ranks still hold depth-N entries,
+ * so a move that climbed the ordering appears both at its new (fresh) rank and
+ * at its old (stale) one. Verified headlessly against the vendored Stockfish
+ * 18 lite-single at the Train grading search's own settings (MultiPV 4,
+ * movetime 1500ms): 3 of 30 searches committed a duplicated move. Downstream
+ * that surfaced as a doubled entry in Train's "Also fine" list (e.g. "Also
+ * fine: Be2, Bd3, Bd3") and a second green arrow drawn on top of the first.
+ *
+ * The surviving entry is the DEEPER of the duplicates (the fresh one, which in
+ * practice is also the lower rank), so a stale shallow reading can never win.
+ * It keeps its own `multipv` value — no caller reassigns ranks after commit.
+ * Lines with an empty PV carry no first move to key on and are passed through
+ * untouched.
+ */
+export function dedupePvLinesByFirstMove(lines: PvLine[]): PvLine[] {
+  const keptIndexByMove = new Map<string, number>();
+  const kept: PvLine[] = [];
+  for (const line of lines) {
+    const move = line.moves[0];
+    if (move === undefined) {
+      kept.push(line);
+      continue;
+    }
+    const existingIndex = keptIndexByMove.get(move);
+    if (existingIndex === undefined) {
+      keptIndexByMove.set(move, kept.length);
+      kept.push(line);
+      continue;
+    }
+    const existing = kept[existingIndex];
+    if (existing !== undefined && line.depth > existing.depth) kept[existingIndex] = line;
+  }
+  return kept;
+}
+
+/**
  * Parse a Stockfish `bestmove` line and return the best move token.
  *
  * Returns null if the line is not a bestmove line, or if the engine

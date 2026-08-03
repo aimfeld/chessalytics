@@ -1,6 +1,7 @@
 // @vitest-environment node
 import { describe, it, expect } from 'vitest';
-import { parseInfoLine, parseBestmove } from '../uciParser';
+import { parseInfoLine, parseBestmove, dedupePvLinesByFirstMove } from '../uciParser';
+import type { PvLine } from '../uciParser';
 
 // UCI input strings from RESEARCH.md / PATTERNS.md § "UCI Parser Unit Test Inputs"
 
@@ -122,5 +123,41 @@ describe('parseBestmove', () => {
 
   it('returns null for bestmove (none) (engine has no move)', () => {
     expect(parseBestmove('bestmove (none)')).toBeNull();
+  });
+});
+
+describe('dedupePvLinesByFirstMove', () => {
+  /** A PvLine with only the fields this helper reads. */
+  function line(multipv: number, depth: number, first: string): PvLine {
+    return { multipv, depth, moves: [first, 'a7a6'], evalCp: 0, evalMate: null };
+  }
+
+  it('returns distinct-first-move lines untouched, in input order', () => {
+    const lines = [line(1, 20, 'e2e4'), line(2, 20, 'd2d4'), line(3, 20, 'g1f3')];
+    expect(dedupePvLinesByFirstMove(lines)).toEqual(lines);
+  });
+
+  it('collapses a stale higher rank holding the same move, keeping the deeper entry at the earlier position', () => {
+    const fresh = line(2, 21, 'b1c3');
+    const stale = line(4, 20, 'b1c3');
+    const result = dedupePvLinesByFirstMove([line(1, 21, 'e2e4'), fresh, line(3, 20, 'g1f3'), stale]);
+    expect(result).toEqual([line(1, 21, 'e2e4'), fresh, line(3, 20, 'g1f3')]);
+  });
+
+  it('keeps the DEEPER duplicate even when it arrives at the later rank, in the earlier slot', () => {
+    const shallow = line(2, 20, 'b1c3');
+    const deeper = line(3, 21, 'b1c3');
+    const result = dedupePvLinesByFirstMove([line(1, 21, 'e2e4'), shallow, deeper]);
+    expect(result).toEqual([line(1, 21, 'e2e4'), deeper]);
+  });
+
+  it('passes empty-PV lines through without treating them as duplicates of each other', () => {
+    const emptyA: PvLine = { multipv: 2, depth: 20, moves: [], evalCp: 0, evalMate: null };
+    const emptyB: PvLine = { multipv: 3, depth: 20, moves: [], evalCp: 5, evalMate: null };
+    expect(dedupePvLinesByFirstMove([emptyA, emptyB])).toEqual([emptyA, emptyB]);
+  });
+
+  it('returns an empty array for no lines', () => {
+    expect(dedupePvLinesByFirstMove([])).toEqual([]);
   });
 });

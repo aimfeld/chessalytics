@@ -716,6 +716,43 @@ describe('useTrainGradingEngine — MultiPV mount search (190.1-02 Task 2)', () 
     ]);
   });
 
+  it('a partial final iteration that leaves the same move at two ranks yields it ONCE in fineMoves, from the deeper (fresh) rank (2026-08-03 "Also fine: Be2, Bd3, Bd3")', async () => {
+    const { result } = renderHook(() => useTrainGradingEngine({ enabled: true }));
+    driveInit(mockWorker);
+
+    act(() => {
+      result.current.startGrading(FEN);
+    });
+    // Depth 12 completes for all four ranks...
+    act(() => {
+      mockWorker.simulateMessage('info depth 12 multipv 1 score cp 40 nodes 1000 pv e2e4');
+    });
+    act(() => {
+      mockWorker.simulateMessage('info depth 12 multipv 2 score cp 38 nodes 1000 pv d2d4');
+    });
+    act(() => {
+      mockWorker.simulateMessage('info depth 12 multipv 3 score cp 36 nodes 1000 pv g1f3');
+    });
+    act(() => {
+      mockWorker.simulateMessage('info depth 12 multipv 4 score cp 34 nodes 1000 pv b1c3');
+    });
+    // ...then depth 13 runs out of movetime after only two ranks, and b1c3 has
+    // climbed from rank 4 to rank 2. Rank 4 still holds its stale depth-12
+    // copy: without the commit-time dedupe, b1c3 is committed TWICE.
+    act(() => {
+      mockWorker.simulateMessage('info depth 13 multipv 1 score cp 41 nodes 2000 pv e2e4');
+    });
+    act(() => {
+      mockWorker.simulateMessage('info depth 13 multipv 2 score cp 39 nodes 2000 pv b1c3');
+    });
+    act(() => {
+      mockWorker.simulateMessage('bestmove e2e4');
+    });
+
+    const grade = await result.current.gradeMove(FEN, 'e2e4');
+    expect(grade.fineMoves.map((m) => m.uci)).toEqual(['e2e4', 'b1c3', 'g1f3']);
+  });
+
   it('ranks straddling the two verdict boundaries: under INACCURACY_DROP is good, between the boundaries is an inaccuracy fine move, at/beyond MISTAKE_DROP is excluded (quick 260726-fma)', async () => {
     const { result } = renderHook(() => useTrainGradingEngine({ enabled: true }));
     driveInit(mockWorker);
