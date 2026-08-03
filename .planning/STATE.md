@@ -4,15 +4,14 @@ milestone: v2.11
 milestone_name: Train Solve Surface & Push Reminders
 status: Awaiting next milestone
 stopped_at: Completed 203-04-PLAN.md (phase 203 complete, 4/4 plans)
-last_updated: "2026-08-03T11:20:19.394Z"
+last_updated: "2026-08-03T13:02:37.698Z"
 last_activity: 2026-08-03
-last_activity_desc: Milestone v2.11 completed and archived
+last_activity_desc: "Completed quick task 260803-iv6: Train solution screen (eval bar, flaw-fixed card order, guess prose) + QR heading copy"
 progress:
-  total_phases: 4
-  completed_phases: 4
-  total_plans: 14
-  completed_plans: 14
-  percent: 100
+  total_phases: 0
+  completed_phases: 0
+  total_plans: 0
+  completed_plans: 0
 current_phase: 999.1
 current_phase_name: Password Reset (BACKLOG)
 ---
@@ -663,6 +662,7 @@ None active.
 | 43 | Mobile Train reveal: pin the board column, collapse line boxes into tap-to-expand rows, hide dev clock in-session | 2026-08-01 | f717558f1 | — |
 | 260801-tu5 | The phone no longer dims or auto-locks while a Train puzzle or its reveal is on screen. New `useWakeLock()` hook holds a Screen Wake Lock (`navigator.wakeLock.request('screen')`) for exactly as long as `TrainSolveScreen` is mounted — scoped to that component on purpose, so the start and score screens keep normal auto-lock behavior for a user who walks away mid-session. Unconditional, no setting. The load-bearing detail is that the browser releases the sentinel ITSELF whenever the document goes hidden, so two independently-necessary halves are needed: a `visibilitychange` listener that re-requests on `visible`, and clearing the ref from the sentinel's own `release` event (otherwise the "already held" guard sees a dead sentinel and blocks re-acquisition forever). Both mutation-proven — removing either one alone fails the re-acquire test. Failures are swallowed silently with no Sentry capture, since all three causes are expected conditions rather than bugs: no API before iOS 16.4, insecure context, and iOS Low Power Mode refusing outright. Frontend 3061/3061 passed, lint/knip/build clean. Real-device behavior is HUMAN-UAT — jsdom cannot exercise an actual wake lock | 2026-08-01 | 20229491e | [260801-tu5-prevent-mobile-screen-dimming-lock-durin](./quick/260801-tu5-prevent-mobile-screen-dimming-lock-durin/) |
 | 260803-iv6 | Four Train UI changes. (1) A live Stockfish eval bar now sits immediately right of the Train board, reusing `EvalBar` + `useStockfishEngine` with the analysis board's exact geometry (`w-5` bar, `gap-2`, `STOCKFISH_ACCENT`), fed by the single `displayFen` the `ChessBoard` already renders so it tracks all three states — pristine solution, stepping a reveal card's line, and free-move exploration. Gated on `showResultRow` (the same gate as the reveal panel) because a live eval visible while the guess buttons are up would hand the user the answer to the puzzle's own "one critical move vs several fine moves" question; the bar's `w-5` column is rendered unconditionally with the bar mounted only after the verdict, so the board does not resize mid-puzzle, and `TRAIN_EVAL_BAR_CHROME_PX = 28` is subtracted from the board's `maxWidth`. The new engine instance is disabled while `freePlay.isExploring` (which already owns a FEN-driven worker) so exactly one such worker is alive at a time. (2) The "Flaw fixed!" banner is now the FIRST child of the reveal panel, above the Your-move box and the guess card, with DOM order pinned by `compareDocumentPosition` rather than list index. (3) New `guessFeedbackProse()` in `lib/trainGuessLabels.ts` renders one locked sentence per guess/verdict/source combination as the first line of the guess card body; the "from a played game" branch keys off the already-present `puzzle_type !== 'herring'` — no backend or API change was needed. (4) The Train schedule QR heading now reads "Reminders work better with FlawChess on your phone". Scope note: Task 1's tests surfaced a genuine latent bug in the SHARED `useStockfishEngine` hook — React's `Object.is` same-value bailout on `setDebouncedFen` could permanently strand an eval at the neutral midpoint whenever the `fen` prop oscillated back to a superseded value inside the 150ms debounce window (reachable in Train when a reveal line's first step replays the move just played), since the unconditional reset branch still cleared the eval but the debounced re-commit never re-fired. Fixed at the hook level with a nonce-tagged `{ fen, nonce }` debounce target rather than worked around locally, because the same shape is reachable by the hook's 4 other consumers. Frontend 3260/3260 passed, lint 0 errors, `tsc -b` and knip clean. The 6 browser checks in the plan's verification block (bar absence/presence, resize-free reveal transition, line stepping, single in-flight free-play search, board-flip orientation, 375px viewport) are HUMAN-UAT — jsdom cannot render the bar's geometry | 2026-08-03 | b12d98387 | [260803-iv6-puzzle-solution-screen-flaw-fixed-cards-](./quick/260803-iv6-puzzle-solution-screen-flaw-fixed-cards-/) |
+| 46 | Center the Train QR handoff section (heading, QR, caption) | 2026-08-03 | 652438cda | — |
 
 ## Deferred Items
 
