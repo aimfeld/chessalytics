@@ -18,13 +18,15 @@ import pytest
 
 # Named tasks expected in the lifespan. Phase 187 / SEED-116: corrected the
 # pre-existing drift (was missing "full-eval-drain") while adding the new
-# "guest-cleanup" task, so this constant actually reflects all 4 background
-# tasks spawned in app/main.py's lifespan.
+# "guest-cleanup" task. Phase 201 / SEED-132 (D-15) adds "train-reminders",
+# so this constant now reflects all 5 background tasks spawned in
+# app/main.py's lifespan.
 EXPECTED_TASKS: tuple[str, ...] = (
     "periodic-orphan-reaper",
     "eval-drain",
     "full-eval-drain",
     "guest-cleanup",
+    "train-reminders",
 )
 
 # Stub coroutines sleep long enough to stay alive for the duration of the test.
@@ -75,6 +77,7 @@ class TestLifespanBackgroundTasks:
         drain_called = False
         full_drain_called = False
         guest_cleanup_called = False
+        reminder_called = False
 
         async def _stub_reaper() -> None:
             nonlocal reaper_called
@@ -96,6 +99,11 @@ class TestLifespanBackgroundTasks:
             guest_cleanup_called = True
             await asyncio.sleep(STUB_SLEEP_SECONDS)
 
+        async def _stub_reminders() -> None:
+            nonlocal reminder_called
+            reminder_called = True
+            await asyncio.sleep(STUB_SLEEP_SECONDS)
+
         # Patch startup hooks so the lifespan can reach the task-spawn lines.
         monkeypatch.setattr("app.main.get_insights_agent", _noop_sync)
         monkeypatch.setattr("app.main.cleanup_orphaned_jobs", _noop)
@@ -107,6 +115,7 @@ class TestLifespanBackgroundTasks:
         monkeypatch.setattr("app.main.run_eval_drain", _stub_drain)
         monkeypatch.setattr("app.main.run_full_eval_drain", _stub_full_drain)
         monkeypatch.setattr("app.main.run_periodic_guest_cleanup", _stub_guest_cleanup)
+        monkeypatch.setattr("app.main.run_periodic_train_reminders", _stub_reminders)
 
         # Drive the lifespan: enter context (startup), then exit (shutdown).
         async with app.router.lifespan_context(app):
@@ -119,6 +128,9 @@ class TestLifespanBackgroundTasks:
             assert full_drain_called, "run_full_eval_drain was not called during lifespan startup"
             assert guest_cleanup_called, (
                 "run_periodic_guest_cleanup was not called during lifespan startup"
+            )
+            assert reminder_called, (
+                "run_periodic_train_reminders was not called during lifespan startup"
             )
 
         # After context exit the tasks were cancelled; stubs exited cleanly.

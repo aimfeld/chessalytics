@@ -354,6 +354,9 @@ async def test_full_session_is_nine_sr_and_three_herrings(db_session: AsyncSessi
         timezone="UTC",
         weekday_mask=0,
         puzzles_per_session=12,
+        reminder_enabled=False,
+        reminder_hour=18,
+        reminder_intent_at=None,
         now_utc=_NOW,
     )
     for i in range(12):
@@ -397,6 +400,9 @@ async def test_sr_shortfall_backfills_with_herrings(db_session: AsyncSession) ->
         timezone="UTC",
         weekday_mask=0,
         puzzles_per_session=12,
+        reminder_enabled=False,
+        reminder_hour=18,
+        reminder_intent_at=None,
         now_utc=_NOW,
     )
     for i in range(2):
@@ -439,6 +445,9 @@ async def test_herring_shortfall_backfills_with_sr(db_session: AsyncSession) -> 
         timezone="UTC",
         weekday_mask=0,
         puzzles_per_session=12,
+        reminder_enabled=False,
+        reminder_hour=18,
+        reminder_intent_at=None,
         now_utc=_NOW,
     )
     for i in range(15):
@@ -492,6 +501,9 @@ async def test_fully_empty_herring_pool_backfills_with_sr(db_session: AsyncSessi
         timezone="UTC",
         weekday_mask=0,
         puzzles_per_session=12,
+        reminder_enabled=False,
+        reminder_hour=18,
+        reminder_intent_at=None,
         now_utc=_NOW,
     )
     for i in range(12):
@@ -539,6 +551,9 @@ async def test_padding_introduces_new_drill_items_recency_first(db_session: Asyn
         timezone="UTC",
         weekday_mask=0,
         puzzles_per_session=12,
+        reminder_enabled=False,
+        reminder_hour=18,
+        reminder_intent_at=None,
         now_utc=_NOW,
     )
     game_ids: list[int] = []
@@ -788,6 +803,9 @@ async def test_cap_shortened_sr_side_fills_via_herring_backfill(db_session: Asyn
         timezone="UTC",
         weekday_mask=0,
         puzzles_per_session=12,
+        reminder_enabled=False,
+        reminder_hour=18,
+        reminder_intent_at=None,
         now_utc=_NOW,
     )
     game_ids: list[int] = []
@@ -877,6 +895,9 @@ async def test_composition_on_off_day_draws_from_same_queue(db_session: AsyncSes
         timezone="UTC",
         weekday_mask=monday_only_mask,
         puzzles_per_session=12,
+        reminder_enabled=False,
+        reminder_hour=18,
+        reminder_intent_at=None,
         now_utc=_NOW,
     )
     for i in range(9):
@@ -929,6 +950,9 @@ async def test_herring_fen_comes_from_pool_row_not_pgn(db_session: AsyncSession)
         timezone="UTC",
         weekday_mask=0,
         puzzles_per_session=1,
+        reminder_enabled=False,
+        reminder_hour=18,
+        reminder_intent_at=None,
         now_utc=_NOW,
     )
     deliberately_wrong_fen = "8/8/8/8/8/8/8/K6k w - - 0 1"
@@ -972,6 +996,9 @@ async def test_own_game_herring_colliding_with_sr_pick_is_dropped(db_session: As
         timezone="UTC",
         weekday_mask=0,
         puzzles_per_session=4,
+        reminder_enabled=False,
+        reminder_hour=18,
+        reminder_intent_at=None,
         now_utc=_NOW,
     )
     game_id = await _seed_flaw_game(db_session, _USER_ID, "collide-sr", ply=2)
@@ -2030,6 +2057,9 @@ async def test_waiting_count_no_session_caps_at_puzzles_per_session(
         timezone="UTC",
         weekday_mask=0,
         puzzles_per_session=12,
+        reminder_enabled=False,
+        reminder_hour=18,
+        reminder_intent_at=None,
         now_utc=_NOW,
     )
     for i in range(20):
@@ -2596,6 +2626,9 @@ async def test_settings_update_settles_with_old_mask_first(db_session: AsyncSess
         timezone="UTC",
         weekday_mask=monday_only_mask,
         puzzles_per_session=6,
+        reminder_enabled=False,
+        reminder_hour=18,
+        reminder_intent_at=None,
         now_utc=_PROGRESS_NOW,
     )
     await _seed_pool_eligible_since(db_session, _USER_ID, datetime.date(2025, 12, 22))
@@ -2614,6 +2647,9 @@ async def test_settings_update_settles_with_old_mask_first(db_session: AsyncSess
         timezone="UTC",
         weekday_mask=three_bit_mask,
         puzzles_per_session=12,
+        reminder_enabled=False,
+        reminder_hour=18,
+        reminder_intent_at=None,
         now_utc=_PROGRESS_NOW,
     )
 
@@ -2645,6 +2681,9 @@ async def test_settings_update_timezone_only_change_still_settles(
         timezone="America/New_York",
         weekday_mask=0,
         puzzles_per_session=12,
+        reminder_enabled=False,
+        reminder_hour=18,
+        reminder_intent_at=None,
         now_utc=_PROGRESS_NOW,
     )
 
@@ -2675,6 +2714,9 @@ async def test_settings_update_no_elapsed_days_leaves_snapshot_unchanged(
         timezone="UTC",
         weekday_mask=0b0000101,
         puzzles_per_session=8,
+        reminder_enabled=False,
+        reminder_hour=18,
+        reminder_intent_at=None,
         now_utc=_PROGRESS_NOW,
     )
 
@@ -2701,6 +2743,9 @@ async def test_settings_update_first_touch_creates_defaults_then_persists(
         timezone="Europe/Zurich",
         weekday_mask=0b0010101,
         puzzles_per_session=6,
+        reminder_enabled=False,
+        reminder_hour=18,
+        reminder_intent_at=None,
         now_utc=_PROGRESS_NOW,
     )
 
@@ -2739,10 +2784,147 @@ async def test_settings_update_after_progress_read_does_not_resettle(
         timezone="UTC",
         weekday_mask=0,
         puzzles_per_session=12,
+        reminder_enabled=False,
+        reminder_hour=18,
+        reminder_intent_at=None,
         now_utc=_PROGRESS_NOW,
     )
 
     assert updated.streak_count == 1
+
+
+# ---------------------------------------------------------------------------
+# Reminder configuration (Phase 201, REMIND-01, D-06/D-18)
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_get_or_create_settings_reminder_defaults(db_session: AsyncSession) -> None:
+    """A user with no train_settings row gets reminder_enabled False,
+    reminder_hour 18 and reminder_last_sent_on None on first touch — the
+    same DEFAULT_REMINDER_ENABLED/DEFAULT_REMINDER_HOUR that
+    get_or_create_settings applies for weekday_mask/puzzles_per_session —
+    and the persisted row carries the same values."""
+    await ensure_test_user(db_session, _USER_ID)
+
+    settings_row = await train_repository.get_or_create_settings(db_session, user_id=_USER_ID)
+
+    assert settings_row.reminder_enabled is False
+    assert settings_row.reminder_hour == 18
+    assert settings_row.reminder_last_sent_on is None
+
+    row = (
+        await db_session.execute(select(TrainSettings).where(TrainSettings.user_id == _USER_ID))
+    ).scalar_one()
+    assert row.reminder_enabled is False
+    assert row.reminder_hour == 18
+    assert row.reminder_last_sent_on is None
+
+
+@pytest.mark.asyncio
+async def test_get_settings_reminder_defaults_from_raw_insert(db_session: AsyncSession) -> None:
+    """A row created by a raw INSERT of just user_id (i.e. relying entirely
+    on the server defaults, never the application-layer defaults) still
+    reads back reminder_enabled False, reminder_hour 18 and
+    reminder_last_sent_on None — proving the migration's server_defaults
+    keep every pre-existing row valid, independent of get_or_create_settings."""
+    await ensure_test_user(db_session, _USER_ID)
+    db_session.add(TrainSettings(user_id=_USER_ID))
+    await db_session.flush()
+
+    settings_row = await train_repository.get_settings(db_session, user_id=_USER_ID)
+
+    assert settings_row is not None
+    assert settings_row.reminder_enabled is False
+    assert settings_row.reminder_hour == 18
+    assert settings_row.reminder_last_sent_on is None
+
+
+@pytest.mark.asyncio
+async def test_upsert_settings_persists_reminder_fields(db_session: AsyncSession) -> None:
+    """upsert_settings with reminder_enabled=True, reminder_hour=7 persists
+    both and returns them on the row."""
+    await ensure_test_user(db_session, _USER_ID)
+
+    updated = await train_repository.upsert_settings(
+        db_session,
+        user_id=_USER_ID,
+        timezone="UTC",
+        weekday_mask=0,
+        puzzles_per_session=12,
+        reminder_enabled=True,
+        reminder_hour=7,
+        reminder_intent_at=None,
+        now_utc=_PROGRESS_NOW,
+    )
+
+    assert updated.reminder_enabled is True
+    assert updated.reminder_hour == 7
+
+    row = (
+        await db_session.execute(select(TrainSettings).where(TrainSettings.user_id == _USER_ID))
+    ).scalar_one()
+    assert row.reminder_enabled is True
+    assert row.reminder_hour == 7
+
+
+@pytest.mark.asyncio
+async def test_upsert_settings_leaves_reminder_last_sent_on_unchanged(
+    db_session: AsyncSession,
+) -> None:
+    """T-201-13: upsert_settings called after a row already carries a
+    non-NULL reminder_last_sent_on leaves that value byte-identical — the
+    watermark is written ONLY by the reminder job's claim UPDATE (plan
+    201-04), never by a settings PUT. This is the assertion that would fail
+    if reminder_last_sent_on were later "tidied" into upsert_settings' ON
+    CONFLICT DO UPDATE set_ dict, which would let a settings save silently
+    clear a user's daily send guard and let the scheduler re-send."""
+    await ensure_test_user(db_session, _USER_ID)
+    await train_repository.get_or_create_settings(db_session, user_id=_USER_ID)
+    claimed_date = datetime.date(2026, 1, 10)
+    await db_session.execute(
+        update(TrainSettings)
+        .where(TrainSettings.user_id == _USER_ID)
+        .values(reminder_last_sent_on=claimed_date)
+    )
+
+    updated = await train_repository.upsert_settings(
+        db_session,
+        user_id=_USER_ID,
+        timezone="UTC",
+        weekday_mask=0,
+        puzzles_per_session=12,
+        reminder_enabled=True,
+        reminder_hour=9,
+        reminder_intent_at=None,
+        now_utc=_PROGRESS_NOW,
+    )
+
+    assert updated.reminder_last_sent_on == claimed_date
+
+    row = (
+        await db_session.execute(select(TrainSettings).where(TrainSettings.user_id == _USER_ID))
+    ).scalar_one()
+    assert row.reminder_last_sent_on == claimed_date
+
+
+@pytest.mark.asyncio
+async def test_reminder_hour_check_constraint_rejects_out_of_range(
+    db_session: AsyncSession,
+) -> None:
+    """A direct SQL write of reminder_hour=24 raises an IntegrityError from
+    the ck_train_settings_reminder_hour CHECK constraint — proving the DB
+    bound holds independently of Pydantic's Field(ge=..., le=...), so a
+    future schema refactor that loosens the Pydantic bound still cannot
+    write an invalid hour."""
+    await ensure_test_user(db_session, _USER_ID)
+    await train_repository.get_or_create_settings(db_session, user_id=_USER_ID)
+
+    with pytest.raises(IntegrityError, match="ck_train_settings_reminder_hour"):
+        await db_session.execute(
+            update(TrainSettings).where(TrainSettings.user_id == _USER_ID).values(reminder_hour=24)
+        )
+        await db_session.flush()
 
 
 # ---------------------------------------------------------------------------

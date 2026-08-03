@@ -17,6 +17,7 @@ import { Button } from '@/components/ui/button';
 import { EmptyState } from '@/components/ui/empty-state';
 import { LoadError } from '@/components/ui/load-error';
 import { TRAIN_CTA_BUTTON_CLASS } from '@/components/train/buttonStyles';
+import { TrainReminderResurfaceBanner } from '@/components/train/TrainReminderResurfaceBanner';
 import { TrainScheduleSettings } from '@/components/train/TrainScheduleSettings';
 import { TrainStatsCard } from '@/components/train/TrainStatsCard';
 import { TrainStreakCard } from '@/components/train/TrainStreakCard';
@@ -255,6 +256,7 @@ export function TrainStartScreen({
   if (state.kind === 'empty') {
     return (
       <div className={LANDING_CONTAINER_CLASS} data-testid="train-start-screen">
+        <TrainReminderResurfaceBanner />
         <TrainEmptyBody progress={progress} />
       </div>
     );
@@ -263,6 +265,7 @@ export function TrainStartScreen({
   if (state.kind === 'completed') {
     return (
       <div className={LANDING_CONTAINER_CLASS} data-testid="train-start-screen">
+        <TrainReminderResurfaceBanner />
         <TrainHeader />
         <div className={LANDING_CARD_GRID_CLASS}>
           <TrainStreakCard />
@@ -287,6 +290,7 @@ export function TrainStartScreen({
   // the page below a screenful of read-only numbers.
   return (
     <div className={LANDING_CONTAINER_CLASS} data-testid="train-start-screen">
+      <TrainReminderResurfaceBanner />
       <TrainHeader />
       <Button
         variant="default"

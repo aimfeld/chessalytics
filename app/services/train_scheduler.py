@@ -88,6 +88,17 @@ _DAYS_IN_WEEK: int = 7
 # returns.
 SHIELD_CAP: int = 7
 
+# Phase 201 (REMIND-01, D-18): default state for a never-configured user's
+# reminder settings. `DEFAULT_REMINDER_HOUR` (18) is REMIND-01's stated
+# default local hour -- the single source of truth for the model's
+# CheckConstraint, get_or_create_settings' create-on-first-touch INSERT, and
+# the Pydantic Field bound on TrainSettingsUpdate.reminder_hour, so none of
+# the three ever drifts from the others.
+DEFAULT_REMINDER_ENABLED: bool = False
+DEFAULT_REMINDER_HOUR: int = 18
+REMINDER_HOUR_MIN: int = 0
+REMINDER_HOUR_MAX: int = 23
+
 
 def local_today(tz_name: str, now_utc: datetime.datetime) -> datetime.date:
     """Convert a UTC instant to a user's local calendar day (D-06).
@@ -116,6 +127,30 @@ def local_today(tz_name: str, now_utc: datetime.datetime) -> datetime.date:
     except (ZoneInfoNotFoundError, ValueError):
         zone = ZoneInfo(DEFAULT_TIMEZONE)
     return now_utc.astimezone(zone).date()
+
+
+def local_hour(tz_name: str, now_utc: datetime.datetime) -> int:
+    """Convert a UTC instant to a user's local clock hour (Phase 201, REMIND-02/D-16).
+
+    The companion to `local_today` -- the ONLY place the reminder job (plan
+    201-04) may resolve a user's local hour. Identical fallback shape: an
+    unrecognised `tz_name` falls back to DEFAULT_TIMEZONE rather than
+    raising, so a stale/typo'd stored timezone can never crash a tick for
+    every other user (T-201-22).
+
+    Args:
+        tz_name: An IANA timezone string (e.g. "Asia/Kathmandu"), as stored
+            on `train_settings.timezone`.
+        now_utc: The current UTC instant.
+
+    Returns:
+        The local clock hour (0-23) at `now_utc` in the given timezone.
+    """
+    try:
+        zone = ZoneInfo(tz_name)
+    except (ZoneInfoNotFoundError, ValueError):
+        zone = ZoneInfo(DEFAULT_TIMEZONE)
+    return now_utc.astimezone(zone).hour
 
 
 def next_scheduled_day(after: datetime.date, weekday_mask: int) -> datetime.date:
@@ -527,11 +562,15 @@ def tick_days(
 __all__ = [
     "ALL_WEEKDAYS_MASK",
     "DEFAULT_PUZZLES_PER_SESSION",
+    "DEFAULT_REMINDER_ENABLED",
+    "DEFAULT_REMINDER_HOUR",
     "DEFAULT_TIMEZONE",
     "DEFAULT_WEEKDAY_MASK",
     "LADDER_DAYS",
     "MASTERY_STREAK_THRESHOLD",
     "PARK_FAIL_THRESHOLD",
+    "REMINDER_HOUR_MAX",
+    "REMINDER_HOUR_MIN",
     "SHIELD_CAP",
     "DayOutcome",
     "ItemState",
@@ -540,6 +579,7 @@ __all__ = [
     "apply_result",
     "is_scheduled_day",
     "is_session_expired",
+    "local_hour",
     "local_today",
     "next_scheduled_day",
     "scheduled_days_per_week",

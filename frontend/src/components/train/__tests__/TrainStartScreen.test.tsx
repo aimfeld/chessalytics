@@ -3,7 +3,7 @@
  * TrainStartScreen.test.tsx — coverage for all six landing states
  * (D-01..D-04, D-14, plus loading/error) per 190-04-PLAN.md Task 1.
  */
-import { afterEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { act, cleanup, fireEvent, render, screen, within } from '@testing-library/react';
 import { MemoryRouter } from 'react-router-dom';
 
@@ -84,6 +84,47 @@ vi.mock('@/hooks/useTrainSettings', () => ({
   }),
 }));
 
+// Phase 202 Plan 02: TrainScheduleSettings now also calls usePushCapability(),
+// which internally calls useQuery() — mocked here for the same reason as
+// useTrainSettings above (a real hook call would throw "No QueryClient set"
+// without a QueryClientProvider this file deliberately does not add).
+// `available: false` keeps the reminder block absent, matching this file's
+// six pre-existing landing-state assertions exactly as they were before this
+// phase (TrainScheduleSettings.test.tsx covers the reminder block itself).
+//
+// WR-01 (203-REVIEW.md) made this mutable: TrainReminderResurfaceBanner now
+// gates on the capability probe too, so a banner test asserting the CTA
+// renders must ALSO say push is available. The default stays `available:
+// false` so the six landing-state assertions are untouched; only the
+// banner-ordering block below opts in.
+let capabilityMock = {
+  isResolved: true,
+  available: false,
+  vapidPublicKey: null as string | null,
+  permission: 'default' as NotificationPermission,
+};
+
+vi.mock('@/hooks/usePushCapability', () => ({
+  usePushCapability: () => capabilityMock,
+}));
+
+// Phase 203 Plan 04 (OFFER-05): TrainStartScreen mounts
+// <TrainReminderResurfaceBanner /> as an ADDITIVE first element, never a
+// seventh `resolveLandingState` branch — mocked here so the six pre-existing
+// landing-state assertions below stay unaffected (`shouldResurface: false`
+// by default renders nothing, matching today's behavior exactly).
+let resurfaceMock: { shouldResurface: boolean } = { shouldResurface: false };
+
+vi.mock('@/hooks/useReminderResurface', () => ({
+  useReminderResurface: () => ({
+    shouldResurface: resurfaceMock.shouldResurface,
+    dismiss: vi.fn(),
+    isResolved: true,
+    markSubscribed: vi.fn(),
+  }),
+  TRAIN_RESURFACE_DISMISSED_KEY: 'train-resurface-dismissed',
+}));
+
 import { TrainStartScreen } from '@/components/train/TrainStartScreen';
 import { TRAIN_SETTINGS_SAVE_DEBOUNCE_MS } from '@/components/train/TrainScheduleSettings';
 import type { TrainProgressResponse, TrainPuzzle, TrainSessionResponse } from '@/types/train';
@@ -93,6 +134,15 @@ afterEach(() => {
   trainProgressMock = { data: DEFAULT_TRAIN_PROGRESS, isPending: false, isError: false };
   saveMock.mockClear();
   mockTrainSettingsData = { timezone: 'UTC', weekday_mask: 127, puzzles_per_session: 6 };
+  resurfaceMock = { shouldResurface: false };
+  // WR-01: restore the file-wide default so the banner block's opt-in cannot
+  // leak into the six landing-state assertions above it.
+  capabilityMock = {
+    isResolved: true,
+    available: false,
+    vapidPublicKey: null,
+    permission: 'default' as NotificationPermission,
+  };
 });
 
 const STUB_PUZZLE: TrainPuzzle = {
@@ -362,5 +412,67 @@ describe('TrainStartScreen — PROG-05/D-16 tailored cold/exhausted empty states
     expect(screen.queryByTestId('train-empty-no-material')).toBeNull();
     expect(screen.queryByTestId('train-empty-exhausted')).toBeNull();
     expect(screen.queryByText('No puzzles available yet')).toBeNull();
+  });
+});
+
+describe('TrainStartScreen — OFFER-05/D-16 re-surface banner (additive, not a seventh state)', () => {
+  // WR-01: the banner also gates on the push-capability probe, so every
+  // "banner renders" assertion here needs push to actually be available.
+  // Without this the block would be asserting that a push CTA appears while
+  // claiming push is unavailable — the inconsistency WR-01's fix exposed.
+  beforeEach(() => {
+    capabilityMock = {
+      isResolved: true,
+      available: true,
+      vapidPublicKey: 'test-vapid-key',
+      permission: 'default' as NotificationPermission,
+    };
+  });
+
+  it('shouldResurface false (default): the banner never mounts, in any landing state', () => {
+    renderScreen();
+    expect(screen.queryByTestId('resurface-banner')).toBeNull();
+  });
+
+  it('shouldResurface true but the capability probe unresolved: still nothing (WR-01)', () => {
+    resurfaceMock = { shouldResurface: true };
+    capabilityMock = {
+      isResolved: false,
+      available: false,
+      vapidPublicKey: null,
+      permission: 'default' as NotificationPermission,
+    };
+    renderScreen();
+    expect(screen.queryByTestId('resurface-banner')).toBeNull();
+  });
+
+  it('shouldResurface true: the banner renders before the streak card in DOM order within the landing container', () => {
+    resurfaceMock = { shouldResurface: true };
+    renderScreen();
+
+    const banner = screen.getByTestId('resurface-banner');
+    const streakCard = screen.getByTestId('train-streak-card');
+    expect(banner.compareDocumentPosition(streakCard) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+  });
+
+  it('shouldResurface true: the banner also renders ahead of the Start CTA (first element in the landing content)', () => {
+    resurfaceMock = { shouldResurface: true };
+    renderScreen();
+
+    const banner = screen.getByTestId('resurface-banner');
+    const startButton = screen.getByTestId('btn-train-start');
+    expect(banner.compareDocumentPosition(startButton) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+  });
+
+  it('shouldResurface true in the completed state: the banner still renders ahead of the streak card', () => {
+    resurfaceMock = { shouldResurface: true };
+    renderScreen({
+      session: { ...BASE_SESSION, puzzle_count: 6, solved_count: 6, expires_on: '2026-08-01' },
+      sessionScore: 6,
+    });
+
+    const banner = screen.getByTestId('resurface-banner');
+    const streakCard = screen.getByTestId('train-streak-card');
+    expect(banner.compareDocumentPosition(streakCard) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
   });
 });

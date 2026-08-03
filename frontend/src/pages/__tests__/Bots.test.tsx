@@ -28,11 +28,27 @@
  * exercise, but the import must resolve.
  */
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
+import {
+  act,
+  cleanup,
+  configure,
+  fireEvent,
+  render,
+  screen,
+  waitFor,
+} from '@testing-library/react';
 import { useState } from 'react';
 import { MemoryRouter } from 'react-router-dom';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { TooltipProvider } from '@/components/ui/tooltip';
+
+// Flake fix: this file's raised per-test timeouts do NOT cover testing-library's
+// async utilities, which have their own independent 1000ms `waitFor` ceiling.
+// Under the full parallel `vitest run` on a loaded box a single waitFor can blow
+// while the test still has seconds of budget left, surfacing as a bare waitFor
+// stack with no assertion message. Give the async utils matching headroom.
+const ASYNC_UTIL_TIMEOUT_MS = 10000;
+configure({ asyncUtilTimeout: ASYNC_UTIL_TIMEOUT_MS });
 
 // 171-08 (B-1): spy on navigation so the Analyze CTA's URL can be asserted.
 // `renderBots()` mounts a bare `MemoryRouter` with no `<Routes>`, so there is

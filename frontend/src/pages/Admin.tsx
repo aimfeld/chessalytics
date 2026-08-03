@@ -3,6 +3,7 @@ import { Navigate } from 'react-router-dom';
 import { useUserProfile } from '@/hooks/useUserProfile';
 import { ImpersonationSelector } from '@/components/admin/ImpersonationSelector';
 import { SentryTestButtons } from '@/components/admin/SentryTestButtons';
+import { TrainReminderTestCard } from '@/components/admin/TrainReminderTestCard';
 
 /**
  * Admin page — superuser-only (D-16, D-18, D-19).
@@ -38,6 +39,21 @@ export function AdminPage() {
         </p>
         <ImpersonationSelector />
       </section>
+
+      {/* Local-dev only: POST /push/dev/trigger-reminder 404s outside
+          ENVIRONMENT=development (D-17), so rendering this in prod would only
+          ever produce a failing button. `import.meta.env.DEV` is a
+          compile-time constant, so the section is tree-shaken from the
+          production bundle entirely (same gate as TrainDevClock). */}
+      {import.meta.env.DEV && (
+        <section
+          className="space-y-3"
+          data-testid="admin-section-train-reminder-test"
+        >
+          <h2 className="text-lg font-medium">Train reminder test</h2>
+          <TrainReminderTestCard />
+        </section>
+      )}
 
       <section
         className="space-y-3"

@@ -1,11 +1,12 @@
 ---
 phase: 200-train-solve-screen-board-legend-inline-sideline-exploration
 verified: 2026-08-01T16:00:00Z
-status: human_needed
+status: passed
 score: 13/13 must-haves verified (DOM/behavior half); 1 pixel-layout item outstanding
 behavior_unverified: 0
 overrides_applied: 0
 human_verification:
+
   - test: "Run the 200-04-PLAN.md end-of-phase browser pass (15 steps, desktop then Chrome DevTools 375px device toolbar) against a live dev server: legend glyph colors/shapes match the board arrows; hover (desktop) / tap (mobile) spotlight; no yellow anywhere for a played inaccuracy; the Also fine row; stepping into a line then dropping a piece starts exploration with the correct seeded move list; the exploration engine card + move list fit the 375px column without page-level horizontal scroll and the move list scrolls on its own; Solution restores the pristine reveal; Next clears leftover state; Analyze + browser-back restores the pristine reveal."
     expected: "All 15 steps pass with no layout breakage, no clipped/illegible text, and tap targets are comfortably hittable at 375px."
     why_human: "jsdom has no layout engine — it cannot detect overflow, measure composited font size, or verify real tap-target size. This is exactly the residual WINDOWS.md entry #3 (kind unrun-verify, phase 200), which the phase's own plan classifies as non-blocking for execution but mandatory before the squash-merge to main."
@@ -16,7 +17,7 @@ human_verification:
 **Phase Goal:** Make the post-solve reveal board self-explanatory instead of an unreadable stack of overlapping arrows, and let a user explore "why didn't my move work" without ever leaving the Train solve screen — frontend-only, no backend or puzzle-pool change.
 
 **Verified:** 2026-08-01
-**Status:** human_needed
+**Status:** passed (initially `human_needed`; closed 2026-08-02 after the operator ran the browser pass — see Human Verification Resolved)
 **Re-verification:** No — initial verification
 
 ## Goal Achievement
@@ -33,7 +34,7 @@ human_verification:
 | 6 | Post-solve, moving a piece anywhere (including from a stepped line, whose prefix seeds the move list) starts exploration immediately, no toggle, no second board (EXPLORE-01, EXPLORE-02) | ✓ VERIFIED | `TrainSolveScreen.tsx`'s `handlePieceDrop` post-verdict branch (strictly after the `guess === null` and `moveApplied`/`verdict === null` guards — Pitfall 3 preserved) calls `exploration.start(lineStep?.prefixUci ?? [], uci)` / `exploration.playMove(uci)`. `TrainLineStep.prefixUci` / `TrainRevealStep.prefixUci` are threaded with a replay round-trip test proving the seeded prefix reconstructs the exact stepped FEN. |
 | 7 | The moment exploration starts, boxes give way to a Stockfish engine-lines card + move list (no Maia, no FlawChess card); solution arrows clear; Solution exits; Analyze unchanged; clean teardown; works at 375px (EXPLORE-03, -04, -05, -06, -07) | ✓ VERIFIED (DOM/state) / EXPLORE-07 pixel half PENDING | `TrainReveal.tsx`'s `isExploring && exploration` ternary swaps sections 4/4a/Also-fine for `TrainExplorationPanel` (`EngineLines` imported verbatim, zero diff on `EngineLines.tsx` since merge-base; grep confirms no `MaiaCard`/`FlawChessEngineLines` reference). `boardArrows`/`boardMarkers` gain an `exploration.isExploring` empty arm. Solution button visibility-gated (`lineStep !== null \|\| exploration.isExploring`) and `handleShowSolution` calls `exploration.reset()`. A second, independent `useStockfishEngine` instance is proven distinct from the grading Worker and terminated on Solution/puzzle-transition (real `terminated` flag assertions on distinct stubbed Worker objects). `analysisUrl.ts`/`trainRevealCache.ts`/both engine hooks show zero diff across the phase's commits. EXPLORE-07's DOM half (same responsive shell, no separate mobile markup) is asserted; the pixel half is the deferred browser pass. |
 
-**Score:** 7/7 roadmap success criteria hold at the DOM/unit-test level; 1 pixel-rendering item (LEGEND-06/EXPLORE-07's 375px browser pass) is honestly deferred, not silently dropped or fabricated.
+**Score:** 7/7 roadmap success criteria hold at the DOM/unit-test level. The one pixel-rendering item (LEGEND-06/EXPLORE-07's 375px browser pass) was deferred at first verification and has since been run by the operator — 7/7 now hold at both levels.
 
 ### Requirement Traceability (13 IDs)
 
@@ -94,6 +95,7 @@ None in the phase's changed files. No `TBD`/`FIXME`/`XXX` markers, no unreferenc
 ### Code Review Resolution (200-REVIEW.md)
 
 Both Warning-level findings (WR-01: ungated `onFocus`/`onBlur` swallowing the first mobile tap; WR-02: `applyTrainSpotlight` marker-filter leaking a foreign move's badge on a shared target square) are fixed in commit `6926d0dc`, confirmed present in the current working tree:
+
 - WR-01: `TrainReveal.tsx:814-815` (`onFocus: isDesktop ? ... : undefined`) and `:939-940` (Also-fine row, same pattern).
 - WR-02: `TrainRevealOverlay.markerOwners` (`trainArrows.ts:179`) populated in the same push pass as the marker itself; `applyTrainSpotlight` filters markers by ownership, not square membership.
 
@@ -101,7 +103,9 @@ Both fixes carry regression tests that assert genuine behavior (not symbol prese
 
 The one Info-level finding (IN-01, `useIsDesktop` has no dedicated unit test) was explicitly Accepted, not fixed — non-blocking by design, and does not affect any must-have.
 
-### Human Verification Required
+### Human Verification Resolved
+
+**Resolved 2026-08-02.** The operator ran the browser pass on a live dev server (desktop, then Chrome DevTools at exactly 375px) and confirmed all three UAT scenarios pass — including the WR-01 first-mobile-tap case, the only fix here not previously proven in a real browser. Confirmation came at ship time after 10 UAT fix rounds (commits `88e18b55e..016084be3`); see `200-UAT.md` tests 1–3, all `passed`, 0 issues. `WINDOWS.md` entry #3 (`kind: unrun-verify`, phase 200) is closed by this pass. The original requirement is preserved verbatim below for the record.
 
 **1. 375px browser pass (LEGEND-06 pixel half, EXPLORE-07 pixel half, plus the rest of the 15-step checklist)**
 
@@ -113,9 +117,10 @@ The one Info-level finding (IN-01, `useIsDesktop` has no dedicated unit test) wa
 
 ### Gaps Summary
 
-No code gaps. All 13 requirement IDs have real, wired, tested implementations in the current working tree; the two code-review Warnings are genuinely fixed and regression-tested (not just documented as fixed); the guard-order and engine-isolation invariants central to this phase's risk profile hold under direct source inspection. The sole open item is the operator-run 375px browser pass (WINDOWS.md #3), which the phase's own plan explicitly scoped as a non-blocking, end-of-phase, pre-squash-merge human check — it has not been run yet, so LEGEND-06 and EXPLORE-07's REQUIREMENTS.md "Complete" marking is one step ahead of full verification. This routes the phase to `human_needed` rather than `passed`; it does not indicate a defect.
+No code gaps. All 13 requirement IDs have real, wired, tested implementations in the current working tree; the two code-review Warnings are genuinely fixed and regression-tested (not just documented as fixed); the guard-order and engine-isolation invariants central to this phase's risk profile hold under direct source inspection. The one item open at first verification — the operator-run 375px browser pass (WINDOWS.md #3), which the phase's own plan scoped as a non-blocking, end-of-phase, pre-squash-merge human check — was run and confirmed on 2026-08-02, so LEGEND-06 and EXPLORE-07 are now fully verified at both the DOM and pixel levels. No gaps remain; status is `passed`.
 
 ---
 
 _Verified: 2026-08-01_
+_Human verification closed: 2026-08-02 (`/gsd-verify-work 200`)_
 _Verifier: Claude (gsd-verifier)_

@@ -941,11 +941,14 @@ describe('TrainSolveScreen — progress, last move, grading state, engine failur
     const nextBtn = screen.getByTestId('btn-train-next');
     expect(solutionBtn.closest('div')).toBe(analyzeBtn.closest('div'));
     expect(analyzeBtn.closest('div')).toBe(nextBtn.closest('div'));
-    // The row lives in the board column (sibling of the board's relative
-    // wrapper — round 7 wrapped the chessboard for the points-flash overlay),
-    // not in the reveal panel.
+    // The row lives in the board column (sibling of the board+eval-bar row —
+    // round 7 wrapped the chessboard for the points-flash overlay, quick
+    // 260803-iv6 added the eval-bar row around that wrapper), not in the
+    // reveal panel.
     const boardEl = screen.getByTestId('chessboard');
-    expect(solutionBtn.closest('div')?.parentElement).toBe(boardEl.parentElement?.parentElement);
+    expect(solutionBtn.closest('div')?.parentElement).toBe(
+      boardEl.parentElement?.parentElement?.parentElement,
+    );
     // Analyze deep-links one ply BEFORE the mistake (ply 20 -> 19).
     expect(analyzeBtn.getAttribute('href')).toBe(buildGameAnalysisUrl(100, 19));
 
@@ -1206,19 +1209,29 @@ describe('TrainSolveScreen — progress, last move, grading state, engine failur
   });
 
   // ─── Phase 200 (EXPLORE-05): second Stockfish instance + teardown ────────
+  //
+  // Quick 260803-iv6 (Task 1) added a THIRD standalone `useStockfishEngine`
+  // instance — the eval bar's own worker, enabled the moment the verdict
+  // lands (`showEvalBar`) and disabled the moment exploration starts (it
+  // defers to the free-play engine's own top line instead). So the ordering
+  // below is: [0] grading (mount) -> [1] eval bar (verdict lands) -> [2]
+  // free play (exploration starts, [1] terminates in the same commit).
 
-  it('exactly ONE Worker exists before exploration starts, and TWO distinct Worker objects exist after the first post-verdict drop', async () => {
+  it('grading + eval-bar Workers exist once the verdict lands; a THIRD, distinct free-play Worker appears after the first post-verdict drop', async () => {
     await renderScreen(makePuzzle());
     fireEvent.click(screen.getByTestId('btn-train-guess-critical'));
     await act(async () => {
       fireEvent.click(screen.getByTestId('drop-e2e4'));
     });
     await waitFor(() => expect(screen.getByTestId('train-verdict-guess')).not.toBeNull());
-    expect(stubbedWorkerInstances.length).toBe(1);
+    await waitFor(() => expect(stubbedWorkerInstances.length).toBe(2)); // grading + eval bar
 
     fireEvent.click(screen.getByTestId('drop-e2e4')); // starts exploration
-    await waitFor(() => expect(stubbedWorkerInstances.length).toBe(2));
+    await waitFor(() => expect(stubbedWorkerInstances.length).toBe(3));
     expect(stubbedWorkerInstances[0]).not.toBe(stubbedWorkerInstances[1]);
+    expect(stubbedWorkerInstances[1]).not.toBe(stubbedWorkerInstances[2]);
+    // The eval-bar Worker ([1]) is disabled the instant exploration starts.
+    await waitFor(() => expect(stubbedWorkerInstances[1]!.terminated).toBe(true));
   });
 
   it('pressing Solution terminates the exploration Worker while the grading Worker stays alive', async () => {
@@ -1228,10 +1241,11 @@ describe('TrainSolveScreen — progress, last move, grading state, engine failur
       fireEvent.click(screen.getByTestId('drop-e2e4'));
     });
     await waitFor(() => expect(screen.getByTestId('train-verdict-guess')).not.toBeNull());
+    await waitFor(() => expect(stubbedWorkerInstances.length).toBe(2)); // grading + eval bar
     fireEvent.click(screen.getByTestId('drop-e2e4')); // starts exploration
-    await waitFor(() => expect(stubbedWorkerInstances.length).toBe(2));
+    await waitFor(() => expect(stubbedWorkerInstances.length).toBe(3));
     const gradingWorker = stubbedWorkerInstances[0]!;
-    const explorationWorker = stubbedWorkerInstances[1]!;
+    const explorationWorker = stubbedWorkerInstances[2]!;
     expect(explorationWorker.terminated).not.toBe(true);
 
     await waitFor(() => expect(screen.getByTestId('btn-train-solution')).not.toBeNull());
@@ -1262,9 +1276,10 @@ describe('TrainSolveScreen — progress, last move, grading state, engine failur
       fireEvent.click(screen.getByTestId('drop-e2e4'));
     });
     await waitFor(() => expect(screen.getByTestId('train-verdict-guess')).not.toBeNull());
+    await waitFor(() => expect(stubbedWorkerInstances.length).toBe(2)); // grading + eval bar
     fireEvent.click(screen.getByTestId('drop-e2e4')); // starts exploration
-    await waitFor(() => expect(stubbedWorkerInstances.length).toBe(2));
-    const explorationWorker = stubbedWorkerInstances[1]!;
+    await waitFor(() => expect(stubbedWorkerInstances.length).toBe(3));
+    const explorationWorker = stubbedWorkerInstances[2]!;
     expect(explorationWorker.terminated).not.toBe(true);
     await waitFor(() => expect(screen.getByTestId('btn-train-solution')).not.toBeNull());
 
@@ -1536,5 +1551,84 @@ describe('TrainSolveScreen — progress, last move, grading state, engine failur
       ),
     );
     await waitFor(() => expect(board().getAttribute('data-flipped')).toBe('false'));
+  });
+
+  // ─── Quick 260803-iv6 (Task 1): live Stockfish eval bar beside the board ──
+
+  describe('live Stockfish eval bar', () => {
+    it('is absent while the guess buttons are on screen and while grading is in flight, and present with a real evaluation once the reveal opens', async () => {
+      await renderScreen(makePuzzle());
+      expect(screen.queryByTestId('train-eval-bar')).toBeNull();
+
+      fireEvent.click(screen.getByTestId('btn-train-guess-critical'));
+      expect(screen.queryByTestId('train-eval-bar')).toBeNull(); // T-iv6-01: guess committed, no move yet
+
+      // Non-exact move -> a second grading search runs. Checked SYNCHRONOUSLY
+      // (no intervening `await`/`waitFor`) — the FakeWorker's response is
+      // already microtask-queued by the time `fireEvent.click` returns, so an
+      // `await` here would let it drain before this assertion runs.
+      fireEvent.click(screen.getByTestId('drop-d2d4'));
+      expect(screen.getByTestId('train-grading-indicator')).not.toBeNull();
+      expect(screen.queryByTestId('train-eval-bar')).toBeNull(); // T-iv6-01: verdict not landed yet
+
+      await waitFor(() => expect(screen.getByTestId('train-verdict-guess')).not.toBeNull());
+      await waitFor(() => expect(screen.getByTestId('train-eval-bar')).not.toBeNull());
+      // aria-label reflects a real engine evaluation, not the 0.00 neutral
+      // reading a still-idle bar would show.
+      await waitFor(() => {
+        const label = screen.getByTestId('train-eval-bar').getAttribute('aria-label') ?? '';
+        expect(label).not.toBe('Engine evaluation: 0.00');
+      });
+    });
+
+    it('follows the board through reveal-line stepping — the SAME FEN the ChessBoard renders drives the bar', async () => {
+      stubWorker(() => new FakeWorker('e2e4', 'e2e4 e7e5'));
+      await renderScreen(makePuzzle({ last_move_uci: 'd7d5' }));
+      fireEvent.click(screen.getByTestId('btn-train-guess-critical'));
+      await act(async () => {
+        fireEvent.click(screen.getByTestId('drop-e2e4')); // exact match -> played IS best
+      });
+      await waitFor(() => expect(screen.getByTestId('train-eval-bar')).not.toBeNull());
+
+      const board = () => screen.getByTestId('chessboard');
+      const positionAtSolution = board().getAttribute('data-position');
+
+      // Step into the merged your/best box's line — the board moves off the
+      // puzzle position, and the bar must stay mounted and keep tracking it
+      // (never disappear just because the position is no longer the puzzle's).
+      const yourBox = screen.getByTestId('train-line-box-your-move');
+      fireEvent.click(within(yourBox).getByTestId('train-line-stepper-token-0'));
+      await waitFor(() => expect(board().getAttribute('data-position')).not.toBe(positionAtSolution));
+      expect(screen.getByTestId('train-eval-bar')).not.toBeNull();
+      await waitFor(() => {
+        const label = screen.getByTestId('train-eval-bar').getAttribute('aria-label') ?? '';
+        expect(label).not.toBe('Engine evaluation: 0.00');
+      });
+    });
+
+    it('while exploring, the bar reads the free-play engine\'s own top line instead of running a second concurrent search', async () => {
+      let workerCallCount = 0;
+      stubWorker(() => {
+        workerCallCount += 1;
+        // [0] grading, [1] eval bar (verdict lands before exploring), [2] free
+        // play — all three legal from their respective positions.
+        return workerCallCount <= 2 ? new FakeWorker() : new FakeWorker('e7e5', 'e7e5');
+      });
+      await renderScreen(makePuzzle());
+      fireEvent.click(screen.getByTestId('btn-train-guess-critical'));
+      await act(async () => {
+        fireEvent.click(screen.getByTestId('drop-e2e4'));
+      });
+      await waitFor(() => expect(screen.getByTestId('train-eval-bar')).not.toBeNull());
+      await waitFor(() => expect(stubbedWorkerInstances.length).toBe(2)); // grading + eval bar
+
+      fireEvent.click(screen.getByTestId('drop-e2e4')); // starts exploration
+      await waitFor(() => expect(stubbedWorkerInstances.length).toBe(3)); // + free play
+      // The eval bar's OWN worker (index 1) is torn down — exploration never
+      // runs a second concurrent search alongside the free-play engine's.
+      await waitFor(() => expect(stubbedWorkerInstances[1]!.terminated).toBe(true));
+      // The bar keeps rendering, fed by the free-play engine's top line.
+      expect(screen.getByTestId('train-eval-bar')).not.toBeNull();
+    });
   });
 });

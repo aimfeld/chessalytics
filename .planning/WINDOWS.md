@@ -1,10 +1,10 @@
 ---
 schema_version: 1
-open_count: 3
+open_count: 2
 waived_count: 0
-fixed_count: 0
+fixed_count: 1
 total_count: 3
-last_updated: 2026-08-01T13:26:38.534Z
+last_updated: 2026-08-02T15:21:00.103Z
 ---
 
 # Broken Windows Ledger
@@ -17,7 +17,7 @@ last_updated: 2026-08-01T13:26:38.534Z
 |----|-------|------|------|------|-------------|--------|--------|-------------|-------------|
 | 1 | 190 | deviation | frontend/src/components/train/TrainReveal.tsx |  | Tactic opt-in trigger renders generic 'Step through the tactic line' pre-fetch (not motif-named) since the motif key is only available inside the lazily-fetched TacticLinesResponse, gated by T-190-16's opt-in-only fetch rule | open |  | 2026-07-25T20:27:06.762Z |  |
 | 2 | 190 | deviation | frontend/src/components/train/TrainReveal.tsx |  | D-11 miss-reveal sentence omits the illustrative {consequence} clause (e.g. 'losing a rook') since no backend field (SolveResponse/PuzzleRevealResponse) supplies a material-loss description | open |  | 2026-07-25T20:27:06.894Z |  |
-| 3 | 200 | unrun-verify | frontend/src/components/train/TrainReveal.tsx |  | Phase 200 end-of-phase Human Verification Required browser pass (375px mobile + desktop, 15 steps) not yet run — non-blocking for execution per plan 200-04, but a mandatory pre-squash-merge item covering EXPLORE-07/LEGEND-06's pixel half that jsdom cannot verify | open |  | 2026-08-01T13:26:38.534Z |  |
+| 3 | 200 | unrun-verify | frontend/src/components/train/TrainReveal.tsx |  | Phase 200 end-of-phase Human Verification Required browser pass (375px mobile + desktop, 15 steps) not yet run — non-blocking for execution per plan 200-04, but a mandatory pre-squash-merge item covering EXPLORE-07/LEGEND-06's pixel half that jsdom cannot verify | fixed |  | 2026-08-01T13:26:38.534Z | 2026-08-02T15:21:00.103Z |
 
 ````json
 [
@@ -52,10 +52,10 @@ last_updated: 2026-08-01T13:26:38.534Z
     "file": "frontend/src/components/train/TrainReveal.tsx",
     "line": null,
     "description": "Phase 200 end-of-phase Human Verification Required browser pass (375px mobile + desktop, 15 steps) not yet run — non-blocking for execution per plan 200-04, but a mandatory pre-squash-merge item covering EXPLORE-07/LEGEND-06's pixel half that jsdom cannot verify",
-    "status": "open",
+    "status": "fixed",
     "reason": "",
     "recorded_at": "2026-08-01T13:26:38.534Z",
-    "resolved_at": null
+    "resolved_at": "2026-08-02T15:21:00.103Z"
   }
 ]
 ````

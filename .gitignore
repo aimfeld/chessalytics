@@ -236,3 +236,4 @@ reports/benchmark/benchmarks-generated.*
 # the fitted JSON/TS artifacts are committed.
 reports/data/sweep-*/
 reports/data/persona-sweep-*/
+reports/data/persona-recal-*/

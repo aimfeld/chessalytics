@@ -54,6 +54,26 @@ Plan 05 (POOL-08/POOL-10, solve/reveal/settings):
   test_put_settings_rejects_out_of_range_mask_422 / test_settings_403_guest /
   test_session_size_follows_settings : the D-06/D-07/D-08 settings surface
 
+Phase 201 Plan 03 (REMIND-01, D-18) — reminder_enabled/reminder_hour on
+GET/PUT /train/settings:
+- test_get_settings_creates_defaults_on_first_touch (extended) : first-touch
+  reminder_enabled/reminder_hour defaults (False/18)
+- test_put_settings_persists_and_round_trips (extended) : reminder fields
+  round-trip through PUT then GET
+- test_put_settings_rejects_out_of_range_reminder_hour_422 : reminder_hour
+  outside [0, 23] is rejected 422 on both boundaries (T-201-14)
+- test_settings_403_guest (unchanged) : the guest gate still blocks a guest
+  from ever setting reminder_enabled=True (REMIND-07 upstream guard)
+
+Phase 203 Plan 01 (OFFER-03/OFFER-05, D-02) — reminder_intent_at on
+GET/PUT /train/settings:
+- test_put_settings_writes_and_round_trips_reminder_intent_at : a PUT'd
+  instant round-trips through the next GET exactly
+- test_put_settings_rejects_missing_reminder_intent_at_422 : a body omitting
+  the key 422s (full-replace loud-failure semantics)
+- test_put_settings_clears_reminder_intent_at : an explicit null PUT after a
+  non-null PUT reads back null
+
 Phase 191 Plan 01 (PROG-01/PROG-04, D-18) — GET /train/progress:
 - test_progress_returns_200_with_all_seven_fields : an authenticated non-guest
                                                      account gets a full payload
@@ -625,7 +645,14 @@ async def _seed_pool_eligible_since_router(test_engine, user_id: int, since: dat
 
 
 async def _put_settings(
-    token: str, *, timezone: str, weekday_mask: int, puzzles_per_session: int
+    token: str,
+    *,
+    timezone: str,
+    weekday_mask: int,
+    puzzles_per_session: int,
+    reminder_enabled: bool = False,
+    reminder_hour: int = 18,
+    reminder_intent_at: str | None = None,
 ) -> httpx.Response:
     async with httpx.AsyncClient(
         transport=httpx.ASGITransport(app=app), base_url="http://test"
@@ -637,6 +664,9 @@ async def _put_settings(
                 "timezone": timezone,
                 "weekday_mask": weekday_mask,
                 "puzzles_per_session": puzzles_per_session,
+                "reminder_enabled": reminder_enabled,
+                "reminder_hour": reminder_hour,
+                "reminder_intent_at": reminder_intent_at,
             },
         )
 
@@ -1911,7 +1941,18 @@ async def test_get_settings_creates_defaults_on_first_touch(test_engine) -> None
     assert resp.status_code == 200
     # 191-06: defaults changed from (weekday_mask=0, puzzles_per_session=12)
     # to (127, 6) — see app.services.train_scheduler.DEFAULT_WEEKDAY_MASK.
-    assert resp.json() == {"timezone": "UTC", "weekday_mask": 127, "puzzles_per_session": 6}
+    # Phase 201 (REMIND-01): reminder_enabled/reminder_hour default to
+    # False/18 — see DEFAULT_REMINDER_ENABLED/DEFAULT_REMINDER_HOUR.
+    # Phase 203 (OFFER-03): reminder_intent_at defaults to None — a brand-new
+    # user has never expressed install intent.
+    assert resp.json() == {
+        "timezone": "UTC",
+        "weekday_mask": 127,
+        "puzzles_per_session": 6,
+        "reminder_enabled": False,
+        "reminder_hour": 18,
+        "reminder_intent_at": None,
+    }
 
 
 @pytest.mark.asyncio
@@ -1947,13 +1988,21 @@ async def test_put_settings_persists_and_round_trips(test_engine) -> None:
     _user_id, token = await _register_and_login(email)
 
     put_resp = await _put_settings(
-        token, timezone="America/New_York", weekday_mask=0b0010101, puzzles_per_session=8
+        token,
+        timezone="America/New_York",
+        weekday_mask=0b0010101,
+        puzzles_per_session=8,
+        reminder_enabled=True,
+        reminder_hour=7,
     )
     assert put_resp.status_code == 200
     assert put_resp.json() == {
         "timezone": "America/New_York",
         "weekday_mask": 0b0010101,
         "puzzles_per_session": 8,
+        "reminder_enabled": True,
+        "reminder_hour": 7,
+        "reminder_intent_at": None,
     }
 
     get_resp = await _get_settings(token)
@@ -1990,6 +2039,34 @@ async def test_put_settings_rejects_out_of_range_mask_422(test_engine) -> None:
 
 
 @pytest.mark.asyncio
+async def test_put_settings_rejects_out_of_range_reminder_hour_422(test_engine) -> None:
+    """T-201-14: a reminder_hour outside [0, 23] is rejected 422 by Pydantic
+    before any SQL runs, on both boundaries."""
+    email = f"train-settings-badhour-{uuid.uuid4().hex[:8]}@example.com"
+    _user_id, token = await _register_and_login(email)
+
+    too_high = await _put_settings(
+        token,
+        timezone="UTC",
+        weekday_mask=0,
+        puzzles_per_session=12,
+        reminder_enabled=True,
+        reminder_hour=24,
+    )
+    assert too_high.status_code == 422
+
+    too_low = await _put_settings(
+        token,
+        timezone="UTC",
+        weekday_mask=0,
+        puzzles_per_session=12,
+        reminder_enabled=True,
+        reminder_hour=-1,
+    )
+    assert too_low.status_code == 422
+
+
+@pytest.mark.asyncio
 async def test_settings_403_guest(test_engine) -> None:
     """A guest account is rejected 403 on both GET and PUT /train/settings."""
     email = f"train-settings-guest-{uuid.uuid4().hex[:8]}@example.com"
@@ -2001,6 +2078,97 @@ async def test_settings_403_guest(test_engine) -> None:
 
     put_resp = await _put_settings(token, timezone="UTC", weekday_mask=0, puzzles_per_session=12)
     assert put_resp.status_code == 403
+
+
+# ---------------------------------------------------------------------------
+# Phase 203 Plan 01 Task 2 (OFFER-03/OFFER-05, D-02) — reminder_intent_at
+# contract: write-and-round-trip, loud-failure-on-omission, clear-to-null.
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_put_settings_writes_and_round_trips_reminder_intent_at(test_engine) -> None:
+    """A PUT carrying an ISO instant persists it; the next GET echoes it exactly."""
+    email = f"train-settings-intent-{uuid.uuid4().hex[:8]}@example.com"
+    _user_id, token = await _register_and_login(email)
+    # Pydantic serializes a UTC-offset instant back out with a "Z" suffix
+    # (RFC 3339), not "+00:00" — send "Z" so the literal string round-trips
+    # byte-for-byte rather than comparing two equivalent-but-differently-
+    # formatted instants.
+    intent_at = "2026-08-02T12:34:56Z"
+
+    put_resp = await _put_settings(
+        token,
+        timezone="UTC",
+        weekday_mask=0,
+        puzzles_per_session=12,
+        reminder_intent_at=intent_at,
+    )
+    assert put_resp.status_code == 200
+    assert put_resp.json()["reminder_intent_at"] == intent_at
+
+    get_resp = await _get_settings(token)
+    assert get_resp.status_code == 200
+    assert get_resp.json()["reminder_intent_at"] == intent_at
+
+
+@pytest.mark.asyncio
+async def test_put_settings_rejects_missing_reminder_intent_at_422(test_engine) -> None:
+    """A PUT body that omits the reminder_intent_at key entirely returns 422 —
+    the full-replace contract fails loudly rather than silently clearing a
+    previously-set intent (D-02). Calls the endpoint directly rather than via
+    the _put_settings helper, since the helper always supplies the key."""
+    email = f"train-settings-intent-omit-{uuid.uuid4().hex[:8]}@example.com"
+    _user_id, token = await _register_and_login(email)
+
+    async with httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=app), base_url="http://test"
+    ) as client:
+        resp = await client.put(
+            "/api/train/settings",
+            headers={"Authorization": f"Bearer {token}"},
+            json={
+                "timezone": "UTC",
+                "weekday_mask": 0,
+                "puzzles_per_session": 12,
+                "reminder_enabled": False,
+                "reminder_hour": 18,
+                # reminder_intent_at deliberately omitted.
+            },
+        )
+    assert resp.status_code == 422
+
+
+@pytest.mark.asyncio
+async def test_put_settings_clears_reminder_intent_at(test_engine) -> None:
+    """An explicit null PUT after a non-null PUT reads back null — clearing
+    the intent is a legal, deliberate write, not merely the absent-key case
+    covered by the 422 test above."""
+    email = f"train-settings-intent-clear-{uuid.uuid4().hex[:8]}@example.com"
+    _user_id, token = await _register_and_login(email)
+
+    set_resp = await _put_settings(
+        token,
+        timezone="UTC",
+        weekday_mask=0,
+        puzzles_per_session=12,
+        reminder_intent_at="2026-08-02T12:34:56+00:00",
+    )
+    assert set_resp.status_code == 200
+    assert set_resp.json()["reminder_intent_at"] is not None
+
+    clear_resp = await _put_settings(
+        token,
+        timezone="UTC",
+        weekday_mask=0,
+        puzzles_per_session=12,
+        reminder_intent_at=None,
+    )
+    assert clear_resp.status_code == 200
+    assert clear_resp.json()["reminder_intent_at"] is None
+
+    get_resp = await _get_settings(token)
+    assert get_resp.json()["reminder_intent_at"] is None
 
 
 @pytest.mark.asyncio

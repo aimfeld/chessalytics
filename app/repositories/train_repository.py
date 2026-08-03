@@ -51,6 +51,8 @@ from app.services.train_pool import (
 )
 from app.services.train_scheduler import (
     DEFAULT_PUZZLES_PER_SESSION,
+    DEFAULT_REMINDER_ENABLED,
+    DEFAULT_REMINDER_HOUR,
     DEFAULT_TIMEZONE,
     DEFAULT_WEEKDAY_MASK,
     DayOutcome,
@@ -129,6 +131,13 @@ class TrainSettingsRow:
     `streak_count`/`shield_level`/`streak_settled_through`/`pool_eligible_since`
     are the Phase 193 per-day tick snapshot fields (added alongside the
     original D-06/D-07/D-08 fields, not a separate row type).
+
+    `reminder_enabled`/`reminder_hour` (Phase 201, REMIND-01) are user-owned
+    reminder configuration. `reminder_last_sent_on` is the reminder job's own
+    "already sent today" watermark (D-06) -- exposed on this row because the
+    job reads it, never because a client writes it. `reminder_intent_at`
+    (Phase 203, OFFER-03/OFFER-05) is the opposite access pattern -- it IS
+    client-writable, stamped on the iOS install-affordance tap (D-15).
     """
 
     timezone: str
@@ -138,6 +147,10 @@ class TrainSettingsRow:
     shield_level: int
     streak_settled_through: datetime.date | None
     pool_eligible_since: datetime.date | None
+    reminder_enabled: bool
+    reminder_hour: int
+    reminder_last_sent_on: datetime.date | None
+    reminder_intent_at: datetime.datetime | None
 
 
 @dataclass(frozen=True)
@@ -229,6 +242,10 @@ async def get_settings(session: AsyncSession, *, user_id: int) -> TrainSettingsR
         shield_level=row.shield_level,
         streak_settled_through=row.streak_settled_through,
         pool_eligible_since=row.pool_eligible_since,
+        reminder_enabled=row.reminder_enabled,
+        reminder_hour=row.reminder_hour,
+        reminder_last_sent_on=row.reminder_last_sent_on,
+        reminder_intent_at=row.reminder_intent_at,
     )
 
 
@@ -260,6 +277,17 @@ async def get_or_create_settings(session: AsyncSession, *, user_id: int) -> Trai
         shield_level=0,
         streak_settled_through=None,
         pool_eligible_since=None,
+        # REMIND-01 (D-18): the reminder columns default through this same
+        # create-on-first-touch seam, exactly like weekday_mask/
+        # puzzles_per_session. reminder_last_sent_on starts NULL -- no user
+        # has ever been sent a reminder yet.
+        reminder_enabled=DEFAULT_REMINDER_ENABLED,
+        reminder_hour=DEFAULT_REMINDER_HOUR,
+        reminder_last_sent_on=None,
+        # Phase 203 (OFFER-03): a brand-new user has never expressed install
+        # intent -- NULL, same create-on-first-touch seam as every other
+        # default here.
+        reminder_intent_at=None,
     )
     # ON CONFLICT DO NOTHING: a concurrent first-touch may have already
     # inserted the row between the get_settings check above and this insert;
@@ -274,6 +302,10 @@ async def get_or_create_settings(session: AsyncSession, *, user_id: int) -> Trai
         shield_level=0,
         streak_settled_through=None,
         pool_eligible_since=None,
+        reminder_enabled=DEFAULT_REMINDER_ENABLED,
+        reminder_hour=DEFAULT_REMINDER_HOUR,
+        reminder_last_sent_on=None,
+        reminder_intent_at=None,
     )
 
 
@@ -284,6 +316,9 @@ async def upsert_settings(
     timezone: str,
     weekday_mask: int,
     puzzles_per_session: int,
+    reminder_enabled: bool,
+    reminder_hour: int,
+    reminder_intent_at: datetime.datetime | None,
     now_utc: datetime.datetime,
 ) -> TrainSettingsRow:
     """Insert or update one user's `train_settings` row (PUT /train/settings).
@@ -325,12 +360,28 @@ async def upsert_settings(
     `weekday_mask` changes (unchanged from the router's prior documented
     behaviour).
 
+    REMIND-01/T-201-13: `reminder_last_sent_on` is deliberately NOT a
+    parameter here and does not appear in the UPSERT's `values(...)` or
+    `set_` dict below — it is the reminder job's own watermark (D-06),
+    written only by its claim UPDATE (plan 201-04). A settings PUT must
+    never move it, so this function structurally cannot write it.
+
+    Phase 203 (OFFER-03/D-02): `reminder_intent_at` IS a parameter here and
+    DOES appear in both `values(...)` and `set_` — the opposite access
+    pattern from `reminder_last_sent_on`, since it is client-writable on
+    every PUT (unlike the reminder job's own watermark, above).
+
     Args:
         session: AsyncSession. Caller commits.
         user_id: Authenticated user's internal PK (V4: never client-supplied).
         timezone: A validated IANA timezone string.
         weekday_mask: 7-bit scheduled-day mask, 0-127.
         puzzles_per_session: Requested session size, 1-50.
+        reminder_enabled: Whether Train reminder push notifications are on.
+        reminder_hour: The local hour (0-23) reminders fire at.
+        reminder_intent_at: The instant the user last expressed install
+            intent, or None to clear it. Required-but-nullable at the schema
+            layer (D-02) — never defaulted here either.
         now_utc: The current UTC instant. Used ONLY to resolve `today` from
             the OLD (pre-mutation) timezone for the settle-before-mutate
             step — never converted against the NEW timezone being applied.
@@ -344,6 +395,9 @@ async def upsert_settings(
         timezone=timezone,
         weekday_mask=weekday_mask,
         puzzles_per_session=puzzles_per_session,
+        reminder_enabled=reminder_enabled,
+        reminder_hour=reminder_hour,
+        reminder_intent_at=reminder_intent_at,
     )
     stmt = stmt.on_conflict_do_update(
         index_elements=["user_id"],
@@ -351,6 +405,12 @@ async def upsert_settings(
             "timezone": stmt.excluded.timezone,
             "weekday_mask": stmt.excluded.weekday_mask,
             "puzzles_per_session": stmt.excluded.puzzles_per_session,
+            "reminder_enabled": stmt.excluded.reminder_enabled,
+            "reminder_hour": stmt.excluded.reminder_hour,
+            "reminder_intent_at": stmt.excluded.reminder_intent_at,
+            # reminder_last_sent_on deliberately absent — see the module
+            # docstring above (T-201-13): it is the reminder job's own
+            # watermark, never moved by a settings PUT.
         },
     )
     # RETURNING: this UPDATE never touches streak_count/shield_level/
@@ -358,15 +418,25 @@ async def upsert_settings(
     # step above is the only writer of those four columns in this function —
     # so read back whatever the row holds after that settlement (either the
     # brand-new insert's server defaults or an existing row's just-settled
-    # snapshot) rather than fabricating a value here.
+    # snapshot) rather than fabricating a value here. reminder_last_sent_on
+    # is included here too for the same reason: this UPSERT never writes it
+    # (T-201-13), so the returned row must reflect whatever is already
+    # persisted, not a fabricated value.
     stmt = stmt.returning(
         TrainSettings.streak_count,
         TrainSettings.shield_level,
         TrainSettings.streak_settled_through,
         TrainSettings.pool_eligible_since,
+        TrainSettings.reminder_last_sent_on,
     )
     result = await session.execute(stmt)
-    streak_count, shield_level, streak_settled_through, pool_eligible_since = result.one()
+    (
+        streak_count,
+        shield_level,
+        streak_settled_through,
+        pool_eligible_since,
+        reminder_last_sent_on,
+    ) = result.one()
     return TrainSettingsRow(
         timezone=timezone,
         weekday_mask=weekday_mask,
@@ -375,6 +445,10 @@ async def upsert_settings(
         shield_level=shield_level,
         streak_settled_through=streak_settled_through,
         pool_eligible_since=pool_eligible_since,
+        reminder_enabled=reminder_enabled,
+        reminder_hour=reminder_hour,
+        reminder_last_sent_on=reminder_last_sent_on,
+        reminder_intent_at=reminder_intent_at,
     )
 
 
@@ -616,6 +690,10 @@ async def get_progress(
             shield_level=settings_row.shield_level,
             streak_settled_through=settings_row.streak_settled_through,
             pool_eligible_since=stamped_pool_eligible_since,
+            reminder_enabled=settings_row.reminder_enabled,
+            reminder_hour=settings_row.reminder_hour,
+            reminder_last_sent_on=settings_row.reminder_last_sent_on,
+            reminder_intent_at=settings_row.reminder_intent_at,
         )
 
     view = await settle_streak_snapshot(

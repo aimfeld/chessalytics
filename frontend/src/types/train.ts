@@ -125,19 +125,40 @@ export interface PuzzleRevealResponse {
   has_tactic_lines: boolean;
 }
 
-/** Response for GET /train/settings. */
+/** Response for GET /train/settings.
+ *
+ * `reminder_enabled`/`reminder_hour` (Phase 202, PERM-01..04) were exposed by
+ * 201 D-18 but never round-tripped through the frontend until now. The
+ * backend CHECK bound on `reminder_hour` is 0..23 inclusive
+ * (`REMINDER_HOUR_MIN`/`REMINDER_HOUR_MAX` in `app/services/train_scheduler.py`).
+ *
+ * `reminder_intent_at` (Phase 203, OFFER-03/OFFER-05/D-02/D-15) is an ISO
+ * instant string, or null if the user has never expressed install intent.
+ */
 export interface TrainSettingsResponse {
   timezone: string;
   weekday_mask: number;
   puzzles_per_session: number;
+  reminder_enabled: boolean;
+  reminder_hour: number;
+  reminder_intent_at: string | null;
 }
 
 /** Body for PUT /train/settings — a separate shape so a PUT can never smuggle
- * a server-owned field (mirrors the backend's `TrainSettingsUpdate`). */
+ * a server-owned field (mirrors the backend's `TrainSettingsUpdate`).
+ *
+ * This is a full-replace body with exactly one call site
+ * (`useTrainSettings.ts`'s `mutationFn`) — every field here must be sent on
+ * every save, or an existing save 422s the moment the backend requires it.
+ * `reminder_intent_at` is required-but-nullable (D-02) — an ISO instant
+ * string or null, never omitted. */
 export interface TrainSettingsUpdate {
   timezone: string;
   weekday_mask: number;
   puzzles_per_session: number;
+  reminder_enabled: boolean;
+  reminder_hour: number;
+  reminder_intent_at: string | null;
 }
 
 /**

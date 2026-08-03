@@ -247,6 +247,9 @@ async def get_train_settings(
         timezone=settings_row.timezone,
         weekday_mask=settings_row.weekday_mask,
         puzzles_per_session=settings_row.puzzles_per_session,
+        reminder_enabled=settings_row.reminder_enabled,
+        reminder_hour=settings_row.reminder_hour,
+        reminder_intent_at=settings_row.reminder_intent_at,
     )
 
 
@@ -272,6 +275,17 @@ async def update_train_settings(
     values (`train_repository.upsert_settings`'s settle-before-mutate step),
     so a user who reschedules after several inactive weeks has those weeks
     judged by the schedule that was actually in force.
+
+    Phase 201 D-18: this endpoint also round-trips `reminder_enabled`/
+    `reminder_hour`, so the whole reminder configuration is exercisable with
+    curl before Phase 202 builds any UI -- no backend work leaks into that
+    UI phase.
+
+    Phase 203 (OFFER-03/D-02): also round-trips `reminder_intent_at`. It is
+    required-but-nullable on `TrainSettingsUpdate` (not defaulted), so a
+    body that omits the key 422s rather than silently clearing a
+    previously-recorded install intent -- the full-replace contract's
+    loud-failure guarantee.
     """
     _reject_guest(user)
     settings_row = await train_repository.upsert_settings(
@@ -280,6 +294,9 @@ async def update_train_settings(
         timezone=body.timezone,
         weekday_mask=body.weekday_mask,
         puzzles_per_session=body.puzzles_per_session,
+        reminder_enabled=body.reminder_enabled,
+        reminder_hour=body.reminder_hour,
+        reminder_intent_at=body.reminder_intent_at,
         now_utc=now_utc,
     )
     await session.commit()
@@ -287,6 +304,9 @@ async def update_train_settings(
         timezone=settings_row.timezone,
         weekday_mask=settings_row.weekday_mask,
         puzzles_per_session=settings_row.puzzles_per_session,
+        reminder_enabled=settings_row.reminder_enabled,
+        reminder_hour=settings_row.reminder_hour,
+        reminder_intent_at=settings_row.reminder_intent_at,
     )
 
 

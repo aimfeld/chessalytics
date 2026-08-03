@@ -18,6 +18,7 @@ that need to control which game is leased without relying on the recency-weighte
 
 from __future__ import annotations
 
+import logging
 import uuid
 from datetime import datetime, timedelta, timezone
 from typing import Any, cast
@@ -293,13 +294,13 @@ async def _delete_games(
 
 
 # httpx's ASGITransport default client address — what request.client.host, and
-# therefore the heartbeat/Sentry `last_ip`, resolves to under _make_client().
+# therefore the heartbeat/log `last_ip`, resolves to under _make_client().
 _DEFAULT_CLIENT_ADDR: tuple[str, int] = ("127.0.0.1", 123)
 
-# 260725-da3: the Path-C cap message, asserted byte-for-byte by
-# test_atomic_submit_holed_batch_at_cap_stamps_with_sentry_warning. Changing this
-# literal re-groups the ~1602 existing FLAWCHESS-8B Sentry events into a new issue,
-# so the test is a deliberate tripwire, not a tautology.
+# The Path-C cap message prefix, asserted by
+# test_atomic_submit_holed_batch_at_cap_stamps_with_log_warning. 260803: this lane
+# no longer Sentry-captures the cap path (it fired ~30x/hour for an expected
+# outcome — FLAWCHESS-8B noise); the same facts go to logger.warning instead.
 _PATH_C_CAP_MESSAGE: str = (
     "atomic-submit: stamping complete after MAX_EVAL_ATTEMPTS with residual holes"
 )
@@ -2854,18 +2855,23 @@ class TestAtomicSubmitEndpoint:
             await _delete_games(eval_worker_session_maker, [game_id])
 
     @pytest.mark.asyncio
-    async def test_atomic_submit_holed_batch_at_cap_stamps_with_sentry_warning(
+    async def test_atomic_submit_holed_batch_at_cap_stamps_with_log_warning(
         self,
         monkeypatch: pytest.MonkeyPatch,
+        caplog: pytest.LogCaptureFixture,
         eval_worker_session_maker: async_sessionmaker[AsyncSession],
         eval_worker_test_user: int,
     ) -> None:
         """CR-01 (147-REVIEW.md, Path C): the same hole as the Path B test, but
         full_eval_attempts is already at MAX_EVAL_ATTEMPTS - 1 -> the NEXT attempt
         reaches the cap, stamps anyway (D-116-07 no-loop invariant), emits exactly
-        one aggregated Sentry warning (game_id/hole_count/attempts via
-        set_context, never embedded in the message string per CLAUDE.md), and
-        DOES signal flaw completion (stamp_complete=True gates IN-01 the other way).
+        one aggregated logger.warning carrying game_id/hole_count/attempts/worker_id,
+        and DOES signal flaw completion (stamp_complete=True gates IN-01 the other
+        way).
+
+        260803: also a regression guard that this cap path stays OUT of Sentry — it
+        fired ~30x/hour in production for an expected outcome (FLAWCHESS-8B), so the
+        capture_message spy must stay empty.
         """
         import app.routers.eval_remote as eval_remote_module
         from app.models.game import Game
@@ -2878,19 +2884,7 @@ class TestAtomicSubmitEndpoint:
         signal_calls: list[int] = []
         monkeypatch.setattr(eval_remote_module, "_signal_flaw_completion", signal_calls.append)
 
-        set_context_calls: list[tuple[str, Any]] = []
-        set_tag_calls: list[tuple[str, Any]] = []
         capture_message_calls: list[str] = []
-        monkeypatch.setattr(
-            eval_remote_module.sentry_sdk,
-            "set_context",
-            lambda name, ctx: set_context_calls.append((name, ctx)),
-        )
-        monkeypatch.setattr(
-            eval_remote_module.sentry_sdk,
-            "set_tag",
-            lambda key, value: set_tag_calls.append((key, value)),
-        )
         monkeypatch.setattr(
             eval_remote_module.sentry_sdk,
             "capture_message",
@@ -2929,15 +2923,16 @@ class TestAtomicSubmitEndpoint:
         }
 
         try:
-            async with _make_client() as client:
-                resp = await client.post(
-                    _ATOMIC_SUBMIT_URL,
-                    json=payload,
-                    headers={
-                        "X-Operator-Token": _TEST_TOKEN,
-                        "X-Worker-Id": _PATH_C_WORKER_ID,
-                    },
-                )
+            with caplog.at_level(logging.WARNING, logger="app.routers.eval_remote"):
+                async with _make_client() as client:
+                    resp = await client.post(
+                        _ATOMIC_SUBMIT_URL,
+                        json=payload,
+                        headers={
+                            "X-Operator-Token": _TEST_TOKEN,
+                            "X-Worker-Id": _PATH_C_WORKER_ID,
+                        },
+                    )
             assert resp.status_code == 200, f"Expected 200, got {resp.status_code}: {resp.text}"
             body = resp.json()
             assert body["failed_ply_count"] == 1, f"One hole expected: {body}"
@@ -2961,43 +2956,36 @@ class TestAtomicSubmitEndpoint:
                     "Path C must stamp full_pv_completed_at despite the residual hole"
                 )
 
-            cap_events = [m for m in capture_message_calls if "MAX_EVAL_ATTEMPTS" in m]
-            assert len(cap_events) == 1, (
-                f"Exactly one cap Sentry event expected, got {len(cap_events)}: {cap_events}"
-            )
-            eval_ctx = next(
-                (ctx for name, ctx in set_context_calls if name == "eval" and "hole_count" in ctx),
-                None,
-            )
-            assert eval_ctx is not None, (
-                "sentry_sdk.set_context('eval', {...}) with 'hole_count' must be called "
-                "at the cap event — variables in context, not in the message string"
-            )
-            assert eval_ctx.get("game_id") == game_id
-            assert eval_ctx.get("hole_count") == 1
-
-            # 260725-da3 GROUPING GUARD: the message string must stay byte-identical
-            # so all ~1602 existing events keep grouping into FLAWCHESS-8B. A `==`
-            # against the literal, not a substring match — interpolating a variable
-            # would fragment the issue (CLAUDE.md Sentry grouping rule).
-            assert cap_events[0] == _PATH_C_CAP_MESSAGE, (
-                "the Path-C cap message must not change by a single byte (Sentry "
-                f"grouping, FLAWCHESS-8B): {cap_events[0]!r}"
+            # 260803 NOISE GUARD: this expected cap-path outcome must NOT reach
+            # Sentry — it fired ~30x/hour in production (FLAWCHESS-8B, 5550 events)
+            # with zero actionable signal, the same mistake FLAWCHESS-5V taught in
+            # the drain lane. logger.warning stays a breadcrumb, never an event.
+            assert capture_message_calls == [], (
+                "the Path-C cap must not Sentry-capture (FLAWCHESS-8B noise), "
+                f"got {capture_message_calls}"
             )
 
-            # 260725-da3: worker identity on the event. Named only for the LAST
-            # attempter (see the reporter's docstring); the real attribution
-            # mechanism is worker_heartbeats.holes_submitted / plies_leased.
-            assert ("worker_id", _PATH_C_WORKER_ID) in set_tag_calls, (
-                "a filterable worker_id Sentry tag must be set at the cap event, "
-                f"got tags {set_tag_calls}"
+            cap_logs = [
+                r.getMessage()
+                for r in caplog.records
+                if r.name == "app.routers.eval_remote" and "MAX_EVAL_ATTEMPTS" in r.getMessage()
+            ]
+            assert len(cap_logs) == 1, (
+                f"Exactly one cap log warning expected, got {len(cap_logs)}: {cap_logs}"
             )
-            assert eval_ctx.get("worker_id") == _PATH_C_WORKER_ID, (
-                f"worker_id must reach the 'eval' context, got {eval_ctx!r}"
+            cap_log = cap_logs[0]
+            assert cap_log.startswith(_PATH_C_CAP_MESSAGE), (
+                f"unexpected cap log message: {cap_log!r}"
             )
-            assert eval_ctx.get("last_ip") == _DEFAULT_CLIENT_ADDR[0], (
-                f"last_ip must reach the 'eval' context, got {eval_ctx!r}"
-            )
+            # The diagnostic payload that used to live in the Sentry `eval` context.
+            # worker_id names only the LAST attempter (see the reporter's docstring);
+            # the real attribution mechanism is worker_heartbeats.holes_submitted /
+            # plies_leased.
+            assert f"game_id={game_id}" in cap_log, cap_log
+            assert "hole_count=1" in cap_log, cap_log
+            assert f"attempts={MAX_EVAL_ATTEMPTS}" in cap_log, cap_log
+            assert f"worker_id={_PATH_C_WORKER_ID}" in cap_log, cap_log
+            assert f"last_ip={_DEFAULT_CLIENT_ADDR[0]}" in cap_log, cap_log
 
             assert signal_calls == [user_id], (
                 f"Path C (stamp_complete=True) must signal flaw completion, got {signal_calls}"

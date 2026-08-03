@@ -18,7 +18,15 @@
  * exact-match fast path (no second search needed to reach a verdict).
  */
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { act, cleanup, render, screen, waitFor, fireEvent } from '@testing-library/react';
+import {
+  act,
+  cleanup,
+  configure,
+  render,
+  screen,
+  waitFor,
+  fireEvent,
+} from '@testing-library/react';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { MemoryRouter } from 'react-router-dom';
 import { saveTrainRevealCache } from '@/lib/trainRevealCache';
@@ -60,6 +68,17 @@ vi.mock('@/components/board/ChessBoard', () => ({
     </div>
   ),
 }));
+
+// Flake fix: the per-test `}, 15000)` timeouts below were necessary but NOT
+// sufficient. testing-library's async utilities carry their own, independent
+// ceiling — `waitFor` defaults to 1000ms regardless of the Vitest test timeout —
+// so on a loaded machine under the full parallel `vitest run` a single
+// `waitFor` could blow while the test as a whole had 15s of headroom left. That
+// surfaced as a bare `waitFor` stack with no assertion message. This file's
+// slowest test measures ~6s even on an idle box, so give the async utils
+// headroom proportional to the per-test budget.
+const ASYNC_UTIL_TIMEOUT_MS = 10000;
+configure({ asyncUtilTimeout: ASYNC_UTIL_TIMEOUT_MS });
 
 // ─── trainApi mock ──────────────────────────────────────────────────────────
 
@@ -535,18 +554,26 @@ describe('Train solve loop (end-to-end tracer)', () => {
         .getByTestId('train-line-box-your-move')
         .querySelector('[data-testid="train-line-stepper-points"]')?.textContent,
     ).toBe('+0');
-    // No mount grading search for an already-solved puzzle — the engine
-    // handshakes but never receives a `go`.
-    expect(fakeWorker.goCount).toBe(0);
+    // No mount grading search for an already-solved puzzle — the grading
+    // engine handshakes but never receives a `go`. Quick 260803-iv6: the
+    // restored reveal's own eval bar DOES analyze the solved position (it
+    // shares the same gate — `showResultRow` — as the reveal panel itself,
+    // and a restored reveal already has a landed verdict), so `goCount`
+    // reaches exactly 1 from the eval bar's Worker — this harness stubs
+    // every `new Worker()` call to the SAME `fakeWorker` singleton, so a
+    // single shared counter covers every engine instance.
+    await waitFor(() => expect(fakeWorker.goCount).toBe(1));
 
     // Next leaves restore mode: cache cleared, loop continues at the resumed
-    // queue's head, and the fresh puzzle gets its own mount search.
+    // queue's head, and the fresh puzzle gets its own mount search (its own
+    // eval bar stays off — no verdict yet), so the shared counter grows by
+    // exactly one more.
     fireEvent.click(screen.getByTestId('btn-train-next'));
     await waitFor(() => expect(screen.getByTestId('train-guess-prompt')).not.toBeNull());
     expect(screen.getByTestId('chessboard').getAttribute('data-position')).toBe(RESTORE_REMAINING_FEN);
     expect(screen.getByTestId('train-progress').textContent).toBe('2 of 2');
     expect(sessionStorage.getItem('train_reveal_cache')).toBeNull();
-    await waitFor(() => expect(fakeWorker.goCount).toBe(1));
+    await waitFor(() => expect(fakeWorker.goCount).toBe(2));
   }, 15000);
 
   it('drops a cached reveal from a different session and shows the start screen instead', async () => {

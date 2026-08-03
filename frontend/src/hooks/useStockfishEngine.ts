@@ -194,8 +194,31 @@ export function useStockfishEngine({
    * Firing before engine init is safe: analyze() early-returns on
    * !isReadyRef.current and the debouncedFen+isReady effect re-fires once
    * isReady flips true.
+   *
+   * Bug fix (quick 260803-iv6): `debouncedFen` is wrapped in a `{ fen, nonce }`
+   * object (a fresh literal every commit) rather than the bare fen string.
+   * A caller whose `fen` prop OSCILLATES back to a value already held in
+   * `debouncedFen` — e.g. the Train eval bar's FEN briefly revisiting the
+   * puzzle's post-move position when a reveal-line step happens to replay the
+   * exact move that was just played — used to hit React's `Object.is`
+   * same-value bailout on `setDebouncedFen(fen)`: the RESET branch below
+   * (`setEvalCp(null)` etc.) still ran (unconditional), but the debounced
+   * commit that would have re-populated it never re-fired, since the
+   * `[debouncedFen, isReady, analyze]` effect's dependency never actually
+   * changed value. The result was a PERMANENTLY stuck neutral eval for that
+   * FEN. The nonce guarantees a new object reference on every fen-effect run,
+   * so the downstream analyze effect always re-fires when intended,
+   * regardless of value coincidence.
    */
-  const [debouncedFen, setDebouncedFen] = useState<string | null>(null);
+  const debounceNonceRef = useRef(0);
+  const [debouncedTarget, setDebouncedTarget] = useState<{ fen: string | null; nonce: number } | null>(
+    null,
+  );
+  const debouncedFen = debouncedTarget?.fen ?? null;
+  const setDebouncedFen = useCallback((nextFen: string | null) => {
+    debounceNonceRef.current += 1;
+    setDebouncedTarget({ fen: nextFen, nonce: debounceNonceRef.current });
+  }, []);
   useEffect(() => {
     // Bug fix (quick 260731-s0z, FIX-5): stop a still-thinking search for the
     // PREVIOUS position BEFORE this effect's own state clears below. Without
@@ -253,7 +276,9 @@ export function useStockfishEngine({
     // produces only one search.
     const timer = setTimeout(() => setDebouncedFen(fen), RAPID_STEP_DEBOUNCE_MS);
     return () => clearTimeout(timer);
-  }, [fen, clearPendingPvCommit]);
+    // setDebouncedFen is a stable useCallback([]) — listed for exhaustive-deps
+    // without churn.
+  }, [fen, clearPendingPvCommit, setDebouncedFen]);
 
   // ─── Analyze ───────────────────────────────────────────────────────────────
 
@@ -491,10 +516,15 @@ export function useStockfishEngine({
   // Trigger analysis when both (a) debouncedFen is set AND (b) engine is ready.
   // Using isReady as a dep ensures the effect re-fires when the engine finishes
   // its init sequence (even if debouncedFen was already set before init completed).
+  //
+  // Bug fix (quick 260803-iv6): depends on `debouncedTarget` (the nonce-tagged
+  // object, a fresh reference every commit) rather than the derived
+  // `debouncedFen` string — depending on the bare string would reintroduce the
+  // exact same-value bailout `setDebouncedFen` was just fixed to avoid.
   useEffect(() => {
     if (!debouncedFen || !isReady) return;
     analyze(debouncedFen);
-  }, [debouncedFen, isReady, analyze]);
+  }, [debouncedTarget, debouncedFen, isReady, analyze]);
 
   // ─── Tab-hide pause (D-04) ─────────────────────────────────────────────────
 

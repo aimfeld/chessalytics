@@ -1,6 +1,6 @@
 ---
 id: SEED-131
-status: dormant
+status: implemented
 planted: 2026-07-31
 planted_during: /gsd-explore session on Train puzzle solution UX
 trigger_when: next Train-focused milestone/phase planning round, or whenever Train solve-screen UX comes up again

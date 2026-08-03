@@ -745,6 +745,10 @@ maia-inference = [
     { name = "numpy" },
     { name = "onnxruntime" },
 ]
+push = [
+    { name = "cryptography" },
+    { name = "pyjwt" },
+]
 
 [package.metadata]
 requires-dist = [
@@ -779,6 +783,10 @@ dev = [
 maia-inference = [
     { name = "numpy" },
     { name = "onnxruntime", specifier = "==1.20.1" },
+]
+push = [
+    { name = "cryptography", specifier = ">=49.0.0" },
+    { name = "pyjwt", specifier = ">=2.10.1" },
 ]
 
 [[package]]

@@ -32,6 +32,12 @@ import type {
   TrainSettingsUpdate,
   TrainProgressResponse,
 } from '@/types/train';
+import type {
+  DevTriggerReminderResponse,
+  PushSubscribeRequest,
+  PushSubscribeResponse,
+  VapidPublicKeyResponse,
+} from '@/types/push';
 
 /**
  * Central Axios instance.
@@ -276,6 +282,27 @@ export const trainApi = {
     apiClient.put<TrainSettingsResponse>('/train/settings', data).then(r => r.data),
   getProgress: () =>
     apiClient.get<TrainProgressResponse>('/train/progress').then(r => r.data),
+};
+
+// ─── Push API ─────────────────────────────────────────────────────────────────
+
+/**
+ * Deliberately NO `unsubscribe` method. D-07 (Phase 202) keeps the stored
+ * `push_subscriptions` row on toggle-off, so no application code may ever
+ * call `POST /push/unsubscribe` — an exported-but-uncalled method would
+ * invite exactly the regression PERM-04 forbids. Do not add one.
+ *
+ * `devTriggerReminder` is the admin panel's manual delivery test. The backend
+ * 404s it outside `ENVIRONMENT=development` (D-17), so its only caller gates
+ * on `import.meta.env.DEV`.
+ */
+export const pushApi = {
+  getVapidPublicKey: () =>
+    apiClient.get<VapidPublicKeyResponse>('/push/vapid-public-key').then(r => r.data),
+  subscribe: (data: PushSubscribeRequest) =>
+    apiClient.post<PushSubscribeResponse>('/push/subscribe', data).then(r => r.data),
+  devTriggerReminder: () =>
+    apiClient.post<DevTriggerReminderResponse>('/push/dev/trigger-reminder').then(r => r.data),
 };
 
 // ─── Library API ──────────────────────────────────────────────────────────────

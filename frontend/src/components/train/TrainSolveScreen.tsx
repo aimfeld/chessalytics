@@ -45,12 +45,16 @@ import { LoadError } from '@/components/ui/load-error';
 import { TRAIN_BUTTON_CLASS } from '@/components/train/buttonStyles';
 import { TrainReveal } from '@/components/train/TrainReveal';
 import type { TrainRevealStep } from '@/components/train/TrainReveal';
+import { EvalBar } from '@/components/analysis/EvalBar';
 import type { SolveResponse, TrainPuzzle } from '@/types/train';
 import type { UseTrainSessionResult } from '@/hooks/useTrainSession';
 import { useFitBoardToViewport } from '@/hooks/useFitBoardToViewport';
 import { useTrainFreePlay, uciFromDrop } from '@/hooks/useTrainFreePlay';
+import { useStockfishEngine, type StockfishEngineState } from '@/hooks/useStockfishEngine';
+import type { PvLine } from '@/hooks/uciParser';
+import { useWakeLock } from '@/hooks/useWakeLock';
 import type { GradeResult, TrainEngineLine, TrainGradingEngine } from '@/hooks/useTrainGradingEngine';
-import { evalToExpectedScore, sideToMoveFromFen } from '@/lib/liveFlaw';
+import { evalToExpectedScore, sideToMoveFromFen, terminalPositionEval } from '@/lib/liveFlaw';
 import { useMarkPlayActive } from '@/lib/playActive';
 import { playSound, useMuted, setMuted } from '@/lib/sounds';
 import { saveTrainRevealCache } from '@/lib/trainRevealCache';
@@ -75,6 +79,7 @@ import {
   ZONE_SUCCESS,
   TRAIN_POINTS_FG_ON_DARK,
   TRAIN_POINTS_FG_ON_LIGHT,
+  STOCKFISH_ACCENT,
 } from '@/lib/theme';
 
 export interface TrainSolveScreenProps {
@@ -149,6 +154,49 @@ const TRAIN_POINTS_FLASH_COLORS: Record<number, { bg: string; fg: string }> = {
   3: { bg: ZONE_SUCCESS, fg: TRAIN_POINTS_FG_ON_DARK },
 };
 
+/**
+ * Quick 260803-iv6 (Task 1): the horizontal space the eval-bar column plus
+ * its gutter takes out of the board row — 20px `w-5` bar + 8px `gap-2`. This
+ * is the single-bar counterpart of Analysis.tsx's `BOARD_EVAL_BARS_ALLOWANCE_PX`
+ * (which reserves the SAME chrome twice, once per side, for its two bars).
+ */
+const TRAIN_EVAL_BAR_CHROME_PX = 28;
+
+/**
+ * Quick 260803-iv6: synthetic search depth handed to `EvalBar` for a terminal
+ * (checkmate/stalemate) position, so a decisive mate clears `EvalBar`'s own
+ * `depth >= 8` mate-fill gate instead of collapsing to the neutral midpoint.
+ * Same device Analysis.tsx uses for its own terminal eval.
+ */
+const TRAIN_TERMINAL_EVAL_DEPTH = 99;
+
+/**
+ * Quick 260803-iv6: resolves the Train eval bar's reading from whichever
+ * source currently owns the shown position — a terminal (mate/draw) verdict
+ * first (the rules already know the answer), then the free-play engine's own
+ * top line while exploring, else the standalone eval-bar engine. Kept as a
+ * flat, non-exported module-level helper (guard-clause returns, no nesting
+ * past depth 2) so the component body stays shallow per CLAUDE.md.
+ */
+function resolveTrainEvalBarReading(
+  fen: string,
+  isExploring: boolean,
+  freePlayTop: PvLine | null,
+  engine: StockfishEngineState,
+): { evalCp: number | null; evalMate: number | null; depth: number } {
+  const terminal = terminalPositionEval(fen);
+  if (terminal !== null) {
+    return { evalCp: terminal.cp, evalMate: terminal.mate, depth: TRAIN_TERMINAL_EVAL_DEPTH };
+  }
+  if (isExploring) {
+    return {
+      evalCp: freePlayTop?.evalCp ?? null,
+      evalMate: freePlayTop?.evalMate ?? null,
+      depth: freePlayTop?.depth ?? 0,
+    };
+  }
+  return { evalCp: engine.evalCp, evalMate: engine.evalMate, depth: engine.depth };
+}
 
 export function TrainSolveScreen({
   puzzle,
@@ -161,6 +209,13 @@ export function TrainSolveScreen({
   // needs the vertical space (ProtectedLayout reads this flag; same pattern
   // as BotsGame).
   useMarkPlayActive();
+
+  // Keep the phone awake while a puzzle or its reveal is on screen — both are
+  // long reading states with no touch input, so the OS auto-lock timer would
+  // otherwise fire mid-solve. Scoped to this component on purpose: the start
+  // and score screens must NOT hold the lock (a user who walks away there
+  // should get their normal auto-lock).
+  useWakeLock();
 
   // 190.1 UAT round 4: reveal-line stepping plays move sounds — same shared
   // mute preference (and toggle iconography) as bot games.
@@ -207,8 +262,8 @@ export function TrainSolveScreen({
   // the per-puzzle reset effect (EXPLORE-05).
   //
   // The hook owns its OWN Stockfish Worker (EXPLORE-05: a second, independent
-  // useStockfishEngine — never a repurposed useTrainGradingEngine) and grades
-  // every freely played move from it. See useTrainFreePlay's docstring.
+  // engine instance — never a repurposed grading engine) and grades every
+  // freely played move from it. See useTrainFreePlay's docstring.
   //
   // `seedEval` hands it the grading engine's verdict for the puzzle position,
   // so the FIRST free move is graded without waiting for the free-play engine
@@ -526,6 +581,27 @@ export function TrainSolveScreen({
   const showResultRow =
     moveApplied && !isGrading && !gradingError && (verdict !== null || trainSession.isSolveError);
 
+  // Quick 260803-iv6 (Task 1, T-iv6-01): the SAME gate the reveal panel
+  // itself uses — a live engine evaluation shown before the reveal opens
+  // would hand the user the answer to the "one critical move vs several fine
+  // moves" question the puzzle is asking, so the bar cannot appear any
+  // earlier than `showResultRow` does.
+  const showEvalBar = showResultRow;
+  const evalBarFen = showEvalBar && !freePlay.isExploring ? displayFen : null;
+  // Deliberately disabled while exploring: `useTrainFreePlay` already owns a
+  // FEN-driven Stockfish worker for the explored position (see its own
+  // docstring), so this gate keeps exactly one such worker alive at a time
+  // for the shown position (the session-scoped grading worker is a third,
+  // but is idle once the verdict has landed).
+  const evalBarEngine = useStockfishEngine({ fen: evalBarFen, enabled: evalBarFen !== null });
+  const freePlayTopLine = freePlay.pvLines[0] ?? null;
+  const evalBarReading = resolveTrainEvalBarReading(
+    displayFen,
+    freePlay.isExploring,
+    freePlayTopLine,
+    evalBarEngine,
+  );
+
   // 190.1 UAT: the played move's classified quality — derived once here and
   // shared by the board overlay below AND the reveal's line-box header icons
   // (threaded down as a prop), so the two surfaces can never drift.
@@ -829,33 +905,52 @@ export function TrainSolveScreen({
           />
         </div>
       </div>
-      <div ref={boardRef} className="relative w-full">
-        <ChessBoard
-          position={displayFen}
-          flipped={flipped}
-          lastMove={boardLastMove}
-          lastMoveColor={boardLastMoveColor}
-          onPieceDrop={handlePieceDrop}
-          arrows={boardArrows}
-          squareMarkers={boardMarkers}
-          maxWidth={boardMaxWidthPx}
-          id="chessboard"
-        />
-        {/* 190.1 UAT round 7: short "Points: +N" pop over the board as the
-            reveal opens. Centering lives in the keyframes' translate(-50%,-50%)
-            (NOT Tailwind translate utilities — the animation would overwrite
-            them mid-flight); the animation ends at opacity 0 and holds there
-            (fill-mode forwards), so the element lingers invisibly (and
-            pointer-events-none) until the next puzzle clears the state. */}
-        {pointsFlash !== null && (
-          <div
-            className="animate-train-points-pop pointer-events-none absolute left-1/2 top-1/2 z-10 select-none whitespace-nowrap rounded-full px-6 py-2 text-2xl font-bold shadow-lg"
-            style={{ backgroundColor: pointsFlashColors?.bg, color: pointsFlashColors?.fg }}
-            data-testid="train-points-flash"
-          >
-            Points: +{pointsFlash}
-          </div>
-        )}
+      <div ref={boardRef} className="flex w-full flex-row items-stretch gap-2">
+        <div className="relative min-w-0 flex-1">
+          <ChessBoard
+            position={displayFen}
+            flipped={flipped}
+            lastMove={boardLastMove}
+            lastMoveColor={boardLastMoveColor}
+            onPieceDrop={handlePieceDrop}
+            arrows={boardArrows}
+            squareMarkers={boardMarkers}
+            maxWidth={boardMaxWidthPx - TRAIN_EVAL_BAR_CHROME_PX}
+            id="chessboard"
+          />
+          {/* 190.1 UAT round 7: short "Points: +N" pop over the board as the
+              reveal opens. Centering lives in the keyframes' translate(-50%,-50%)
+              (NOT Tailwind translate utilities — the animation would overwrite
+              them mid-flight); the animation ends at opacity 0 and holds there
+              (fill-mode forwards), so the element lingers invisibly (and
+              pointer-events-none) until the next puzzle clears the state. */}
+          {pointsFlash !== null && (
+            <div
+              className="animate-train-points-pop pointer-events-none absolute left-1/2 top-1/2 z-10 select-none whitespace-nowrap rounded-full px-6 py-2 text-2xl font-bold shadow-lg"
+              style={{ backgroundColor: pointsFlashColors?.bg, color: pointsFlashColors?.fg }}
+              data-testid="train-points-flash"
+            >
+              Points: +{pointsFlash}
+            </div>
+          )}
+        </div>
+        {/* Quick 260803-iv6 (Task 1): the slot is ALWAYS present — that is
+            what keeps the board from resizing mid-puzzle when the reveal
+            opens (the board's own maxWidth already reserves this column's
+            width). Only the EvalBar inside it is conditional on showEvalBar. */}
+        <div className="w-5 shrink-0">
+          {showEvalBar && (
+            <EvalBar
+              evalCp={evalBarReading.evalCp}
+              evalMate={evalBarReading.evalMate}
+              depth={evalBarReading.depth}
+              flipped={flipped}
+              accentColor={STOCKFISH_ACCENT}
+              testId="train-eval-bar"
+              className="h-full w-full"
+            />
+          )}
+        </div>
       </div>
       {/* 190.1 UAT round 3: Solution + Analyze + Next directly below the
           board, sharing its width evenly (plus the round-4 mute icon at the

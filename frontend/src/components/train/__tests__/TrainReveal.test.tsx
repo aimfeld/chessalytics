@@ -17,6 +17,7 @@ import { TrainReveal } from '@/components/train/TrainReveal';
 import { TooltipProvider } from '@/components/ui/tooltip';
 import { formatScore } from '@/components/analysis/EngineLines';
 import { formatDateWithYear } from '@/lib/utils';
+import { guessFeedbackProse } from '@/lib/trainGuessLabels';
 import type { GradeResult, TrainEngineLine, TrainGradingEngine } from '@/hooks/useTrainGradingEngine';
 import type { TrainFreePlayState } from '@/hooks/useTrainFreePlay';
 import type { PvLine } from '@/hooks/uciParser';
@@ -413,6 +414,33 @@ describe('TrainReveal', () => {
   it('item_status "mastered" renders the flaw-fixed banner', () => {
     renderReveal({ verdict: makeVerdict({ item_status: 'mastered', due_date: null }) });
     expect(screen.getByTestId('train-flaw-fixed-banner')).not.toBeNull();
+  });
+
+  // Quick 260803-iv6 (Task 2): the banner is the FIRST card in the panel —
+  // above both the Your-move box and the guess card — on a mastered,
+  // non-herring verdict. Asserted via `compareDocumentPosition`, not index
+  // into a hand-built list, so a reordering elsewhere in the panel can't
+  // accidentally make this pass for the wrong reason.
+  it('the flaw-fixed banner is the FIRST card in the panel — above the Your-move box and the guess card', async () => {
+    renderReveal({
+      guess: 'critical',
+      playedMoveUci: 'd2d4',
+      gradeResult: makeGradeResult({
+        correctMove: false,
+        bestLine: makeEngineLine({ moves: ['e2e4'] }),
+        playedLine: makeEngineLine({ moves: ['d2d4'] }),
+      }),
+      verdict: makeVerdict({ item_status: 'mastered', due_date: null }),
+    });
+    const banner = screen.getByTestId('train-flaw-fixed-banner');
+    const yourBox = await waitFor(() => screen.getByTestId('train-line-box-your-move'));
+    const guessCard = screen.getByTestId('train-verdict-guess');
+    expect(
+      banner.compareDocumentPosition(yourBox) & Node.DOCUMENT_POSITION_FOLLOWING,
+    ).toBeTruthy();
+    expect(
+      banner.compareDocumentPosition(guessCard) & Node.DOCUMENT_POSITION_FOLLOWING,
+    ).toBeTruthy();
   });
 
   it('item_status "active" renders neither the banner nor a comeback line', () => {
@@ -1398,6 +1426,130 @@ describe('TrainReveal', () => {
 
     fireEvent.click(screen.getByTestId('train-reveal-glyph-also-fine'));
     expect(onSpotlightChange).toHaveBeenLastCalledWith(null);
+  });
+
+  // ─── Guess-feedback prose (Quick 260803-iv6, Task 3) ──────────────────────
+  // One prose sentence stating what the guess verdict MEANS, in the guess
+  // card body above the Also fine line. The five combinations are LOCKED
+  // wording — exact string equality, never a substring/regex match.
+
+  describe('guessFeedbackProse', () => {
+    it('critical + wrong', () => {
+      expect(guessFeedbackProse('critical', false, true)).toBe('Several moves are fine here.');
+    });
+
+    it('critical + correct', () => {
+      expect(guessFeedbackProse('critical', true, true)).toBe('You identified the one critical move.');
+    });
+
+    it('several + wrong', () => {
+      expect(guessFeedbackProse('several', false, true)).toBe(
+        'One move is clearly better than the alternatives.',
+      );
+    });
+
+    it('several + correct + NOT from a played game (herring)', () => {
+      expect(guessFeedbackProse('several', true, false)).toBe('Indeed, several moves are fine here.');
+    });
+
+    it('several + correct + from a played game', () => {
+      expect(guessFeedbackProse('several', true, true)).toBe('You handled this fine in your game.');
+    });
+  });
+
+  it('renders the exact locked prose sentence in the guess card body, above the Also fine line', () => {
+    renderReveal({
+      guess: 'critical',
+      verdict: makeVerdict({ correct_guess: true, puzzle_type: 'sharp' }),
+      alsoFineMoves: [{ uci: 'd2d4', quality: 'good' }],
+    });
+    const card = screen.getByTestId('train-verdict-guess');
+    const prose = within(card).getByTestId('train-verdict-guess-prose');
+    expect(prose.textContent).toBe('You identified the one critical move.');
+    const alsoFine = within(card).getByTestId('train-reveal-also-fine');
+    expect(
+      prose.compareDocumentPosition(alsoFine) & Node.DOCUMENT_POSITION_FOLLOWING,
+    ).toBeTruthy();
+  });
+
+  it('several + correct + herring (not a played game) renders the "Indeed" sentence', () => {
+    renderReveal({
+      guess: 'several',
+      verdict: makeVerdict({
+        correct_guess: true,
+        puzzle_type: 'herring',
+        item_status: null,
+        due_date: null,
+        streak: null,
+      }),
+    });
+    expect(screen.getByTestId('train-verdict-guess-prose').textContent).toBe(
+      'Indeed, several moves are fine here.',
+    );
+  });
+
+  it('several + correct + a played game (sharp/soft) renders the "in your game" sentence', () => {
+    renderReveal({
+      guess: 'several',
+      verdict: makeVerdict({ correct_guess: true, puzzle_type: 'soft' }),
+    });
+    expect(screen.getByTestId('train-verdict-guess-prose').textContent).toBe(
+      'You handled this fine in your game.',
+    );
+  });
+
+  it('several + wrong renders the "one move is clearly better" sentence', () => {
+    renderReveal({
+      guess: 'several',
+      verdict: makeVerdict({ correct_guess: false, puzzle_type: 'sharp' }),
+    });
+    expect(screen.getByTestId('train-verdict-guess-prose').textContent).toBe(
+      'One move is clearly better than the alternatives.',
+    );
+  });
+
+  it('critical + wrong renders the "several moves are fine" sentence', () => {
+    renderReveal({
+      guess: 'critical',
+      verdict: makeVerdict({ correct_guess: false, puzzle_type: 'sharp' }),
+    });
+    expect(screen.getByTestId('train-verdict-guess-prose').textContent).toBe(
+      'Several moves are fine here.',
+    );
+  });
+
+  it('renders no prose element when guess is null', () => {
+    renderReveal({ guess: null });
+    expect(screen.queryByTestId('train-verdict-guess-prose')).toBeNull();
+  });
+
+  it('the guess card body still mounts (for the prose alone) even with no Also fine alternatives', () => {
+    renderReveal({
+      guess: 'critical',
+      verdict: makeVerdict({ correct_guess: true, puzzle_type: 'sharp' }),
+      alsoFineMoves: [],
+    });
+    expect(screen.getByTestId('train-verdict-guess-prose').textContent).toBe(
+      'You identified the one critical move.',
+    );
+    expect(screen.queryByTestId('train-reveal-also-fine')).toBeNull();
+  });
+
+  // Quick 260803-iv6: the prose must NOT extend the spotlight/cursor-pointer
+  // contract — a guess card that carries prose but no Also-fine alternatives
+  // stays genuinely inert (no hover affordance it hasn't got).
+  it('a prose-only guess card (no Also fine) attaches no spotlight handlers and carries no cursor-pointer class', () => {
+    const onSpotlightChange = vi.fn();
+    renderReveal({
+      guess: 'critical',
+      verdict: makeVerdict({ correct_guess: true, puzzle_type: 'sharp' }),
+      alsoFineMoves: [],
+      onSpotlightChange,
+    });
+    const card = screen.getByTestId('train-verdict-guess');
+    expect(card.className).not.toContain('cursor-pointer');
+    fireEvent.pointerEnter(card);
+    expect(onSpotlightChange).not.toHaveBeenCalled();
   });
 
   // ─── Free-play swap (Phase 200 D-10/D-13/D-14, reworked per Phase 200 UAT) ──

@@ -19,8 +19,16 @@
  */
 
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
-import { act, renderHook, waitFor } from '@testing-library/react';
+import { act, configure, renderHook, waitFor } from '@testing-library/react';
 import type { SweepCandidate } from '@/lib/gemSweep';
+
+// Flake fix: this file's raised per-test timeouts do NOT cover testing-library's
+// async utilities, which have their own independent 1000ms `waitFor` ceiling.
+// Under the full parallel `vitest run` on a loaded box a single waitFor can blow
+// while the test still has seconds of budget left, surfacing as a bare waitFor
+// stack with no assertion message. Give the async utils matching headroom.
+const ASYNC_UTIL_TIMEOUT_MS = 10000;
+configure({ asyncUtilTimeout: ASYNC_UTIL_TIMEOUT_MS });
 
 // ─── Mocks ───────────────────────────────────────────────────────────────────
 

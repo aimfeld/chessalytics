@@ -1264,18 +1264,38 @@ class TestTier3Lottery:
             lichess_evals_at=now,
             played_at=now,
         )
+        # Flake fix: this was 180d, which puts game_weight at 2^-6 + floor =
+        # 0.0256 against the fresh game's 1.01, i.e. the stale game wins only
+        # 2.5% of draws — so "stale is not fully starved" failed outright once
+        # in ~1850 runs (P(zero stale hits in 300) = 5.4e-4). At 90d the weight
+        # is 2^-3 + floor = 0.135; measured, the split is ~91/9, so the stale
+        # game lands ~28 times in 300 (P(zero) ~1e-13) and the 65% majority
+        # threshold below sits ~15 sigma away. Same scenario the docstring
+        # describes — recency dominant, stale still reachable — just no longer
+        # balanced on a knife edge.
         stale_game = await _insert_game(
             queue_session_maker,
             user_id,
             full_evals_completed_at=now,
             full_pv_completed_at=None,
             lichess_evals_at=now,
-            played_at=now - timedelta(days=180),
+            played_at=now - timedelta(days=90),
         )
 
         from app.services.eval_queue_service import _claim_tier3_derived
 
         n_draws = 300
+        # Flake fix: a foreign eligible backlog row anywhere in the DB (a sibling
+        # test's leftover, per project_eval_lottery_test_isolation) used to fail
+        # this test outright, because the user-pick weight has an additive
+        # WEIGHT_FLOOR — any other eligible user wins ~0.5% of draws, which over
+        # 300 draws lands at least once ~77% of the time. That is an environment
+        # condition, not the invariant under test: this test is about the
+        # fresh-vs-stale ES ratio within the pv-backfill lane. So score the ratio
+        # over the draws that landed on OUR pair, and only fail on foreign draws
+        # when they are numerous enough to mean the predicate itself is wrong
+        # (a broken predicate admits rows wholesale, not 0.5% of the time).
+        max_foreign_share = 0.10
         count_fresh = 0
         count_stale = 0
         try:
@@ -1290,10 +1310,12 @@ class TestTier3Lottery:
                         count_stale += 1
 
             total = count_fresh + count_stale
-            assert total == n_draws, (
-                f"Expected every draw to pick one of the two backlog games; got "
-                f"{total}/{n_draws} (a draw picked neither — check for a leaked "
-                "backlog row from a sibling test)."
+            assert total >= n_draws * (1 - max_foreign_share), (
+                f"Our two backlog games should win the overwhelming majority of "
+                f"draws; got {total}/{n_draws} ({total / n_draws:.1%}). More than "
+                f"{max_foreign_share:.0%} foreign draws means the residual "
+                "predicate is admitting rows it should not (a stray leaked row "
+                "from a sibling test costs only ~0.5% of draws)."
             )
             # Random ES key, not a deterministic first-row pick: both games must
             # win at least one draw (neither is a hard-zero-probability loser).
@@ -1302,10 +1324,10 @@ class TestTier3Lottery:
                 f"weighted key; got fresh={count_fresh}, stale={count_stale}"
             )
             # Recency preference still dominant: the freshly-played game wins a
-            # strong majority.
-            assert count_fresh > n_draws * 0.65, (
+            # strong majority of the draws that landed on our pair.
+            assert count_fresh > total * 0.65, (
                 f"Recently-played backlog game should win a strong majority; got "
-                f"{count_fresh}/{n_draws} ({count_fresh / n_draws:.1%})"
+                f"{count_fresh}/{total} ({count_fresh / total:.1%})"
             )
         finally:
             await _delete_games(queue_session_maker, [fresh_game, stale_game])

@@ -1,13 +1,28 @@
 import { Share, X } from 'lucide-react';
+import { useLocation } from 'react-router-dom';
 import { Button } from '@/components/ui/button';
 import { Tooltip } from '@/components/ui/tooltip';
 import {
   Drawer, DrawerContent, DrawerHeader, DrawerTitle, DrawerClose,
 } from '@/components/ui/drawer';
 import { useInstallPrompt } from '@/hooks/useInstallPrompt';
+import { isHandoffActive } from '@/lib/handoffMarker';
 
 export function InstallPromptBanner() {
   const { showAndroidPrompt, showIOSBanner, triggerInstall, dismissAndroid, dismissIOS } = useInstallPrompt();
+  const location = useLocation();
+
+  // D-07/INSTALL-03: neither install surface renders on a Train route — this
+  // is how "push before install" is satisfied structurally, by making it
+  // geometrically impossible for the drawer to sit on top of, or steal a tap
+  // from, the "Remind me" button, the score screen, or the Settings toggle,
+  // rather than with a cross-component ordering arbiter. D-11: a scanned
+  // handoff QR overrides this suppression for that one load — the marker is
+  // an explicit "I came here to install" signal.
+  const suppressedOnTrainRoute = location.pathname.startsWith('/train') && !isHandoffActive();
+  if (suppressedOnTrainRoute) {
+    return null;
+  }
 
   return (
     <>
@@ -19,7 +34,7 @@ export function InstallPromptBanner() {
           </DrawerHeader>
           <div className="px-4 pb-6">
             <p className="text-sm text-muted-foreground mb-4">
-              Add to your home screen for the best experience — faster load, full screen, offline assets.
+              Get faster loads and instant access to your Train puzzles — right from your home screen.
             </p>
             <div className="flex gap-3">
               <Button

@@ -44,6 +44,21 @@ maia-inference = [
     "onnxruntime==1.20.1",
     "numpy",
 ]
+# Isolated group for the backend Web Push send path (Phase 201, PUSH-05). Kept OUT
+# of [project.dependencies] on purpose: that set is shared with the lean remote-worker
+# image (Dockerfile.worker), which must never pull the push stack. Only the backend
+# Dockerfile opts in via `uv sync --group push`.
+#
+# There is no third-party web-push package here: `app/services/push_crypto.py`
+# vendors the ~110 lines we need (MIT, from webpush-py 1.0.6) and depends only on
+# these two, both of which already resolve into the base tree anyway. Declared
+# explicitly because push_crypto imports them directly. See that module's
+# docstring for why vendoring beat the dependency, and
+# tests/services/test_push_crypto.py for the differential test that pinned it.
+push = [
+    "cryptography>=49.0.0",
+    "pyjwt>=2.10.1",
+]
 
 [tool.pytest.ini_options]
 asyncio_mode = "auto"
