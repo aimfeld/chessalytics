@@ -554,18 +554,26 @@ describe('Train solve loop (end-to-end tracer)', () => {
         .getByTestId('train-line-box-your-move')
         .querySelector('[data-testid="train-line-stepper-points"]')?.textContent,
     ).toBe('+0');
-    // No mount grading search for an already-solved puzzle — the engine
-    // handshakes but never receives a `go`.
-    expect(fakeWorker.goCount).toBe(0);
+    // No mount grading search for an already-solved puzzle — the grading
+    // engine handshakes but never receives a `go`. Quick 260803-iv6: the
+    // restored reveal's own eval bar DOES analyze the solved position (it
+    // shares the same gate — `showResultRow` — as the reveal panel itself,
+    // and a restored reveal already has a landed verdict), so `goCount`
+    // reaches exactly 1 from the eval bar's Worker — this harness stubs
+    // every `new Worker()` call to the SAME `fakeWorker` singleton, so a
+    // single shared counter covers every engine instance.
+    await waitFor(() => expect(fakeWorker.goCount).toBe(1));
 
     // Next leaves restore mode: cache cleared, loop continues at the resumed
-    // queue's head, and the fresh puzzle gets its own mount search.
+    // queue's head, and the fresh puzzle gets its own mount search (its own
+    // eval bar stays off — no verdict yet), so the shared counter grows by
+    // exactly one more.
     fireEvent.click(screen.getByTestId('btn-train-next'));
     await waitFor(() => expect(screen.getByTestId('train-guess-prompt')).not.toBeNull());
     expect(screen.getByTestId('chessboard').getAttribute('data-position')).toBe(RESTORE_REMAINING_FEN);
     expect(screen.getByTestId('train-progress').textContent).toBe('2 of 2');
     expect(sessionStorage.getItem('train_reveal_cache')).toBeNull();
-    await waitFor(() => expect(fakeWorker.goCount).toBe(1));
+    await waitFor(() => expect(fakeWorker.goCount).toBe(2));
   }, 15000);
 
   it('drops a cached reveal from a different session and shows the start screen instead', async () => {
