@@ -163,6 +163,54 @@
 | 201. Push Infrastructure & Train Reminders (SEED-132 Phase A, v2.11) | 4/4 | Complete | 2026-08-02 |
 | 202. Reminder Permission UX (SEED-132 Phase A, v2.11) | 2/2 | Complete | 2026-08-02 |
 | 203. PWA Install Re-prompting & Train-Anchored Install Offer (SEED-134, v2.11) | 4/4 | Complete | 2026-08-02 |
+| 204. Push Reminder Delivery Reliability (SEED-135, unassigned) | 0 plans | Not planned | — |
+
+## Active Phases (unassigned milestone)
+
+Phases added after the v2.11 close and not yet assigned to a milestone. `/gsd-new-milestone` folds these into the next milestone section; until then they are active work, not backlog.
+
+### Phase 204: Push Reminder Delivery Reliability
+
+**Goal**: A Train push reminder that fails to arrive stops being permanent and invisible. A device whose subscription the server pruned re-registers itself without spending the one-shot notification permission; a message is no longer discarded by the push service the instant the phone is unreachable; a VAPID key rotation cannot silently kill every device; and a fan-out that delivered to nobody does not consume the day's reminder claim. Backend + frontend, no migration expected.
+
+**Depends on**: Phase 201 (push infrastructure, `push_subscriptions`, the reminder tick), Phase 202 (`ensureDeviceSubscribed` and the PERM-01 single call site this phase must not violate)
+
+**Requirements**: TBD (derive at planning; source is SEED-135 defects D2, D3, D4, D5)
+
+**Source**: [SEED-135](../seeds/SEED-135-push-subscription-prune-is-silent-and-unrecoverable.md) — planted 2026-08-03 from the first real-world reminder after the v2.11 deploy, which never arrived and left no trace anywhere. **D1 (the silent prune) is already fixed** by quick task `260803-nio` (commit `e63c3b7a1`: WARNING log + Sentry capture before the row is deleted, tick summary escalated to WARNING when `pruned > 0 or failed > 0`) and is out of scope here. This phase carries the remaining four.
+
+**Scope**:
+
+- **D2 — nothing ever re-subscribes (frontend, the highest-value fix).** `pushApi.subscribe` has one caller, `ensureDeviceSubscribed`, reachable only from three explicit user gestures. After a server-side prune the two sides desync permanently: `train_settings.reminder_enabled` stays `true`, the UI renders "reminders on", the browser still holds a live `PushSubscription`, and the server has no row. Only a manual off/on toggle recovers. `upsert_subscription` is already `ON CONFLICT DO UPDATE` on `endpoint`, so an idempotent blind re-POST needs no new endpoint.
+- **D5 — `TTL: 0` contradicts D-08 and makes non-delivery invisible.** `push_send.py:56` asks the push service for zero retention while `train_reminder_service.py:146`'s hour gate is deliberately unbounded within the local day. A discarded message returns **201**, so `sent` increments, the row survives, and server state is byte-identical to a real delivery — Android Doze, a Wi-Fi handover, or any blip is silently lost. D-14's fixed `train-reminder` tag + `renotify: false` already collapse a backlog to one notification, which is the entire stated reason for TTL 0.
+- **D4 — `existing ??` never validates the key.** `ensureDeviceSubscribed` reuses whatever `getSubscription()` returns without comparing `existing.options.applicationServerKey` to the current VAPID key, so a rotation would leave every device holding a dead subscription 403-ing forever. Cheap alongside D2. No rotation runbook exists either.
+- **D3 — a failed send burns the day's claim (a decision, not a bug).** `claim_reminder_day` commits before the send by design (D-07, which makes a double-send structurally impossible across a crash mid-fan-out) and D-04 rejects retries, so a 410 costs the whole day. Do not blindly "fix" this.
+
+**Plan-time decisions to resolve explicitly (not default)**:
+
+1. **D3's carve-out**: does releasing the claim when the fan-out delivered to nobody (`attempted == 0`, or `attempted == pruned`) actually violate D-07's invariant? Nothing was delivered and nothing could have been, so there is arguably no double-send window — but D-07 exists precisely to avoid reasoning like that. `PushFanoutResult` already carries `attempted`/`pruned`/`failed`, so no new plumbing is needed either way. **Settle this before writing code; the partial-failure case stays untouched regardless.**
+2. **D5's TTL value**: remaining seconds in the user's local day (consistent with D-08's own bound) versus a flat few hours. The former is exact and matches the stated invariant; the latter is simpler and needs no timezone arithmetic at send time.
+3. **Should a prune flip `reminder_enabled` to `false`** so the UI stops lying? More honest than a silent re-sync, but it discards user intent over a possibly transient device hiccup and costs the user a trip through Settings to recover. The seed's own read is *no, D2 is the better answer* — record the call explicitly rather than leaving it implied.
+4. **Evidence ordering**: a `TTL: 0` discard is indistinguishable from a delivery server-side, so no existing push metric can currently separate "sent and shown" from "sent and dropped". Decide whether D5 (or a client-side delivery ack) must land before any new push metric or Sentry alert rule is trustworthy.
+
+**Success Criteria** (what must be TRUE):
+
+1. A device holding a live `PushSubscription` that the server has pruned re-registers itself without user action — on Train mount or app load when `reminder_enabled` — and a reminder scheduled after that point arrives.
+2. That re-sync path can never call `Notification.requestPermission()` or `PushManager.subscribe()` (PERM-01): it only re-POSTs an **existing** device subscription, and it stays inside `push.ts` as the single call site.
+3. A reminder sent while the phone is briefly unreachable (Doze, screen off, network handover) is still delivered when the device wakes, within the bound the chosen TTL sets, and D-14's tag still collapses any backlog to exactly one notification.
+4. A VAPID public-key change causes devices to detect the mismatch and re-subscribe rather than silently hold a dead subscription; the rotation procedure is written down.
+5. The D3 decision is recorded with its reasoning in the phase's decision log — whether the claim is released on a total-non-delivery fan-out or deliberately left alone — and the D-07 double-send invariant demonstrably still holds either way.
+6. Tests cover the desync-and-recover path end to end, and each production change is mutation-tested (revert it, confirm the test goes red) rather than accepted on symbol presence.
+
+**Non-goals**: retries on transient send failure (D-04 stands); releasing the claim on a *partial* failure; distinguishing "Chrome dropped it" from "user revoked permission" server-side (both surface as 410 — noted in the seed as an open question, not a deliverable here); Sentry alert rules on push health (revisit once D5 makes the metrics trustworthy).
+
+**Plans**: 0 plans
+
+Plans:
+
+- [ ] TBD (run `/gsd-plan-phase 204` to break down)
+
+**UI hint**: minimal — the only user-visible surface is the reminder state no longer lying; no new components expected.
 
 ## Backlog
 

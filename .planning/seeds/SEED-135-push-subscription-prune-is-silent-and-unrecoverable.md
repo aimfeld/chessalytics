@@ -1,8 +1,10 @@
 ---
 id: SEED-135
-status: dormant
+status: promoted
 planted: 2026-08-03
 planted_during: v2.11 post-deploy UAT — operator set a 16:00 reminder on Android Chrome and received nothing
+promoted: 2026-08-03
+promoted_to: Phase 204 (unassigned milestone) — D2, D3, D4, D5. D1 was already closed ahead of the phase by quick task 260803-nio (commit e63c3b7a1) and is out of the phase's scope.
 trigger_when: before the next push-related phase, or immediately if a second user reports missing reminders
 scope: small-medium (independent fixes: backend observability, frontend re-sync, TTL correction; plus one scheduler ordering decision to settle)
 ---
@@ -68,6 +70,11 @@ Fix direction: log at WARNING and capture to Sentry on prune, tagged `source=pus
 with `set_context` carrying the status code and subscription id (never the endpoint — it
 is a bearer capability). Consider promoting the per-tick summary to WARNING, or emitting
 it only when `pruned > 0 or failed > 0`.
+
+**FIXED 2026-08-03** by quick task `260803-nio` (commit `e63c3b7a1`), exactly as described
+above: WARNING log + Sentry capture before the row is deleted, and the per-tick summary
+escalates INFO → WARNING when `pruned > 0 or failed > 0`. D1 is therefore **out of scope
+for Phase 204**, which carries D2–D5 only.
 
 ### D2 — Nothing ever re-subscribes (frontend) ← the one that actually matters
 
