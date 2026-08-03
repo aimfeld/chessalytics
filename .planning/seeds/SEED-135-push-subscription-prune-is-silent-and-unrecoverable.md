@@ -4,7 +4,7 @@ status: dormant
 planted: 2026-08-03
 planted_during: v2.11 post-deploy UAT — operator set a 16:00 reminder on Android Chrome and received nothing
 trigger_when: before the next push-related phase, or immediately if a second user reports missing reminders
-scope: small-medium (three independent fixes: one backend observability, one frontend re-sync, one scheduler ordering decision)
+scope: small-medium (independent fixes: backend observability, frontend re-sync, TTL correction; plus one scheduler ordering decision to settle)
 ---
 
 # SEED-135: A pruned push subscription is silent, permanent, and burns the day's claim
@@ -127,6 +127,37 @@ would therefore leave every device silently holding a dead subscription, with FC
 re-subscribe on mismatch. Cheap to add alongside D2; note the rotation runbook does not
 exist either.
 
+### D5 — `TTL: 0` contradicts D-08 and makes non-delivery invisible
+
+`app/services/push_send.py:49` sends every push with `TTL: 0`, justified as "a reminder is
+worthless once its hour has passed (D-04/D-08 already own lateness), so we do not ask for
+retention."
+
+**That rationale inverts what D-08 actually says.** The hour gate in
+`train_reminder_service.py:146` is deliberately inclusive with *no upper bound* — "the end
+of the user's local day is the only bound, so a deploy at 18:05 or a short outage never
+silently costs a user their reminder." The scheduler is explicitly built to tolerate
+lateness within the local day; `TTL: 0` then tells the push service to discard the message
+outright unless the device is reachable at that exact instant. The two decisions pull in
+opposite directions, and the TTL wins.
+
+`TTL: 0` is zero-tolerance for entirely normal phone states: Android Doze (screen off and
+stationary — the likely state of a phone at a 17:00 reminder), off Wi-Fi mid-handover, or
+any momentary network blip. Note this is *independent* of the app being closed: a closed
+app is the normal, designed case for Web Push (the OS wakes the SW), and is not itself a
+problem.
+
+**The nasty part is that it is indistinguishable from success.** A discarded message
+returns **201**, not an error — so `send_to_subscription` returns `False`, the row
+survives, no log, no Sentry, `ReminderTickSummary.sent` increments. Server state after a
+silent discard is byte-identical to server state after a real delivery. Do not read
+`sent=1` + a surviving subscription row as proof a notification was shown; it isn't.
+
+Fix direction: set TTL to the remaining seconds in the user's local day (consistent with
+D-08's own bound), or simply a few hours. `renotify: false` + the fixed `train-reminder`
+tag already collapse a backlog to one notification (D-14), so retention cannot produce a
+pile-up — the stated reason for TTL 0 is already handled by the tag.
+
 ## Open Questions
 
 - **D3 is a decision, not a fix.** Does releasing the claim on a total-non-delivery fan-out
@@ -136,6 +167,10 @@ exist either.
   arguably more honest than D2's silent re-sync, but it discards user intent over what may
   be a transient device hiccup — and re-enabling costs the user a trip through Settings.
   Probably no; D2 is the better answer. Worth an explicit call.
+- **D5 undermines the evidence base for D1/D3.** Because a `TTL: 0` discard is
+  indistinguishable from a delivery server-side, we currently cannot tell "reminder sent
+  and shown" from "reminder sent and dropped" for *any* past tick. Fixing D5 (or adding a
+  client-side delivery ack) may be a prerequisite for trusting any push metric we add.
 - Is there a cheap way to distinguish "Chrome dropped it" from "user revoked notification
   permission"? Both surface as 410 server-side, but they want opposite UX (silently
   re-register vs. stop nagging).
