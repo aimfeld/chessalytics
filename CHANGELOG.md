@@ -20,6 +20,22 @@ in `YYYY-MM-DD` (Europe/Zurich).
 
 - You can now explore "why didn't my move work" without leaving Train. Once a puzzle is revealed, just move a piece: the cards give way to a Stockfish engine card plus the analysis page's move list, seeded with whatever line you had stepped into. Play freely, click moves inside the engine's lines to play them in, branch off into sidelines that survive as their own blocks, and press Solution (or the card's ×) to return to the full reveal. Next and Analyze leave no residue behind. (Phase 200)
 
+- FlawChess can now remind you on your own devices when it is time for a Train session. It arrives on the days you have scheduled, at the local hour you pick, and never on a day you have already trained. It's off until you turn it on, and nothing in the interface offers it yet — that lands in the next phase. (Phase 201)
+
+- You can now turn those reminders on. Finish a Train session and a "Remind me" button sits beside Done on the score screen; pressing it is the only thing that asks your browser for permission, so the prompt never appears on its own. Once you allow it, the button is replaced in place by a confirmation naming the hour. If you close the prompt without deciding, nothing is recorded and the offer simply stands next time: there is no counter, no second ask, and no path that nudges you toward the one answer your browser will not let you take back. The Train schedule card carries a "Remind me to train" switch and an hour picker that save themselves exactly like the weekday chips, so you can subscribe later even if you declined, and a second device can be added the same way. Turning the switch off silences reminders immediately without giving up the browser permission, so turning it back on is instant. If your browser has notifications blocked, the switch reads off and disabled with the reason rather than pretending it can help. (Phase 202)
+
+- Turning on Train reminders now offers to get FlawChess onto your phone, at the one moment you have clearly said you want them. What you see depends on where you are: on an Android phone, a button that installs the app; on a desktop, a QR code you can scan to open FlawChess on your phone; on an iPhone, a button that records your intent and then shows the two steps Safari requires. If you are already running the installed app, you get nothing extra, which is the point. The QR code also has a permanent home in the Train schedule card, where it becomes an install button on a phone and disappears entirely inside the installed app. (Phase 203)
+
+- If you install FlawChess on an iPhone after asking for reminders, opening it now takes you to Train and offers the permission prompt you never got to answer, instead of leaving you with no way back to it. (Phase 203)
+
+### Fixed
+
+- Declining the install prompt no longer silences it forever. "Not now" now sets it aside for two weeks, and FlawChess will offer at most three times before it stops asking for good. Dismissing it also no longer breaks every later install button in the same visit. (Phase 203)
+
+- If you already run FlawChess from your iPhone home screen, it no longer keeps telling you to add it to your home screen. (Phase 203)
+
+- The install prompt no longer appears while you are training. It stays out of the Train screens entirely, so it can never land on top of the reminder button or steal a tap, unless you got there by scanning the install QR code yourself. (Phase 203)
+
 ## [v2.10] FlawChess Engine Improvements — 2026-08-01
 
 ### Changed

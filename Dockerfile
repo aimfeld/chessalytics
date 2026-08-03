@@ -10,13 +10,14 @@ RUN --mount=type=cache,target=/root/.cache/uv \
     uv sync --locked --no-dev --no-install-project
 
 # Copy source and install project.
-# The opt-in dependency group below pulls the backend-only Maia-3 ONNX inference
-# stack (onnxruntime + numpy). Dockerfile.worker deliberately OMITS it so the
-# remote-worker image stays lean (GEMS-06). The uv cache mount above keeps the
-# onnxruntime wheel cached across builds even when this source layer is invalidated.
+# The opt-in dependency groups below pull the backend-only Maia-3 ONNX inference
+# stack (onnxruntime + numpy) and the backend-only Web Push send stack (webpush +
+# cryptography). Dockerfile.worker deliberately OMITS both so the remote-worker
+# image stays lean (GEMS-06, PUSH-05). The uv cache mount above keeps the wheels
+# cached across builds even when this source layer is invalidated.
 COPY . /app
 RUN --mount=type=cache,target=/root/.cache/uv \
-    uv sync --locked --no-dev --group maia-inference
+    uv sync --locked --no-dev --group maia-inference --group push
 
 FROM python:3.13-slim@sha256:d168b8d9eb761f4d3fe305ebd04aeb7e7f2de0297cec5fb2f8f6403244621664 AS runtime
 WORKDIR /app

@@ -45,6 +45,7 @@ from app.services.train_scheduler import (
     apply_result,
     is_scheduled_day,
     is_session_expired,
+    local_hour,
     local_today,
     next_scheduled_day,
     scheduled_days_per_week,
@@ -249,6 +250,31 @@ class TestLocalToday:
         now_utc = datetime.datetime(2026, 7, 28, 12, 0, 0, tzinfo=datetime.timezone.utc)
         result = local_today("Not/AZone", now_utc)
         assert result == datetime.date(2026, 7, 28)
+
+
+class TestLocalHour:
+    """local_hour: the companion UTC->local-hour conversion (Phase 201, REMIND-02).
+
+    The three fractional-offset zones are exactly what REMIND-02's >=15-minute
+    tick exists to serve -- a coarser tick could skip a user's hour entirely.
+    """
+
+    def test_local_hour_kolkata_plus_5_30_offset(self) -> None:
+        now_utc = datetime.datetime(2026, 7, 28, 10, 0, 0, tzinfo=datetime.timezone.utc)
+        assert local_hour("Asia/Kolkata", now_utc) == 15
+
+    def test_local_hour_kathmandu_plus_5_45_offset(self) -> None:
+        now_utc = datetime.datetime(2026, 7, 28, 10, 0, 0, tzinfo=datetime.timezone.utc)
+        assert local_hour("Asia/Kathmandu", now_utc) == 15
+
+    def test_local_hour_chatham_plus_12_45_offset(self) -> None:
+        # Winter (no NZ DST) so Chatham sits at the plain +12:45 standard offset.
+        now_utc = datetime.datetime(2026, 7, 28, 10, 0, 0, tzinfo=datetime.timezone.utc)
+        assert local_hour("Pacific/Chatham", now_utc) == 22
+
+    def test_local_hour_unrecognised_zone_falls_back_to_utc_without_raising(self) -> None:
+        now_utc = datetime.datetime(2026, 7, 28, 12, 0, 0, tzinfo=datetime.timezone.utc)
+        assert local_hour("Not/AZone", now_utc) == 12
 
 
 class TestIsSessionExpired:

@@ -32,7 +32,9 @@
 import { useEffect, type ReactElement } from 'react';
 import { format, parseISO } from 'date-fns';
 import { Button } from '@/components/ui/button';
-import { TRAIN_CTA_BUTTON_CLASS } from '@/components/train/buttonStyles';
+import { cn } from '@/lib/utils';
+import { TRAIN_BUTTON_CLASS } from '@/components/train/buttonStyles';
+import { useTrainReminderSlot } from '@/components/train/TrainReminderButton';
 import { fireWinConfetti, firePartialConfetti, prefersReducedMotion } from '@/lib/confetti';
 import { playSound, type SoundEvent } from '@/lib/sounds';
 import {
@@ -81,8 +83,13 @@ export interface TrainScoreScreenProps {
   /**
    * Leaves the score screen for the Train landing (SEED-122). The landing is
    * where the streak card lives, so the session ends on the tick it just
-   * earned rather than on a screen with no way forward. Secondary emphasis
-   * (`brand-outline`): it is an exit, not a call to action.
+   * earned rather than on a screen with no way forward.
+   *
+   * Phase 202 D-04 OVERRIDES the original SEED-122 rationale recorded here:
+   * Done used to be `brand-outline` ("it is an exit, not a call to action")
+   * while it was the screen's only button. Now that it shares a row with the
+   * "Remind me" opt-in (`TrainReminderButton`), Done is promoted to
+   * `variant="default"` and moves to the right as the row's primary action.
    */
   onDone: () => void;
 }
@@ -95,6 +102,11 @@ export function TrainScoreScreen({
   const percentage = displaySessionPercentage(score);
   const band = score.max > 0 ? resolveRatingBand(score.total / score.max) : null;
   const bandColor = band !== null ? RATING_BAND_COLOR[band] : null;
+  // Plan 04 UAT round 1: called directly here (not via `<TrainReminderButton />`)
+  // so `control` and `belowRow` can be placed in two different rows — see
+  // TrainReminderButton.tsx's module docstring for why the split exists. One
+  // hook call, one state instance, for this whole screen.
+  const { control: reminderControl, belowRow: reminderBelowRow } = useTrainReminderSlot();
   // Read once per render (not inside the effect) so the badge animation and
   // the confetti decision can never disagree within a single mount.
   const reducedMotion = prefersReducedMotion();
@@ -142,14 +154,31 @@ export function TrainScoreScreen({
       <p className="text-sm font-semibold text-muted-foreground">
         Next session: {format(parseISO(nextSessionDate), 'MMM d, yyyy')}
       </p>
-      <Button
-        variant="brand-outline"
-        className={TRAIN_CTA_BUTTON_CLASS}
-        onClick={onDone}
-        data-testid="btn-train-done"
-      >
-        Done
-      </Button>
+      {/* Phase 202 (D-01..D-04, UI-SPEC E2): Remind me (left, brand-outline)
+          then Done (right, promoted to default/primary). max-w-sm is a
+          planner resolution — the Train page container has no max width, so
+          a bare w-full row would stretch Done across the whole desktop
+          viewport.
+          Plan 04 UAT round 1: the row keeps its two-cell shape no matter
+          which reminder-slot state is active — overflow content (error
+          copy, the iOS instructions, the Android install offer, the QR
+          block) never crowds into this row; it renders on its own full-width
+          line below via `reminderBelowRow`, wrapped in this flex-col so both
+          pieces stay inside the same max-w-sm column. */}
+      <div className="flex w-full max-w-sm flex-col gap-2">
+        <div className="flex w-full items-center gap-2" data-testid="train-score-button-row">
+          {reminderControl}
+          <Button
+            variant="default"
+            className={cn('flex-1', TRAIN_BUTTON_CLASS)}
+            onClick={onDone}
+            data-testid="btn-train-done"
+          >
+            Done
+          </Button>
+        </div>
+        {reminderBelowRow}
+      </div>
     </div>
   );
 }

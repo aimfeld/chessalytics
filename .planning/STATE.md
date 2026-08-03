@@ -2,35 +2,35 @@
 gsd_state_version: 1.0
 milestone: v2.11
 milestone_name: Train Solve Surface & Push Reminders
-current_phase: 200
-current_phase_name: train-solve-screen-board-legend-inline-sideline-exploration
-status: complete
-stopped_at: Phase 200 shipped (squash-merged to main)
-last_updated: "2026-08-01T17:48:43.371Z"
-last_activity: 2026-08-01
-last_activity_desc: Phase 200 shipped — UAT passed, squash-merged to main
+current_phase: 999.1
+current_phase_name: Password Reset (BACKLOG)
+status: planning
+stopped_at: Completed 203-04-PLAN.md (phase 203 complete, 4/4 plans)
+last_updated: "2026-08-02T21:12:57.380Z"
+last_activity: 2026-08-02
+last_activity_desc: Phase 203 complete, transitioned to Phase 999.1
 progress:
-  total_phases: 3
-  completed_phases: 1
-  total_plans: 4
-  completed_plans: 4
-  percent: 33
+  total_phases: 4
+  completed_phases: 4
+  total_plans: 14
+  completed_plans: 14
+  percent: 100
 ---
 
 # Project State: FlawChess
 
 ## Current Position
 
-Phase: 200 (train-solve-screen-board-legend-inline-sideline-exploration) — COMPLETE
-Plan: 4 of 4
-Status: Shipped — verification passed (7/7 criteria), UAT passed (3/3) after 10 fix rounds, squash-merged to main
-Last activity: 2026-08-01 — Completed quick task 260801-tu5: screen wake lock on the Train solve screen
+Phase: 999.1 — Password Reset (BACKLOG)
+Plan: Not started
+Status: Ready to plan
+Last activity: 2026-08-02 — Phase 203 complete, transitioned to Phase 999.1
 
 ## Project Reference
 
-See: .planning/PROJECT.md (updated 2026-08-01 at v2.11 milestone start)
+See: .planning/PROJECT.md (updated 2026-08-02 after Phase 201)
 Core value: Position-precise WDL across openings + endgames + time pressure on top of users' actual chess.com / lichess games, with personalized LLM commentary and an auto-generated opening-strengths/weaknesses report.
-Current focus: **v2.11 Train Solve Surface & Push Reminders — ROADMAP CREATED 2026-08-01.** Three phases (200–202), continuing absolute numbering from v2.10's Phase 199: **200 Train Solve Screen — Board Legend & Inline Sideline Exploration** (SEED-131, frontend-only, no migration), **201 Push Infrastructure & Train Reminders** (SEED-132 Phase A — `push_subscriptions` table, VAPID keypair, ≥15-minute scheduler tick, `push-sw.js` via `workbox.importScripts`, the reminder job), **202 Reminder Permission UX** (SEED-132 Phase A — score-screen pre-prompt + `TrainScheduleSettings` toggle/hour picker). Sourced entirely from two `/gsd-explore` seeds (SEED-131 2026-07-31, SEED-132 Phase A 2026-08-01) carrying locked decisions, rejected alternatives, and per-file anchors — no project-level research pass. SEED-131 sequenced before SEED-132 per a milestone-start decision (frontend-only, no shared files, so the tracks don't compete); within SEED-132, 201 (infra + job) precedes 202 (permission UX) because the UX is meaningless without a scheduler that can send. SEED-132 Phase B (install promotion, iOS push) stays deferred on a BrowserStack dependency and is not a phase here. All 31 requirements (LEGEND-01..06, EXPLORE-01..07, PUSH-01..06, REMIND-01..08, PERM-01..04) mapped 1:1, 100% coverage, no orphans. Next: `/gsd-plan-phase 200`.
+Current focus: **v2.11 Train Solve Surface & Push Reminders — ROADMAP CREATED 2026-08-01.** Three phases (200–202), continuing absolute numbering from v2.10's Phase 199: **200 Train Solve Screen — Board Legend & Inline Sideline Exploration** (SEED-131, frontend-only, no migration), **201 Push Infrastructure & Train Reminders** (SEED-132 Phase A — `push_subscriptions` table, VAPID keypair, ≥15-minute scheduler tick, `push-sw.js` via `workbox.importScripts`, the reminder job), **202 Reminder Permission UX** (SEED-132 Phase A — score-screen pre-prompt + `TrainScheduleSettings` toggle/hour picker). Sourced entirely from two `/gsd-explore` seeds (SEED-131 2026-07-31, SEED-132 Phase A 2026-08-01) carrying locked decisions, rejected alternatives, and per-file anchors — no project-level research pass. SEED-131 sequenced before SEED-132 per a milestone-start decision (frontend-only, no shared files, so the tracks don't compete); within SEED-132, 201 (infra + job) precedes 202 (permission UX) because the UX is meaningless without a scheduler that can send. SEED-132 Phase B (install promotion, iOS push) stays deferred on a BrowserStack dependency and is not a phase here. All 31 requirements (LEGEND-01..06, EXPLORE-01..07, PUSH-01..06, REMIND-01..08, PERM-01..04) mapped 1:1, 100% coverage, no orphans. **Phases 200, 201 and 202 are complete (3/4).** Phase 201 closed 2026-08-02: all 14 PUSH/REMIND requirements Complete, verification `passed`, UAT 5/5 including real Chrome-on-Linux delivery and the D-13 focus-and-navigate click. Carried forward: the API is Bearer-token auth (`localStorage.auth_token`), not cookies — which is exactly why Phase 203's iOS `localStorage` gate is a design blocker and not a detail — and Brave needs "Use Google services for push messaging" enabled or `PushManager.subscribe()` throws `AbortError`. **Phase 203 added 2026-08-02** (SEED-134, full seed in one phase): **PWA Install Re-prompting & Train-Anchored Install Offer** — fixes the self-inflicted permanent install-prompt burn, retimes the first offer behind demonstrated value, turns the reminder-confirmed state into the install/QR upsell surface across five explicit device states, and adds the dismissible desktop→phone QR handoff. This re-admits the SEED-132 Phase B work the milestone opened by deferring; the BrowserStack dependency is now a blocking pre-planning research gate inside the phase. Requirements extended 31 → 46 (INSTALL-01..06, OFFER-01..05, HANDOFF-01..04). Next: `/gsd-plan-phase 203`.
 
 ## Deferred Items
 
@@ -111,6 +111,7 @@ v1.29 Live-Engine Analysis Page shipped 2026-06-29 — 5 phases (136–140), 14 
 
 ### Roadmap Evolution
 
+- Phase 203 added 2026-08-02 (explicit user request via `/gsd-phase 203 @SEED-134`): **PWA Install Re-prompting & Train-Anchored Install Offer** (SEED-134, `/gsd-explore` 2026-08-02), full seed in one phase per the operator's scope call — re-prompting (INSTALL-01..06) + the five-state `TrainReminderButton` offer surface (OFFER-01..05) + the desktop→phone QR handoff (HANDOFF-01..04). **This reverses a milestone-start decision**: v2.11 opened by deferring SEED-132 Phase B out of the milestone on a BrowserStack dependency; SEED-134 supersedes that part of Phase B and the operator chose to extend v2.11 rather than open v2.12 (v2.11 was at 3/3 complete when this was added). The device dependency is now carried inside the phase as a **blocking pre-planning research gate**, not as a reason to defer: whether `localStorage` survives the iOS Safari-tab → standalone transition is a design blocker because the auth token lives there — if it dies, every iOS install lands on a login screen, which changes the iOS design and weakens the QR handoff's case. Second, cheaper gate: empirically confirm in a real Chrome profile that `beforeinstallprompt` re-fires after the user dismissed our `preventDefault()`ed custom UI (undocumented in both directions; the INSTALL-01 cooldown design rests on it). The premise that makes this the right follow-up to 201/202: the reminder lands on whichever device the user happened to be on, usually desktop, where an 18:00 push is queued past the moment it existed to create. The premise that reframes it: install promotion is **not** greenfield — `useInstallPrompt` + `InstallPromptBanner` already ship and are already mounted globally in `App.tsx`; they fail because we burn the prompt ourselves (permanent no-expiry dismissal boolean, worst-possible first-fire timing, `isMobile` gate hiding it from desktop entirely, and `setPromptEvent(null)` on dismiss making the affordance a dead no-op for the rest of an SPA session). Two decisions locked against intuition and not to be re-derived: Android install buys **nothing** for push (install-gates-push is iOS-only), and desktop push does not require an open tab. Rejected for v1: a signed one-time handoff credential in the QR (scannable credential on a monitor = account takeover). Plan-time calls left open on purpose: what counts as "demonstrated value", the cooldown N/M constants, and the QR library (no `qrcode` dependency exists yet — knip-relevant). `phase.add` numbered 203 correctly but appended the section past the archived `<details>` history — moved into the v2.11 block by hand (the known mature-ROADMAP behavior). Requirements extended 31 → 46. Next: `/gsd-plan-phase 203`.
 - v2.11 Train Solve Surface & Push Reminders roadmap created 2026-08-01 — 3 phases (200–202) continuing absolute numbering from v2.10's Phase 199. All 31 v1 requirements (LEGEND-01..06, EXPLORE-01..07, PUSH-01..06, REMIND-01..08, PERM-01..04) mapped 1:1 to exactly one phase — no orphans, no duplicates. Coarse granularity (2-4 phases expected); SEED-131 (medium-large, frontend-only, no migration) became **Phase 200** unsplit per its own self-description. SEED-132 Phase A (18 requirements: push infra + reminder job + permission UX) was split along the seam the milestone-start scope call named as legitimate — backend push infrastructure + the reminder job (**Phase 201**, PUSH-01..06 + REMIND-01..08) vs. the frontend permission UX (**Phase 202**, PERM-01..04) — rather than combined into one phase, because 202 depends on 201 existing for the permission grant to mean anything. Ordering (200 → 201 → 202) is a milestone-start decision carried into the roadmap, not re-derived: SEED-131 first because it shares no source files with SEED-132's tracks. Phase 201 explicitly inherits an unresolved research blocker (the `pywebpush`/`requests` conflict with the CLAUDE.md async-only constraint) as a plan-time decision to resolve before planning, not a milestone-level call — the seed named three candidates without picking one. SEED-132 Phase B (install promotion, iOS push) stays deferred on a BrowserStack dependency and does not appear as a phase. No project-level research pass was run — both source seeds (SEED-131, SEED-132) carried locked decisions and per-file anchors instead. Next: `/gsd-plan-phase 200`.
 - v2.10 FlawChess Engine Improvements roadmap created 2026-07-30 — 6 phases (194–199) continuing absolute numbering from v2.9's Phase 193. All 49 v1 requirements (JANK-01..05, ABORT-01..03, CACHE-01..06, LADDER-01..05, INJECT-01..07, LEAF-01..07, DISPATCH-01..11, RECAL-01..05) mapped 1:1 to exactly one phase per a phase structure the user specified at milestone start (not re-derived by the roadmapper) — no orphans, no duplicates. Sequencing is strictly linear and load-bearing (all five source units edit `dispatchExpansion`): **194** (SEED-126 Phases 2–5, main-thread + cache hygiene, no calibration dependency) → **195** (SEED-126 Phase 1, depth ladder, own calibration recorded before anything else touches leaf evaluation) → **196** (SEED-118, root injection, gated on 194's cache work + 195's throughput win so the disagreement re-run is a cache replay not a recompute) → **197** (SEED-126 Phase 6, Maia WDL leaves, own calibration, re-validates 196's headline number afterward) → **198** (SEED-127, continuous dispatch, the riskiest change in the codebase, rewrites the same `dispatchExpansion` region 196 touched and needs a paper design + cross-AI review before code) → **199** (one combined calibration sweep covering 195+197+198's strength changes together — an accepted trade-off that forfeits per-change attribution). Framing guardrail carried into Phase 194's success criteria: the SAN→UCI conversion and lazy-snapshot work are main-thread jank fixes (~1.4% of search wall clock) — no criterion claims a search-latency win. Also corrected REQUIREMENTS.md's stale "v1 requirements: 42 total" Coverage line to the actual count of 49 (the file undercounted at authoring time; verified by counting unique `**XXX-NN**` IDs). No `/gsd-new-milestone` requirements-gathering research pass was run — the three source seeds (SEED-126, SEED-127, SEED-118) carried the measured data instead. Next: `/gsd-plan-phase 194`.
 - v2.9 Train — Spaced-Repetition Blunder Drills closed 2026-07-30 (Phases 189–193 incl. 190.1; tag v2.9). Two phases were added mid-milestone as corrections rather than polish: **190.1** (inserted from Phase 190's blocking UAT — the reveal mixed stored server evals with live client evals, so displayed numbers could contradict the verdict) and **192** (SEED-120 — the red-herring source was structurally incapable of producing a "several fine moves" position, a correctness defect in Phase 189's design, not a bug in its implementation). **193** (SEED-121) then replaced Phase 191's just-shipped weekly streak wholesale, which was only cheap because streaks had never reached production — verified against `origin/production` before planning. Roadmap + requirements archived to `milestones/v2.9-*`, phases to `milestones/v2.9-phases/`. `override_closeout` on artifacts only; all six phases verified `passed`. Reset for the next milestone.
@@ -567,6 +568,23 @@ v1.29 Live-Engine Analysis Page shipped 2026-06-29 — 5 phases (136–140), 14 
 - [Phase ?]: [Phase 200-03]: explorationPvLines is computed with its staleness guard but void'd (not yet consumed) — wiring it into TrainReveal's UI is plan 200-04's job, outside this plan's own task scope.
 - [Phase ?]: TrainExplorationPanel is a required-prop function component (not inline JSX) so exploration: TrainExplorationState narrows safely inside onMoveClick, sidestepping TS closure-narrowing limits
 - [Phase ?]: Exploration engine card reuses EngineLines/EngineLinesSkeleton/MAX_LINES verbatim from Analysis.tsx, never forked or edited, keeping the two engine cards bit-identical
+- [Phase ?]: Push router tests patch push_send.push_http_client instead of httpx.AsyncClient.post globally, since the router tests drive their own request via httpx.AsyncClient+ASGITransport
+- [Phase ?]: list_subscriptions gained ORDER BY id for deterministic fan-out test ordering
+- [Phase ?]: 201-02: workbox.importScripts single-key addition wires push-sw.js into the Workbox-generated sw.js without touching the hand-tuned generateSW block (diff pinned to exactly 1 insertion, 0 deletions)
+- [Phase ?]: 201-03: reminder_last_sent_on included in upsert_settings' RETURNING but never in values()/set_ — job-owned watermark structurally unwritable by a settings PUT
+- [Phase ?]: 201-03: upsert_settings' new reminder_enabled/reminder_hour kwargs kept required, not defaulted — router always supplies them from the validated body
+- [Phase ?]: 201-04: is_scheduled_day(day,0) returns True (train-anytime identity), contradicting the plan's open_decisions_resolved prose; implemented the plan's required weekday_mask=0-never-fires behavior via an explicit guard instead of the literal 'reuse verbatim' instruction.
+- [Phase ?]: 202-01: D-04 override applied — TrainScoreScreen Done promoted to variant=default, docstring corrected in place per SEED-122 override
+- [Phase ?]: 202-02: Toggle-ON is the one asynchronous exception to the debounced-draft pattern (D-09): reminderEnabled is only written into the draft after ensureDeviceSubscribed() resolves 'subscribed'; toggle-OFF and hour changes ride the existing 600ms debounce unchanged.
+- [Phase ?]: 202-02: D-11 mount-time reconciliation of a per-device block is render-only — no PUT is ever issued to silence account-wide reminder_enabled on behalf of one blocked browser (D-05: block is per-device, setting is account-wide).
+- [Phase ?]: Phase 203-01: reminder_intent_at required-but-nullable on TrainSettingsUpdate (D-02) so an omitting PUT 422s instead of silently clearing install intent
+- [Phase ?]: Phase 203-01: fixed 18 pre-existing upsert_settings call sites in tests/repositories/test_train_repository.py (Rule 3, confirmed at tracer checkpoint)
+- [Phase ?]: D-11 handoff bypass applies symmetrically to both Android and iOS cooldown state in useInstallPrompt, not just Android
+- [Phase ?]: Date.now() cannot be called directly in render under react-hooks/purity; captured via a lazy useState initializer and refreshed inside dismiss handlers
+- [Phase ?]: resolveReminderSlotState (Phase 203, lib/reminderSlotState.ts) is a pure, import-free resolver — subscribed is checked first regardless of platform, fixing a pre-existing bug where a device already subscribed at mount rendered nothing instead of the confirmed span.
+- [Phase ?]: Task execution order deviated from the plan's 1-2-3 listing to 1-3-2: TrainInstallQr (Task 3) was built before rewiring TrainReminderButton (Task 2), because Task 2's action renders <TrainInstallQr /> which did not exist yet — building it first avoided an intermediate broken build between commits.
+- [Phase ?]: [Phase 203-04]: Score-screen reminder slot converged on one invariant across 3 UAT rounds — the row only ever holds a pressable reminder control (confirmed line, error copy, iOS instructions, Android offer, and QR all render below it, per direct user instruction, deviating from D-13/D-15/Phase-202-D-03)
+- [Phase ?]: [Phase 203-04]: Fixed a real useInstallPrompt bug (unguarded window.matchMedia call) surfaced by useReminderResurface becoming an app-wide consumer via ProtectedLayout
 
 ### Pending Todos
 
@@ -677,9 +695,9 @@ Items acknowledged and deferred at **v1.29 milestone close on 2026-06-29** (user
 
 ## Session Continuity
 
-**Stopped at:** Completed 200-04-PLAN.md
+**Stopped at:** Completed 203-04-PLAN.md (phase 203 complete, 4/4 plans)
 
-**Last session:** 2026-08-01T13:28:08.072Z
+**Last session:** 2026-08-02T20:26:28.190Z
 
 **Resume file:**
 
@@ -798,6 +816,16 @@ None
 | Phase 200 P02 | 55min | 2 tasks | 6 files |
 | Phase 200 P03 | 45min | 3 tasks | 8 files |
 | Phase 200 P04 | 35min | 2 tasks | 6 files |
+| Phase 201 P01 | 45min | 3 tasks | 19 files |
+| Phase 201 P02 | 25min | 2 tasks | 4 files |
+| Phase 201 P03 | 15min | 3 tasks | 8 files |
+| Phase 201 P04 | 45min | 3 tasks | 9 files |
+| Phase 202 P01 | 20min | 3 tasks | 13 files |
+| Phase 202 P02 | 35min | 3 tasks | 3 files |
+| Phase 203 P01 | 50min | 2 tasks | 13 files |
+| Phase 203 P02 | 25min | 3 tasks | 10 files |
+| Phase 203 P03 | ~45min | 3 tasks | 10 files |
+| Phase 203 P04 | ~1h20m | 3 tasks | 12 files |
 
 ## Performance Metrics
 

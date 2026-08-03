@@ -107,6 +107,19 @@ class Settings(BaseSettings):
     # Prod sets to the version installed on the server.
     EXPECTED_SF_VERSION: str = ""
 
+    # VAPID keypair for Web Push (Phase 201, PUSH-03, D-03). Empty PUBLIC or
+    # PRIVATE key means push is disabled: GET /push/vapid-public-key 404s,
+    # POST /push/subscribe 503s, no send is ever attempted. Every dev/test/CI
+    # run works with zero setup. Generate a real pair with
+    # `uv run python scripts/gen_vapid_keys.py` and paste into
+    # /opt/flawchess/.env only — never committed, never auto-generated into
+    # the database (that would put the private key in every DB dump).
+    # Rotating the key invalidates every existing subscription (D-02) — rotate
+    # only on key compromise, and truncate push_subscriptions when you do.
+    VAPID_PUBLIC_KEY: str = ""
+    VAPID_PRIVATE_KEY: str = ""
+    VAPID_SUBJECT: str = "push@flawchess.com"
+
     model_config = SettingsConfigDict(env_file=".env", extra="ignore")
 
 

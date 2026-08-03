@@ -34,11 +34,11 @@ from __future__ import annotations
 
 import datetime
 
-from sqlalchemy import CheckConstraint, Date, ForeignKey, SmallInteger, Text
+from sqlalchemy import Boolean, CheckConstraint, Date, DateTime, ForeignKey, SmallInteger, Text
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.models.base import Base
-from app.services.train_scheduler import SHIELD_CAP
+from app.services.train_scheduler import REMINDER_HOUR_MAX, REMINDER_HOUR_MIN, SHIELD_CAP
 
 
 class TrainSettings(Base):
@@ -51,6 +51,10 @@ class TrainSettings(Base):
         CheckConstraint("puzzles_per_session BETWEEN 1 AND 50", name="ck_train_settings_puzzles"),
         CheckConstraint(
             f"shield_level BETWEEN 0 AND {SHIELD_CAP}", name="ck_train_settings_shield_level"
+        ),
+        CheckConstraint(
+            f"reminder_hour BETWEEN {REMINDER_HOUR_MIN} AND {REMINDER_HOUR_MAX}",
+            name="ck_train_settings_reminder_hour",
         ),
     )
 
@@ -88,6 +92,38 @@ class TrainSettings(Base):
     # waiver this implies). Stamped lazily, once, by
     # `app.repositories.train_repository._stamp_pool_eligibility`.
     pool_eligible_since: Mapped[datetime.date | None] = mapped_column(Date, nullable=True)
+    # Phase 201 (REMIND-01, D-06/D-18). reminder_enabled/reminder_hour are
+    # user-owned configuration exposed through GET/PUT /train/settings
+    # (D-18); reminder_hour is a plain bounded local-hour integer (a count,
+    # not a named state), so SmallInteger + range CHECK per CLAUDE.md, never
+    # a native enum -- mirrors shield_level's shape exactly.
+    # reminder_last_sent_on is the D-06 "already sent today" watermark,
+    # structurally identical to streak_settled_through: compared against
+    # train_scheduler.local_today(timezone, now_utc), and written ONLY by
+    # the reminder job's claim UPDATE (plan 201-04) -- never client-writable
+    # (it never appears in TrainSettingsUpdate/TrainSettingsResponse or in
+    # upsert_settings' ON CONFLICT DO UPDATE set_ dict).
+    # The three server_defaults below exist for direct-INSERT parity only;
+    # the real defaults are train_scheduler.DEFAULT_REMINDER_ENABLED/
+    # DEFAULT_REMINDER_HOUR, applied at the application layer in
+    # train_repository.get_or_create_settings, same as weekday_mask/
+    # puzzles_per_session.
+    reminder_enabled: Mapped[bool] = mapped_column(Boolean, nullable=False, server_default="false")
+    reminder_hour: Mapped[int] = mapped_column(SmallInteger, nullable=False, server_default="18")
+    reminder_last_sent_on: Mapped[datetime.date | None] = mapped_column(Date, nullable=True)
+    # Phase 203 (OFFER-03/OFFER-05, D-02/D-15). Opposite access pattern from
+    # reminder_last_sent_on directly above: reminder_intent_at IS
+    # client-writable and appears in BOTH TrainSettingsUpdate and
+    # TrainSettingsResponse. It is stamped when the user expresses install
+    # intent from the iOS install-affordance tap (D-15) -- an instant, not a
+    # calendar watermark, so it uses DateTime(timezone=True) rather than
+    # Date (mirrors the codebase's nullable-instant convention, e.g.
+    # drill_session.py, eval_jobs.py, herring_pool.py -- never a naive
+    # DateTime). No backfill: every row that predates this column reads back
+    # NULL, meaning "no install intent expressed yet."
+    reminder_intent_at: Mapped[datetime.datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
 
 
 __all__ = ["TrainSettings"]

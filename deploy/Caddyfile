@@ -18,7 +18,16 @@ flawchess.com {
         # Service worker and PWA manifest must never be HTTP-cached so browsers
         # detect new deployments immediately on every page load (SW spec requires
         # revalidation, but no-cache enforces it on every request, not just every 24h).
-        @nocache path /sw.js /registerSW.js /manifest.webmanifest
+        # /push-sw.js joins this matcher too: it is pulled in by the generated
+        # service worker via importScripts(), an ordinary sub-resource fetch
+        # subject to normal HTTP caching — unlike the top-level sw.js fetch,
+        # which the SW update algorithm force-revalidates. Without this line
+        # push-sw.js matches none of the matchers below and falls through to
+        # the bare file_server with no explicit Cache-Control, leaving the
+        # browser to apply its own heuristic freshness lifetime — so a deploy
+        # that changes only push-sw.js (leaving the generated sw.js
+        # byte-identical) could go unnoticed on an already-installed device.
+        @nocache path /sw.js /registerSW.js /manifest.webmanifest /push-sw.js
         header @nocache Cache-Control "no-cache"
 
         # Content-hashed assets (Vite output: /assets/index-Bb5kahVl.js etc.) are

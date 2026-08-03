@@ -54,41 +54,65 @@
 
 ### Push Infrastructure (SEED-132 A)
 
-- [ ] **PUSH-01**: A `push_subscriptions` table stores one row per device-per-browser, 1-to-many on `user_id` with a CASCADE FK, so a desktop subscription and a phone subscription expire independently
-- [ ] **PUSH-02**: A subscription returning `410 Gone` (or `404`) from the push service is pruned, so dead endpoints cannot accumulate and silently degrade fan-out
-- [ ] **PUSH-03**: A locally-generated VAPID keypair signs every send; the public key reaches the client at subscribe time, the private key lives only in `/opt/flawchess/.env` and is never committed, and rotation's effect on existing subscriptions is decided and documented rather than discovered
-- [ ] **PUSH-04**: The send path makes no blocking HTTP call from the event loop — CLAUDE.md's async-only constraint holds, and `requests` never enters the request or scheduler path
-- [ ] **PUSH-05**: No push vendor, Firebase SDK, or paid developer-program dependency is added — standard Web Push with VAPID only
-- [ ] **PUSH-06**: `push-sw.js` supplies the `push` and `notificationclick` handlers via `workbox.importScripts`, with the existing `generateSW` workbox config (navigateFallback, globIgnores, wasm/onnx exclusions, `/api/*` NetworkOnly ordering) unchanged
+- [x] **PUSH-01**: A `push_subscriptions` table stores one row per device-per-browser, 1-to-many on `user_id` with a CASCADE FK, so a desktop subscription and a phone subscription expire independently
+- [x] **PUSH-02**: A subscription returning `410 Gone` (or `404`) from the push service is pruned, so dead endpoints cannot accumulate and silently degrade fan-out
+- [x] **PUSH-03**: A locally-generated VAPID keypair signs every send; the public key reaches the client at subscribe time, the private key lives only in `/opt/flawchess/.env` and is never committed, and rotation's effect on existing subscriptions is decided and documented rather than discovered
+- [x] **PUSH-04**: The send path makes no blocking HTTP call from the event loop — CLAUDE.md's async-only constraint holds, and `requests` never enters the request or scheduler path
+- [x] **PUSH-05**: No push vendor, Firebase SDK, or paid developer-program dependency is added — standard Web Push with VAPID only
+- [x] **PUSH-06**: `push-sw.js` supplies the `push` and `notificationclick` handlers via `workbox.importScripts`, with the existing `generateSW` workbox config (navigateFallback, globIgnores, wasm/onnx exclusions, `/api/*` NetworkOnly ordering) unchanged
 
 ### Train Reminders (SEED-132 A)
 
-- [ ] **REMIND-01**: `train_settings` gains `reminder_enabled` and `reminder_hour` (default 18 local), defaulted through `get_or_create_settings` the same way the existing `weekday_mask` and `puzzles_per_session` fields are
-- [ ] **REMIND-02**: The scheduler ticks at least every 15 minutes, so half- and quarter-hour IANA offsets (India +5:30, Nepal +5:45, Chatham +12:45) still land on the user's chosen local hour
-- [ ] **REMIND-03**: A reminder fires only on a day the user's `weekday_mask` schedules, reusing `train_scheduler`'s existing day predicates rather than re-deriving weekday math
-- [ ] **REMIND-04**: A **send-time** check suppresses the reminder if the user already completed a session that day — someone who trains at 17:00 does not get the 18:00 reminder
-- [ ] **REMIND-05**: An "already sent today" guard makes the job idempotent, so a backend restart inside the tick window cannot double-send
-- [ ] **REMIND-06**: A user with several subscribed devices is handled by one explicit, documented fan-out rule (all devices vs. most-recently-active), not by accident
-- [ ] **REMIND-07**: Guests never receive reminders — guest games are never bulk-analysed, so guests have no puzzle pool and no Train feature to be reminded about
-- [ ] **REMIND-08**: A reminder can be triggered on demand in development without waiting for the real clock hour, since the background job has no request context and cannot read the `X-Dev-Clock-Offset-Minutes` header
+- [x] **REMIND-01**: `train_settings` gains `reminder_enabled` and `reminder_hour` (default 18 local), defaulted through `get_or_create_settings` the same way the existing `weekday_mask` and `puzzles_per_session` fields are
+- [x] **REMIND-02**: The scheduler ticks at least every 15 minutes, so half- and quarter-hour IANA offsets (India +5:30, Nepal +5:45, Chatham +12:45) still land on the user's chosen local hour
+- [x] **REMIND-03**: A reminder fires only on a day the user's `weekday_mask` schedules, reusing `train_scheduler`'s existing day predicates rather than re-deriving weekday math
+- [x] **REMIND-04**: A **send-time** check suppresses the reminder if the user already completed a session that day — someone who trains at 17:00 does not get the 18:00 reminder
+- [x] **REMIND-05**: An "already sent today" guard makes the job idempotent, so a backend restart inside the tick window cannot double-send
+- [x] **REMIND-06**: A user with several subscribed devices is handled by one explicit, documented fan-out rule (all devices vs. most-recently-active), not by accident
+- [x] **REMIND-07**: Guests never receive reminders — guest games are never bulk-analysed, so guests have no puzzle pool and no Train feature to be reminded about
+- [x] **REMIND-08**: A reminder can be triggered on demand in development without waiting for the real clock hour, since the background job has no request context and cannot read the `X-Dev-Clock-Offset-Minutes` header
 
 ### Reminder Permission UX (SEED-132 A)
 
-- [ ] **PERM-01**: After the user's first completed session, `TrainScoreScreen` shows a custom in-app pre-prompt with Yes / Not now; only the Yes path calls the real browser permission API
-- [ ] **PERM-02**: "Not now" stays recoverable and does not become a nag — the user is never pushed toward the one browser prompt that can permanently deny them
-- [ ] **PERM-03**: `TrainScheduleSettings` is the permanent fallback surface, hosting the master toggle and hour picker with the same auto-saving behavior as the existing pickers, so a user who declined can subscribe later
-- [ ] **PERM-04**: Turning the master toggle off silences reminders inside FlawChess without touching the browser permission grant, keeping the user reachable
+- [x] **PERM-01**: After the user's first completed session, `TrainScoreScreen` shows a custom in-app pre-prompt with Yes / Not now; only the Yes path calls the real browser permission API
+- [x] **PERM-02**: "Not now" stays recoverable and does not become a nag — the user is never pushed toward the one browser prompt that can permanently deny them
+- [x] **PERM-03**: `TrainScheduleSettings` is the permanent fallback surface, hosting the master toggle and hour picker with the same auto-saving behavior as the existing pickers, so a user who declined can subscribe later
+- [x] **PERM-04**: Turning the master toggle off silences reminders inside FlawChess without touching the browser permission grant, keeping the user reachable
+
+### Install Re-prompting (SEED-134 A)
+
+- [x] **INSTALL-01**: The permanent dismissal boolean in `useInstallPrompt` is replaced by a timestamped cooldown plus an attempt cap — re-offer after N days, at most M times, then stop for good — with N and M as named constants, not literals
+- [x] **INSTALL-02**: The first install offer fires behind a demonstrated-value signal rather than the instant `beforeinstallprompt` arrives, so each prompt is worth more and each dismissal costs less [Superseded by Phase 203 CONTEXT.md D-03: the drawer keeps firing on first mobile arrival — arrival-timing is kept for reach; the demonstrated-value retiming is deferred and is the first lever to revisit if drawer conversion turns out poor.]
+- [x] **INSTALL-03**: Where push and install are both available on the same device (Android tabbed), the permission grant comes first and the install offer second — the non-renewable ask is never spent on the re-offerable one
+- [x] **INSTALL-04**: Dismissal keeps the captured `BeforeInstallPromptEvent` and moves only the cooldown state; the event is nulled solely after a successful install, so a later install affordance in the same SPA session is a live prompt rather than a dead no-op
+- [x] **INSTALL-05**: `isStandalone` ORs `navigator.standalone` with the `display-mode: standalone` media query, so an already-installed iOS user stops being shown the Add-to-Home-Screen banner permanently
+- [x] **INSTALL-06**: No install copy promises notifications on any platform except iOS — install gates push on iOS only; on Android, Chrome delivers push to an ordinary tabbed site
+
+### Train-Anchored Install Offer (SEED-134 B, D)
+
+- [x] **OFFER-01**: `TrainReminderButton` resolves five explicit, named states from `available` / `isStandalone` / `isIOS` plus subscription state, rather than the single state it has today
+- [x] **OFFER-02**: The confirmed reminder state is the upsell surface — QR offer on desktop, install offer on Android tabbed — placed at peak receptiveness and at zero cost to ignore
+- [x] **OFFER-03**: On iOS tabbed, where the capability guard renders `null` today and the user sees no button at all, the slot carries an install affordance routing into the existing Share → Add-to-Home-Screen instructions (203-01 landed the `reminder_intent_at` backend substrate this depends on; the actual iOS install affordance UI is Plan 04, per ROADMAP.md's per-plan breakdown)
+- [x] **OFFER-04**: Any standalone unsubscribed user grants and reaches the confirmed state with no install offer attached
+- [x] **OFFER-05**: After an iOS install, the reminder prompt is proactively re-surfaced on the next standalone launch, closing SEED-132's install → later visit → permission two-session cliff instead of hoping the user hunts for the button (203-01 landed the `reminder_intent_at` backend substrate this depends on; the re-surface banner itself is Plan 04, per ROADMAP.md's per-plan breakdown)
+
+### Desktop→Phone Handoff (SEED-134 C)
+
+- [x] **HANDOFF-01**: The QR encodes a plain URL carrying a `?src=handoff` marker and no credential of any kind — a signed one-time handoff token is rejected for v1, because a scannable credential rendered on a monitor is account takeover by screen-share, shoulder-surf, or photograph
+- [x] **HANDOFF-02**: The scanning phone logs in through the existing Google SSO path, lands on `/train`, and the `?src=handoff` marker drives the install and reminder flow immediately
+- [x] **HANDOFF-03**: The QR is dismissible and never blocking — a desktop-only user without a smartphone, or without the wish to use one, can ignore it permanently [Per Phase 203 CONTEXT.md D-13: satisfied structurally, not via a dismiss control or a persisted flag — the QR only ever appears in the one-session confirmed state (score screen) or as a row the user navigated to (Settings), so ignoring it costs nothing and no state needs to be stored.]
+- [x] **HANDOFF-04**: `TrainScheduleSettings` carries a permanent, non-nagging home for the QR offer alongside the toggle and hour picker
 
 ## Future Requirements (deferred)
 
-**SEED-132 Phase B — install promotion + iOS push** (stays in `.planning/seeds/SEED-132-*.md`, gated on BrowserStack):
+**SEED-132 Phase B — install promotion + iOS push**: superseded on 2026-08-02 by SEED-134 and promoted into **Phase 203** (INSTALL-01..06, OFFER-01..05, HANDOFF-01..04 above). The BrowserStack dependency that originally justified deferring it is now carried as Phase 203's blocking pre-planning research gate rather than as a reason to defer the work: whether `localStorage` survives the iOS Safari-tab → standalone transition is a design blocker, not a verification detail, because the auth token lives there and a PWA that launches logged out changes the iOS design entirely.
 
-- Desktop→phone QR handoff (a desktop page cannot install anything on a phone, and there is no SMS channel, so QR is the only option)
-- Android `beforeinstallprompt` install nudge, framed as "train on the go" — **not** "so we can notify you", which would bait a permission desktop users have already granted
-- The iOS path: Safari has no `beforeinstallprompt`, so installation can only be explained ("tap Share → Add to Home Screen") and the permission prompt is unavailable until the user is in standalone mode — install → later visit → permission, two sessions minimum with a drop-off cliff between them
-- A dismissal-persistence rule so the install nudge cannot become a nag
+**Do not invert the order** — promotion-first would have shipped an install nag promising a notification feature that did not exist yet. Phase 201/202 shipped that feature first, which is what makes Phase 203 orderly.
 
-**Do not invert the order** — promotion-first would ship an install nag promising a notification feature that does not exist yet.
+Still deferred out of Phase 203:
+
+- A signed one-time handoff credential in the QR URL (SEED-134 decision C.9) — would convert far better, but needs short TTL, single-use, and rate limiting, and should be scoped as an auth change rather than a UX detail
+- Whether the Train solve loop (client-side Stockfish WASM grading) holds up on a mid-range phone — worth a measurement before promoting mobile hard, but not a gate on this phase
 
 ## Out of Scope
 
@@ -119,30 +143,45 @@
 | EXPLORE-05 | Phase 200 | Complete |
 | EXPLORE-06 | Phase 200 | Complete |
 | EXPLORE-07 | Phase 200 | Pending (375px browser pass unrun) |
-| PUSH-01 | Phase 201 | Pending |
-| PUSH-02 | Phase 201 | Pending |
-| PUSH-03 | Phase 201 | Pending |
-| PUSH-04 | Phase 201 | Pending |
-| PUSH-05 | Phase 201 | Pending |
-| PUSH-06 | Phase 201 | Pending |
-| REMIND-01 | Phase 201 | Pending |
-| REMIND-02 | Phase 201 | Pending |
-| REMIND-03 | Phase 201 | Pending |
-| REMIND-04 | Phase 201 | Pending |
-| REMIND-05 | Phase 201 | Pending |
-| REMIND-06 | Phase 201 | Pending |
-| REMIND-07 | Phase 201 | Pending |
-| REMIND-08 | Phase 201 | Pending |
-| PERM-01 | Phase 202 | Pending |
-| PERM-02 | Phase 202 | Pending |
-| PERM-03 | Phase 202 | Pending |
-| PERM-04 | Phase 202 | Pending |
+| PUSH-01 | Phase 201 | Complete |
+| PUSH-02 | Phase 201 | Complete |
+| PUSH-03 | Phase 201 | Complete |
+| PUSH-04 | Phase 201 | Complete |
+| PUSH-05 | Phase 201 | Complete |
+| PUSH-06 | Phase 201 | Complete |
+| REMIND-01 | Phase 201 | Complete |
+| REMIND-02 | Phase 201 | Complete |
+| REMIND-03 | Phase 201 | Complete |
+| REMIND-04 | Phase 201 | Complete |
+| REMIND-05 | Phase 201 | Complete |
+| REMIND-06 | Phase 201 | Complete |
+| REMIND-07 | Phase 201 | Complete |
+| REMIND-08 | Phase 201 | Complete |
+| PERM-01 | Phase 202 | Complete |
+| PERM-02 | Phase 202 | Complete |
+| PERM-03 | Phase 202 | Complete |
+| PERM-04 | Phase 202 | Complete |
+| INSTALL-01 | Phase 203 | Complete |
+| INSTALL-02 | Phase 203 | Complete |
+| INSTALL-03 | Phase 203 | Complete |
+| INSTALL-04 | Phase 203 | Complete |
+| INSTALL-05 | Phase 203 | Complete |
+| INSTALL-06 | Phase 203 | Complete |
+| OFFER-01 | Phase 203 | Complete |
+| OFFER-02 | Phase 203 | Complete |
+| OFFER-03 | Phase 203 | Complete |
+| OFFER-04 | Phase 203 | Complete |
+| OFFER-05 | Phase 203 | Complete |
+| HANDOFF-01 | Phase 203 | Complete |
+| HANDOFF-02 | Phase 203 | Complete |
+| HANDOFF-03 | Phase 203 | Complete |
+| HANDOFF-04 | Phase 203 | Complete |
 
 **Coverage:**
 
-- v1 requirements: 31 total
-- Mapped to phases: 31/31
+- v1 requirements: 46 total (31 from the milestone-start pass, +15 added 2026-08-02 with Phase 203)
+- Mapped to phases: 46/46
 - Unmapped: 0
 
 ---
-*Requirements defined: 2026-08-01*
+*Requirements defined: 2026-08-01; extended 2026-08-02 (Phase 203, SEED-134)*

@@ -160,8 +160,9 @@
 | 198. mctsSearch continuous dispatch (SEED-127, v2.10) | 5/8 | Closed (measured, not shipped — operator risk judgement) | 2026-07-31 |
 | 199. Bot re-calibration sweep + strength curve refit (v2.10) | 7/7 | Complete (parity HOLDS, no calibration artifact refit) | 2026-08-01 |
 | 200. Train Solve Screen — Board Legend & Inline Sideline Exploration (SEED-131, v2.11) | 4/4 | Complete | 2026-08-01 |
-| 201. Push Infrastructure & Train Reminders (SEED-132 Phase A, v2.11) | 0/TBD | Not started | - |
-| 202. Reminder Permission UX (SEED-132 Phase A, v2.11) | 0/TBD | Not started | - |
+| 201. Push Infrastructure & Train Reminders (SEED-132 Phase A, v2.11) | 4/4 | Complete | 2026-08-02 |
+| 202. Reminder Permission UX (SEED-132 Phase A, v2.11) | 2/2 | Complete | 2026-08-02 |
+| 203. PWA Install Re-prompting & Train-Anchored Install Offer (SEED-134, v2.11) | 4/4 | Complete | 2026-08-02 |
 
 ## v2.10 FlawChess Engine Improvements (In Progress)
 
@@ -448,7 +449,7 @@ observe early results". Plan 05 is deliberately concurrent with plan 06's multi-
 
 ## v2.11 Train Solve Surface & Push Reminders (In Progress)
 
-Make the Train solve screen readable and self-contained, then close the retention loop with web push reminders on the days the scheduler actually picked. Sourced from two `/gsd-explore` sessions: SEED-131 (solve-screen legend + inline sideline exploration, 2026-07-31) and SEED-132 Phase A (push notifications, 2026-08-01); no project-level research pass was run — both seeds carry locked decisions, named rejected alternatives, and per-file implementation anchors that stand in for it. Sequencing is a milestone-start decision, not re-derived here: **SEED-131 ships first (Phase 200)** because it is frontend-only with no migration and no external dependency, so **SEED-132's phases (201, 202)** run afterward without competing for the same files — the two tracks share no source files. Within SEED-132, Phase 201 (push infrastructure + the reminder job) must land before Phase 202 (the permission UX) can mean anything — there is no point prompting a user to enable reminders that no scheduler can yet send. SEED-132 Phase B (install promotion, desktop→phone QR handoff, Android `beforeinstallprompt`, the iOS install-then-permission path) is deliberately deferred out of this milestone on a BrowserStack dependency the operator does not have, and does not appear as a phase here — the seed stays open in `.planning/seeds/`.
+Make the Train solve screen readable and self-contained, then close the retention loop with web push reminders on the days the scheduler actually picked. Sourced from two `/gsd-explore` sessions: SEED-131 (solve-screen legend + inline sideline exploration, 2026-07-31) and SEED-132 Phase A (push notifications, 2026-08-01); no project-level research pass was run — both seeds carry locked decisions, named rejected alternatives, and per-file implementation anchors that stand in for it. Sequencing is a milestone-start decision, not re-derived here: **SEED-131 ships first (Phase 200)** because it is frontend-only with no migration and no external dependency, so **SEED-132's phases (201, 202)** run afterward without competing for the same files — the two tracks share no source files. Within SEED-132, Phase 201 (push infrastructure + the reminder job) must land before Phase 202 (the permission UX) can mean anything — there is no point prompting a user to enable reminders that no scheduler can yet send. SEED-132 Phase B (install promotion, desktop→phone QR handoff, Android `beforeinstallprompt`, the iOS install-then-permission path) was deliberately deferred out of this milestone at milestone start, on a BrowserStack dependency the operator does not have. **That deferral was reversed on 2026-08-02** and re-admitted as **Phase 203**, sourced from SEED-134 (a `/gsd-explore` session run after 201/202 shipped), which supersedes that part of SEED-132 Phase B. The reason is that 201/202's reminder lands on whichever device the user happened to be on, and for most users that is a desktop browser, where an 18:00 reminder is queued past the moment it existed to create; and because the existing install promotion turned out not to be greenfield but structurally broken (`useInstallPrompt` writes a permanent, no-expiry dismissal boolean and fires at the worst possible moment). The device dependency did not go away — it is carried inside Phase 203 as a blocking pre-planning research gate on iOS `localStorage` survival across the tab→standalone transition, which is a design blocker rather than a verification detail because the auth token lives there.
 
 ### Phase 200: Train Solve Screen — Board Legend & Inline Sideline Exploration
 
@@ -509,7 +510,21 @@ Plans:
   4. `train_settings` carries `reminder_enabled` and `reminder_hour` (default 18 local), defaulted through `get_or_create_settings` the same way as the existing `weekday_mask`/`puzzles_per_session` fields; a background job ticking at least every 15 minutes sends a reminder only on a day the user's `weekday_mask` schedules (reusing `train_scheduler`'s existing day predicates rather than re-deriving weekday math) and only once per user per day even across a backend restart inside the tick window (REMIND-01, REMIND-02, REMIND-03, REMIND-05).
   5. A user who already completed a session that day receives no reminder even after their configured hour has passed; a user with several subscribed devices is fanned out to by one explicit, documented rule (not by accident); guests never receive a reminder (no puzzle pool exists for them); and a developer can trigger a reminder send on demand in development without waiting for the real clock hour (REMIND-04, REMIND-06, REMIND-07, REMIND-08).
 
-**Plans**: TBD
+**Plans**: 4 plans
+
+Plans:
+**Wave 1**
+
+- [x] 201-01-PLAN.md — Tracer: end-to-end push delivery (dependency group, VAPID config, `push_subscriptions` table, subscribe/unsubscribe/public-key/dev-trigger endpoints, encrypt-and-POST send path with 410/404 pruning)
+
+**Wave 2** *(blocked on Wave 1 completion)*
+
+- [x] 201-02-PLAN.md — Service worker and deploy cache surface (`push-sw.js` push/notificationclick handlers, `workbox.importScripts`, Caddy `@nocache`)
+- [x] 201-03-PLAN.md — Reminder settings columns through the Train settings API (`reminder_enabled`, `reminder_hour`, `reminder_last_sent_on`)
+
+**Wave 3** *(blocked on Wave 2 completion)*
+
+- [x] 201-04-PLAN.md — Reminder scheduler job (candidate selection, settle-before-copy, claim-then-send fan-out, lifespan wiring)
 
 ### Phase 202: Reminder Permission UX
 
@@ -526,7 +541,59 @@ Plans:
   3. `TrainScheduleSettings` hosts a master reminder toggle and an hour picker with the same auto-saving behavior as its existing weekday and session-size pickers, so a user who declined the pre-prompt can subscribe later from Settings (PERM-03).
   4. Turning the master toggle off immediately silences reminders inside FlawChess without touching the underlying browser permission grant, so a user who turns it back on later is still reachable (PERM-04).
 
-**Plans**: TBD
+**Plans**: 2 plans
+
+Plans:
+**Wave 1**
+
+- [x] 202-01-PLAN.md — Tracer: end-to-end "Remind me" on the score screen (`types/push.ts`, `pushApi`, `lib/push.ts` shared subscribe routine, `usePushCapability` VAPID gate, `TrainReminderButton`, promoted `Done`, two-field settings type/draft/PUT extension)
+
+**Wave 2** *(blocked on Wave 1 completion)*
+
+- [x] 202-02-PLAN.md — Settings master reminder toggle, 24-hour picker, D-11 blocked row, and the live-browser UAT gate
+
+**UI hint**: yes
+
+### Phase 203: PWA Install Re-prompting & Train-Anchored Install Offer
+
+**Goal**: A user who declines the install prompt once can be offered it again on a bounded schedule instead of never, and the moment they opt into Train reminders becomes the surface that routes them onto their phone — by install offer (Android tabbed), by Add-to-Home-Screen instructions (iOS tabbed, today a blank slot), or by a dismissible desktop→phone QR handoff. ~~Frontend-only; no migration and no backend change unless the iOS storage finding in the research gate below forces the reminder-intent flag server-side.~~ **Superseded at planning time (2026-08-02) by `203-CONTEXT.md` D-02**: the `reminder_intent_at` migration is unconditional, not contingent — the phase carries a migration plus model/schema/repository/router changes (Plan 203-01). The "Blocking research gate" paragraph below is likewise superseded by D-01 (SEED-134 amendment E: ship the iOS branch unverified and fail safe); SC1's demonstrated-value clause is deviated from by D-03 (the drawer keeps arrival-timing, and INSTALL-02 is recorded as superseded in REQUIREMENTS.md rather than left Pending).
+
+**Depends on**: Phase 202 (the reminder opt-in surface this phase anchors to — `TrainReminderButton`'s confirmed span and capability guard — is what 202 built)
+
+**Requirements**: INSTALL-01, INSTALL-02, INSTALL-03, INSTALL-04, INSTALL-05, INSTALL-06, OFFER-01, OFFER-02, OFFER-03, OFFER-04, OFFER-05, HANDOFF-01, HANDOFF-02, HANDOFF-03, HANDOFF-04
+
+**Scope note (reverses a milestone-start decision)**: v2.11 opened by deferring SEED-132 Phase B out of the milestone on a BrowserStack dependency the operator does not have. SEED-134 (`/gsd-explore`, 2026-08-02) supersedes that part of Phase B and this phase re-admits it, at the operator's explicit call on 2026-08-02, with the device dependency now carried as the research gate below rather than as a reason to defer.
+
+**Blocking research gate (resolve before planning, not during execution)**: does `localStorage` survive the iOS Safari-tab → standalone transition? Historically iOS home-screen web apps had a storage container separate from Safari. If that still holds, two things break, and the second is much larger than this phase: (a) the "they wanted reminders" intent flag dies, fixable by moving it onto `train_settings` server-side; (b) **the auth token in `localStorage` dies, so the installed PWA launches logged out** — which would mean every iOS install lands on a login screen and independently weakens the QR handoff's conversion case. Only checkable on a real iPhone. A second, cheaper gate: empirically confirm in a real Chrome profile that `beforeinstallprompt` re-fires on a later visit after the user dismissed our `preventDefault()`ed custom UI — undocumented in both directions, and the INSTALL-01 cooldown design rests on it.
+
+**Plan-time decisions to resolve explicitly (not default)**: what counts as "demonstrated value" for retiming the first offer (has imported games / has completed one Train session / has completed N sessions) — this interacts with where the banner is allowed to mount, and is not a default; the INSTALL-01 cooldown constants (N days, M attempts), which have no data behind them and must ship as named constants rather than literals; and the QR library choice, since no `qrcode`/`qrcode.react` dependency exists in `frontend/package.json` — a new frontend dependency that knip will see.
+
+**Success Criteria** (what must be TRUE):
+
+  1. Dismissing the install prompt no longer burns it permanently: `useInstallPrompt` replaces the bare `'true'` localStorage boolean with a timestamped cooldown plus an attempt cap (both named constants), re-offers after the cooldown at most M times and then stops for good, and the first offer fires behind a demonstrated-value signal rather than on `beforeinstallprompt` arrival (INSTALL-01, INSTALL-02).
+  2. Dismissal keeps the captured `BeforeInstallPromptEvent` and clears only the cooldown state — the event is nulled solely after a successful install — so an install affordance reached later in the same SPA session is a live prompt and not a dead no-op (the event is single-use per instance and re-captured only on real page loads, which SPA route changes are not) (INSTALL-04).
+  3. Where push and install are both available on the same device (Android tabbed), the permission grant comes first and the install offer second — the non-renewable ask is never displaced by the re-offerable one — and no install copy anywhere promises notifications on any platform except iOS, the only platform where install actually gates push (INSTALL-03, INSTALL-06).
+  4. `isStandalone` ORs `navigator.standalone` with the `display-mode: standalone` media query, so an iOS user who already installed FlawChess stops being shown "tap Share → Add to Home Screen" forever (INSTALL-05).
+  5. `TrainReminderButton` resolves five explicit, named states from `available` / `isStandalone` / `isIOS` plus subscription state — desktop-unsubscribed (grant → confirmed + QR offer), Android-tabbed-unsubscribed (grant → confirmed + install offer), iOS-tabbed (cannot grant → install instructions, where it renders `null` today), any-standalone-unsubscribed (grant → confirmed, no install offer), and subscribed (the current confirmed span) — with the offer living in the confirmed state, at zero cost to ignore (OFFER-01, OFFER-02, OFFER-03, OFFER-04).
+  6. After an iOS install, the reminder prompt is proactively re-surfaced on the next standalone launch rather than left for the user to hunt down, closing SEED-132's install-then-later-visit-then-permission two-session cliff (OFFER-05).
+  7. The desktop→phone handoff renders a QR encoding a plain URL with a `?src=handoff` marker and no credential of any kind (a signed one-time token is explicitly rejected for v1 — a scannable credential on a monitor is account takeover by screen-share, shoulder-surf, or photo); the phone logs in via existing Google SSO, lands on `/train`, and the marker drives the install and reminder flow immediately (HANDOFF-01, HANDOFF-02).
+  8. The QR is dismissible and never blocking — a desktop-only user without a smartphone, or without the wish to use one, can ignore it permanently — and it also has a permanent, non-nagging home in `TrainScheduleSettings` alongside the toggle and hour picker (HANDOFF-03, HANDOFF-04).
+
+**Plans**: 4 plans
+
+Plans:
+**Wave 1**
+
+- [x] 203-01-PLAN.md — Tracer: `reminder_intent_at` end-to-end round-trip (migration → model → schema → repository → router → frontend types → both existing PUT call sites)
+- [x] 203-02-PLAN.md — Install re-prompting core: 14-day cooldown + 3-attempt cap, retained install event, `isStandalone` OR, Train-route suppression, `?src=handoff` marker
+
+**Wave 2** *(blocked on Wave 1 completion)*
+
+- [x] 203-03-PLAN.md — Five-state reminder slot, Android-tabbed install offer, desktop→phone QR handoff at both mount points
+
+**Wave 3** *(blocked on Wave 2 completion)*
+
+- [x] 203-04-PLAN.md — iOS slice (sequenced last per D-17): iOS-tabbed install affordance with synchronous intent write, standalone re-surface banner
 
 **UI hint**: yes
 

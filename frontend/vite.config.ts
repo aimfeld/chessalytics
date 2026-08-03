@@ -87,6 +87,7 @@ export default defineConfig({
         ],
       },
       workbox: {
+        importScripts: ['/push-sw.js'],
         // SPA fallback is handled by Caddy in prod (try_files /index.html) and by
         // the NetworkFirst navigation route below. Keep navigateFallback null so the
         // SW never blindly serves index.html for backend navigations such as the

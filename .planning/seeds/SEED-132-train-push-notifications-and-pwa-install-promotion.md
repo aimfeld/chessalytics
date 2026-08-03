@@ -128,6 +128,24 @@ skips guest flaws.)
     (a desktop page cannot install anything on a phone, and there is no SMS
     channel, so QR is the only option), Android `beforeinstallprompt`, and the
     iOS path.
+
+    > **SUPERSEDED 2026-08-02 — plan Phase B from [SEED-134](SEED-134-pwa-install-reprompting-and-train-anchored-offer.md), not from this section.**
+    > Phase A shipped as Phases 201/202. A follow-up `/gsd-explore` pass found
+    > this section's premise is wrong in two ways:
+    > - **Install promotion is not greenfield.**
+    >   `frontend/src/components/install/InstallPromptBanner.tsx` already ships
+    >   an Android `beforeinstallprompt` drawer and an iOS Add-to-Home-Screen
+    >   banner, mounted globally in `App.tsx:613,638`. The real defect is that
+    >   `useInstallPrompt.ts` burns the prompt permanently on one dismissal, at
+    >   the worst possible moment, and never fires on desktop at all.
+    > - **The iOS two-session cliff is absorbed**, not solved standalone. It
+    >   becomes the continuation of a reminder opt-in the user already asked
+    >   for, on the score screen.
+    >
+    > Phase B's remaining unique content is the desktop→phone QR handoff plus
+    > the BrowserStack-dependent iOS verification. SEED-134 also carries a
+    > blocker this section did not anticipate: whether `localStorage` (and with
+    > it the auth token) survives the iOS Safari-tab → standalone transition.
 18. **Do not invert the order.** Promotion-first would ship an install nag
     promising a notification feature that does not exist yet.
 19. **iOS ordering is inverted and belongs in B**: Safari has no

@@ -35,6 +35,8 @@ import { useImportPolling, useActiveJobs } from '@/hooks/useImport';
 import { useUserFlag, setUserFlag } from '@/hooks/useUserFlag';
 import { useReadiness } from '@/hooks/useReadiness';
 import { useTrainProgress } from '@/hooks/useTrainProgress';
+import { useReminderResurfaceRedirect } from '@/hooks/useReminderResurface';
+import { captureHandoffMarker } from '@/lib/handoffMarker';
 
 // First React.lazy boundary in the app — keeps the Stockfish JS/WASM bundle off
 // every other route (ROUTE-01 / D-07). Analysis.tsx uses export default (Pitfall 1).
@@ -540,6 +542,21 @@ function ProtectedLayout() {
   const playActive = usePlayActive();
   const refreshedRef = useRef(false);
 
+  // OFFER-05/D-16: the standalone launch's active route push to /train. The
+  // manifest start_url is '/', so a qualifying standalone launch (iOS
+  // install intent recorded, no push subscription on this device yet) never
+  // lands on Train by itself — see useReminderResurface.ts for the fail-safe
+  // decision and the once-per-mount navigate guard.
+  //
+  // CR-01 FIX (203-REVIEW.md): this runs on EVERY protected route for EVERY
+  // account. Gate its underlying GET /train/settings off for guests (and
+  // while `profile` hasn't resolved yet) — guests get a guaranteed 403 from
+  // `_reject_guest` that the global QueryCache.onError reporter was
+  // capturing to Sentry on every page view and window refocus, mirroring
+  // the same fix `useTrainProgress`'s `enabled` option applies at the nav
+  // badge call sites (T-191-21).
+  useReminderResurfaceRedirect({ enabled: profile != null && !profile.is_guest });
+
   useEffect(() => {
     if (isOpeningsRoute && profile?.email) {
       setUserFlag(FLAG_OPENINGS_VISITED, profile.email);
@@ -560,6 +577,15 @@ function ProtectedLayout() {
       sessionStorage.removeItem('pending_toast');
       toast.success(msg);
     }
+  }, []);
+
+  // HANDOFF-02/D-12: capture the desktop→phone QR handoff marker as early as
+  // possible on first load, mirroring how googleAuth.ts's promote_intent is
+  // captured before its own SSO hop — ProtectedLayout is the stable mount
+  // point that sees the raw URL on arrival, before Google's redirect chain
+  // strips the query string.
+  useEffect(() => {
+    captureHandoffMarker(window.location.search);
   }, []);
 
   // GUEST-05: Refresh guest JWT on each visit, resetting the 30-day expiry.

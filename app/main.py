@@ -24,6 +24,7 @@ from app.routers.endgames import router as endgames_router
 from app.routers.insights import router as insights_router
 from app.routers.eval_remote import router as eval_remote_router
 from app.routers.library import router as library_router
+from app.routers.push import router as push_router
 from app.routers.stats import router as stats_router
 from app.routers.train import router as train_router
 from app.routers.users import router as users_router
@@ -33,6 +34,7 @@ from app.services.eval_drain import run_eval_drain, run_full_eval_drain
 from app.services.guest_cleanup_service import run_periodic_guest_cleanup
 from app.services.import_service import cleanup_orphaned_jobs, run_periodic_reaper
 from app.services.insights_llm import get_insights_agent
+from app.services.train_reminder_service import run_periodic_train_reminders
 
 logger = logging.getLogger(__name__)
 
@@ -118,6 +120,12 @@ async def lifespan(_app: FastAPI) -> AsyncIterator[None]:
     # ordering dependency with stop_engine/stop_maia — guest cleanup never
     # touches the engine.
     guest_cleanup_task = asyncio.create_task(run_periodic_guest_cleanup(), name="guest-cleanup")
+    # Phase 201 / SEED-132 (D-15): Train reminder ticker. No ordering dependency
+    # with stop_engine/stop_maia -- it never touches the engine. Prod runs a
+    # single uvicorn process (deploy/entrypoint.sh passes no --workers), so
+    # there is exactly one ticker; D-07's claim UPDATE covers restarts and any
+    # future multi-process case.
+    reminder_task = asyncio.create_task(run_periodic_train_reminders(), name="train-reminders")
     try:
         yield
     finally:
@@ -130,6 +138,7 @@ async def lifespan(_app: FastAPI) -> AsyncIterator[None]:
         drain_task.cancel()
         full_drain_task.cancel()
         guest_cleanup_task.cancel()
+        reminder_task.cancel()
         try:
             try:
                 await reaper_task
@@ -155,6 +164,12 @@ async def lifespan(_app: FastAPI) -> AsyncIterator[None]:
                 pass  # expected on shutdown
             except Exception:
                 logger.exception("Guest cleanup task raised on shutdown")
+            try:
+                await reminder_task
+            except asyncio.CancelledError:
+                pass  # expected on shutdown
+            except Exception:
+                logger.exception("Train reminder task raised on shutdown")
         finally:
             await stop_engine()
             # Phase 174 / D-03: tear down the Maia session alongside Stockfish. No
@@ -203,6 +218,7 @@ app.include_router(eval_remote_router, prefix="/api")
 app.include_router(feedback.router, prefix="/api")
 app.include_router(bots_router, prefix="/api")
 app.include_router(train_router, prefix="/api")
+app.include_router(push_router, prefix="/api")
 
 
 @app.get("/", include_in_schema=False)

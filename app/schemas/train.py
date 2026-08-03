@@ -7,11 +7,13 @@ schema exists to enforce.
 
 from __future__ import annotations
 
-from datetime import date
+from datetime import date, datetime
 from typing import Literal
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from pydantic import BaseModel, Field, field_validator
+
+from app.services.train_scheduler import REMINDER_HOUR_MAX, REMINDER_HOUR_MIN
 
 
 class TrainPuzzle(BaseModel):
@@ -194,11 +196,24 @@ class PuzzleRevealResponse(BaseModel):
 
 
 class TrainSettingsResponse(BaseModel):
-    """Response for GET/PUT /train/settings."""
+    """Response for GET/PUT /train/settings.
+
+    `reminder_enabled`/`reminder_hour` (Phase 201, REMIND-01/D-18) are the
+    user-owned reminder configuration, round-tripped through this same
+    settings surface so it is fully testable before Phase 202 builds any UI.
+    `reminder_last_sent_on` is deliberately absent — it is the reminder job's
+    own watermark (D-06), never readable or writable by a client.
+    `reminder_intent_at` (Phase 203, OFFER-03/OFFER-05/D-02/D-15) is the
+    OPPOSITE of `reminder_last_sent_on`: it IS client-writable (stamped when
+    the user taps the iOS install affordance), so it appears here.
+    """
 
     timezone: str
     weekday_mask: int
     puzzles_per_session: int
+    reminder_enabled: bool
+    reminder_hour: int
+    reminder_intent_at: datetime | None
 
 
 class TrainSettingsUpdate(BaseModel):
@@ -206,13 +221,25 @@ class TrainSettingsUpdate(BaseModel):
 
     A separate schema from `TrainSettingsResponse` (not one schema reused for
     both directions) so a PUT body can never smuggle a server-owned field.
-    `weekday_mask`/`puzzles_per_session` bounds mirror the `train_settings`
-    table's CHECK constraints exactly.
+    `weekday_mask`/`puzzles_per_session`/`reminder_hour` bounds mirror the
+    `train_settings` table's CHECK constraints exactly. `reminder_last_sent_on`
+    is deliberately absent for the same reason it is absent from
+    `TrainSettingsResponse` — see that class's docstring.
+
+    `reminder_intent_at` has NO default (required-but-nullable), a deliberate
+    choice per D-02: this schema is a full-replace PUT body, so a defaulted
+    field would let a payload that omits the key silently clear a
+    previously-recorded install intent. Omitting the key must 422 loudly
+    instead. No bound validator: a timestamp has no injection surface
+    (RESEARCH.md Security Domain V5).
     """
 
     timezone: str
     weekday_mask: int = Field(ge=0, le=127)
     puzzles_per_session: int = Field(ge=1, le=50)
+    reminder_enabled: bool
+    reminder_hour: int = Field(ge=REMINDER_HOUR_MIN, le=REMINDER_HOUR_MAX)
+    reminder_intent_at: datetime | None
 
     @field_validator("timezone")
     @classmethod
