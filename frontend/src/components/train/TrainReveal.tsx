@@ -1099,7 +1099,25 @@ export function TrainReveal({
       className="flex w-full flex-col gap-4 lg:mt-[46px] lg:max-w-sm"
       data-testid="train-reveal"
     >
-      {/* 1. The guess-feedback card (Phase 200 UAT round 6) — one card that
+      {/* 1. Flaw fixed banner (PROG-03/D-14) — supersedes the D-12 plain
+          "Mastered — retired." comeback hint; nothing for a herring or a
+          non-mastered item. Quick 260803-iv6: hoisted to the FIRST card in
+          the panel (above the Your-move box and the guess card, both
+          viewports) — the mastery celebration used to sit three cards down,
+          behind the Your-move and guess cards. Stays OUTSIDE the
+          `isFreePlayActive` gate and the `isExploring` swap below: it is
+          pinned throughout exploration too (same D-10 pinning every other
+          `isFreePlayActive`-exempt section already gets). */}
+      {showFlawFixedBanner && <TrainFlawFixedBanner fen={puzzle.fen} />}
+
+      {/* 2. The Your-move box (UAT round 8) — the user's own move is the first
+          thing they look for, so its card sits at the top of the rest of the
+          panel on both viewports, above the guess card. Swapped out during
+          exploration with the other line boxes below (same `isFreePlayActive`
+          gate), since the board no longer shows the puzzle by then. */}
+      {!isFreePlayActive && yourBox !== null && renderLineBox(yourBox)}
+
+      {/* 3. The guess-feedback card (Phase 200 UAT round 6) — one card that
           absorbed what used to be three loose surfaces: the guess verdict row,
           the outcome sentence, and the standalone "Also fine" card.
 
@@ -1125,13 +1143,6 @@ export function TrainReveal({
           the board is showing the user's own exploration by then, not the
           puzzle, so neither the Also fine legend nor the guess verdict has
           anything on screen left to describe. */}
-      {/* 0. The Your-move box (UAT round 8) — the user's own move is the first
-          thing they look for, so its card sits at the very top of the panel on
-          both viewports, above the guess card. Swapped out during exploration
-          with the other line boxes below (same `isFreePlayActive` gate), since
-          the board no longer shows the puzzle by then. */}
-      {!isFreePlayActive && yourBox !== null && renderLineBox(yourBox)}
-
       {!isFreePlayActive && (
       <Card
         data-testid="train-verdict-guess"
@@ -1170,11 +1181,6 @@ export function TrainReveal({
         )}
       </Card>
       )}
-
-      {/* 3. Flaw fixed banner (PROG-03/D-14) — supersedes the D-12 plain
-          "Mastered — retired." comeback hint; nothing for a herring or a
-          non-mastered item. */}
-      {showFlawFixedBanner && <TrainFlawFixedBanner fen={puzzle.fen} />}
 
       {revealQuery.isError && (
         <p className="text-sm font-semibold text-muted-foreground" data-testid="train-reveal-error">

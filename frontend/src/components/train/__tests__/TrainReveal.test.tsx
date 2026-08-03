@@ -415,6 +415,33 @@ describe('TrainReveal', () => {
     expect(screen.getByTestId('train-flaw-fixed-banner')).not.toBeNull();
   });
 
+  // Quick 260803-iv6 (Task 2): the banner is the FIRST card in the panel —
+  // above both the Your-move box and the guess card — on a mastered,
+  // non-herring verdict. Asserted via `compareDocumentPosition`, not index
+  // into a hand-built list, so a reordering elsewhere in the panel can't
+  // accidentally make this pass for the wrong reason.
+  it('the flaw-fixed banner is the FIRST card in the panel — above the Your-move box and the guess card', async () => {
+    renderReveal({
+      guess: 'critical',
+      playedMoveUci: 'd2d4',
+      gradeResult: makeGradeResult({
+        correctMove: false,
+        bestLine: makeEngineLine({ moves: ['e2e4'] }),
+        playedLine: makeEngineLine({ moves: ['d2d4'] }),
+      }),
+      verdict: makeVerdict({ item_status: 'mastered', due_date: null }),
+    });
+    const banner = screen.getByTestId('train-flaw-fixed-banner');
+    const yourBox = await waitFor(() => screen.getByTestId('train-line-box-your-move'));
+    const guessCard = screen.getByTestId('train-verdict-guess');
+    expect(
+      banner.compareDocumentPosition(yourBox) & Node.DOCUMENT_POSITION_FOLLOWING,
+    ).toBeTruthy();
+    expect(
+      banner.compareDocumentPosition(guessCard) & Node.DOCUMENT_POSITION_FOLLOWING,
+    ).toBeTruthy();
+  });
+
   it('item_status "active" renders neither the banner nor a comeback line', () => {
     renderReveal({ verdict: makeVerdict({ item_status: 'active', due_date: '2026-07-28' }) });
     expect(screen.queryByTestId('train-flaw-fixed-banner')).toBeNull();
