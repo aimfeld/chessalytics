@@ -912,11 +912,20 @@ export function TrainReveal({
   // Quick 260803-iv6 (Task 3): the guess card states the verdict but never
   // says WHY it landed where it did — one locked prose sentence, derived
   // next to `showAlsoFine` since both render inside the same card body.
-  // `verdict.puzzle_type !== 'herring'` is the "came from a played game vs a
-  // red herring" predicate — the SAME one the game footer below already
-  // uses, no extra field needed.
+  // `verdict.puzzle_type !== 'herring'` is the "one of the user's own
+  // blunders vs a red herring" predicate — the SAME one the game footer below
+  // already uses, no extra field needed. `move_quality` joins it (2026-08-03
+  // bug fix) so the sentence can never claim the user PLAYED the critical
+  // move on the strength of the guess alone; see `guessFeedbackProse`.
   const guessProse =
-    guess !== null ? guessFeedbackProse(guess, verdict.correct_guess, verdict.puzzle_type !== 'herring') : null;
+    guess !== null
+      ? guessFeedbackProse(
+          guess,
+          verdict.correct_guess,
+          verdict.puzzle_type !== 'herring',
+          verdict.move_quality,
+        )
+      : null;
   const alsoFineEntry = { key: ALSO_FINE_KEY, ucis: alsoFineMoves.map((f) => f.uci) };
   const isAlsoFineSpotlit = spotlightKey === ALSO_FINE_KEY;
   const alsoFineSanList = alsoFineMoves

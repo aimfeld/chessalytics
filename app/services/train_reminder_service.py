@@ -233,7 +233,16 @@ async def send_due_reminders(now_utc: datetime.datetime) -> ReminderTickSummary:
         pruned += outcome.pruned
         failed += outcome.failed
 
-    logger.info(
+    # SEED-135 D1 (2026-08-03): app-level INFO is filtered out of prod docker
+    # logs (verified 2026-08-03 -- WARNING lines from other subsystems
+    # appear, this tick's INFO summary does not), so a tick that pruned or
+    # failed would otherwise leave no trace in production. One call site,
+    # one format string -- the message shape must stay byte-identical at
+    # both levels so prefix-filtering tests (and any prod grep) can rely on
+    # it regardless of which level actually fired.
+    summary_level = logging.WARNING if (pruned > 0 or failed > 0) else logging.INFO
+    logger.log(
+        summary_level,
         "Train reminder tick: scanned=%d eligible=%d claimed=%d sent=%d pruned=%d failed=%d",
         scanned,
         eligible,

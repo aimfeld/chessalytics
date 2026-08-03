@@ -13,6 +13,13 @@ this module -- never an exception at import time, never a startup abort.
 D-04: only a 404/410 response means "prune this subscription" (PUSH-02).
 Every other non-2xx status, and every transport error, is logged +
 `sentry_sdk.capture_exception`-ed and left alone -- no retry, no deletion.
+
+SEED-135 D1 (2026-08-03): the prune branch itself is now ALSO logged +
+captured before the row is deleted -- a prod incident had to be diagnosed
+entirely by inference because this branch, uniquely, deletes state while
+emitting nothing. The capture never carries the endpoint (a bearer
+capability) or any variable data in its message; only the status code and
+the (about-to-be-deleted) subscription id go into `set_context`.
 """
 
 from __future__ import annotations
@@ -93,11 +100,22 @@ async def send_to_subscription(
     p256dh: str,
     auth: str,
     payload: dict[str, object],
+    subscription_id: int | None = None,
 ) -> bool:
     """Send one push message. Returns True if the subscription should be pruned.
 
     D-04: only 404/410 return True (prune). Every other non-2xx is logged +
     reported to Sentry and left alone -- no retry, no deletion.
+
+    Args:
+        subscription_id: The row's PK, threaded in so the prune capture's
+            `set_context` can identify which row was deleted (SEED-135 D1)
+            without ever carrying the endpoint. Keyword-only and defaulted to
+            None rather than required -- `send_to_subscription` is exported
+            in `__all__` and called directly by ~15 tests with the pre-D1
+            signature. Must be set BEFORE `capture_exception` fires (setting
+            it at the `send_to_user` call site would attach to a later
+            event), which is why it is threaded in rather than set outside.
     """
     if not is_push_configured():
         return False  # D-03: VAPID unconfigured, no-op
@@ -125,6 +143,20 @@ async def send_to_subscription(
         return False
 
     if resp.status_code in _PRUNE_STATUS_CODES:
+        # SEED-135 D1: this branch permanently deletes a push_subscriptions
+        # row (via send_to_user below) -- it must never be the one silent
+        # branch. Mirrors the >= 300 branch's style exactly, except the
+        # RuntimeError message is a distinct fixed literal so Sentry groups
+        # prunes separately from transient failures. No endpoint, no
+        # variable data in the message (CLAUDE.md): the endpoint is a bearer
+        # capability and must never reach a log record or a Sentry payload.
+        logger.warning("Push subscription pruned after status %d", resp.status_code)
+        sentry_sdk.set_tag("source", "push_send")
+        sentry_sdk.set_context(
+            "push_send",
+            {"status_code": resp.status_code, "subscription_id": subscription_id},
+        )
+        sentry_sdk.capture_exception(RuntimeError("Push send returned a prune status"))
         return True
     # Anything outside 2xx is a non-delivery. The bound is 300, not 400: we send
     # with follow_redirects=False (an SSRF mitigation on a client-supplied
@@ -174,6 +206,7 @@ async def send_to_user(
                     p256dh=subscription.p256dh,
                     auth=subscription.auth,
                     payload=payload,
+                    subscription_id=subscription.id,
                 )
             except Exception:
                 # Per-subscription isolation: a construction/encryption error

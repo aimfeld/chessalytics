@@ -2,9 +2,11 @@
 
 Coverage:
 - Status-branch table (one test per status, mirrors test_chesscom_client.py's
-  granularity): 201/200 -> no prune, no Sentry; 404/410 -> prune, no Sentry;
-  400/401/403/413/429/500/503 -> no prune, exactly one Sentry capture whose
-  message carries no status-code digits (the code lives in set_context only).
+  granularity): 201/200 -> no prune, no Sentry; 404/410 -> prune, WARNING log
+  + exactly one Sentry capture whose message carries no status-code digits and
+  no endpoint (SEED-135 D1); 400/401/403/413/429/500/503 -> no prune, exactly
+  one Sentry capture whose message carries no status-code digits (the code
+  lives in set_context only).
 - A transport error (httpx.ConnectError) -> no prune, one Sentry capture, no
   exception escapes.
 - test_no_key_leak_* : neither error branch ever leaks the configured VAPID
@@ -117,7 +119,7 @@ async def test_send_to_subscription_status_200_no_prune_no_capture() -> None:
 
 @pytest.mark.asyncio
 @pytest.mark.usefixtures("vapid_keypair")
-async def test_send_to_subscription_status_404_prunes_no_capture() -> None:
+async def test_send_to_subscription_status_404_prunes_and_captures() -> None:
     p256dh, auth = _fresh_subscription_keys()
     client = _mock_client(404)
     with patch("app.services.push_send.sentry_sdk.capture_exception") as mock_capture:
@@ -125,12 +127,12 @@ async def test_send_to_subscription_status_404_prunes_no_capture() -> None:
             client, endpoint=_ENDPOINT, p256dh=p256dh, auth=auth, payload=_PAYLOAD
         )
     assert should_prune is True
-    assert mock_capture.call_count == 0
+    assert mock_capture.call_count == 1
 
 
 @pytest.mark.asyncio
 @pytest.mark.usefixtures("vapid_keypair")
-async def test_send_to_subscription_status_410_prunes_no_capture() -> None:
+async def test_send_to_subscription_status_410_prunes_and_captures() -> None:
     p256dh, auth = _fresh_subscription_keys()
     client = _mock_client(410)
     with patch("app.services.push_send.sentry_sdk.capture_exception") as mock_capture:
@@ -138,7 +140,7 @@ async def test_send_to_subscription_status_410_prunes_no_capture() -> None:
             client, endpoint=_ENDPOINT, p256dh=p256dh, auth=auth, payload=_PAYLOAD
         )
     assert should_prune is True
-    assert mock_capture.call_count == 0
+    assert mock_capture.call_count == 1
 
 
 async def _assert_error_status_captures_once(status_code: int) -> None:
@@ -155,6 +157,81 @@ async def _assert_error_status_captures_once(status_code: int) -> None:
     # it lives only in sentry_sdk.set_context (CLAUDE.md: never embed
     # variables in error messages, which fragments Sentry grouping).
     assert str(status_code) not in str(captured_exc)
+
+
+async def _assert_prune_status_captures_no_digits(status_code: int) -> None:
+    p256dh, auth = _fresh_subscription_keys()
+    client = _mock_client(status_code)
+    with patch("app.services.push_send.sentry_sdk.capture_exception") as mock_capture:
+        should_prune = await push_send.send_to_subscription(
+            client, endpoint=_ENDPOINT, p256dh=p256dh, auth=auth, payload=_PAYLOAD
+        )
+    assert should_prune is True
+    assert mock_capture.call_count == 1
+    captured_exc = mock_capture.call_args.args[0]
+    # Mirrors _assert_error_status_captures_once: the status code must never
+    # appear in the exception's own message -- it lives only in
+    # sentry_sdk.set_context (CLAUDE.md: never embed variables in error
+    # messages, which fragments Sentry grouping).
+    assert str(status_code) not in str(captured_exc)
+
+
+@pytest.mark.asyncio
+@pytest.mark.usefixtures("vapid_keypair")
+async def test_send_to_subscription_status_404_capture_message_has_no_status_digits() -> None:
+    await _assert_prune_status_captures_no_digits(404)
+
+
+@pytest.mark.asyncio
+@pytest.mark.usefixtures("vapid_keypair")
+async def test_send_to_subscription_status_410_capture_message_has_no_status_digits() -> None:
+    await _assert_prune_status_captures_no_digits(410)
+
+
+async def _assert_prune_status_leaks_no_endpoint(
+    status_code: int, caplog: pytest.LogCaptureFixture
+) -> None:
+    p256dh, auth = _fresh_subscription_keys()
+    client = _mock_client(status_code)
+    # The endpoint's unique path segment, not the whole URL -- so a partial
+    # leak (e.g. only the host, or only the token) is still caught.
+    endpoint_segment = _ENDPOINT.rsplit("/", 1)[-1]
+    caplog.set_level("WARNING", logger="app.services.push_send")
+    with (
+        patch("app.services.push_send.sentry_sdk.capture_exception") as mock_capture,
+        patch("app.services.push_send.sentry_sdk.set_context") as mock_set_context,
+        patch("app.services.push_send.sentry_sdk.set_tag") as mock_set_tag,
+    ):
+        should_prune = await push_send.send_to_subscription(
+            client, endpoint=_ENDPOINT, p256dh=p256dh, auth=auth, payload=_PAYLOAD
+        )
+    assert should_prune is True
+    haystack = ""
+    for capture_call in mock_capture.call_args_list:
+        haystack += str(capture_call.args) + str(capture_call.kwargs)
+    for context_call in mock_set_context.call_args_list:
+        haystack += str(context_call.args) + str(context_call.kwargs)
+    for tag_call in mock_set_tag.call_args_list:
+        haystack += str(tag_call.args) + str(tag_call.kwargs)
+    for record in caplog.records:
+        haystack += record.getMessage()
+    assert endpoint_segment not in haystack
+
+
+@pytest.mark.asyncio
+@pytest.mark.usefixtures("vapid_keypair")
+async def test_send_to_subscription_status_404_leaks_no_endpoint(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    await _assert_prune_status_leaks_no_endpoint(404, caplog)
+
+
+@pytest.mark.asyncio
+@pytest.mark.usefixtures("vapid_keypair")
+async def test_send_to_subscription_status_410_leaks_no_endpoint(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    await _assert_prune_status_leaks_no_endpoint(410, caplog)
 
 
 @pytest.mark.asyncio
