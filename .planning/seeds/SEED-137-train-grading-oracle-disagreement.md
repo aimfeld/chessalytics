@@ -1,7 +1,7 @@
 # SEED-137 — Train's guess label, move score, and free-play badges come from three different searches
 
 **Captured:** 2026-08-04, from two contradictions user 28 hit in prod drill session 107.
-**Status:** open
+**Status:** promoted to Phase 205 (Train Grading Oracle Agreement) on 2026-08-04
 **Trigger:** any milestone touching Train grading, the drill pool, or the reveal surface.
 
 ## What was observed
