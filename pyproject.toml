@@ -56,7 +56,7 @@ maia-inference = [
 # docstring for why vendoring beat the dependency, and
 # tests/services/test_push_crypto.py for the differential test that pinned it.
 push = [
-    "cryptography>=49.0.0",
+    "cryptography>=50.0.0",
     "pyjwt>=2.10.1",
 ]
 
