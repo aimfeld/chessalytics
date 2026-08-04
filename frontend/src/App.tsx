@@ -541,6 +541,11 @@ function ProtectedLayout() {
   // needs the vertical space on small screens. Set by BotsGame and
   // TrainSolveScreen via useMarkPlayActive().
   const playActive = usePlayActive();
+  // A live bot game: the floating feedback bubble sits over the board's bottom
+  // right corner and the result dialog's actions, so it's hidden for the
+  // duration. Scoped to /bots deliberately — `playActive` alone would also
+  // cover the Train solve loop, which was not part of the ask.
+  const botGameActive = playActive && location.pathname.startsWith('/bots');
   const refreshedRef = useRef(false);
 
   // OFFER-05/D-16: the standalone launch's active route push to /train. The
@@ -666,7 +671,7 @@ function ProtectedLayout() {
       <MobileBottomBar onMoreClick={() => setMoreOpen(true)} />
       <MobileMoreDrawer open={moreOpen} onOpenChange={setMoreOpen} />
       <InstallPromptBanner />
-      <FeedbackButton />
+      {!botGameActive && <FeedbackButton />}
     </>
   );
 }

@@ -91,8 +91,10 @@ const BOT_BOARD_MIN_WIDTH_PX = 240;
 
 /** Space kept free between the page container's bottom edge and the viewport
  * bottom. The container's own bottom padding (pb-20 / sm:pb-4) is already
- * measured as chrome, so this is only visual breathing room. */
-const BOT_BOARD_BOTTOM_GUTTER_PX = 24;
+ * measured as chrome, so this is only visual breathing room — halved from 24
+ * to pay for the taller control rows (see the vertical-budget note on the page
+ * container's className) rather than letting them eat the board's width. */
+const BOT_BOARD_BOTTOM_GUTTER_PX = 12;
 
 /** Fixed width of the desktop right column (clocks + move list + controls). */
 const DESKTOP_SIDE_COLUMN_PX = 320;
@@ -128,7 +130,7 @@ function renderMobileLayout(
 ): ReactElement {
   return (
     <div
-      className="mx-auto flex w-full flex-col gap-3"
+      className="mx-auto flex w-full flex-col gap-2"
       style={{ maxWidth: boardPx }}
     >
       {botClock}
@@ -494,7 +496,15 @@ function BotsGame({
       // clearance arithmetic. Horizontal padding is deliberately tighter than
       // the usual p-4: every px of it comes straight off the board's width at
       // the narrower desktop widths.
-      className="mx-auto flex max-w-5xl flex-col gap-4 px-2 py-4 pb-20 sm:pb-4"
+      //
+      // Vertical budget: the board is SQUARE and height-fitted
+      // (`useFitBoardToViewport`), so every px of vertical chrome on this page
+      // is a px off the board's WIDTH — it shrinks away from the screen edges
+      // and leaves side gutters. Raising the control rows to 48px tap targets
+      // cost ~36px, reclaimed here (`py-2` on mobile) plus the mobile stack's
+      // `gap-2` and a halved BOT_BOARD_BOTTOM_GUTTER_PX. Keep that budget in
+      // mind before adding height anywhere in this column.
+      className="mx-auto flex max-w-5xl flex-col gap-4 px-2 py-2 pb-20 sm:py-4 sm:pb-4"
     >
       {isDesktop
         ? renderDesktopLayout(botClock, userClock, board, boardControls, moveList, controls, boardPx)
