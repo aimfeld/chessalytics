@@ -8,7 +8,7 @@ status: planning
 stopped_at: Completed 205-02-PLAN.md
 last_updated: "2026-08-04T18:00:55.470Z"
 last_activity: 2026-08-04
-last_activity_desc: Phase 205 complete, transitioned to Phase 999.1
+last_activity_desc: Phase 205 shipped — squash-merged to main
 progress:
   total_phases: 2
   completed_phases: 2
@@ -23,8 +23,9 @@ progress:
 Phase: 999.1 — Password Reset (BACKLOG)
 Plan: Not started
 Status: Ready to plan
-Last activity: 2026-08-04 — Phase 205 complete, transitioned to Phase 999.1
+Last activity: 2026-08-04 — Phase 205 shipped, transitioned to Phase 999.1
 
+Phase 205 (train-grading-oracle-agreement) shipped 2026-08-04 (2/2 plans, squash-merged to main as 278054955).
 Phase 204 (push-reminder-delivery-reliability) shipped 2026-08-03 (3/3 plans, squash-merged to main).
 
 ## Project Reference
