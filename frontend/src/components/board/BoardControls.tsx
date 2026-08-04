@@ -21,18 +21,19 @@ interface BoardControlsProps {
    * mobile /analysis board-controls footer; desktop/Openings keep the pill.
    */
   flat?: boolean;
-  /** Button size. 'sm' = h-8 w-8 (desktop), 'md' = h-9 w-9 (mobile slim row), 'lg' = h-11 w-11 (mobile vertical column). Defaults to 'lg' when vertical, 'sm' otherwise. */
-  size?: 'sm' | 'md' | 'lg';
+  /** Button size. 'sm' = h-8 w-8 (desktop), 'md' = h-9 w-9 (mobile slim row), 'lg' = h-11 w-11 (mobile vertical column), 'xl' = each button fills an equal share of the bar at a 48px tap target (bot play, matching that page's other action buttons). Defaults to 'lg' when vertical, 'sm' otherwise. */
+  size?: 'sm' | 'md' | 'lg' | 'xl';
   /** Explicit Tailwind size classes for the buttons. Overrides `size` when provided — use when width and height need to be decoupled (e.g. `h-9 w-11`). */
   buttonClassName?: string;
   /** Additional CSS classes for the root container */
   className?: string;
 }
 
-const SIZE_CLASSES: Record<'sm' | 'md' | 'lg', string> = {
+const SIZE_CLASSES: Record<'sm' | 'md' | 'lg' | 'xl', string> = {
   sm: 'h-8 w-8',
   md: 'h-9 w-9',
   lg: 'h-11 w-11',
+  xl: 'flex-1 h-12',
 };
 
 export function BoardControls({
@@ -59,9 +60,9 @@ export function BoardControls({
     buttonClassName ?? (navStyle ? 'flex-1 h-12' : SIZE_CLASSES[resolvedSize]);
   // flat drops the charcoal pill so the bar reads like the main nav (Quick 260628-dgv).
   const surfaceClass = flat ? '' : 'rounded-lg charcoal-texture';
-  // Match the main nav icon size (h-5) on the flat mobile bar; keep h-4 on the
-  // smaller desktop/vertical pills.
-  const iconSize = navStyle ? 'h-5 w-5' : 'h-4 w-4';
+  // Match the main nav icon size (h-5) on the flat mobile bar and the 48px 'xl'
+  // bar; keep h-4 on the smaller desktop/vertical pills.
+  const iconSize = navStyle || resolvedSize === 'xl' ? 'h-5 w-5' : 'h-4 w-4';
   return (
     <div className={`flex items-center justify-evenly ${surfaceClass} ${vertical ? 'flex-col' : ''} ${className ?? ''}`}>
       <Tooltip content="Reset to start">

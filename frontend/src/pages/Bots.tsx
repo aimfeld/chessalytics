@@ -450,6 +450,9 @@ function BotsGame({
       onFlip={handleFlip}
       canGoBack={viewedPly > 0}
       canGoForward={viewedPly < liveGamePly}
+      // 'xl': 48px tall, buttons spread across the full bar — same tap target
+      // as this page's Resign / Offer draw row right below it.
+      size="xl"
     />
   );
   // Move list (desktop side column only — hidden in the single-column layout).
