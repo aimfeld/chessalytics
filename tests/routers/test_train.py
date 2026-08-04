@@ -106,8 +106,8 @@ from app.schemas.train import SolveRequest
 ENDPOINT = "/api/train/sessions"
 
 # POOL-02 puzzle-type fixtures: a "sharp" blob has a wide best-vs-second gap
-# (>= SHARP_GAP_ES == MISTAKE_DROP == 0.10); the module's default
-# _MISSED_PV_LINES blob (b=40, s=-30 -> gap ~0.064) is deliberately "soft".
+# (>= SHARP_GAP_ES == MISTAKE_DROP == 0.10). The module's default
+# _MISSED_PV_LINES blob is deliberately "soft".
 _SHARP_PV_LINES = [{"b": 200, "bm": None, "s": -200, "sm": None, "su": "g8f6"}]
 
 # A real, legal Ruy Lopez opening PGN — long enough (10 half-moves) to replay
@@ -119,7 +119,14 @@ _FLAW_PLY_WHITE = 6
 # ply=7 (odd -> black mover): position before black's 4th move (Nf6).
 _FLAW_PLY_BLACK = 7
 
-_MISSED_PV_LINES = [{"b": 40, "bm": None, "s": -30, "sm": None, "su": "g8f6"}]
+# Phase 205 (dead-band exclusion, D-05/D-11): the ORIGINAL blob here was
+# {"b": 40, "s": -30}, gap ~0.0643 -- squarely inside the new
+# [INACCURACY_DROP, BLUNDER_DROP) = [0.05, 0.15) band, so `pool_entry_stmt`
+# would no longer admit it. Moved `s` from -30 to 30 (holding `b` at 40),
+# giving a gap of ~0.0092 -- comfortably below INACCURACY_DROP -- so the
+# fixture stays exactly as "soft" as before (the old drop was already below
+# SHARP_GAP_ES = 0.10) with no assertion elsewhere shifting.
+_MISSED_PV_LINES = [{"b": 40, "bm": None, "s": 30, "sm": None, "su": "g8f6"}]
 
 # A comfortably winnable eval for White (well above WINNABILITY_FLOOR_ES=0.20).
 _WINNABLE_CP = 300

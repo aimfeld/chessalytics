@@ -164,6 +164,7 @@
 | 202. Reminder Permission UX (SEED-132 Phase A, v2.11) | 2/2 | Complete | 2026-08-02 |
 | 203. PWA Install Re-prompting & Train-Anchored Install Offer (SEED-134, v2.11) | 4/4 | Complete | 2026-08-02 |
 | 204. Push Reminder Delivery Reliability (SEED-135, unassigned) | 3/3 | Complete | 2026-08-03 |
+| 205. Train Grading Oracle Agreement (SEED-137, unassigned) | 2/2 | Complete    | 2026-08-04 |
 
 ## Active Phases (unassigned milestone)
 
@@ -219,6 +220,56 @@ Plans:
 **Criterion 4 narrowing** (recorded at planning, per 204-CONTEXT.md D-04): the mismatch repair lives ONLY in the gesture path (`ensureDeviceSubscribed`); the passive app-load re-sync detects a mismatch and deliberately does nothing. Phase 201 D-02 locked rotation as accepted mass invalidation and explicitly rejected a passive self-heal. Verify against the narrowed wording, not the original.
 
 **UI hint**: minimal — the only user-visible surface is the reminder state no longer lying; no new components expected.
+
+### Phase 205: Train Grading Oracle Agreement
+
+**Goal**: A Train puzzle stops contradicting itself. The guess label, the move score, and the free-play badges are produced by three independent searches today (server answer key, the MultiPV-4 mount search, the MultiPV-2 free-play worker), all measuring the same `INACCURACY_DROP` / `MISTAKE_DROP` / `BLUNDER_DROP` cutoffs with different budgets — so any position whose true gap sits within search noise of a cutoff renders a visible self-contradiction. Close the seam users actually see (an "Also fine: Qh4" move badged a mistake when played), and stop serving the puzzles whose margins are too thin for browser search to adjudicate. Backend + frontend; a migration is not expected.
+
+**Depends on**: Phase 189 (`pool_entry_stmt`, `classify_puzzle_type`, `SHARP_GAP_ES` in `app/services/train_pool.py`), Phase 190/190.1 (`useTrainGradingEngine`, the MultiPV-4 mount search and the reveal contract), Phase 200 (`useTrainFreePlay` and its `seedEval` prop)
+
+**Requirements**: ORACLE-01, ORACLE-02, ORACLE-03, ORACLE-04, ORACLE-05, ORACLE-06 — minted at planning (2026-08-04) 1:1 from the success criteria below. There is no active `.planning/REQUIREMENTS.md` (the v2.11 set is archived at `.planning/milestones/v2.11-REQUIREMENTS.md`), so the definitions live in the phase's first PLAN.md (`205-01-PLAN.md` § "Phase 205 requirement IDs"), same convention as Phase 204. Success criterion 6 (mutation testing) is cross-cutting and carried by every plan's mutation acceptance criteria rather than by a seventh ID.
+
+**Source**: [SEED-137](../seeds/SEED-137-train-grading-oracle-disagreement.md) — planted 2026-08-04 from two contradictions user 28 hit in prod drill session 107, both `source = 0` (SR own-blunder) with `herring_pool_id IS NULL`. **Not a herring-sourcing artifact** — the pre-Phase-192 `game_best_moves` problem is ruled out from the data, not from the code.
+
+**Scope**:
+
+- **Proposal B — seed free play with the mount ranks (do first; this is the bug actually reported).** `useTrainFreePlay` receives `seedEval` as only `{cp, mate, bestUci}` for the root position and discards the grading engine's settled `lines` array, so the first freely played move is graded against a *fresh* MultiPV-2 search of the post-move position rather than the mount rank that put it on the "Also fine" list. Fix: pass the whole `lines` array and short-circuit the first ply's grade to the matching rank — exactly what `gradeMoveInner`'s `rankLineForMove` branch already does for the solve verdict. Deeper plies stay engine-3-only, which is self-consistent (parent and child from the same engine), so the cross-oracle seam survives only at the root, and the root is the one place users notice it. Small, local, independent of Proposal A.
+- **Proposal A — a selection-level dead band on pool entry AND at composition time.** Keep `SHARP_GAP_ES = MISTAKE_DROP` (it is an identity, not a knob — see "Rejected" below) and filter the pool instead: **sharp** items require second-best drop ≥ `BLUNDER_DROP` (0.15), **soft** items require second-best drop < `INACCURACY_DROP` (0.05), everything in `[0.05, 0.15)` is excluded. Node 0 stores only the second-best move, but that is exactly the right column — second-best is by definition the best alternative, so the single comparison is total. Measured prod cost: **12.0% of items dropped** (20.4% kept sharp, 67.6% kept soft); sharp share moves 25.1% → 23.2%, so the guess base rate barely shifts and does not become more gameable.
+- **The implementation edge that makes or breaks Proposal A.** Filtering in `pool_entry_stmt` stops only *new* entries — existing `drill_items` rows for band plies keep being served. The check must also run at composition time via the existing lazy-eviction path (serve-time reads already LEFT JOIN `game_flaws` and tolerate a missing match, per `drill_item.py`'s D-02 anchoring note). A reclassification backfill can move an item into or out of the band after the fact, so the gate has to be live at compose time and **never snapshotted onto the row** (D-01 already forbids snapshotting grading-critical fields).
+- **Viability at the binding constraint** — distinct games per user, since `MAX_ITEMS_PER_GAME_PER_SESSION = 1` means a 12-puzzle session needs ≥9 distinct games. Measured: of 260 users, **219 can fill a session today, 218 after** (one user newly starved), average 89.7% of distinct games retained. Re-measure at planning against current prod rather than trusting the 2026-08-04 snapshot.
+
+**Plan-time decisions to resolve explicitly (not default)**:
+
+1. **Does Proposal A ship with Proposal B, or does B ship alone first?** B is small, frontend-only and fixes the reported bug; A touches pool entry and session composition and costs 12% of items. Sequencing them as separate waves is the obvious read, but decide whether A belongs in this phase at all or is a follow-on gated on B's effect.
+2. **Residual 3 — soft items: the label is verified, the list is not.** The dead band guarantees rank 2 is genuinely good, but ranks 3–4 in the "Also fine" row are evaluator-2-only and could be real mistakes. Either cap the displayed list at what the server verified, or accept it as browser-grade — decide deliberately rather than inherit.
+3. **Residual 1 — evaluator 2's internal seam.** A played move outside the top-4 mount ranks is graded by a width-1 after-move search while `fineMoves` came from the MultiPV-4 mount; `clampLineEvalToBest` reconciles the *display* but not the verdict. Mostly harmless after Proposal A (such a move is ≥0.15 down on a sharp item). Widening MultiPV would close it; decide whether that is worth the search budget or is explicitly a non-goal.
+4. **Buffer width.** `[[SEED-130]]` applies directly — the browser never clears the Stockfish TT, so evaluator 2's reading of a position depends on what that worker slot searched before (up to 241 cp / 0.0135 ES mean at depth 14 in this project's own grading-ladder data). That is *why* the band wants 0.05 rather than the measured `ES_STABILITY_TOLERANCE` of 0.025. Confirm the choice at planning rather than treating 0.05 as given.
+
+**Success Criteria** (what must be TRUE):
+
+1. Playing a move listed in the reveal's "Also fine" row on the free-play board is never badged worse than that listing claims — the root ply's grade comes from the mount `lines` array, not a fresh post-move search.
+2. Deeper free-play plies remain graded by the free-play engine alone (parent and child from the same search), so no new cross-oracle seam is introduced below the root.
+3. If the dead band ships: no served drill item has a second-best drop in `[INACCURACY_DROP, BLUNDER_DROP)` — enforced both on pool entry and at session composition, with the composition-time check reading live `game_flaws` and never a value snapshotted onto `drill_items`.
+4. A drill item that moves into the band after a reclassification backfill stops being served without any backfill of its own.
+5. The measured session-viability cost is re-confirmed against current prod before the band ships, and any user newly unable to fill a session is a known, accepted number rather than a discovery.
+6. Tests cover both contradiction shapes end to end (case 1: server-sharp puzzle where the browser scores the second-best move as an inaccuracy; case 2: an "Also fine" move badged a mistake on the free-play board), and each production change is mutation-tested (revert it, confirm the test goes red) rather than accepted on symbol presence.
+
+**Non-goals**: raising `SHARP_GAP_ES` from `MISTAKE_DROP` to `BLUNDER_DROP` — **explicitly rejected in the seed.** It does not constrain the pool at all (`classify_puzzle_type` is a classifier, never an entry gate, per P-04), and it converts case 1 into case 2: the `[0.10, 0.15)` band (4.7% of all items) would be labelled "several moves are fine here" while our own scorer gives their runner-up zero points — no measurement error required, guaranteed every time. It also pushes the guess base rate to 79.6/20.4, making "always answer several" a larger freebie. Also out of scope: **residual 2, the server cannot name its own best move** — node 0 keys are `b/bm/s/sm/su` with no best-move UCI, so "Best move: Qc1" is *always* evaluator 2's rank 1 and on a sharp item the two can name different moves with nothing able to detect it; a `bu` key is an eval-pipeline change, not a Train change, and belongs in its own phase. Also out of scope: clearing the browser Stockfish TT between positions (`[[SEED-130]]`, same family, different surface).
+
+**Plans**: 2 plans
+
+Plans:
+**Wave 1**
+
+- [x] 205-01-PLAN.md — Wave 1 (Proposal B, D-01): the free-play root ply is graded from the mount search's own rank lines instead of a fresh post-move search
+
+**Wave 2** *(blocked on Wave 1 completion)*
+
+- [x] 205-02-PLAN.md — Wave 2 (Proposal A, D-01): the selection-level dead band at all three SR sites, plus D-03's degenerate exclusions and the measured prod cost
+
+**Measured cost** (prod, 2026-08-04, recorded in `205-RESEARCH.md` § "Prod Measurement Results"): the band drops **24.29%** of pool items and D-03's no-second-move path a further **10.51%** — **34.80%** total, ~3x the seed's 12.0% estimate, which did not reproduce. The viability conclusion reproduced exactly: of **260** users with pool material, **225 → 224** can fill a session (**1** newly starved), 84.7% of distinct games retained. D-02 locks this as measure-and-record, not a gate.
+
+**UI hint**: minimal — no new components expected. The visible surfaces are the free-play badge on the reveal board and, if the band ships, a slightly smaller pool.
 
 ## Backlog
 

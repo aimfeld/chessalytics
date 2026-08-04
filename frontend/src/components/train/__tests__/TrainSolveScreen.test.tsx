@@ -27,6 +27,7 @@ import { TRAIN_BEST_MOVE_ARROW } from '@/lib/theme';
 import { buildGameAnalysisUrl } from '@/lib/analysisUrl';
 import { useTrainSession } from '@/hooks/useTrainSession';
 import { useTrainGradingEngine } from '@/hooks/useTrainGradingEngine';
+import type { CachedTrainReveal } from '@/lib/trainRevealCache';
 import type {
   SolveRequest,
   SolveResponse,
@@ -117,6 +118,14 @@ vi.mock('@/components/board/ChessBoard', () => ({
           divergent continuation — the fork the analysis move tree must keep. */}
       <button data-testid="drop-d7d5" onClick={() => onPieceDrop('d7', 'd5')}>
         d7d5
+      </button>
+      {/* Phase 205 (D-04): a THIRD white first move (Nc3), legal from the
+          starting position but deliberately outside every mount-search rank
+          the ScriptedFenFakeWorker below ever returns (e2e4/d2d4/g1f3/c2c4)
+          — needed to exercise the D-04 residual (an unranked root move
+          stays on today's cross-oracle path). */}
+      <button data-testid="drop-b1c3" onClick={() => onPieceDrop('b1', 'c3')}>
+        b1c3
       </button>
     </div>
   ),
@@ -323,7 +332,16 @@ function makeSession(overrides: Partial<TrainSessionResponse> = {}): TrainSessio
 
 // ─── Harness: mounts the REAL hooks against the mocked trainApi + fake Worker ─
 
-function Harness({ puzzle }: { puzzle: TrainPuzzle }): ReactElement {
+function Harness({
+  puzzle,
+  restoredSolve = null,
+}: {
+  puzzle: TrainPuzzle;
+  /** Phase 205 Task 2 (D-10): pass-through to TrainSolveScreen's own prop,
+   * defaulting to today's behavior so every pre-existing test (none of which
+   * passes this) is unaffected. */
+  restoredSolve?: CachedTrainReveal | null;
+}): ReactElement {
   const trainSession = useTrainSession();
   const gradingEngine = useTrainGradingEngine({ enabled: true });
   const { startSession } = trainSession;
@@ -331,7 +349,14 @@ function Harness({ puzzle }: { puzzle: TrainPuzzle }): ReactElement {
     startSession();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
-  return <TrainSolveScreen puzzle={puzzle} trainSession={trainSession} gradingEngine={gradingEngine} />;
+  return (
+    <TrainSolveScreen
+      puzzle={puzzle}
+      trainSession={trainSession}
+      gradingEngine={gradingEngine}
+      restoredSolve={restoredSolve}
+    />
+  );
 }
 
 // Phase 200 UAT round 7: the same harness, but the SOLVE SCREEN can be
@@ -380,7 +405,11 @@ function RemountHarness({
   );
 }
 
-async function renderScreen(puzzle: TrainPuzzle, session: TrainSessionResponse = makeSession()) {
+async function renderScreen(
+  puzzle: TrainPuzzle,
+  session: TrainSessionResponse = makeSession(),
+  restoredSolve: CachedTrainReveal | null = null,
+) {
   composeOrResumeSession.mockResolvedValue(session);
   const queryClient = new QueryClient({
     defaultOptions: { queries: { retry: false }, mutations: { retry: false } },
@@ -389,7 +418,7 @@ async function renderScreen(puzzle: TrainPuzzle, session: TrainSessionResponse =
     <MemoryRouter>
       <QueryClientProvider client={queryClient}>
         <TooltipProvider>
-          <Harness puzzle={puzzle} />
+          <Harness puzzle={puzzle} restoredSolve={restoredSolve} />
         </TooltipProvider>
       </QueryClientProvider>
     </MemoryRouter>,
@@ -880,6 +909,78 @@ describe('TrainSolveScreen — progress, last move, grading state, engine failur
     }
   }
 
+  /**
+   * Phase 205 (D-04, Task 1): a Worker fake that branches its response on
+   * the LAST position it was told to search (`position fen ...`), modelled
+   * on `MultiRankFakeWorker` above. At `puzzleFen` it emits the SAME shape
+   * of settled mount search — four near-equal-score, distinct-move ranks,
+   * honouring the requested MultiPV width exactly as `MultiRankFakeWorker`
+   * does. At any OTHER position (the free-play engine's own post-move
+   * search) it emits a single line whose score comes from a constructor-
+   * supplied FEN -> WHITE-POV-centipawn map, with a default for any FEN not
+   * in the map — so a test can script the free-play "oracle" to disagree
+   * with the mount search on purpose (SEED-137 case 2's exact shape).
+   *
+   * `scoresByFen` values are WHITE-POV (matching every eval convention in
+   * this codebase); this class converts to the mover-POV a real UCI engine
+   * reports before emitting, using the searched FEN's own side-to-move —
+   * the same `whitePovSign` inversion `useTrainGradingEngine.ts`'s
+   * `dispatchNow` and `useStockfishEngine.ts`'s `analyze` both apply.
+   */
+  class ScriptedFenFakeWorker {
+    onmessage: ((e: MessageEvent<string>) => void) | null = null;
+    onerror: ((e: unknown) => void) | null = null;
+    private width = 1;
+    private lastPositionFen = '';
+    private readonly mountRanks = ['e2e4', 'd2d4', 'g1f3', 'c2c4'];
+
+    constructor(
+      private readonly puzzleFen: string,
+      private readonly scoresByFen: Record<string, number>,
+      private readonly defaultScoreCp = 20,
+    ) {}
+
+    postMessage(msg: string): void {
+      if (msg === 'uci') {
+        this.emit('uciok');
+      } else if (msg === 'isready') {
+        this.emit('readyok');
+      } else if (msg.startsWith('setoption name MultiPV value ')) {
+        const width = parseInt(msg.slice('setoption name MultiPV value '.length), 10);
+        this.width = Number.isFinite(width) && width > 0 ? width : 1;
+      } else if (msg.startsWith('position fen ')) {
+        this.lastPositionFen = msg.slice('position fen '.length);
+      } else if (msg.startsWith('go ')) {
+        const fen = this.lastPositionFen;
+        queueMicrotask(() => {
+          if (fen === this.puzzleFen) {
+            // The settled mount search — near-equal scores (differ by 1cp
+            // per rank), a DISTINCT move per rank, honouring the requested
+            // width exactly like MultiRankFakeWorker.
+            for (let rank = 1; rank <= this.width; rank++) {
+              const move = this.mountRanks[rank - 1] ?? this.mountRanks[this.mountRanks.length - 1];
+              this.emit(`info depth 10 multipv ${rank} score cp ${20 - rank} nodes 1000 pv ${move}`);
+            }
+            this.emit(`bestmove ${this.mountRanks[0]}`);
+          } else {
+            // The free-play engine's own independent post-move search —
+            // scripted per-FEN, WHITE-POV converted to this FEN's mover POV.
+            const whitePovCp = this.scoresByFen[fen] ?? this.defaultScoreCp;
+            const moverSign = fen.split(' ')[1] === 'b' ? -1 : 1;
+            this.emit(`info depth 10 multipv 1 score cp ${whitePovCp * moverSign} nodes 1000 pv a7a6`);
+            this.emit('bestmove a7a6');
+          }
+        });
+      }
+    }
+
+    terminate(): void {}
+
+    private emit(data: string): void {
+      this.onmessage?.(new MessageEvent('message', { data }));
+    }
+  }
+
   it('a soft puzzle with three drawn alternatives lists all three SANs in the guess card; the alternatives are OFF the pristine board and appear only while that card is hovered (Phase 200 UAT)', async () => {
     stubWorker(() => new MultiRankFakeWorker());
     solvePuzzle.mockResolvedValueOnce({ ...SOLVE_RESPONSE, puzzle_type: 'soft' });
@@ -913,6 +1014,62 @@ describe('TrainSolveScreen — progress, last move, grading state, engine failur
 
     fireEvent.pointerLeave(card);
     await waitFor(() => expect(board().getAttribute('data-arrows-count')).toBe('1'));
+  });
+
+  // ─── Phase 205 (D-04, ORACLE-01/ORACLE-02): free-play root grade agrees ──
+  // with the reveal's "Also fine" row — this plan's tracer, SEED-137 case 2.
+
+  it('ORACLE-01: playing an "Also fine" mount rank as the FIRST free-play move is graded from that rank\'s own eval, never a fresh (worse) free-play-engine search', async () => {
+    // The position reached after white's rank-2 mount move (d2d4) — scripted
+    // to a CATASTROPHIC white-POV score (-900cp), far below BLUNDER_DROP, so
+    // a build that consulted the free-play engine's own search here would
+    // badge this move a blunder. The mount ranks themselves stay within a
+    // couple of centipawns of each other (see ScriptedFenFakeWorker: 19/18/
+    // 17/16cp for ranks 1-4).
+    const afterD2D4 = new Chess(START_FEN);
+    afterD2D4.move('d4');
+    const fenAfterD2D4 = afterD2D4.fen();
+    stubWorker(() => new ScriptedFenFakeWorker(START_FEN, { [fenAfterD2D4]: -900 }));
+    solvePuzzle.mockResolvedValueOnce({ ...SOLVE_RESPONSE, puzzle_type: 'soft' });
+
+    await renderScreen(makePuzzle());
+    fireEvent.click(screen.getByTestId('btn-train-guess-several'));
+    await act(async () => {
+      fireEvent.click(screen.getByTestId('drop-e2e4')); // rank-1, exact match -> lands the verdict
+    });
+    await waitFor(() => expect(screen.getByTestId('train-verdict-guess')).not.toBeNull());
+
+    // Post-verdict: the FIRST free-play move, from the root, is the mount
+    // search's own rank-2 ("Also fine") move.
+    fireEvent.click(screen.getByTestId('drop-d2d4'));
+    const board = () => screen.getByTestId('chessboard');
+    await waitFor(() => expect(board().getAttribute('data-last-move-color')).not.toBe(''));
+    expect(board().getAttribute('data-last-move-color')).toBe(TRAIN_STEP_HIGHLIGHT.good);
+    expect(board().getAttribute('data-last-move-color')).not.toBe(TRAIN_STEP_HIGHLIGHT.mistake);
+    expect(board().getAttribute('data-last-move-color')).not.toBe(TRAIN_STEP_HIGHLIGHT.blunder);
+  });
+
+  it('D-04 residual (deliberate): a FIRST free-play move NOT among the mount ranks still comes from the free-play engine\'s own (worse) search', async () => {
+    const afterB1C3 = new Chess(START_FEN);
+    afterB1C3.move('Nc3');
+    const fenAfterB1C3 = afterB1C3.fen();
+    stubWorker(() => new ScriptedFenFakeWorker(START_FEN, { [fenAfterB1C3]: -900 }));
+
+    await renderScreen(makePuzzle());
+    fireEvent.click(screen.getByTestId('btn-train-guess-critical'));
+    await act(async () => {
+      fireEvent.click(screen.getByTestId('drop-e2e4')); // rank-1, exact match -> lands the verdict
+    });
+    await waitFor(() => expect(screen.getByTestId('train-verdict-guess')).not.toBeNull());
+
+    // b1c3 (Nc3) is legal but outside every mount rank (e2e4/d2d4/g1f3/c2c4)
+    // — D-04's accepted residual seam: esBefore stays seeded from the mount
+    // search, esAfter still comes from the free-play engine's own search.
+    fireEvent.click(screen.getByTestId('drop-b1c3'));
+    const board = () => screen.getByTestId('chessboard');
+    await waitFor(() =>
+      expect(board().getAttribute('data-last-move-color')).toBe(TRAIN_STEP_HIGHLIGHT.blunder),
+    );
   });
 
   // ─── 190.1 UAT round 3: Solution/Analyze/Next row below the board ─────────
@@ -1149,6 +1306,51 @@ describe('TrainSolveScreen — progress, last move, grading state, engine failur
     // Prohibition guard: neither exploration drop touched the graded/solve
     // path — exactly the ONE solvePuzzle call from the original graded move.
     expect(solvePuzzle).toHaveBeenCalledTimes(1);
+  });
+
+  // Phase 205 Task 2 (D-10): a reveal restored from an OLDER bundle's cache
+  // (its gradeResult has no rank-lines key at runtime) must grade its root
+  // free-play move exactly like today's pre-Phase-205 path — no throw, no
+  // silently invented rank match.
+  it('D-10: a restored pre-Phase-205 reveal (gradeResult carrying no rank lines) grades its root free-play move from today\'s free-play-engine path, never throwing', async () => {
+    const restoredPuzzle = makePuzzle();
+    const afterD2D4 = new Chess(START_FEN);
+    afterD2D4.move('d4');
+    const fenAfterD2D4 = afterD2D4.fen();
+    stubWorker(() => new ScriptedFenFakeWorker(START_FEN, { [fenAfterD2D4]: -900 }));
+
+    // A JSON round trip through `unknown` models exactly what an OLDER
+    // bundle actually wrote — `lines` never existed on the wire.
+    const restoredCached = JSON.parse(
+      JSON.stringify({
+        sessionId: 1,
+        puzzle: restoredPuzzle,
+        verdict: SOLVE_RESPONSE,
+        guess: 'critical',
+        playedMoveUci: 'e2e4',
+        gradeResult: {
+          moveTier: 'good',
+          bestMoveUci: 'e2e4',
+          esBefore: 0.5,
+          esAfter: 0.5,
+          bestLine: { moves: ['e2e4'], evalCp: 19, evalMate: null },
+          playedLine: { moves: ['e2e4'], evalCp: 19, evalMate: null },
+          fineMoves: [],
+        },
+      }),
+    ) as CachedTrainReveal;
+
+    await renderScreen(restoredPuzzle, makeSession(), restoredCached);
+    await waitFor(() => expect(screen.getByTestId('train-verdict-guess')).not.toBeNull());
+
+    expect(() => fireEvent.click(screen.getByTestId('drop-d2d4'))).not.toThrow();
+    const board = () => screen.getByTestId('chessboard');
+    // Today's pre-Phase-205 behavior: graded from the free-play engine's own
+    // (scripted, catastrophic) search — never a silently invented rank
+    // match, since the restored gradeResult carries no lines to consult.
+    await waitFor(() =>
+      expect(board().getAttribute('data-last-move-color')).toBe(TRAIN_STEP_HIGHLIGHT.blunder),
+    );
   });
 
   it('a drop while grading is still pending (verdict not yet landed) is rejected and never starts exploration', async () => {
@@ -1455,6 +1657,55 @@ describe('TrainSolveScreen — progress, last move, grading state, engine failur
     await waitFor(() => expect(badgeTitles()).toContain('Best move'));
     expect(badgeTitles()).not.toContain('Gem move');
     expect(badgeTitles()).not.toContain('Great move');
+  });
+
+  // Phase 205 (D-04, ORACLE-02): the root-only boundary. The seeded rank
+  // lines describe the ROOT position only — consulting them at a DEEPER ply
+  // would grade a move against a search of a DIFFERENT position, exactly
+  // the failure mode this test exists to catch (edge probe R2, a boundary
+  // edge per 205-01-PLAN.md).
+  it('ORACLE-02: a mount-rank move replayed at ply 3 (not the root) is graded from the free-play engine\'s own parent/child pair — a scripted bad score still badges it worse', async () => {
+    const afterSequence = new Chess(START_FEN);
+    afterSequence.move('e4');
+    afterSequence.move('e5');
+    afterSequence.move('d4'); // the ROOT search's own rank-2 move, replayed at ply 3
+    const fenAfterSequence = afterSequence.fen();
+    stubWorker(() => new ScriptedFenFakeWorker(START_FEN, { [fenAfterSequence]: -900 }));
+
+    await renderScreen(makePuzzle());
+    fireEvent.click(screen.getByTestId('btn-train-guess-critical'));
+    await act(async () => {
+      fireEvent.click(screen.getByTestId('drop-e2e4')); // graded move -> lands the verdict
+    });
+    await waitFor(() => expect(screen.getByTestId('train-verdict-guess')).not.toBeNull());
+
+    fireEvent.click(screen.getByTestId('drop-e2e4')); // ply 1 (root) — starts free play
+    await waitFor(() => expect(screen.getByTestId('train-reveal-exploration')).not.toBeNull());
+
+    const moveList = () => screen.getByTestId('train-exploration-moves-card');
+    fireEvent.click(screen.getByTestId('drop-e7e5')); // ply 2 — a reply
+    await waitFor(() => expect(within(moveList()).getByText('e5')).not.toBeNull());
+    // Let ply 2's own position finish its free-play-engine search (debounce
+    // + microtask-deferred response) BEFORE playing ply 3 — otherwise React's
+    // effect cleanup cancels ply 2's pending debounce outright the instant
+    // ply 3's FEN change fires, and its eval never lands in `evalByFen`
+    // (same RAPID_STEP_DEBOUNCE_MS-driven pattern other suites in this repo
+    // wait out, e.g. TrainStartScreen.test.tsx).
+    await act(async () => {
+      await new Promise((resolve) => setTimeout(resolve, 250));
+    });
+
+    // ply 3 — the ROOT search's own rank-2 move (d2d4), replayed at a DEEPER
+    // ply. A build that widened the root-only gate to run at every ply would
+    // wrongly consult the ROOT's seeded lines by squares alone and badge
+    // this 'good'; the correct build grades it from THIS ply's own
+    // parent/child pair (the free-play engine's scripted, catastrophic
+    // score for the position after 1.e4 e5 2.d4).
+    fireEvent.click(screen.getByTestId('drop-d2d4'));
+    const board = () => screen.getByTestId('chessboard');
+    await waitFor(() =>
+      expect(board().getAttribute('data-last-move-color')).toBe(TRAIN_STEP_HIGHLIGHT.blunder),
+    );
   });
 
   // ─── Phase 200 UAT round 5: free-play board controls ──────────────────────

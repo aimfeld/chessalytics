@@ -46,7 +46,7 @@ from app.models.game_flaw import GameFlaw
 from app.models.game_position import GamePosition
 from app.models.herring_pool import HerringPool
 from app.services.eval_utils import LICHESS_K
-from app.services.flaws_service import INACCURACY_DROP
+from app.services.flaws_service import BLUNDER_DROP, INACCURACY_DROP
 from app.services.train_pool import (
     HERRING_DEGENERATE_MIN_GAP_ES,
     HERRING_LADDER_SIZE,
@@ -350,6 +350,7 @@ async def _seed_blunder_game(
     ply: int = 10,
     missed_pv_lines: list[Any],
     prior_eval_cp: int = 300,
+    user_color: Literal["white", "black"] = "white",
 ) -> int:
     session_maker = async_sessionmaker(test_engine, expire_on_commit=False)
     async with session_maker() as session:
@@ -361,7 +362,7 @@ async def _seed_blunder_game(
                 platform_url="https://lichess.org/test",
                 pgn=_PGN,
                 result="1-0",
-                user_color="white",
+                user_color=user_color,
                 time_control_str="600+0",
                 time_control_bucket="blitz",
                 time_control_seconds=600,
@@ -459,6 +460,214 @@ async def test_empty_blob_not_counted_as_blob_pending(test_engine) -> None:
         assert pending_count == 0
     finally:
         await _delete_games(test_engine, [game_id])
+
+
+# ---------------------------------------------------------------------------
+# TestDeadBandAdmissible (Phase 205, ORACLE-03/ORACLE-04) — dead_band_admissible
+# applied at pool_entry_stmt. Both boundaries, both D-03 degenerate paths, the
+# JSON-null node, black-mover parity, and the SQL/Python twin agreement at the
+# boundary.
+# ---------------------------------------------------------------------------
+
+
+def _band_node(gap: float) -> dict[str, Any]:
+    """A missed_pv_lines node-0 dict whose best-vs-second expected-score gap
+    is >= `gap`, built on `_boundary_best_cp`'s exact sigmoid-inverse
+    construction. The second move is held at cp=0 (es=0.5), with a real
+    second-move UCI so the D-03 no-second-move sentinel is never accidentally
+    hit by these fixtures."""
+    return {"b": _boundary_best_cp(gap), "bm": None, "s": 0, "sm": None, "su": "e2e4"}
+
+
+async def _pool_contains(test_engine, user_id: int, game_id: int, ply: int) -> bool:
+    """True when pool_entry_stmt(user_id) yields the (game_id, ply) row."""
+    session_maker = async_sessionmaker(test_engine, expire_on_commit=False)
+    async with session_maker() as session:
+        rows = (await session.execute(pool_entry_stmt(user_id))).all()
+    return any(flaw.game_id == game_id and flaw.ply == ply for flaw, _game in rows)
+
+
+class TestDeadBandAdmissible:
+    """dead_band_admissible, applied at pool_entry_stmt."""
+
+    @pytest.mark.asyncio
+    async def test_drop_exactly_at_upper_edge_is_present(self, test_engine) -> None:
+        """BLUNDER_DROP itself is KEPT — the upper edge is open."""
+        user_id, _ = await _register_and_login(
+            f"train-band-upper-{uuid.uuid4().hex[:8]}@example.com"
+        )
+        game_id = await _seed_blunder_game(
+            test_engine, user_id, missed_pv_lines=[_band_node(BLUNDER_DROP)]
+        )
+        try:
+            assert await _pool_contains(test_engine, user_id, game_id, 10) is True
+        finally:
+            await _delete_games(test_engine, [game_id])
+
+    @pytest.mark.asyncio
+    async def test_one_cp_below_upper_edge_is_absent(self, test_engine) -> None:
+        """One cp inside the upper edge is banded — the boundary is sharp."""
+        user_id, _ = await _register_and_login(
+            f"train-band-upperabs-{uuid.uuid4().hex[:8]}@example.com"
+        )
+        node = _band_node(BLUNDER_DROP)
+        node["b"] = node["b"] - 1.0
+        game_id = await _seed_blunder_game(test_engine, user_id, missed_pv_lines=[node])
+        try:
+            assert await _pool_contains(test_engine, user_id, game_id, 10) is False
+        finally:
+            await _delete_games(test_engine, [game_id])
+
+    @pytest.mark.asyncio
+    async def test_drop_exactly_at_lower_edge_is_absent(self, test_engine) -> None:
+        """INACCURACY_DROP itself is EXCLUDED — the lower edge is closed."""
+        user_id, _ = await _register_and_login(
+            f"train-band-lower-{uuid.uuid4().hex[:8]}@example.com"
+        )
+        game_id = await _seed_blunder_game(
+            test_engine, user_id, missed_pv_lines=[_band_node(INACCURACY_DROP)]
+        )
+        try:
+            assert await _pool_contains(test_engine, user_id, game_id, 10) is False
+        finally:
+            await _delete_games(test_engine, [game_id])
+
+    @pytest.mark.asyncio
+    async def test_one_cp_below_lower_edge_is_present(self, test_engine) -> None:
+        """One cp below the lower edge is KEPT (soft) — the boundary is sharp."""
+        user_id, _ = await _register_and_login(
+            f"train-band-lowerabs-{uuid.uuid4().hex[:8]}@example.com"
+        )
+        node = _band_node(INACCURACY_DROP)
+        node["b"] = node["b"] - 1.0
+        game_id = await _seed_blunder_game(test_engine, user_id, missed_pv_lines=[node])
+        try:
+            assert await _pool_contains(test_engine, user_id, game_id, 10) is True
+        finally:
+            await _delete_games(test_engine, [game_id])
+
+    @pytest.mark.asyncio
+    async def test_no_second_move_sentinel_is_absent(self, test_engine) -> None:
+        """D-03 path 1: su == "" (no legal second move) is excluded."""
+        user_id, _ = await _register_and_login(
+            f"train-band-nosecond-{uuid.uuid4().hex[:8]}@example.com"
+        )
+        node = {"b": 50, "bm": None, "s": None, "sm": None, "su": ""}
+        game_id = await _seed_blunder_game(test_engine, user_id, missed_pv_lines=[node])
+        try:
+            assert await _pool_contains(test_engine, user_id, game_id, 10) is False
+        finally:
+            await _delete_games(test_engine, [game_id])
+
+    @pytest.mark.asyncio
+    async def test_non_dict_node_is_absent(self, test_engine) -> None:
+        """D-03 path 2: a non-object node 0 is excluded, not raising."""
+        user_id, _ = await _register_and_login(
+            f"train-band-nondict-{uuid.uuid4().hex[:8]}@example.com"
+        )
+        game_id = await _seed_blunder_game(test_engine, user_id, missed_pv_lines=["not-a-dict"])
+        try:
+            assert await _pool_contains(test_engine, user_id, game_id, 10) is False
+        finally:
+            await _delete_games(test_engine, [game_id])
+
+    @pytest.mark.asyncio
+    async def test_node_with_no_second_move_keys_is_absent(self, test_engine) -> None:
+        """D-03 path 2: a node 0 missing s/sm/su entirely is excluded, not raising."""
+        user_id, _ = await _register_and_login(
+            f"train-band-nokeys-{uuid.uuid4().hex[:8]}@example.com"
+        )
+        node = {"b": 300, "bm": None}
+        game_id = await _seed_blunder_game(test_engine, user_id, missed_pv_lines=[node])
+        try:
+            assert await _pool_contains(test_engine, user_id, game_id, 10) is False
+        finally:
+            await _delete_games(test_engine, [game_id])
+
+    @pytest.mark.asyncio
+    async def test_json_null_node_is_absent_and_raises_nothing(self, test_engine) -> None:
+        """A blob whose single element is a JSON null (the asyncpg None-binding
+        gotcha's shape, RESEARCH Pitfall 3) is excluded, not raising."""
+        user_id, _ = await _register_and_login(
+            f"train-band-jsonnull-{uuid.uuid4().hex[:8]}@example.com"
+        )
+        game_id = await _seed_blunder_game(test_engine, user_id, missed_pv_lines=[None])
+        try:
+            assert await _pool_contains(test_engine, user_id, game_id, 10) is False
+        finally:
+            await _delete_games(test_engine, [game_id])
+
+    @pytest.mark.asyncio
+    async def test_integer_valued_in_band_blob_is_absent(self, test_engine) -> None:
+        """An in-band blob built from plain ints (not the sigmoid-inverse
+        float construction) is still banded — the float cast on b/s does not
+        break the ordinary integer case."""
+        user_id, _ = await _register_and_login(f"train-band-int-{uuid.uuid4().hex[:8]}@example.com")
+        node = {"b": 40, "bm": None, "s": -30, "sm": None, "su": "g8f6"}  # gap ~0.0643, in-band
+        game_id = await _seed_blunder_game(test_engine, user_id, missed_pv_lines=[node])
+        try:
+            assert await _pool_contains(test_engine, user_id, game_id, 10) is False
+        finally:
+            await _delete_games(test_engine, [game_id])
+
+    @pytest.mark.asyncio
+    async def test_second_node_does_not_affect_decision(self, test_engine) -> None:
+        """Only node 0 is read, no re-sorting: a second node that would
+        classify very differently changes nothing."""
+        user_id, _ = await _register_and_login(
+            f"train-band-node0only-{uuid.uuid4().hex[:8]}@example.com"
+        )
+        banded_node = _band_node(INACCURACY_DROP)  # excluded, exactly at the lower edge
+        large_gap_node = {"b": 300, "bm": None, "s": 0, "sm": None, "su": "e2e4"}
+        game_id = await _seed_blunder_game(
+            test_engine, user_id, missed_pv_lines=[banded_node, large_gap_node]
+        )
+        try:
+            assert await _pool_contains(test_engine, user_id, game_id, 10) is False
+        finally:
+            await _delete_games(test_engine, [game_id])
+
+    @pytest.mark.asyncio
+    async def test_twin_agreement_at_upper_edge(self, test_engine) -> None:
+        """The SQL predicate and the Python classifier cannot disagree at the
+        threshold: the exact BLUNDER_DROP construction is 'sharp' under
+        classify_puzzle_type AND kept by pool_entry_stmt in the same run."""
+        user_id, _ = await _register_and_login(
+            f"train-band-twin-{uuid.uuid4().hex[:8]}@example.com"
+        )
+        node = _band_node(BLUNDER_DROP)
+        game_id = await _seed_blunder_game(test_engine, user_id, missed_pv_lines=[node])
+        try:
+            assert classify_puzzle_type([node], "white") == "sharp"
+            assert await _pool_contains(test_engine, user_id, game_id, 10) is True
+        finally:
+            await _delete_games(test_engine, [game_id])
+
+    @pytest.mark.asyncio
+    async def test_black_mover_parity_flips_admissibility(self, test_engine) -> None:
+        """The same node evaluated for a black mover flips admissibility
+        relative to the white-mover case, with mover color derived purely
+        from ply parity -- no Game column enters the predicate."""
+        node = _band_node(INACCURACY_DROP)  # excluded (banded) for a white mover
+        user_id, _ = await _register_and_login(
+            f"train-band-parity-{uuid.uuid4().hex[:8]}@example.com"
+        )
+        white_game_id = await _seed_blunder_game(
+            test_engine, user_id, ply=10, missed_pv_lines=[dict(node)], user_color="white"
+        )
+        black_game_id = await _seed_blunder_game(
+            test_engine,
+            user_id,
+            ply=11,
+            missed_pv_lines=[dict(node)],
+            prior_eval_cp=-300,  # winnable for black (sign flips vs the white default)
+            user_color="black",
+        )
+        try:
+            assert await _pool_contains(test_engine, user_id, white_game_id, 10) is False
+            assert await _pool_contains(test_engine, user_id, black_game_id, 11) is True
+        finally:
+            await _delete_games(test_engine, [white_game_id, black_game_id])
 
 
 # ---------------------------------------------------------------------------

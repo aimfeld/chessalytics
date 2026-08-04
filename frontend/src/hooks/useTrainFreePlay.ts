@@ -33,6 +33,7 @@ import type { FlawMarkerEntry } from '@/components/analysis/VariationTree';
 import { useAnalysisBoard } from '@/hooks/useAnalysisBoard';
 import type { MoveNode, NodeId } from '@/hooks/useAnalysisBoard';
 import { useStockfishEngine } from '@/hooks/useStockfishEngine';
+import { rankLineForSquares } from '@/hooks/uciParser';
 import type { PvLine } from '@/hooks/uciParser';
 import { evalToExpectedScore, sideToMoveFromFen, terminalPositionEval } from '@/lib/liveFlaw';
 import {
@@ -60,6 +61,31 @@ interface FreePlayEval {
   bestUci: string | null;
 }
 
+/**
+ * Phase 205 (D-04): the grading engine's seed for `useTrainFreePlay`,
+ * threaded through `TrainSolveScreen`'s `freePlaySeedEval`. Extends
+ * `FreePlayEval`'s three fields with the settled mount search's own rank
+ * lines, so the FIRST freely played move — when it lands on the puzzle's
+ * ROOT ply and matches one of those ranks — can be graded from that SAME
+ * search instead of a fresh, independently-searched post-move eval that can
+ * disagree with it (SEED-137 case 2). See `currentQuality`'s root-only
+ * branch below for where this is consumed. `lines` is REQUIRED here (unlike
+ * `GradeResult.lines`, which is optional for D-10 cache-restore reasons) —
+ * the one nullish default that absorbs a missing/older-bundle value lives
+ * at `TrainSolveScreen.tsx`'s `freePlaySeedEval` seam, not here.
+ */
+export interface FreePlaySeedEval extends FreePlayEval {
+  lines: PvLine[];
+}
+
+/**
+ * Phase 205 (D-04): frozen empty rank-lines array — referential stability so
+ * `currentQuality`'s memo does not re-run every render when no seed is
+ * present (a fresh `[]` literal would fail the dependency-array `Object.is`
+ * check on every render). Never mutated.
+ */
+const NO_SEED_LINES = Object.freeze<PvLine[]>([]);
+
 export interface UseTrainFreePlayOptions {
   /** The puzzle position — the root of every free-play line. */
   startFen: string;
@@ -69,7 +95,7 @@ export interface UseTrainFreePlayOptions {
    * re-evaluate a position the solve loop already searched. White-POV, same as
    * every other eval in the Train stack. Null before a verdict has landed.
    */
-  seedEval: FreePlayEval | null;
+  seedEval: FreePlaySeedEval | null;
 }
 
 export interface TrainFreePlayState {
@@ -207,6 +233,13 @@ export function useTrainFreePlay({
   const seedCp = seedEval?.cp ?? null;
   const seedMate = seedEval?.mate ?? null;
   const seedBestUci = seedEval?.bestUci ?? null;
+  // Phase 205 (D-04): the settled mount search's own rank lines, or the
+  // shared frozen empty array when no seed is present yet. Deliberately NOT
+  // `seedEval?.lines ?? NO_SEED_LINES` here — `seedEval.lines` is a REQUIRED
+  // field on `FreePlaySeedEval` (the one nullish default for a missing value
+  // lives at the `freePlaySeedEval` call site in `TrainSolveScreen.tsx`, per
+  // D-10 — a second default here would make that one untestable).
+  const seedLines = seedEval === null ? NO_SEED_LINES : seedEval.lines;
   useEffect(() => {
     if (seedCp === null && seedMate === null) return;
     setEvalByFen((prev) => {
@@ -261,8 +294,24 @@ export function useTrainFreePlay({
     // `mate 0`; the rules already know the answer, so prefer them (same fix
     // the Analysis page applies — otherwise a mating move grades as a blunder).
     const terminal = terminalPositionEval(fen);
-    const childCp = terminal !== null ? terminal.cp : liveCp;
-    const childMate = terminal !== null ? terminal.mate : liveMate;
+    // Phase 205 (D-04): when the played move is the puzzle's ROOT ply (no
+    // parent move — `currentNode.parentId === null`) and it matches one of
+    // the settled mount search's own ranks, grade it from that rank line's
+    // own eval instead of the free-play engine's fresh post-move search —
+    // the reveal's "Also fine" alternatives row and this badge must be
+    // answered by the SAME search, so a move the row calls fine can never be
+    // badged worse when played (SEED-137 case 2, Phase 205 D-04). Root-only
+    // on purpose: below the root, the parent and child evals already come
+    // from ONE engine (this free-play engine itself), which is already
+    // self-consistent — consulting the seeded ROOT-only lines there would
+    // grade a move against a search of a DIFFERENT position.
+    const rootRank =
+      terminal === null && currentNode.parentId === null
+        ? rankLineForSquares(seedLines, currentNode.from, currentNode.to)
+        : null;
+    const childCp = terminal !== null ? terminal.cp : rootRank !== null ? rootRank.evalCp : liveCp;
+    const childMate =
+      terminal !== null ? terminal.mate : rootRank !== null ? rootRank.evalMate : liveMate;
     if (childCp === null && childMate === null) return null;
     const mover = sideToMoveFromFen(parentFen);
     const esBefore = evalToExpectedScore(parent.cp, parent.mate, mover);
@@ -274,7 +323,7 @@ export function useTrainFreePlay({
       parent.bestUci !== null &&
       parent.bestUci.slice(0, 4) === `${currentNode.from}${currentNode.to}`;
     return classifyTrainMoveQuality(esBefore, esAfter, isBest);
-  }, [isExploring, currentNode, parentFen, fen, evalByFen, liveCp, liveMate]);
+  }, [isExploring, currentNode, parentFen, fen, evalByFen, liveCp, liveMate, seedLines]);
 
   // Persist each graded node's quality so the move-list badge stays on EVERY
   // explored move (not just the current one) and re-showing an earlier move

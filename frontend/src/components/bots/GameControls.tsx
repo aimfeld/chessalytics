@@ -2,7 +2,9 @@ import { useState } from 'react';
 import type { ReactElement } from 'react';
 import { Volume2, VolumeX } from 'lucide-react';
 import { Button } from '@/components/ui/button';
+import { cn } from '@/lib/utils';
 import { Tooltip } from '@/components/ui/tooltip';
+import { BOT_ACTION_BUTTON_CLASS } from '@/components/bots/chipStyles';
 import {
   Dialog,
   DialogContent,
@@ -49,7 +51,7 @@ export function GameControls({
     <div className="flex items-center gap-2">
       <Button
         variant="brand-outline"
-        size="sm"
+        className={cn(BOT_ACTION_BUTTON_CLASS, 'flex-1')}
         onClick={() => setResignDialogOpen(true)}
         data-testid="board-btn-resign"
       >
@@ -62,11 +64,16 @@ export function GameControls({
             <DialogDescription>You&apos;ll lose this game against the bot.</DialogDescription>
           </DialogHeader>
           <DialogFooter>
-            <Button variant="outline" onClick={() => setResignDialogOpen(false)}>
+            <Button
+              variant="outline"
+              className={BOT_ACTION_BUTTON_CLASS}
+              onClick={() => setResignDialogOpen(false)}
+            >
               Cancel
             </Button>
             <Button
               variant="destructive"
+              className={BOT_ACTION_BUTTON_CLASS}
               onClick={handleConfirmResign}
               data-testid="board-btn-resign-confirm"
             >
@@ -82,12 +89,16 @@ export function GameControls({
        * "Wait a few more moves..." on hover of a perfectly clickable button.
        * `drawCooldownActive` (not the combined `drawOfferDisabled`) is the
        * correct gate: an enabled button never wraps in a tooltip at all. */}
+      {/* Resign and Offer draw split the row evenly (`flex-1` each); the mute
+          toggle keeps its fixed square footprint. In the cooldown branch the
+          Tooltip's `<span>` is the actual flex child, so it carries `flex-1`
+          and the button inside stretches to `w-full`. */}
       {drawCooldownActive ? (
         <Tooltip content="Wait a few more moves before offering again">
-          <span>
+          <span className="flex-1">
             <Button
               variant="brand-outline"
-              size="sm"
+              className={cn(BOT_ACTION_BUTTON_CLASS, 'w-full')}
               disabled={drawOfferDisabled}
               onClick={onOfferDraw}
               data-testid="board-btn-offer-draw"
@@ -99,7 +110,7 @@ export function GameControls({
       ) : (
         <Button
           variant="brand-outline"
-          size="sm"
+          className={cn(BOT_ACTION_BUTTON_CLASS, 'flex-1')}
           disabled={drawOfferDisabled}
           onClick={onOfferDraw}
           data-testid="board-btn-offer-draw"
@@ -111,6 +122,7 @@ export function GameControls({
       <Button
         variant="ghost"
         size="icon"
+        className="size-12"
         onClick={onToggleMute}
         aria-label={muted ? 'Unmute sounds' : 'Mute sounds'}
         data-testid="board-btn-mute"

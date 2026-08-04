@@ -666,7 +666,10 @@ function ProtectedLayout() {
       <MobileBottomBar onMoreClick={() => setMoreOpen(true)} />
       <MobileMoreDrawer open={moreOpen} onOpenChange={setMoreOpen} />
       <InstallPromptBanner />
-      <FeedbackButton />
+      {/* The floating feedback bubble sits over the board's bottom right corner
+          and the result dialog's actions, so it's hidden on both immersive
+          board screens (`playActive`: a live bot game, the Train solve loop). */}
+      {!playActive && <FeedbackButton />}
     </>
   );
 }

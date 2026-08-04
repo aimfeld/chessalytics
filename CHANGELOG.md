@@ -16,6 +16,10 @@ in `YYYY-MM-DD` (Europe/Zurich).
 
 - Train reminders now recover from the ways they used to stop arriving without telling you. Push services drop a device's registration on their own, and until now that was permanent: FlawChess re-registers the device the next time you open the app, silently, without spending your one-shot notification permission. A reminder sent while your phone is off or out of signal is no longer thrown away on the spot; it waits until the end of your day and lands when the phone comes back, and a backlog still collapses into a single notification rather than a pile. If a key rotation on our side invalidated your device, pressing "Remind me" now repairs the registration instead of appearing to work and doing nothing. And on a day when a reminder reached none of your devices, that day is no longer marked as reminded, so the next attempt can still get through. (Phase 204)
 
+- A move the reveal lists as also fine can no longer be marked a mistake when you play it on the free-play board. That badge now comes from the same search that put the move on the "Also fine" list, instead of a fresh one that could grade the identical position differently. (Phase 205)
+
+- Puzzles whose best and second-best moves are too close for the in-browser engine to separate reliably are no longer served, so the guess label, the move score, and the board badges can no longer disagree about the same position. This removes about a third of the eligible pool — 24.29% for the too-close margin, plus 10.51% for positions with only one legal move to begin with. Of 260 affected users, exactly one is newly unable to fill a full session, and on average users keep 84.7% of the distinct games their puzzles were drawn from. (Phase 205)
+
 ## [v2.11] Train Solve Surface & Push Reminders — 2026-08-03
 
 ### Tests

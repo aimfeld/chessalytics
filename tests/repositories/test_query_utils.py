@@ -14,11 +14,16 @@ rows leak between tests.
 from __future__ import annotations
 
 import pytest
-from sqlalchemy import select
+from sqlalchemy import literal, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.game import Game
-from app.repositories.query_utils import DEFAULT_EXCLUDED_PLATFORMS, apply_game_filters
+from app.repositories.query_utils import (
+    DEFAULT_EXCLUDED_PLATFORMS,
+    apply_game_filters,
+    mover_color_expr,
+    mover_is_white_at_ply,
+)
 from tests.conftest import ensure_test_user
 
 _TEST_USER_ID = 92401  # unique ID for this test module
@@ -165,3 +170,29 @@ class TestApplyGameFiltersFlawchessExclusion:
         ids = {row[0] for row in result.fetchall()}
 
         assert flawchess_id not in ids
+
+
+class TestMoverColorExpr:
+    """mover_color_expr — the SQL twin of mover_is_white_at_ply/mover_color_for_ply.
+
+    Phase 205 (dead-band exclusion): evaluated against a real DB query for
+    both ply parities, compared through the Python helper (not a hardcoded
+    string) so the two sources cannot drift independently.
+    """
+
+    pytestmark = pytest.mark.asyncio
+
+    async def _eval_mover_color(self, db_session: AsyncSession, ply: int) -> str:
+        expr = mover_color_expr(literal(ply))
+        result = await db_session.execute(select(expr))
+        return str(result.scalar_one())
+
+    async def test_even_ply_agrees_with_python_helper(self, db_session: AsyncSession) -> None:
+        ply = 10
+        expected = "white" if mover_is_white_at_ply(ply) else "black"
+        assert await self._eval_mover_color(db_session, ply) == expected == "white"
+
+    async def test_odd_ply_agrees_with_python_helper(self, db_session: AsyncSession) -> None:
+        ply = 11
+        expected = "white" if mover_is_white_at_ply(ply) else "black"
+        assert await self._eval_mover_color(db_session, ply) == expected == "black"

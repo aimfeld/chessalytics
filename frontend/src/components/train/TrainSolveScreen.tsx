@@ -276,6 +276,17 @@ export function TrainSolveScreen({
             cp: gradeResult.bestLine.evalCp,
             mate: gradeResult.bestLine.evalMate,
             bestUci: gradeResult.bestMoveUci,
+            // Phase 205 (D-10): the single graceful-fallback default for the
+            // whole D-04 seam. A reveal restored from a `trainRevealCache`
+            // entry written by an OLDER bundle carries a `gradeResult` with
+            // no `lines` key at runtime even though the compiler sees the
+            // (optional) field — this `?? []` is what turns that into
+            // "fall back to today's free-play-engine grade" instead of a
+            // thrown error. This is the ONLY nullish default anywhere on
+            // this seam (see useTrainFreePlay's `seedLines` derivation,
+            // which must not add a second one — exactly one load-bearing
+            // default keeps the D-10 mutation test meaningful).
+            lines: gradeResult.lines ?? [],
           },
     [gradeResult],
   );

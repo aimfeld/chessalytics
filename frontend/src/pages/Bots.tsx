@@ -45,7 +45,6 @@ import { MoveListPanel } from '@/components/bots/MoveListPanel';
 import { GameControls } from '@/components/bots/GameControls';
 import { BotDrawOfferBanner } from '@/components/bots/BotDrawOfferBanner';
 import { GameResultDialog } from '@/components/bots/GameResultDialog';
-import { GameResultStrip } from '@/components/bots/GameResultStrip';
 import { ResumeGate } from '@/components/bots/ResumeGate';
 import { SetupScreen } from '@/components/bots/SetupScreen';
 import { PersonaGrid } from '@/components/bots/PersonaGrid';
@@ -92,8 +91,10 @@ const BOT_BOARD_MIN_WIDTH_PX = 240;
 
 /** Space kept free between the page container's bottom edge and the viewport
  * bottom. The container's own bottom padding (pb-20 / sm:pb-4) is already
- * measured as chrome, so this is only visual breathing room. */
-const BOT_BOARD_BOTTOM_GUTTER_PX = 24;
+ * measured as chrome, so this is only visual breathing room — halved from 24
+ * to pay for the taller control rows (see the vertical-budget note on the page
+ * container's className) rather than letting them eat the board's width. */
+const BOT_BOARD_BOTTOM_GUTTER_PX = 12;
 
 /** Fixed width of the desktop right column (clocks + move list + controls). */
 const DESKTOP_SIDE_COLUMN_PX = 320;
@@ -129,7 +130,7 @@ function renderMobileLayout(
 ): ReactElement {
   return (
     <div
-      className="mx-auto flex w-full flex-col gap-3"
+      className="mx-auto flex w-full flex-col gap-2"
       style={{ maxWidth: boardPx }}
     >
       {botClock}
@@ -271,7 +272,6 @@ function BotsGame({
   // (`expect(fakeGame.newGame).not.toHaveBeenCalled()` on both result
   // surfaces), not by a linter.
   const game = useBotGame(settings, resume ?? undefined, ownerKey);
-  const [dialogDismissed, setDialogDismissed] = useState(false);
   const hasUnlockedAudioRef = useRef(false);
   // Quick 260723-tqn: holds the result modal closed for a short window after
   // a human win so the confetti (fired from useBotGame's finalizeGame) plays
@@ -342,11 +342,6 @@ function BotsGame({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [game.outcome, game.pgn, game.gameUuid, ownerKey, settings, store.mutate, queryClient]);
 
-  // Reset the dismissed flag when a fresh game starts (outcome goes back to null).
-  useEffect(() => {
-    if (game.outcome === null) setDialogDismissed(false);
-  }, [game.outcome]);
-
   // Pitfall 4: unlock iOS/mobile-Chrome audio playback from the page's first
   // user gesture of ANY kind (useBotGame.attemptMove also unlocks on the
   // first board move, but a gesture on the controls/board container before
@@ -364,7 +359,7 @@ function BotsGame({
   // D-21 RETIRED (Quick 260714-rj5): Analyze now needs the server-assigned
   // game_id from the finish-time store (`store`, above) to enqueue tier-1
   // analysis and land on the game-mode board directly, so it's gated on the
-  // store settling — see GameResultDialog/GameResultStrip's analyzeBusy doc
+  // store settling — see GameResultDialog's analyzeBusy doc
   // comments for the full rationale (this replaces the old "never gated"
   // Phase 169 D-20/D-21 invariant).
   const enqueueTier1 = useTier1EnqueueForGame();
@@ -457,6 +452,9 @@ function BotsGame({
       onFlip={handleFlip}
       canGoBack={viewedPly > 0}
       canGoForward={viewedPly < liveGamePly}
+      // 'xl': 48px tall, buttons spread across the full bar — same tap target
+      // as this page's Resign / Offer draw row right below it.
+      size="xl"
     />
   );
   // Move list (desktop side column only — hidden in the single-column layout).
@@ -472,37 +470,21 @@ function BotsGame({
       fillHeight
     />
   );
-  // Game controls, or — once the result dialog is dismissed — the persistent
-  // result strip that REPLACES them (per the UI-SPEC).
-  const showResultStrip = game.outcome !== null && dialogDismissed;
-  const controls =
-    showResultStrip && game.outcome !== null ? (
-      <GameResultStrip
-        outcome={game.outcome}
-        userColor={settings.userColor}
-        onNewGame={onNewGame}
-        onAnalyze={handleAnalyze}
-        storeSucceeded={store.isSuccess}
-        isGuest={isGuest}
-        analyzeBusy={analyzeBusy}
-        personaName={persona?.name ?? null}
-        onRematch={handleRematch}
-      />
-    ) : (
-      <GameControls
-        // WR-04: the props now mean what their names/docs say — `canOfferDraw`
-        // is the D-01 "not already pending, game not over" gate;
-        // `drawCooldownActive` is the D-04 cooldown throttle, which is what the
-        // hook's own `canOfferDraw` (a cooldown-gate boolean) actually reports
-        // (inverted). The net disabled state is unchanged.
-        canOfferDraw={!game.drawOfferPending && game.outcome === null}
-        drawCooldownActive={!game.canOfferDraw}
-        muted={muted}
-        onResignConfirmed={game.resign}
-        onOfferDraw={game.offerDraw}
-        onToggleMute={handleToggleMute}
-      />
-    );
+  const controls = (
+    <GameControls
+      // WR-04: the props now mean what their names/docs say — `canOfferDraw`
+      // is the D-01 "not already pending, game not over" gate;
+      // `drawCooldownActive` is the D-04 cooldown throttle, which is what the
+      // hook's own `canOfferDraw` (a cooldown-gate boolean) actually reports
+      // (inverted). The net disabled state is unchanged.
+      canOfferDraw={!game.drawOfferPending && game.outcome === null}
+      drawCooldownActive={!game.canOfferDraw}
+      muted={muted}
+      onResignConfirmed={game.resign}
+      onOfferDraw={game.offerDraw}
+      onToggleMute={handleToggleMute}
+    />
+  );
 
   return (
     <div
@@ -514,7 +496,15 @@ function BotsGame({
       // clearance arithmetic. Horizontal padding is deliberately tighter than
       // the usual p-4: every px of it comes straight off the board's width at
       // the narrower desktop widths.
-      className="mx-auto flex max-w-5xl flex-col gap-4 px-2 py-4 pb-20 sm:pb-4"
+      //
+      // Vertical budget: the board is SQUARE and height-fitted
+      // (`useFitBoardToViewport`), so every px of vertical chrome on this page
+      // is a px off the board's WIDTH — it shrinks away from the screen edges
+      // and leaves side gutters. Raising the control rows to 48px tap targets
+      // cost ~36px, reclaimed here (`py-2` on mobile) plus the mobile stack's
+      // `gap-2` and a halved BOT_BOARD_BOTTOM_GUTTER_PX. Keep that budget in
+      // mind before adding height anywhere in this column.
+      className="mx-auto flex max-w-5xl flex-col gap-4 px-2 py-2 pb-20 sm:py-4 sm:pb-4"
     >
       {isDesktop
         ? renderDesktopLayout(botClock, userClock, board, boardControls, moveList, controls, boardPx)
@@ -552,8 +542,13 @@ function BotsGame({
         <GameResultDialog
           outcome={game.outcome}
           userColor={settings.userColor}
-          open={!dialogDismissed && !celebrationHold}
-          onDismiss={() => setDialogDismissed(true)}
+          open={!celebrationHold}
+          // Dismissing without picking an action (X / outside click / Esc)
+          // returns to the bot roster. The old wiring revealed a persistent
+          // result strip over the finished board instead — a screen with no
+          // purpose of its own, whose extra height also shrank the board on
+          // mobile (the "zoomed out" report).
+          onDismiss={onNewGame}
           onNewGame={onNewGame}
           onAnalyze={handleAnalyze}
           storeSucceeded={store.isSuccess}

@@ -10,6 +10,7 @@ import {
   DialogTitle,
 } from '@/components/ui/dialog';
 import type { BotGameSnapshot } from '@/lib/botGameSnapshot';
+import { BOT_ACTION_BUTTON_CLASS } from '@/components/bots/chipStyles';
 
 // ─── Named constants (CLAUDE.md no-magic-numbers) ──────────────────────────
 
@@ -123,12 +124,18 @@ export function ResumeGate({
           <DialogFooter>
             <Button
               variant="brand-outline"
+              className={BOT_ACTION_BUTTON_CLASS}
               onClick={() => setDiscardConfirmOpen(true)}
               data-testid="btn-discard"
             >
               Discard
             </Button>
-            <Button variant="default" onClick={onResume} data-testid="btn-resume">
+            <Button
+              variant="default"
+              className={BOT_ACTION_BUTTON_CLASS}
+              onClick={onResume}
+              data-testid="btn-resume"
+            >
               Resume
             </Button>
           </DialogFooter>
@@ -146,6 +153,7 @@ export function ResumeGate({
           <DialogFooter>
             <Button
               variant="outline"
+              className={BOT_ACTION_BUTTON_CLASS}
               onClick={() => setDiscardConfirmOpen(false)}
               data-testid="btn-discard-cancel"
             >
@@ -153,6 +161,7 @@ export function ResumeGate({
             </Button>
             <Button
               variant="destructive"
+              className={BOT_ACTION_BUTTON_CLASS}
               onClick={handleConfirmDiscard}
               data-testid="btn-discard-confirm"
             >

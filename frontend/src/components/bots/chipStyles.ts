@@ -31,3 +31,13 @@ export const CHIP_ACTIVE_CLASS =
  * latch on touch devices. */
 export const CHIP_INACTIVE_CLASS =
   'border-border bg-inactive-bg text-muted-foreground pointer-fine:hover:bg-inactive-bg-hover pointer-fine:hover:text-foreground';
+
+/** The ONE height for every bot-play action button — the in-game controls
+ * (Resign / Offer draw / mute), the resume + discard + resign confirmations,
+ * and the game-result actions. `h-12` (48px) matches the roster's "Custom"
+ * and the detail surface's "Play" CTA, which were the only bot buttons that
+ * were comfortably tappable; everything else sat at `size="sm"`'s 28px, far
+ * under the 44px WCAG 2.5.5 / Apple HIG touch minimum. `px-4` keeps the
+ * horizontal padding proportionate to the taller box. Applied via
+ * `className` (tailwind-merge lets it win over the size variant's `h-*`). */
+export const BOT_ACTION_BUTTON_CLASS = 'h-12 px-4';
