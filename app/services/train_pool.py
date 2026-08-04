@@ -32,6 +32,7 @@ from typing import Any, Literal, TypeVar
 
 import chess.pgn
 from sqlalchemy import (
+    Float,
     Integer,
     Select,
     and_,
@@ -41,6 +42,7 @@ from sqlalchemy import (
     exists,
     func,
     literal,
+    or_,
     select,
     true,
 )
@@ -54,9 +56,14 @@ from app.models.game import Game
 from app.models.game_flaw import GameFlaw
 from app.models.game_position import GamePosition
 from app.models.herring_pool import HerringPool
-from app.repositories.query_utils import player_only_gate
+from app.repositories.query_utils import mover_color_expr, player_only_gate
 from app.services.eval_utils import LICHESS_K, eval_cp_to_expected_score
-from app.services.flaws_service import INACCURACY_DROP, MATE_CP_EQUIVALENT, MISTAKE_DROP
+from app.services.flaws_service import (
+    BLUNDER_DROP,
+    INACCURACY_DROP,
+    MATE_CP_EQUIVALENT,
+    MISTAKE_DROP,
+)
 
 # P-05: low end of the seed's ~20-25% expected-score band. Planner discretion
 # (CONTEXT.md "Claude's Discretion").
@@ -318,6 +325,82 @@ def answer_key_present(col: Any) -> ColumnElement[bool]:
     return and_(col.isnot(None), func.jsonb_typeof(col) == "array", col != empty_array)
 
 
+def dead_band_admissible(missed_pv_lines_col: Any, ply_col: Any) -> ColumnElement[bool]:
+    """True when `missed_pv_lines_col`'s node-0 best-vs-second expected-score
+    gap clears Proposal A's dead band (D-05/D-11, SEED-137, Phase 205).
+
+    The band is `[INACCURACY_DROP, BLUNDER_DROP)` — CLOSED at the lower edge,
+    OPEN at the upper edge: a gap of exactly `INACCURACY_DROP` is EXCLUDED, a
+    gap of exactly `BLUNDER_DROP` is KEPT and stays sharp. The 0.05 buffer
+    (rather than the measured `ES_STABILITY_TOLERANCE` of 0.025) stands on
+    SEED-130's rationale: the browser's Stockfish never clears its
+    transposition table, so evaluator 2's reading of a position depends on
+    what that Worker slot searched before.
+
+    BOTH of D-03's degenerate node-0 shapes are excluded HERE, at the
+    selection predicate, rather than in `classify_puzzle_type` — that
+    function keeps its current return contract (it is a classifier, never an
+    entry gate, P-04): the no-legal-second-move sentinel (`su == ""`) and an
+    unreadable blob (a non-object node 0, or either expected score
+    resolving to NULL).
+
+    Callers MUST also apply `answer_key_present(missed_pv_lines_col)` in the
+    same WHERE — this predicate assumes an already-validated non-NULL,
+    non-empty JSON array (mirroring how `answer_key_pending`'s docstring
+    cross-references its own sibling below).
+
+    Mover color is derived from ply parity (`mover_color_expr`), never
+    `Game.user_color` — every candidate row this predicate is ever applied to
+    is already the user's OWN ply by construction (the player-only gate at
+    pool entry), so ply parity and `Game.user_color` always agree for these
+    rows. This is what lets the SAME predicate serve
+    `get_waiting_puzzle_count`'s due-count statement, which deliberately
+    drops the `Game` join.
+
+    The total-operator hazard `answer_key_present`'s docstring documents was
+    checked and does not apply here: this predicate pairs a JSONB type test
+    with plain index/field extraction, never with an array function, and
+    every operator here returns NULL rather than raising on wrong-shaped
+    input (verified against the dev DB during research).
+
+    `b`/`s` are cast to a float type, not an integer type: the boundary tests
+    construct `b` via the exact sigmoid inverse, which is a non-integer, and
+    an integer cast of a non-integer text value raises in Postgres — exactly
+    the crash `answer_key_present`'s total-operator discipline forbids.
+    `bm`/`sm` (mate distances) stay integer-cast — they are whole numbers,
+    only null-checked and sign-compared by `expected_score_sql`.
+
+    Args:
+        missed_pv_lines_col: A JSONB column/expression, typically
+            `GameFlaw.missed_pv_lines` — already validated non-NULL/non-empty
+            by `answer_key_present` in the same WHERE.
+        ply_col: A column/expression resolving to the ply integer, typically
+            `GameFlaw.ply`.
+
+    Returns:
+        A SQLAlchemy ColumnElement[bool]: True when node 0 is fully readable
+        AND its best-vs-second gap is outside `[INACCURACY_DROP, BLUNDER_DROP)`.
+    """
+    node0 = missed_pv_lines_col[0]
+    second_uci = node0["su"].astext
+    mover_color = mover_color_expr(ply_col)
+    best_es = expected_score_sql(
+        cast(node0["b"].astext, Float), cast(node0["bm"].astext, Integer), mover_color
+    )
+    second_es = expected_score_sql(
+        cast(node0["s"].astext, Float), cast(node0["sm"].astext, Integer), mover_color
+    )
+    gap = best_es - second_es
+    return and_(
+        func.jsonb_typeof(node0) == "object",
+        second_uci.isnot(None),
+        second_uci != "",
+        best_es.isnot(None),
+        second_es.isnot(None),
+        or_(gap >= BLUNDER_DROP, gap < INACCURACY_DROP),
+    )
+
+
 def answer_key_pending(col: Any) -> ColumnElement[bool]:
     """True when `col` (a `missed_pv_lines`-shaped JSONB column) has not yet
     been processed by the eval pipeline — i.e. true SQL NULL (189-06 D-GAP-01).
@@ -442,6 +525,7 @@ def pool_entry_stmt(user_id: int) -> Select[tuple[GameFlaw, Game]]:
             GameFlaw.severity == _SEVERITY_BLUNDER,
             player_only_gate(GameFlaw.ply, Game.user_color),
             answer_key_present(GameFlaw.missed_pv_lines),
+            dead_band_admissible(GameFlaw.missed_pv_lines, GameFlaw.ply),
             expected_score >= WINNABILITY_FLOOR_ES,
         )
     )
@@ -875,6 +959,7 @@ __all__ = [
     "blob_pending_stmt",
     "classify_puzzle_type",
     "compose_slots",
+    "dead_band_admissible",
     "expected_score_for",
     "expected_score_sql",
     "fen_and_last_move_at_ply",

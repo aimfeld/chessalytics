@@ -29,7 +29,7 @@
 
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { Chess } from 'chess.js';
-import { parseInfoLine, parseBestmove, dedupePvLinesByFirstMove } from './uciParser';
+import { parseInfoLine, parseBestmove, dedupePvLinesByFirstMove, rankLineForMove } from './uciParser';
 import type { PvLine } from './uciParser';
 import { classifyLiveSeverity, evalToExpectedScore, sideToMoveFromFen } from '@/lib/liveFlaw';
 import type { MoverColor } from '@/lib/liveFlaw';
@@ -167,6 +167,19 @@ export interface GradeResult {
    * without any additional search. */
   bestLine: TrainEngineLine;
   /**
+   * Phase 205 (D-04): the settled mount search's own MultiPV ranks,
+   * white-POV sign-normalized exactly like `bestLine` — carried so the
+   * free-play board can grade its root ply from the SAME search that
+   * produced the reveal's "Also fine" alternatives row, instead of a
+   * second, independent search that can disagree with it (SEED-137
+   * case 2). OPTIONAL: a reveal restored from a `trainRevealCache` entry
+   * written by an older bundle genuinely carries no such key at runtime,
+   * even though the compiler sees the field (D-10) — every consumer must
+   * treat a missing/empty array as "fall back to today's behavior", never
+   * throw.
+   */
+  lines?: PvLine[];
+  /**
    * The played move's own line. On the exact-match fast path this is exactly
    * `bestLine` — rank 1 IS the played move's line. When the played move is
    * any OTHER mount-search rank, it's that rank's line — same search as
@@ -291,14 +304,6 @@ function deriveFineMoves(lines: PvLine[], esRank1: number, mover: MoverColor): T
     }
   }
   return fine;
-}
-
-/** Find the settled mount-search rank whose first move is `uci`, or null.
- * Rank lines are rooted at the puzzle FEN and share one search with rank 1,
- * so an eval taken from here can never invert against the best move's eval
- * (190.1 UAT round 9). */
-function rankLineForMove(lines: PvLine[], uci: string): PvLine | null {
-  return lines.find((l) => l.moves[0] === uci) ?? null;
 }
 
 /**
@@ -699,7 +704,9 @@ export function useTrainGradingEngine({
         // Defensive fallback (should not happen when startGrading was called
         // for this exact fen) — never crash the solve loop. Resolves the GOOD
         // tier (SEED-119): a defensive path must never silently cost the
-        // user move points.
+        // user move points. No settled search is in scope here, so `lines`
+        // is the empty array — the one path per Phase 205 D-04 that does NOT
+        // carry the mount search's own ranks.
         return {
           moveTier: 'good',
           bestMoveUci: null,
@@ -707,6 +714,7 @@ export function useTrainGradingEngine({
           esAfter: 0.5,
           bestLine: emptyLine,
           playedLine: emptyLine,
+          lines: [],
           fineMoves: [],
         };
       }
@@ -727,6 +735,7 @@ export function useTrainGradingEngine({
           esAfter: esBefore,
           bestLine,
           playedLine: bestLine,
+          lines: best.lines,
           fineMoves,
         };
       }
@@ -748,6 +757,7 @@ export function useTrainGradingEngine({
           esAfter,
           bestLine,
           playedLine: { moves: rankLine.moves, evalCp: rankLine.evalCp, evalMate: rankLine.evalMate },
+          lines: best.lines,
           fineMoves,
         };
       }
@@ -764,6 +774,7 @@ export function useTrainGradingEngine({
           esAfter: esBefore,
           bestLine,
           playedLine: bestLine,
+          lines: best.lines,
           fineMoves,
         };
       }
@@ -788,7 +799,16 @@ export function useTrainGradingEngine({
         bestLine,
         mover,
       );
-      return { moveTier, bestMoveUci: best.bestMoveUci, esBefore, esAfter, bestLine, playedLine, fineMoves };
+      return {
+        moveTier,
+        bestMoveUci: best.bestMoveUci,
+        esBefore,
+        esAfter,
+        bestLine,
+        playedLine,
+        lines: best.lines,
+        fineMoves,
+      };
     },
     [search],
   );

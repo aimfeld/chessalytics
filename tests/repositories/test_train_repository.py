@@ -78,7 +78,22 @@ _PGN = (
     "8. c3 O-O 9. h3 Nb8 10. d4 Nbd7 *"
 )
 
-_MISSED_PV_LINES = [{"b": 40, "bm": None, "s": -30, "sm": None, "su": "g8f6"}]
+# Phase 205 (dead-band exclusion, D-05/D-11): the ORIGINAL blob here was
+# {"b": 40, "s": -30}, gap ~0.0643 -- squarely inside the new
+# [INACCURACY_DROP, BLUNDER_DROP) = [0.05, 0.15) band, so `pool_entry_stmt`
+# would no longer admit it. Moved `s` from -30 to 30 (holding `b` at 40),
+# giving a gap of ~0.0092 -- comfortably below INACCURACY_DROP -- so the
+# fixture stays exactly as "soft" as before (the old drop was already below
+# SHARP_GAP_ES = 0.10) with no assertion elsewhere shifting. The old blob
+# survives verbatim as `_BANDED_PV_LINES` below, for the tests that need an
+# in-band fixture.
+_MISSED_PV_LINES = [{"b": 40, "bm": None, "s": 30, "sm": None, "su": "g8f6"}]
+
+# Phase 205: the pre-retune `_MISSED_PV_LINES` blob verbatim (gap ~0.0643,
+# inside [INACCURACY_DROP, BLUNDER_DROP) = [0.05, 0.15)) -- the in-band
+# fixture the dead-band tests use to prove pool_entry_stmt/due_stmt/
+# get_waiting_puzzle_count all exclude it.
+_BANDED_PV_LINES = [{"b": 40, "bm": None, "s": -30, "sm": None, "su": "g8f6"}]
 
 # A comfortably winnable eval for White (well above WINNABILITY_FLOOR_ES=0.20).
 _WINNABLE_CP = 300
@@ -1506,6 +1521,154 @@ async def test_emptied_blob_item_not_reserved_when_due(db_session: AsyncSession)
         )
     ).scalar_one()
     assert item_row.status == DrillStatus.ACTIVE  # skipped, never deleted or parked
+
+
+# ---------------------------------------------------------------------------
+# Phase 205 (D-05/D-06, ORACLE-03/ORACLE-05) — the dead-band re-serve sites.
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_banded_item_not_reserved_when_due(db_session: AsyncSession) -> None:
+    """Phase 205 ORACLE-03 (re-serve arm) + ORACLE-05 (criterion 4) in full:
+    an already-tracked drill_items row whose backing flaw's missed_pv_lines
+    is rewritten INTO the dead band ([INACCURACY_DROP, BLUNDER_DROP)) is
+    skipped by due_stmt's fresh scan on the next session compose, with the
+    row provably untouched -- it still EXISTS, its status is still ACTIVE,
+    and its due_date is unchanged from the value captured before the
+    rewrite. This isolates due_stmt's own re-serve clause specifically:
+    pool_entry_stmt's entry gate already skips ALREADY-TRACKED items via
+    existing_pairs regardless of the band, so only due_stmt's clause can be
+    responsible for the second session composing empty. Modeled on
+    test_emptied_blob_item_not_reserved_when_due (the D-06 empty-blob
+    analog)."""
+    await ensure_test_user(db_session, _USER_ID)
+    game_id = await _seed_flaw_game(db_session, _USER_ID, "banded-reserve-1", ply=2)
+
+    first = await train_repository.compose_and_materialize_session(
+        db_session, user_id=_USER_ID, now_utc=_NOW
+    )
+    assert first.puzzle_count == 1
+
+    item_row_before = (
+        await db_session.execute(
+            select(DrillItem).where(
+                DrillItem.user_id == _USER_ID, DrillItem.game_id == game_id, DrillItem.ply == 2
+            )
+        )
+    ).scalar_one()
+    due_date_before = item_row_before.due_date
+
+    # Force the session to expire so the NEXT compose runs a fresh due_stmt
+    # scan rather than resuming (resume/load_session_puzzles is a distinct
+    # code path, D-06, covered separately below).
+    await db_session.execute(
+        update(DrillSession)
+        .where(DrillSession.id == first.session_id)
+        .values(expires_on=datetime.date(2020, 1, 1))
+    )
+    await db_session.flush()
+
+    # Simulate a reclassification that moves the backing blob into the band.
+    await db_session.execute(
+        update(GameFlaw)
+        .where(GameFlaw.user_id == _USER_ID, GameFlaw.game_id == game_id, GameFlaw.ply == 2)
+        .values(missed_pv_lines=_BANDED_PV_LINES)
+    )
+    await db_session.flush()
+
+    second = await train_repository.compose_and_materialize_session(
+        db_session, user_id=_USER_ID, now_utc=_NOW
+    )
+    assert second.puzzle_count == 0
+
+    item_row_after = (
+        await db_session.execute(
+            select(DrillItem).where(
+                DrillItem.user_id == _USER_ID, DrillItem.game_id == game_id, DrillItem.ply == 2
+            )
+        )
+    ).scalar_one()
+    assert item_row_after.status == DrillStatus.ACTIVE  # skipped, never deleted or parked
+    assert item_row_after.due_date == due_date_before  # untouched
+
+
+@pytest.mark.asyncio
+async def test_waiting_count_excludes_banded_due_item(db_session: AsyncSession) -> None:
+    """Phase 205: get_waiting_puzzle_count's due-count statement excludes a
+    banded due item while still counting an admissible one -- not simply
+    zero, which would pass for the wrong reason."""
+    await ensure_test_user(db_session, _USER_ID)
+    settings_row = await train_repository.get_or_create_settings(db_session, user_id=_USER_ID)
+
+    admissible_game_id = await _seed_flaw_game(db_session, _USER_ID, "waiting-band-admissible")
+    db_session.add(
+        DrillItem(
+            user_id=_USER_ID,
+            game_id=admissible_game_id,
+            ply=2,
+            status=DrillStatus.ACTIVE,
+            streak=0,
+            due_date=_TODAY,
+            fail_count=0,
+            ever_correct=False,
+        )
+    )
+    banded_game_id = await _seed_flaw_game(
+        db_session, _USER_ID, "waiting-band-banded", missed_pv_lines=_BANDED_PV_LINES
+    )
+    db_session.add(
+        DrillItem(
+            user_id=_USER_ID,
+            game_id=banded_game_id,
+            ply=2,
+            status=DrillStatus.ACTIVE,
+            streak=0,
+            due_date=_TODAY,
+            fail_count=0,
+            ever_correct=False,
+        )
+    )
+    await db_session.flush()
+
+    count = await train_repository.get_waiting_puzzle_count(
+        db_session, user_id=_USER_ID, settings_row=settings_row, today=_TODAY
+    )
+    assert count == 1
+
+
+@pytest.mark.asyncio
+async def test_open_session_serves_item_after_backing_blob_moves_into_band(
+    db_session: AsyncSession,
+) -> None:
+    """D-06: a banded item already materialized into an OPEN session is
+    still served out -- no mid-session eviction. The boundary the user drew:
+    banded items already inside a set-up session are fine, the goal is only
+    to keep them out of newly generated ones."""
+    await ensure_test_user(db_session, _USER_ID)
+    game_id = await _seed_flaw_game(db_session, _USER_ID, "band-open-session-1", ply=2)
+
+    first = await train_repository.compose_and_materialize_session(
+        db_session, user_id=_USER_ID, now_utc=_NOW
+    )
+    assert first.puzzle_count == 1
+
+    # Rewrite the backing blob into the band WITHOUT expiring the session.
+    await db_session.execute(
+        update(GameFlaw)
+        .where(GameFlaw.user_id == _USER_ID, GameFlaw.game_id == game_id, GameFlaw.ply == 2)
+        .values(missed_pv_lines=_BANDED_PV_LINES)
+    )
+    await db_session.flush()
+
+    resumed = await train_repository.compose_and_materialize_session(
+        db_session, user_id=_USER_ID, now_utc=_NOW
+    )
+    assert resumed.session_id == first.session_id
+    assert resumed.puzzle_count == first.puzzle_count  # unchanged, no eviction
+    assert len(resumed.puzzles) == 1
+    assert resumed.puzzles[0].game_id == game_id
+    assert resumed.puzzles[0].ply == 2
 
 
 @pytest.mark.asyncio

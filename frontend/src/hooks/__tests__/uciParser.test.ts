@@ -1,6 +1,12 @@
 // @vitest-environment node
 import { describe, it, expect } from 'vitest';
-import { parseInfoLine, parseBestmove, dedupePvLinesByFirstMove } from '../uciParser';
+import {
+  parseInfoLine,
+  parseBestmove,
+  dedupePvLinesByFirstMove,
+  rankLineForMove,
+  rankLineForSquares,
+} from '../uciParser';
 import type { PvLine } from '../uciParser';
 
 // UCI input strings from RESEARCH.md / PATTERNS.md § "UCI Parser Unit Test Inputs"
@@ -159,5 +165,49 @@ describe('dedupePvLinesByFirstMove', () => {
 
   it('returns an empty array for no lines', () => {
     expect(dedupePvLinesByFirstMove([])).toEqual([]);
+  });
+});
+
+// Phase 205 (D-04): edge coverage for the two rank-lookup primitives Proposal
+// B threads from the mount search to the free-play root badge — RESEARCH.md
+// § "Per-Task Verification Map" rows for criteria 1/2.
+
+describe('rankLineForSquares', () => {
+  /** A PvLine with only the fields this helper reads. */
+  function rankLine(multipv: number, uci: string): PvLine {
+    return { multipv, depth: 10, moves: [uci], evalCp: 0, evalMate: null };
+  }
+
+  it('returns null for an empty lines array', () => {
+    expect(rankLineForSquares([], 'e2', 'e4')).toBeNull();
+  });
+
+  it("returns null when no line's first move starts with the given squares", () => {
+    const lines = [rankLine(1, 'e2e4'), rankLine(2, 'd2d4')];
+    expect(rankLineForSquares(lines, 'g1', 'f3')).toBeNull();
+  });
+
+  it('matches a line whose first move carries a promotion suffix — the promotion-tolerance contract (MoveNode stores no promotion piece)', () => {
+    const lines = [rankLine(1, 'e7e8q'), rankLine(2, 'd2d4')];
+    const result = rankLineForSquares(lines, 'e7', 'e8');
+    expect(result).not.toBeNull();
+    expect(result?.moves[0]).toBe('e7e8q');
+  });
+
+  it('two lines naming the same squares (a promotion-variant pair): the EARLIER (lower multipv) line wins — the tie rule pinned on multipv, not just the move', () => {
+    const lines = [rankLine(1, 'e7e8q'), rankLine(2, 'e7e8n')];
+    const result = rankLineForSquares(lines, 'e7', 'e8');
+    expect(result?.multipv).toBe(1);
+    expect(result?.moves[0]).toBe('e7e8q');
+  });
+});
+
+describe('rankLineForMove', () => {
+  it('does NOT match on squares alone — exact-UCI match only, so its contract can never silently converge with rankLineForSquares', () => {
+    const lines: PvLine[] = [
+      { multipv: 1, depth: 10, moves: ['e7e8q'], evalCp: 0, evalMate: null },
+    ];
+    expect(rankLineForMove(lines, 'e7e8n')).toBeNull();
+    expect(rankLineForMove(lines, 'e7e8q')).not.toBeNull();
   });
 });

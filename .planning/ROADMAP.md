@@ -164,7 +164,7 @@
 | 202. Reminder Permission UX (SEED-132 Phase A, v2.11) | 2/2 | Complete | 2026-08-02 |
 | 203. PWA Install Re-prompting & Train-Anchored Install Offer (SEED-134, v2.11) | 4/4 | Complete | 2026-08-02 |
 | 204. Push Reminder Delivery Reliability (SEED-135, unassigned) | 3/3 | Complete | 2026-08-03 |
-| 205. Train Grading Oracle Agreement (SEED-137, unassigned) | 0/0 | Not planned | — |
+| 205. Train Grading Oracle Agreement (SEED-137, unassigned) | 2/2 | Complete    | 2026-08-04 |
 
 ## Active Phases (unassigned milestone)
 
@@ -227,7 +227,7 @@ Plans:
 
 **Depends on**: Phase 189 (`pool_entry_stmt`, `classify_puzzle_type`, `SHARP_GAP_ES` in `app/services/train_pool.py`), Phase 190/190.1 (`useTrainGradingEngine`, the MultiPV-4 mount search and the reveal contract), Phase 200 (`useTrainFreePlay` and its `seedEval` prop)
 
-**Requirements**: to be minted at planning from the success criteria below, prefix `ORACLE-`. There is no active `.planning/REQUIREMENTS.md` (the v2.11 set is archived at `.planning/milestones/v2.11-REQUIREMENTS.md`), so the definitions live in the phase's first PLAN.md, same convention as Phase 204.
+**Requirements**: ORACLE-01, ORACLE-02, ORACLE-03, ORACLE-04, ORACLE-05, ORACLE-06 — minted at planning (2026-08-04) 1:1 from the success criteria below. There is no active `.planning/REQUIREMENTS.md` (the v2.11 set is archived at `.planning/milestones/v2.11-REQUIREMENTS.md`), so the definitions live in the phase's first PLAN.md (`205-01-PLAN.md` § "Phase 205 requirement IDs"), same convention as Phase 204. Success criterion 6 (mutation testing) is cross-cutting and carried by every plan's mutation acceptance criteria rather than by a seventh ID.
 
 **Source**: [SEED-137](../seeds/SEED-137-train-grading-oracle-disagreement.md) — planted 2026-08-04 from two contradictions user 28 hit in prod drill session 107, both `source = 0` (SR own-blunder) with `herring_pool_id IS NULL`. **Not a herring-sourcing artifact** — the pre-Phase-192 `game_best_moves` problem is ruled out from the data, not from the code.
 
@@ -256,11 +256,18 @@ Plans:
 
 **Non-goals**: raising `SHARP_GAP_ES` from `MISTAKE_DROP` to `BLUNDER_DROP` — **explicitly rejected in the seed.** It does not constrain the pool at all (`classify_puzzle_type` is a classifier, never an entry gate, per P-04), and it converts case 1 into case 2: the `[0.10, 0.15)` band (4.7% of all items) would be labelled "several moves are fine here" while our own scorer gives their runner-up zero points — no measurement error required, guaranteed every time. It also pushes the guess base rate to 79.6/20.4, making "always answer several" a larger freebie. Also out of scope: **residual 2, the server cannot name its own best move** — node 0 keys are `b/bm/s/sm/su` with no best-move UCI, so "Best move: Qc1" is *always* evaluator 2's rank 1 and on a sharp item the two can name different moves with nothing able to detect it; a `bu` key is an eval-pipeline change, not a Train change, and belongs in its own phase. Also out of scope: clearing the browser Stockfish TT between positions (`[[SEED-130]]`, same family, different surface).
 
-**Plans**: TBD (`/gsd-plan-phase 205`)
+**Plans**: 2 plans
 
 Plans:
+**Wave 1**
 
-- [ ] TBD
+- [x] 205-01-PLAN.md — Wave 1 (Proposal B, D-01): the free-play root ply is graded from the mount search's own rank lines instead of a fresh post-move search
+
+**Wave 2** *(blocked on Wave 1 completion)*
+
+- [x] 205-02-PLAN.md — Wave 2 (Proposal A, D-01): the selection-level dead band at all three SR sites, plus D-03's degenerate exclusions and the measured prod cost
+
+**Measured cost** (prod, 2026-08-04, recorded in `205-RESEARCH.md` § "Prod Measurement Results"): the band drops **24.29%** of pool items and D-03's no-second-move path a further **10.51%** — **34.80%** total, ~3x the seed's 12.0% estimate, which did not reproduce. The viability conclusion reproduced exactly: of **260** users with pool material, **225 → 224** can fill a session (**1** newly starved), 84.7% of distinct games retained. D-02 locks this as measure-and-record, not a gate.
 
 **UI hint**: minimal — no new components expected. The visible surfaces are the free-play badge on the reveal board and, if the band ships, a slightly smaller pool.
 

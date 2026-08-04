@@ -43,6 +43,7 @@ from app.services.train_pool import (
     blob_pending_stmt,
     classify_puzzle_type,
     compose_slots,
+    dead_band_admissible,
     fen_and_last_move_at_ply,
     full_fen_at_ply,
     herring_stmt,
@@ -962,8 +963,13 @@ async def get_waiting_puzzle_count(
         return 0
 
     # Due drill_items — mirrors compose_and_materialize_session's due_stmt
-    # eligibility exactly (status/due_date/flaw-row-presence/answer-key),
-    # minus the Game join (not needed for a count).
+    # eligibility exactly (status/due_date/flaw-row-presence/answer-key/
+    # dead-band, Phase 205), minus the Game join (not needed for a count).
+    # dead_band_admissible derives mover color from ply parity rather than
+    # Game.user_color for exactly this reason — every candidate row here is
+    # already the user's own ply by construction. Leaving this arm unbanded
+    # was considered and rejected: a user whose whole due set is banded
+    # would otherwise see a badge for a session that composes empty (D-05).
     due_count_stmt = (
         select(func.count())
         .select_from(DrillItem)
@@ -981,6 +987,7 @@ async def get_waiting_puzzle_count(
             DrillItem.due_date <= today,
             GameFlaw.ply.isnot(None),
             answer_key_present(GameFlaw.missed_pv_lines),
+            dead_band_admissible(GameFlaw.missed_pv_lines, GameFlaw.ply),
         )
     )
     due_count = (await session.execute(due_count_stmt)).scalar_one()
@@ -1504,6 +1511,16 @@ async def compose_and_materialize_session(
             # re-analysis restores a real blob — no deletion or status
             # change is introduced here.
             answer_key_present(GameFlaw.missed_pv_lines),
+            # Phase 205 (D-05/SEED-137): the entry gate (pool_entry_stmt) and
+            # this re-serve scan must apply the SAME dead-band standard —
+            # the exact precedent the answer-key comment above already sets.
+            # The band is read LIVE from the flaw row and is NEVER
+            # snapshotted onto the item, so a later reclassification moves
+            # an item in or out of service with no backfill of its own. A
+            # banded item is skipped for THIS session only — status and
+            # due_date untouched, nothing deleted — so it resurfaces
+            # automatically if a re-analysis moves it back out.
+            dead_band_admissible(GameFlaw.missed_pv_lines, GameFlaw.ply),
         )
         .order_by(DrillItem.due_date.asc(), DrillItem.game_id.asc(), DrillItem.ply.asc())
         # Quick task 260728-pgp: over-fetch (bounded by _DUE_OVERFETCH_FACTOR,

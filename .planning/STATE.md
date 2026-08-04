@@ -2,28 +2,28 @@
 gsd_state_version: 1.0
 milestone: v2.11
 milestone_name: Train Solve Surface & Push Reminders
-current_phase: 205
-current_phase_name: train-grading-oracle-agreement
-status: Phase 205 added from SEED-137 — not planned yet
-stopped_at: Phase 205 written into ROADMAP.md; next step /gsd-plan-phase 205
-last_updated: "2026-08-04T00:00:00.000Z"
+current_phase: 999.1
+current_phase_name: Password Reset (BACKLOG)
+status: planning
+stopped_at: Completed 205-02-PLAN.md
+last_updated: "2026-08-04T18:00:55.470Z"
 last_activity: 2026-08-04
+last_activity_desc: Phase 205 complete, transitioned to Phase 999.1
 progress:
-  total_phases: 1
-  completed_phases: 1
-  total_plans: 3
-  completed_plans: 3
-last_activity_desc: Phase 205 added from SEED-137 — not planned yet
+  total_phases: 2
+  completed_phases: 2
+  total_plans: 5
+  completed_plans: 5
 ---
 
 # Project State: FlawChess
 
 ## Current Position
 
-Phase: 205 (train-grading-oracle-agreement) — NOT PLANNED
-Plan: 0 of 0
-Status: Phase 205 added from SEED-137 — next step `/gsd-plan-phase 205`
-Last activity: 2026-08-04
+Phase: 999.1 — Password Reset (BACKLOG)
+Plan: Not started
+Status: Ready to plan
+Last activity: 2026-08-04 — Phase 205 complete, transitioned to Phase 999.1
 
 Phase 204 (push-reminder-delivery-reliability) shipped 2026-08-03 (3/3 plans, squash-merged to main).
 
@@ -614,6 +614,10 @@ v1.29 Live-Engine Analysis Page shipped 2026-06-29 — 5 phases (136–140), 14 
 - [Phase ?]: 204-02: Release the day's reminder claim only on total non-delivery (attempted==0 or attempted==pruned, D-13); failed never triggers it (D-15); guarded on exact today equality (D-14) so D-07's double-send invariant stays structural
 - [Phase ?]: Confined the VAPID key-mismatch repair to the gesture path only (ensureDeviceSubscribed); the passive app-load re-sync stays detect-only per D-04/D-05, keeping Phase 201 D-02's locked rotation-as-mass-invalidation decision closed.
 - [Phase ?]: VAPID rotation procedure lives at docs/push-vapid-rotation-runbook.md, reachable from app/services/push_send.py and CLAUDE.md — not only in an archived .planning/ file.
+- [Phase ?]: D-04 (inherited, applied): root-ply short-circuit fires only on a rank match; unranked moves keep the cross-oracle path
+- [Phase ?]: D-10 (inherited, applied): trainRevealCache.ts untouched — graceful fallback lives entirely in the consumer's single nullish default
+- [Phase ?]: rankLineForMove relocated to uciParser.ts rather than exported in place, avoiding a new hook-to-hook dependency (205-RESEARCH.md A1)
+- [Phase ?]: Phase 205 dead-band exclusion (205-02): dead_band_admissible applied live at all three SR selection sites (pool_entry_stmt, due_stmt, get_waiting_puzzle_count), never snapshotted; measured cost 34.80% of pool (24.29% band + 10.51% degenerate su==""), 260 users with material, 1 newly starved, 84.7% game retention — shipped as documented CHANGELOG number per D-02
 
 ### Pending Todos
 
@@ -727,9 +731,9 @@ Items acknowledged and deferred at **v1.29 milestone close on 2026-06-29** (user
 
 ## Session Continuity
 
-**Stopped at:** Completed 204-03-PLAN.md — Phase 204 fully executed and verified
+**Stopped at:** Completed 205-02-PLAN.md
 
-**Last session:** 2026-08-03T18:23:46.413Z
+**Last session:** 2026-08-04T17:27:15.903Z
 
 **Resume file:**
 
@@ -861,6 +865,8 @@ None
 | Phase 204 P01 | 55min | 3 tasks | 7 files |
 | Phase 204 P02 | 35min | 3 tasks | 7 files |
 | Phase 204 P03 | 25min | 3 tasks | 5 files |
+| Phase 205 P01 | 27min | 3 tasks | 7 files |
+| Phase 205 P02 | 25min | 3 tasks | 8 files |
 
 ## Performance Metrics
 

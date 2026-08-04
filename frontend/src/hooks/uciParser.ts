@@ -190,3 +190,42 @@ export function parseBestmove(line: string): string | null {
   if (move === undefined || move === '(none)') return null;
   return move;
 }
+
+// ─── Rank-line lookup ──────────────────────────────────────────────────────
+
+/** Find the settled mount-search rank whose first move is `uci`, or null.
+ * Rank lines are rooted at the puzzle FEN and share one search with rank 1,
+ * so an eval taken from here can never invert against the best move's eval
+ * (190.1 UAT round 9). Exact-UCI match (including any promotion suffix) —
+ * deliberately STRICTER than `rankLineForSquares` below; the two contracts
+ * must never be allowed to silently converge (see that function's own doc
+ * comment for why a squares-only match exists at all). Relocated here from
+ * `useTrainGradingEngine.ts` (Phase 205 D-04 — body unchanged) so free play's
+ * from+to variant can live beside it without a new hook-to-hook dependency. */
+export function rankLineForMove(lines: PvLine[], uci: string): PvLine | null {
+  return lines.find((l) => l.moves[0] === uci) ?? null;
+}
+
+/**
+ * Phase 205 (D-04): find the settled mount-search rank whose first move
+ * starts at `from` and ends at `to`, or null. A from+to (squares-only)
+ * match, deliberately LOOSER than `rankLineForMove`'s exact-UCI match above:
+ * `MoveNode` (`useAnalysisBoard.ts`) stores only `from`/`to` and no
+ * promotion piece, the same reason `useTrainFreePlay.ts`'s existing
+ * `isBest` check already slices a UCI string down to its first four
+ * characters before comparing — a full-string compare would call an
+ * engine-best promotion a non-best move.
+ *
+ * Ties (two ranks naming the same squares — a promotion-variant pair) are
+ * resolved by ARRAY ORDER, which is the engine's own MultiPV rank order:
+ * the first match wins, so the LOWER `multipv` always wins. Callers must
+ * NOT re-sort `lines` before calling this — the ordering IS the tie rule.
+ */
+export function rankLineForSquares(
+  lines: readonly PvLine[],
+  from: string,
+  to: string,
+): PvLine | null {
+  const fromTo = `${from}${to}`;
+  return lines.find((l) => l.moves[0]?.slice(0, 4) === fromTo) ?? null;
+}

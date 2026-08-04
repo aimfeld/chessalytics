@@ -4,7 +4,7 @@ import datetime
 from collections.abc import Sequence
 from typing import Any, Literal, cast
 
-from sqlalchemy import case
+from sqlalchemy import case, literal
 from sqlalchemy.sql.elements import ColumnElement
 
 from app.models.game import Game
@@ -68,6 +68,36 @@ def is_opponent_expr(
     return case(
         (ply_col % 2 == _PLY_EVEN_MOVER_WHITE, user_color_col == "black"),
         else_=user_color_col == "white",
+    )
+
+
+def mover_color_expr(ply_col: Any) -> ColumnElement[str]:
+    """Return a SQL expression yielding the mover's color ('white'/'black') at ply_col.
+
+    SQL twin of `mover_color_for_ply` (app/services/best_move_candidates.py:65-68):
+    even ply -> white, odd ply -> black. It exists so a caller that has a ply
+    column but no `Game` join can still name the mover — e.g. Train's dead-band
+    predicate (`app/services/train_pool.py`'s `dead_band_admissible`), which is
+    applied at a COUNT statement that deliberately drops the `Game` join
+    (`get_waiting_puzzle_count`'s due-count statement). This module is already
+    documented as the single source of the ply-parity convention (see the module
+    docstring above) — a second parity expression elsewhere is exactly what
+    CLAUDE.md's "never hand-roll `ply % 2`" rule forbids. Its two output values
+    are the same two strings `expected_score_sql`'s `user_color_col` argument
+    compares against ('white'/'black').
+
+    Args:
+        ply_col: A column or literal expression resolving to the ply integer.
+                 Accepts ColumnElement[int] or ORM InstrumentedAttribute[int]
+                 (typed as Any because ty does not recognise InstrumentedAttribute
+                 as a ColumnElement subtype — they share SQLColumnExpression lineage).
+
+    Returns:
+        A SQLAlchemy ColumnElement[str] yielding 'white' or 'black'.
+    """
+    return case(
+        (ply_col % 2 == _PLY_EVEN_MOVER_WHITE, literal("white")),
+        else_=literal("black"),
     )
 
 
