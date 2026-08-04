@@ -1,5 +1,6 @@
 import type { ReactElement } from 'react';
 import { Button } from '@/components/ui/button';
+import { BOT_ACTION_BUTTON_CLASS } from '@/components/bots/chipStyles';
 
 interface BotDrawOfferBannerProps {
   /** True while the bot has a live outgoing draw offer (Phase 183, D-07 —
@@ -37,12 +38,17 @@ export function BotDrawOfferBanner({
     >
       <span className="text-sm font-medium text-foreground">{message}</span>
       <div className="flex items-center gap-2">
-        <Button variant="default" size="sm" onClick={onAccept} data-testid="btn-accept-bot-draw">
+        <Button
+          variant="default"
+          className={BOT_ACTION_BUTTON_CLASS}
+          onClick={onAccept}
+          data-testid="btn-accept-bot-draw"
+        >
           Accept
         </Button>
         <Button
           variant="brand-outline"
-          size="sm"
+          className={BOT_ACTION_BUTTON_CLASS}
           onClick={onDecline}
           data-testid="btn-decline-bot-draw"
         >

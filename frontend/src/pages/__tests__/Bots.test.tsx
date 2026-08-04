@@ -528,7 +528,7 @@ describe('Bots — setup/resume/new-game convergence (V-11)', () => {
     expect(fakeGame.newGame).not.toHaveBeenCalled();
   });
 
-  it('new game from the result strip also returns to setup, without calling newGame', async () => {
+  it('dismissing the result dialog returns to the roster, without calling newGame', async () => {
     renderBots();
     await startFromSetup();
 
@@ -537,15 +537,11 @@ describe('Bots — setup/resume/new-game convergence (V-11)', () => {
     });
     await waitFor(() => expect(screen.getByTestId('result-dialog')).toBeTruthy());
 
-    // Dismiss the dialog (the Dialog primitive's own close button) to reveal
-    // the persistent result strip in its place (GamePanel's showResultStrip).
+    // Dismissing without choosing an action (the Dialog primitive's own close
+    // button) routes back to the roster — it no longer leaves a result strip
+    // parked over the finished board.
     fireEvent.click(screen.getByRole('button', { name: 'Close' }));
-    await waitFor(() => expect(screen.getByTestId('strip-btn-new-game')).toBeTruthy());
 
-    fireEvent.click(screen.getByTestId('strip-btn-new-game'));
-
-    // Falls through to the setup view's default (Phase 183: the persona
-    // grid, not SetupScreen directly).
     await waitFor(() => expect(screen.getByTestId('bots-persona-grid')).toBeTruthy());
     expect(screen.queryByTestId('bots-page')).toBeNull();
     expect(fakeGame.newGame).not.toHaveBeenCalled();
@@ -678,7 +674,7 @@ describe('Bots — Rematch/New opponent (Phase 183, D-06/D-08)', () => {
     expect(fakeGame.newGame).not.toHaveBeenCalled();
   });
 
-  it('the result strip mirrors the SAME persona-named copy and a working Rematch (mobile parity)', async () => {
+  it('dismissing a persona game\'s result dialog routes to the roster (no result strip)', async () => {
     await startPersonaGame();
 
     act(() => {
@@ -686,17 +682,12 @@ describe('Bots — Rematch/New opponent (Phase 183, D-06/D-08)', () => {
     });
     await waitFor(() => expect(screen.getByTestId('result-dialog')).toBeTruthy());
     fireEvent.click(screen.getByRole('button', { name: 'Close' }));
-    await waitFor(() => expect(screen.getByTestId('strip-btn-rematch')).toBeTruthy());
 
-    expect(screen.getByTestId('strip-btn-rematch').textContent).toBe('Rematch Ziggy the Wasp');
-    const firstSettings = fakeGame.lastSettings;
-    fireEvent.click(screen.getByTestId('strip-btn-rematch'));
-
-    // A fresh game remounts (outcome reset to null) — the strip/dialog give
-    // way to the live game controls again.
-    await waitFor(() => expect(screen.queryByTestId('strip-btn-rematch')).toBeNull());
-    expect(fakeGame.lastSettings).toBe(firstSettings);
-    expect(fakeGame.lastSettings?.personaId).toBe('attacker-800');
+    await waitFor(() => expect(screen.getByTestId('bots-persona-grid')).toBeTruthy());
+    // The load-bearing negative: the dismissed-dialog surface is gone entirely,
+    // not merely hidden behind the roster.
+    expect(screen.queryByTestId('result-strip')).toBeNull();
+    expect(fakeGame.newGame).not.toHaveBeenCalled();
   });
 
   it('a Custom game shows generic result copy and no Rematch button (New opponent only)', async () => {

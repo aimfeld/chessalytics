@@ -12,6 +12,7 @@ import { Button } from '@/components/ui/button';
 import { resultCopy, type BotGameOutcome } from '@/lib/botGameEnd';
 import type { MoverColor } from '@/lib/liveFlaw';
 import { WDL_DRAW, WDL_LOSS, WDL_WIN } from '@/lib/theme';
+import { BOT_ACTION_BUTTON_CLASS } from '@/components/bots/chipStyles';
 
 /** D-20/D-21 copy, exported so `GameResultStrip` renders the EXACT same
  * strings rather than re-typing them — a divergence risk on the "apply
@@ -110,7 +111,7 @@ export function GameResultDialog({
           <div className="flex flex-col gap-1">
             <Link
               to="/library/games"
-              className="text-sm text-brand-brown-light hover:text-brand-brown-highlight transition-colors"
+              className="text-sm text-muted-foreground hover:text-foreground transition-colors"
               data-testid="result-saved-to-library"
             >
               {BOT_GAME_SAVED_COPY}
@@ -139,6 +140,7 @@ export function GameResultDialog({
               (Bots.tsx's handleAnalyze) — the user is never stranded. */}
           <Button
             variant="brand-outline"
+            className={BOT_ACTION_BUTTON_CLASS}
             onClick={onAnalyze}
             disabled={analyzeBusy}
             data-testid="btn-analyze-game"
@@ -154,13 +156,19 @@ export function GameResultDialog({
               Rematch), New opponent stays the sole primary action. */}
           <Button
             variant={personaName ? 'brand-outline' : 'default'}
+            className={BOT_ACTION_BUTTON_CLASS}
             onClick={onNewGame}
             data-testid="btn-new-game"
           >
             New opponent
           </Button>
           {personaName && (
-            <Button variant="default" onClick={onRematch} data-testid="btn-rematch">
+            <Button
+              variant="default"
+              className={BOT_ACTION_BUTTON_CLASS}
+              onClick={onRematch}
+              data-testid="btn-rematch"
+            >
               {`Rematch ${personaName}`}
             </Button>
           )}

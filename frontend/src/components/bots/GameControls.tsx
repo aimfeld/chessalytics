@@ -3,6 +3,7 @@ import type { ReactElement } from 'react';
 import { Volume2, VolumeX } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Tooltip } from '@/components/ui/tooltip';
+import { BOT_ACTION_BUTTON_CLASS } from '@/components/bots/chipStyles';
 import {
   Dialog,
   DialogContent,
@@ -49,7 +50,7 @@ export function GameControls({
     <div className="flex items-center gap-2">
       <Button
         variant="brand-outline"
-        size="sm"
+        className={BOT_ACTION_BUTTON_CLASS}
         onClick={() => setResignDialogOpen(true)}
         data-testid="board-btn-resign"
       >
@@ -62,11 +63,16 @@ export function GameControls({
             <DialogDescription>You&apos;ll lose this game against the bot.</DialogDescription>
           </DialogHeader>
           <DialogFooter>
-            <Button variant="outline" onClick={() => setResignDialogOpen(false)}>
+            <Button
+              variant="outline"
+              className={BOT_ACTION_BUTTON_CLASS}
+              onClick={() => setResignDialogOpen(false)}
+            >
               Cancel
             </Button>
             <Button
               variant="destructive"
+              className={BOT_ACTION_BUTTON_CLASS}
               onClick={handleConfirmResign}
               data-testid="board-btn-resign-confirm"
             >
@@ -87,7 +93,7 @@ export function GameControls({
           <span>
             <Button
               variant="brand-outline"
-              size="sm"
+              className={BOT_ACTION_BUTTON_CLASS}
               disabled={drawOfferDisabled}
               onClick={onOfferDraw}
               data-testid="board-btn-offer-draw"
@@ -99,7 +105,7 @@ export function GameControls({
       ) : (
         <Button
           variant="brand-outline"
-          size="sm"
+          className={BOT_ACTION_BUTTON_CLASS}
           disabled={drawOfferDisabled}
           onClick={onOfferDraw}
           data-testid="board-btn-offer-draw"
@@ -111,6 +117,7 @@ export function GameControls({
       <Button
         variant="ghost"
         size="icon"
+        className="size-12"
         onClick={onToggleMute}
         aria-label={muted ? 'Unmute sounds' : 'Mute sounds'}
         data-testid="board-btn-mute"
