@@ -37,10 +37,12 @@ import subprocess
 import sys
 import tempfile
 import time
+from collections.abc import Callable, Coroutine
+from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
 from types import FrameType
-from typing import Literal, cast
+from typing import Any, Literal, TypeVar, cast
 
 import chess
 import httpx
@@ -117,6 +119,17 @@ _CHILD_MARKER_VALUE: str = "1"
 # capped-exponential -- predictable behavior for volunteers watching the logs).
 SUPERVISOR_BACKOFF_S: float = 3.0
 
+# SEED-139 D-05: one extra, longer-wall-clock pass over positions whose first
+# search returned the all-None engine-failure tuple. 3x the pool's 5s default
+# guard — long enough that a merely-oversubscribed box's retry succeeds, short
+# enough to stay a bounded wall-clock allowance, not a second search budget.
+EVAL_RETRY_TIMEOUT_S: float = 15.0
+# Per CYCLE (shared across ALL passes _eval_atomic_game runs — D-05), NOT per
+# pass: a per-pass cap would multiply by the three passes and blow the
+# STALL_THRESHOLD_S headroom below. 8 positions x 15s = 120s worst-case added
+# wall clock at --workers 1.
+EVAL_RETRY_MAX_POSITIONS: int = 8
+
 # SEED-063 watchdog: 10 minutes, NOT seconds. Must clear the slowest LEGITIMATE cycle
 # so a slow-but-healthy worker is never killed. A tier-1 game = 100 positions; with
 # _NODES_TIMEOUT_S=5s the worst case is ~(100 / --workers) x 5s if every position times
@@ -126,7 +139,16 @@ SUPERVISOR_BACKOFF_S: float = 3.0
 # it makes a slow machine contribute even less). 600s leaves generous headroom even for
 # --workers 1. Raising it only delays recovery from a GENUINE wedge (the
 # InvalidStateError storm's future never resolves), so it can never mask a real hang.
-STALL_THRESHOLD_S: float = 600.0
+#
+# SEED-139 D-05: raised 600.0 -> 720.0 to absorb the worker-side retry pass added
+# above. Worst legitimate cycle is still ~500s at --workers 1 (unchanged — the
+# retry only fires on ALREADY-failed positions, it never widens the first-pass
+# timeout); the retry pass adds at most EVAL_RETRY_MAX_POSITIONS *
+# EVAL_RETRY_TIMEOUT_S = 8 * 15.0 = 120s on top of that, so the worst case rises
+# to ~620s. 720s preserves the same ~100s margin the 600s value had over its own
+# ~500s worst case. Raising it only delays recovery from a genuine wedge, so it
+# can never mask a real hang (same invariant as before).
+STALL_THRESHOLD_S: float = 720.0
 # How often the watchdog checker task wakes to compare now vs. last_progress.
 WATCHDOG_POLL_INTERVAL_S: float = 15.0
 # Override env var for the heartbeat file path (used by the Docker healthcheck so it
@@ -142,6 +164,78 @@ def _log(msg: str = "") -> None:
     """Print a message prefixed with a UTC timestamp (second precision)."""
     ts = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S")
     print(f"[{ts}] {msg}")
+
+
+# ─── SEED-139 D-05: bounded per-cycle worker-side retry of timed-out positions ─
+
+_ResultTuple = TypeVar("_ResultTuple", bound=tuple[Any, ...])
+
+
+@dataclass
+class _RetryBudget:
+    """Mutable per-CYCLE retry allowance, shared across all passes `_eval_atomic_game`
+    runs (D-05). NOT per-pass — a per-pass cap would multiply by the three passes
+    and blow the STALL_THRESHOLD_S headroom. Construct via `_fresh_retry_budget()`.
+    """
+
+    remaining: int = field(default=EVAL_RETRY_MAX_POSITIONS)
+
+
+def _fresh_retry_budget() -> _RetryBudget:
+    """A budget seeded from EVAL_RETRY_MAX_POSITIONS, for a standalone call/test
+    that does not thread a shared budget through `_eval_atomic_game`."""
+    return _RetryBudget(remaining=EVAL_RETRY_MAX_POSITIONS)
+
+
+def _is_engine_failure(result: tuple[Any, ...]) -> bool:
+    """An engine-failure tuple is one whose first TWO elements (eval_cp, eval_mate)
+    are both None. Identical for the 4-tuple (evaluate_nodes_with_pv) and 7-tuple
+    (evaluate_nodes_multipv2) shapes, and correctly does NOT flag a mate-only
+    score (eval_cp None, eval_mate set is a real result, not a failure)."""
+    return result[0] is None and result[1] is None
+
+
+async def _retry_timed_out(
+    analyse: Callable[[chess.Board], Coroutine[Any, Any, _ResultTuple]],
+    boards: list[chess.Board],
+    results: list[_ResultTuple],
+    budget: _RetryBudget,
+) -> list[_ResultTuple]:
+    """Re-run, at a longer wall clock, only the positions whose first search
+    returned the all-None engine-failure tuple (SEED-139 items 1-2).
+
+    `analyse` is the caller-bound retry call (e.g. a lambda closing over
+    `pool.evaluate_nodes_with_pv(board, timeout_s=EVAL_RETRY_TIMEOUT_S)`), so this
+    helper stays result-shape-agnostic (4-tuple or 7-tuple, via the TypeVar).
+
+    Selects the failed indices, truncates the selection to `budget.remaining`,
+    decrements the budget by however many are actually retried, logs one summary
+    line, and re-runs only those boards via `asyncio.gather` (safe here — no
+    `AsyncSession` is open in the worker process). A successful retry replaces the
+    failure in a COPY of `results`; a retry that fails again leaves the original
+    all-None tuple in place (still submitted as a hole, as before — never garbage,
+    never dropped).
+
+    Returns `results` unchanged, and issues ZERO engine calls, when nothing failed
+    or the budget is already exhausted.
+    """
+    failed_indices = [i for i, r in enumerate(results) if _is_engine_failure(r)]
+    if not failed_indices or budget.remaining <= 0:
+        return results
+
+    retry_indices = failed_indices[: budget.remaining]
+    budget.remaining -= len(retry_indices)
+    _log(
+        f"retrying {len(retry_indices)} timed-out position(s) at "
+        f"{EVAL_RETRY_TIMEOUT_S}s (budget remaining after: {budget.remaining})"
+    )
+    retry_results = await asyncio.gather(*(analyse(boards[i]) for i in retry_indices))
+
+    merged = list(results)
+    for idx, retried in zip(retry_indices, retry_results):
+        if not _is_engine_failure(retried):
+            merged[idx] = retried
+    return merged
 
 
 # ─── Worker-ID helper ────────────────────────────────────────────────────────
@@ -165,6 +259,7 @@ def _generate_worker_id() -> str:
 async def _eval_positions(
     pool: EnginePool,
     positions: list[dict[str, object]],
+    budget: _RetryBudget | None = None,
 ) -> list[dict[str, object]]:
     """Evaluate all positions from a lease response via EnginePool fan-out.
 
@@ -179,9 +274,20 @@ async def _eval_positions(
 
     Each position dict contains: ply, fen, is_terminal.
     Each output dict contains:  ply, eval_cp, eval_mate, best_move, pv.
+
+    SEED-139 items 1-2: this is THE hole source, so it is the first of the four
+    passes retried once at EVAL_RETRY_TIMEOUT_S on a failed position. `budget`
+    defaults to a fresh one when omitted (standalone calls, existing tests);
+    `_eval_atomic_game` passes ONE shared budget across all three of its passes.
     """
     boards: list[chess.Board] = [chess.Board(str(pos["fen"])) for pos in positions]
-    results = await asyncio.gather(*(pool.evaluate_nodes_with_pv(b) for b in boards))
+    results = list(await asyncio.gather(*(pool.evaluate_nodes_with_pv(b) for b in boards)))
+    results = await _retry_timed_out(
+        lambda b: pool.evaluate_nodes_with_pv(b, timeout_s=EVAL_RETRY_TIMEOUT_S),
+        boards,
+        results,
+        budget if budget is not None else _fresh_retry_budget(),
+    )
     return [
         {
             "ply": pos["ply"],
@@ -197,6 +303,7 @@ async def _eval_positions(
 async def _eval_flaw_blob_positions(
     pool: EnginePool,
     positions: list[dict[str, object]],
+    budget: _RetryBudget | None = None,
 ) -> list[dict[str, object]]:
     """Evaluate flaw-blob positions at MultiPV=2 and echo tokens (D-04a).
 
@@ -212,9 +319,19 @@ async def _eval_flaw_blob_positions(
 
     asyncio.gather is safe here — no AsyncSession is open in the worker process.
     The CLAUDE.md gather rule applies to the server only (RESEARCH Pitfall 6).
+
+    SEED-139 items 1-2: retried once at EVAL_RETRY_TIMEOUT_S on a failed
+    position. `budget` defaults to a fresh one when omitted — this rung is a
+    standalone tier-4 pass, not one of `_eval_atomic_game`'s three.
     """
     boards: list[chess.Board] = [chess.Board(str(pos["fen"])) for pos in positions]
-    results = await asyncio.gather(*(pool.evaluate_nodes_multipv2(b) for b in boards))
+    results = list(await asyncio.gather(*(pool.evaluate_nodes_multipv2(b) for b in boards)))
+    results = await _retry_timed_out(
+        lambda b: pool.evaluate_nodes_multipv2(b, timeout_s=EVAL_RETRY_TIMEOUT_S),
+        boards,
+        results,
+        budget if budget is not None else _fresh_retry_budget(),
+    )
     return [
         {
             "token": str(pos["token"]),  # echoed unchanged (D-04a)
@@ -313,6 +430,7 @@ async def _eval_atomic_blob_nodes(
     pool: EnginePool,
     boards: list[chess.Board],
     tokens: list[str],
+    budget: _RetryBudget | None = None,
 ) -> list[dict[str, object]]:
     """Evaluate walked continuation boards at MultiPV=2, echoing tokens (D-04a).
 
@@ -321,8 +439,18 @@ async def _eval_atomic_blob_nodes(
     PV-continuation FENs, not game plies). `asyncio.gather` is safe here — no
     `AsyncSession` is open in the worker process (CLAUDE.md gather rule applies
     to the server only, RESEARCH Pitfall 6).
+
+    SEED-139 items 1-2: retried once at EVAL_RETRY_TIMEOUT_S on a failed
+    position. `budget` defaults to a fresh one when omitted; `_eval_atomic_game`
+    passes its own shared budget here (one of its three passes).
     """
-    results = await asyncio.gather(*(pool.evaluate_nodes_multipv2(b) for b in boards))
+    results = list(await asyncio.gather(*(pool.evaluate_nodes_multipv2(b) for b in boards)))
+    results = await _retry_timed_out(
+        lambda b: pool.evaluate_nodes_multipv2(b, timeout_s=EVAL_RETRY_TIMEOUT_S),
+        boards,
+        results,
+        budget if budget is not None else _fresh_retry_budget(),
+    )
     return [
         {
             "token": token,
@@ -340,6 +468,7 @@ async def _eval_targeted_second_best(
     pool: EnginePool,
     positions: list[dict[str, object]],
     evals: list[dict[str, object]],
+    budget: _RetryBudget | None = None,
 ) -> list[dict[str, object]]:
     """Targeted MultiPV-2 runner-up search for fresh-lane gem candidates (PROTO-02).
 
@@ -356,7 +485,12 @@ async def _eval_targeted_second_best(
     string. Positions whose own best move differs from the played move (played !=
     best) are excluded entirely — they were never gem candidates in the first place.
 
-    A failed targeted search (engine failure -> the all-None 7-tuple
+    SEED-139 items 1-2: the retry runs BEFORE the drop-on-failure filter below, so
+    a transient failure no longer costs the candidate — only a position that fails
+    TWICE (first search AND retry) is dropped. `budget` defaults to a fresh one
+    when omitted; `_eval_atomic_game` passes its own shared budget here.
+
+    A search that still fails after the retry (the all-None 7-tuple
     `evaluate_nodes_multipv2` returns when the pool isn't started or the engine
     errors) DROPS that ply from the returned list rather than submitting garbage or
     failing the whole submit (T-177-14) — the server's own Pitfall-1 fallback
@@ -378,12 +512,18 @@ async def _eval_targeted_second_best(
         return []
 
     boards = [chess.Board(str(pos["fen"])) for pos in candidates]
-    results = await asyncio.gather(*(pool.evaluate_nodes_multipv2(b) for b in boards))
+    results = list(await asyncio.gather(*(pool.evaluate_nodes_multipv2(b) for b in boards)))
+    results = await _retry_timed_out(
+        lambda b: pool.evaluate_nodes_multipv2(b, timeout_s=EVAL_RETRY_TIMEOUT_S),
+        boards,
+        results,
+        budget if budget is not None else _fresh_retry_budget(),
+    )
 
     second_best: list[dict[str, object]] = []
     for pos, r in zip(candidates, results):
-        if r[0] is None and r[1] is None:
-            continue  # engine failure (all-None 7-tuple) — drop, server fallback covers it
+        if _is_engine_failure(r):
+            continue  # failed twice (search + retry) — drop, server fallback covers it
         second_best.append(
             {
                 "ply": pos["ply"],
@@ -412,15 +552,30 @@ async def _eval_atomic_game(
     classify. The targeted second-best re-search (`_eval_targeted_second_best`)
     runs AFTER both of those, over the played==best plies only (S-01).
 
+    SEED-139 D-05: creates ONE `_RetryBudget` here and shares it across all three
+    passes — the retry budget is per CYCLE, not per pass.
+
     Returns (evals, blob_nodes, second_best) — all three go straight into the
     /atomic-submit body.
     """
-    evals = await _eval_positions(pool, positions)
+    budget = _fresh_retry_budget()
+    evals = await _eval_positions(pool, positions, budget)
     flaw_plies = _hint_flaw_plies(evals)
     boards, tokens = _build_blob_walk_targets(positions, evals, flaw_plies)
-    blob_nodes = await _eval_atomic_blob_nodes(pool, boards, tokens) if boards else []
-    second_best = await _eval_targeted_second_best(pool, positions, evals)
+    blob_nodes = await _eval_atomic_blob_nodes(pool, boards, tokens, budget) if boards else []
+    second_best = await _eval_targeted_second_best(pool, positions, evals, budget)
     return evals, blob_nodes, second_best
+
+
+# SEED-139 D-06: the worker-side retry pass covers exactly the four passes the
+# seed named — _eval_positions, _eval_flaw_blob_positions, _eval_atomic_blob_nodes,
+# _eval_targeted_second_best (all above). Deliberately EXCLUDED, below:
+# `_eval_entry_positions` (depth-15 cold entry-ply lane, its own `_TIMEOUT_S` guard
+# — not the node-budget Path-C mechanism the seed measured) and
+# `_eval_bestmove_positions` (tier-4b gem-candidate rung — a miss there costs a
+# candidate the server's own fallback already covers). Neither can produce a
+# `game_positions` eval hole, so retrying them would add wall clock for zero
+# hole-prevention benefit.
 
 
 async def _eval_entry_positions(

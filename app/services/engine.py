@@ -576,18 +576,28 @@ class EnginePool:
     async def evaluate_nodes_with_pv(
         self,
         board: chess.Board,
+        *,
+        timeout_s: float | None = None,
     ) -> tuple[int | None, int | None, str | None, str | None]:
         """Evaluate at 1M nodes, returning (eval_cp, eval_mate, best_move_uci, pv_uci_string).
 
         EVAL-04 / Phase 117: PV falls out of the SAME 1M-node search as evaluate_nodes —
-        zero extra engine compute. Reuses _NODES_BUDGET and _NODES_TIMEOUT_S.
+        zero extra engine compute. Reuses _NODES_BUDGET; resolves _NODES_TIMEOUT_S when
+        timeout_s is None (every server-side caller), else uses timeout_s directly.
 
         best_move_uci: info["pv"][0].uci() when PV present, else None (D-117-01).
         pv_uci_string: space-joined UCI capped at PV_CAP_PLIES (D-117-02).
         Returns (None, None, None, None) on engine failure (D-09 failure semantics).
+
+        timeout_s (SEED-139 D-04): the remote worker's retry pass on a slow or
+        oversubscribed box passes a longer wall clock here. A 1M-node search
+        always terminates, so this is a wall-clock allowance, not a larger search
+        budget — no server-side caller passes it.
         """
         result = await self._acquire_and_analyse(
-            board, chess.engine.Limit(nodes=_NODES_BUDGET), _NODES_TIMEOUT_S
+            board,
+            chess.engine.Limit(nodes=_NODES_BUDGET),
+            timeout_s if timeout_s is not None else _NODES_TIMEOUT_S,
         )
         if result is None or isinstance(result, list):
             return None, None, None, None
@@ -599,12 +609,16 @@ class EnginePool:
     async def evaluate_nodes_multipv2(
         self,
         board: chess.Board,
+        *,
+        timeout_s: float | None = None,
     ) -> tuple[int | None, int | None, str | None, str | None, int | None, int | None, str | None]:
         """Evaluate at 1M nodes with multipv=2, returning best + second-best per-ply data.
 
         Phase 142 MPV-01: returns (eval_cp, eval_mate, best_move, pv_string,
-        second_cp, second_mate, second_uci). Reuses _NODES_BUDGET and _NODES_TIMEOUT_S
-        (D-06: keep existing node budget; raise only if SC4 histogram fails).
+        second_cp, second_mate, second_uci). Reuses _NODES_BUDGET; resolves
+        _NODES_TIMEOUT_S when timeout_s is None (every server-side caller), else
+        uses timeout_s directly (D-06: keep existing node budget; raise only if
+        SC4 histogram fails).
 
         second_uci is str (never None) when the engine ran — empty string indicates a
         single-legal-move position (PvNode.su sentinel;
@@ -612,9 +626,17 @@ class EnginePool:
         Returns (None, None, None, None, None, None, None) on engine failure (D-09).
         Caller must handle len(result) < 2: single-legal-move positions return a
         list of length 1 — second_cp/second_mate=None, second_uci="" (Pitfall 2).
+
+        timeout_s (SEED-139 D-04): the remote worker's retry pass on a slow or
+        oversubscribed box passes a longer wall clock here. A 1M-node search
+        always terminates, so this is a wall-clock allowance, not a larger search
+        budget — no server-side caller passes it.
         """
         result = await self._acquire_and_analyse(
-            board, chess.engine.Limit(nodes=_NODES_BUDGET), _NODES_TIMEOUT_S, multipv=2
+            board,
+            chess.engine.Limit(nodes=_NODES_BUDGET),
+            timeout_s if timeout_s is not None else _NODES_TIMEOUT_S,
+            multipv=2,
         )
         if result is None or not isinstance(result, list):
             return None, None, None, None, None, None, None

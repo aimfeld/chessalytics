@@ -35,6 +35,8 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 import httpx
 
 from scripts.remote_eval_worker import (
+    EVAL_RETRY_MAX_POSITIONS,
+    EVAL_RETRY_TIMEOUT_S,
     STALL_THRESHOLD_S,
     TRANSIENT_FAILURE_ALERT_S,
     _WORKER_ID_ALPHABET,
@@ -43,16 +45,23 @@ from scripts.remote_eval_worker import (
     WORKER_ID_MAX_LEN,
     WORKER_SCHEMA_VERSION,
     _build_blob_walk_targets,
+    _eval_atomic_blob_nodes,
     _eval_atomic_game,
     _eval_bestmove_positions,
     _eval_entry_positions,
     _eval_flaw_blob_positions,
+    _eval_positions,
+    _eval_targeted_second_best,
+    _fresh_retry_budget,
     _generate_worker_id,
     _handle_transient_failure,
     _Heartbeat,
     _hint_flaw_plies,
+    _is_engine_failure,
     _is_expected_transient,
     _is_stalled,
+    _RetryBudget,
+    _retry_timed_out,
     _run_cycle,
     _worker_role,
     parse_args,
@@ -506,6 +515,265 @@ async def test_eval_positions_uses_multipv1_no_second_best() -> None:
     assert "second_cp" not in r, "second_cp must not appear in full-ply output (D-03)"
     assert "second_mate" not in r, "second_mate must not appear in full-ply output (D-03)"
     assert "second_uci" not in r, "second_uci must not appear in full-ply output (D-03)"
+
+
+# ─── SEED-139 items 1-2: bounded worker-side retry of timed-out positions ────
+
+
+def test_is_engine_failure_true_only_for_all_none_score() -> None:
+    """_is_engine_failure flags a result iff BOTH eval_cp and eval_mate are None.
+
+    A mate-scored result (eval_cp None, eval_mate set) must NEVER be treated as
+    a failure — only the genuine all-None engine-failure tuple qualifies.
+    """
+    assert _is_engine_failure((None, None, None, None)) is True
+    assert _is_engine_failure((None, None, None, None, None, None, None)) is True
+    assert _is_engine_failure((100, None, "e2e4", "e2e4")) is False
+    assert _is_engine_failure((None, 3, None, None)) is False, (
+        "a mate-only result (eval_cp=None, eval_mate=3) must not be flagged a failure"
+    )
+
+
+async def test_eval_positions_no_retry_when_all_succeed() -> None:
+    """All positions succeed on the first search -> exactly one engine call per
+    position, and the retry pass issues ZERO extra calls."""
+    pool = AsyncMock()
+    pool.evaluate_nodes_with_pv = AsyncMock(
+        side_effect=[(10, None, "e2e4", "e2e4"), (20, None, "d7d5", "d7d5")]
+    )
+    positions: list[dict[str, object]] = [
+        {"ply": 0, "fen": chess.STARTING_FEN, "is_terminal": False},
+        {"ply": 1, "fen": chess.STARTING_FEN, "is_terminal": False},
+    ]
+
+    results = await _eval_positions(pool, positions)
+
+    assert pool.evaluate_nodes_with_pv.call_count == 2, "no retry calls when nothing failed"
+    assert [r["eval_cp"] for r in results] == [10, 20]
+
+
+async def test_eval_positions_retries_failed_position_and_uses_success() -> None:
+    """A position whose first search fails (all-None) is retried once at
+    EVAL_RETRY_TIMEOUT_S; a successful retry replaces the failure in the output."""
+    pool = AsyncMock()
+    pool.evaluate_nodes_with_pv = AsyncMock(
+        side_effect=[
+            (None, None, None, None),  # first pass: failure
+            (50, None, "g1f3", "g1f3"),  # retry: success
+        ]
+    )
+    positions: list[dict[str, object]] = [
+        {"ply": 0, "fen": chess.STARTING_FEN, "is_terminal": False},
+    ]
+
+    results = await _eval_positions(pool, positions)
+
+    assert pool.evaluate_nodes_with_pv.call_count == 2, "exactly one retry call"
+    retry_call = pool.evaluate_nodes_with_pv.call_args_list[1]
+    assert retry_call.kwargs.get("timeout_s") == EVAL_RETRY_TIMEOUT_S
+    assert results[0]["eval_cp"] == 50, "the successful retry result must replace the failure"
+
+
+async def test_eval_positions_retry_fails_twice_stays_a_hole() -> None:
+    """A retry that also fails leaves the all-None result in place — still
+    submitted as a hole (as before), never garbage, never dropped."""
+    pool = AsyncMock()
+    pool.evaluate_nodes_with_pv = AsyncMock(
+        side_effect=[
+            (None, None, None, None),  # first pass: failure
+            (None, None, None, None),  # retry: also fails
+        ]
+    )
+    positions: list[dict[str, object]] = [
+        {"ply": 0, "fen": chess.STARTING_FEN, "is_terminal": False},
+    ]
+
+    results = await _eval_positions(pool, positions)
+
+    assert pool.evaluate_nodes_with_pv.call_count == 2
+    assert results[0]["eval_cp"] is None
+    assert results[0]["eval_mate"] is None
+
+
+async def test_eval_positions_mate_only_result_never_retried() -> None:
+    """A mate-scored result (eval_cp None, eval_mate set) must never trigger a
+    retry — _is_engine_failure's mate-aware guard prevents a wasted call."""
+    pool = AsyncMock()
+    pool.evaluate_nodes_with_pv = AsyncMock(return_value=(None, 3, "a1a8", "a1a8"))
+    positions: list[dict[str, object]] = [
+        {"ply": 0, "fen": chess.STARTING_FEN, "is_terminal": False},
+    ]
+
+    results = await _eval_positions(pool, positions)
+
+    assert pool.evaluate_nodes_with_pv.call_count == 1, "a mate result must not be retried"
+    assert results[0]["eval_mate"] == 3
+
+
+async def test_eval_positions_retry_capped_at_budget() -> None:
+    """More failed positions than the caller's remaining budget -> only
+    `budget.remaining` are retried, the rest keep their all-None result, and the
+    budget is fully spent (never over-spent)."""
+    n_positions = EVAL_RETRY_MAX_POSITIONS + 3
+    pool = AsyncMock()
+    # First pass: every position fails. Retry pass: every retried position
+    # succeeds, so the number of successes in the output == the number retried.
+    pool.evaluate_nodes_with_pv = AsyncMock(
+        side_effect=(
+            [(None, None, None, None)] * n_positions
+            + [(1, None, "e2e4", "e2e4")] * EVAL_RETRY_MAX_POSITIONS
+        )
+    )
+    positions: list[dict[str, object]] = [
+        {"ply": p, "fen": chess.STARTING_FEN, "is_terminal": False} for p in range(n_positions)
+    ]
+    budget = _RetryBudget(remaining=EVAL_RETRY_MAX_POSITIONS)
+
+    results = await _eval_positions(pool, positions, budget)
+
+    assert pool.evaluate_nodes_with_pv.call_count == n_positions + EVAL_RETRY_MAX_POSITIONS
+    succeeded = sum(1 for r in results if r["eval_cp"] is not None)
+    assert succeeded == EVAL_RETRY_MAX_POSITIONS, "only budget.remaining positions get retried"
+    assert budget.remaining == 0
+
+
+async def test_eval_atomic_blob_nodes_retries_failed_position() -> None:
+    """The tier-4 blob rung (_eval_atomic_blob_nodes) is also retried at
+    EVAL_RETRY_TIMEOUT_S on a failed position; a successful retry replaces the
+    failure and the original token is preserved."""
+    pool = AsyncMock()
+    pool.evaluate_nodes_multipv2 = AsyncMock(
+        side_effect=[
+            (None, None, None, None, None, None, None),  # first pass: failure
+            (10, None, "e2e4", "e2e4", 5, None, "d2d4"),  # retry: success
+        ]
+    )
+    boards = [chess.Board()]
+    tokens = ["1:missed:0"]
+
+    results = await _eval_atomic_blob_nodes(pool, boards, tokens)
+
+    assert pool.evaluate_nodes_multipv2.call_count == 2
+    retry_call = pool.evaluate_nodes_multipv2.call_args_list[1]
+    assert retry_call.kwargs.get("timeout_s") == EVAL_RETRY_TIMEOUT_S
+    assert results[0]["token"] == "1:missed:0"
+    assert results[0]["best_cp"] == 10
+
+
+async def test_retry_timed_out_budget_shared_across_sequential_calls() -> None:
+    """A single `_RetryBudget` object shared across two SEQUENTIAL `_retry_timed_out`
+    calls (mirroring `_eval_atomic_game`'s three passes sharing one budget) caps
+    the TOTAL retried across both calls at the budget's starting value, never per-call.
+    """
+    budget = _RetryBudget(remaining=EVAL_RETRY_MAX_POSITIONS)
+
+    async def always_fails(board: chess.Board) -> tuple[None, None, None, None]:
+        return (None, None, None, None)
+
+    # Call 1: EVAL_RETRY_MAX_POSITIONS failures -- would exhaust a fresh budget.
+    boards_1 = [chess.Board() for _ in range(EVAL_RETRY_MAX_POSITIONS)]
+    results_1 = [(None, None, None, None)] * EVAL_RETRY_MAX_POSITIONS
+    merged_1 = await _retry_timed_out(always_fails, boards_1, results_1, budget)
+    assert budget.remaining == 0, "call 1 alone must exhaust the shared budget"
+    assert all(_is_engine_failure(r) for r in merged_1)
+
+    # Call 2: budget is already exhausted -- must issue ZERO engine calls.
+    call_2_spy_count = 0
+
+    async def spy_analyse(
+        board: chess.Board,
+    ) -> tuple[int | None, int | None, str | None, str | None]:
+        nonlocal call_2_spy_count
+        call_2_spy_count += 1
+        return (100, None, "e2e4", "e2e4")
+
+    boards_2 = [chess.Board()]
+    results_2 = [(None, None, None, None)]
+    merged_2 = await _retry_timed_out(spy_analyse, boards_2, results_2, budget)
+    assert call_2_spy_count == 0, "an exhausted shared budget must issue zero retry calls"
+    assert merged_2 == results_2, "results are returned unchanged when the budget is exhausted"
+
+
+async def test_eval_atomic_game_passes_identical_budget_to_all_three_passes() -> None:
+    """SEED-139 D-05: `_eval_atomic_game` constructs ONE `_RetryBudget` and passes
+    the SAME object (not equal copies) to `_eval_positions`, `_eval_atomic_blob_nodes`,
+    and `_eval_targeted_second_best` — the load-bearing structural guarantee behind
+    the per-cycle (not per-pass) cap.
+    """
+    import scripts.remote_eval_worker as worker_module
+
+    captured_budgets: list[object] = []
+
+    async def fake_eval_positions(
+        pool: object, positions: object, budget: object = None
+    ) -> list[dict[str, object]]:
+        captured_budgets.append(budget)
+        return [{"ply": 0, "eval_cp": 0, "eval_mate": None, "best_move": None, "pv": None}]
+
+    async def fake_eval_atomic_blob_nodes(
+        pool: object, boards: object, tokens: object, budget: object = None
+    ) -> list[dict[str, object]]:
+        captured_budgets.append(budget)
+        return []
+
+    async def fake_eval_targeted_second_best(
+        pool: object, positions: object, evals: object, budget: object = None
+    ) -> list[dict[str, object]]:
+        captured_budgets.append(budget)
+        return []
+
+    with (
+        patch.object(worker_module, "_eval_positions", fake_eval_positions),
+        patch.object(worker_module, "_hint_flaw_plies", return_value={0}),
+        patch.object(
+            worker_module,
+            "_build_blob_walk_targets",
+            return_value=([chess.Board()], ["0:missed:0"]),
+        ),
+        patch.object(worker_module, "_eval_atomic_blob_nodes", fake_eval_atomic_blob_nodes),
+        patch.object(worker_module, "_eval_targeted_second_best", fake_eval_targeted_second_best),
+    ):
+        await worker_module._eval_atomic_game(AsyncMock(), [{"ply": 0, "fen": chess.STARTING_FEN}])
+
+    assert len(captured_budgets) == 3, "all three passes must receive a budget argument"
+    assert captured_budgets[0] is not None
+    assert captured_budgets[0] is captured_budgets[1] is captured_budgets[2], (
+        "all three passes must share the IDENTICAL budget object, not equal copies"
+    )
+
+
+async def test_eval_targeted_second_best_retries_before_dropping() -> None:
+    """SEED-139 items 1-2: the retry runs BEFORE the drop-on-failure filter -- a
+    position whose first targeted search fails but whose retry succeeds is
+    INCLUDED in second_best, not dropped."""
+    positions: list[dict[str, object]] = [
+        {"ply": 0, "fen": chess.STARTING_FEN, "is_terminal": False, "move_uci": "e2e4"},
+    ]
+    evals: list[dict[str, object]] = [
+        {"ply": 0, "eval_cp": 0, "eval_mate": None, "best_move": "e2e4", "pv": None},
+    ]
+
+    pool = AsyncMock()
+    pool.evaluate_nodes_multipv2 = AsyncMock(
+        side_effect=[
+            (None, None, None, None, None, None, None),  # first targeted search: fails
+            (0, None, "e2e4", "e2e4", 5, None, "d2d4"),  # retry: succeeds
+        ]
+    )
+
+    second_best = await _eval_targeted_second_best(pool, positions, evals)
+
+    assert pool.evaluate_nodes_multipv2.call_count == 2, "exactly one retry call"
+    assert second_best == [{"ply": 0, "second_cp": 5, "second_mate": None, "second_uci": "d2d4"}], (
+        "a retry-recovered candidate must be included, not dropped"
+    )
+
+
+async def test_fresh_retry_budget_seeded_from_max_positions() -> None:
+    """_fresh_retry_budget() constructs a budget seeded from EVAL_RETRY_MAX_POSITIONS
+    — the default a standalone caller (or a test omitting `budget`) gets."""
+    budget = _fresh_retry_budget()
+    assert budget.remaining == EVAL_RETRY_MAX_POSITIONS
 
 
 # ─── Phase 147 SEED-074 Part B: atomic eval+blob rung tests ─────────────────
@@ -1084,11 +1352,28 @@ def test_heartbeat_mark_never_raises_on_write_failure(tmp_path: Path) -> None:
 
 
 def test_stall_threshold_s_is_minutes_not_seconds() -> None:
-    """STALL_THRESHOLD_S must clear the slowest legit cycle (~125s worst case) --
-    regression guard against an accidental seconds-scale value (SEED-063).
+    """STALL_THRESHOLD_S must clear the worst legitimate cycle PLUS the full
+    SEED-139 retry budget, derived rather than asserted against a bare literal
+    (SEED-063 regression guard, updated for D-05):
+
+    - worst single-worker cycle: ~500s (--workers 1, every position times out at
+      _NODES_TIMEOUT_S=5s over a ~100-position tier-1 game -- the same figure
+      STALL_THRESHOLD_S's own module docstring derives).
+    - plus the worst-case added retry wall clock: EVAL_RETRY_MAX_POSITIONS *
+      EVAL_RETRY_TIMEOUT_S.
+
+    STALL_THRESHOLD_S must clear that sum with the same ~100s margin the
+    original 600s value held over its own ~500s worst case.
     """
-    assert STALL_THRESHOLD_S >= 180.0, (
-        f"STALL_THRESHOLD_S is {STALL_THRESHOLD_S}, expected >= 180s (~3-4 minutes)"
+    worst_single_worker_cycle_s = 500.0
+    worst_case_added_retry_wall_clock_s = EVAL_RETRY_MAX_POSITIONS * EVAL_RETRY_TIMEOUT_S
+    margin_s = 100.0
+    derived_floor_s = worst_single_worker_cycle_s + worst_case_added_retry_wall_clock_s + margin_s
+
+    assert STALL_THRESHOLD_S >= derived_floor_s, (
+        f"STALL_THRESHOLD_S is {STALL_THRESHOLD_S}, expected >= {derived_floor_s} "
+        f"(worst single-worker cycle {worst_single_worker_cycle_s}s + retry budget "
+        f"{worst_case_added_retry_wall_clock_s}s + {margin_s}s margin)"
     )
 
 
