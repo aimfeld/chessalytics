@@ -1556,13 +1556,11 @@ export default function Analysis() {
 
   // ── Derived values (game mode — new) ─────────────────────────────────────────
 
-  // Slider parked when not on the main line (D-05): disabled + opacity-40 + tooltip.
-  const isOnMainLineForSlider = currentNodeId === null || isOnMainLine(currentNodeId);
-
   // Eval-chart sync ply (Quick 260627-mt8): the board's current main-line ply, or the
   // fork point (nearest main-line ancestor) when off the main line. Drives the eval-
   // chart slider so navigating the move list / board keeps the chart in sync; on a
-  // sideline it parks the (disabled) slider at the position the sideline branches from.
+  // sideline it parks the slider at the position the sideline branches from, which is
+  // also the natural starting point for scrubbing back onto the main line (D-05 reversal).
   const evalChartPly = useMemo<number | null>(() => {
     if (!isGameMode || currentNodeId === null) return null;
     if (isOnMainLine(currentNodeId)) {
@@ -2572,9 +2570,13 @@ export default function Analysis() {
     void nodeId; // nodeId passed for API symmetry with VariationTree; ply identifies the flaw
   };
 
-  // EvalChart scrub callback: navigate board on main line only (slider disabled off-line).
+  // EvalChart scrub callback: navigate the board to the scrubbed main-line ply.
+  // Scrubbing works from a sideline too (D-05 reversal): goToNode only moves the
+  // current-node pointer, so the sideline stays in the tree and is one move-list click
+  // away. The old off-line guard also silently swallowed mobile chart taps, since the
+  // touch-scrub overlay was never gated by the slider's disabled state.
   const handleEvalChartPlyChange = (ply: number | null): void => {
-    if (ply === null || !isOnMainLineForSlider) return;
+    if (ply === null) return;
     // T-140-02b: L-8 guard — ply from eval chart may not align exactly with mainLine.
     const nodeId = mainLine[ply];
     if (nodeId !== undefined) goToNode(nodeId);
@@ -3074,7 +3076,6 @@ export default function Analysis() {
               : undefined
           }
           sliderTestId="analysis-eval-chart-slider"
-          sliderDisabled={!isOnMainLineForSlider}
           disableHoverScrub
           onHoverPlyChange={handleEvalChartPlyChange}
           syncPly={evalChartPly}

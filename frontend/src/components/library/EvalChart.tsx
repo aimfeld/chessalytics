@@ -152,12 +152,6 @@ interface EvalChartProps {
    */
   sliderTestId?: string;
   /**
-   * Park the slider: when true, the input is disabled and dimmed with a tooltip
-   * explaining the user must return to the main line to scrub. Applies on any
-   * sideline (PV or sub-PV). When false/omitted, the slider behaves normally.
-   */
-  sliderDisabled?: boolean;
-  /**
    * Externally-driven slider position (Quick 260627-mt8). When this changes, the
    * slider parks at the given ply WITHOUT surfacing the tooltip or stealing focus
    * (unlike commandedPly). The analysis page passes the board's current main-line
@@ -575,7 +569,6 @@ export function EvalChart({
   commandedPly,
   commandSeq,
   sliderTestId,
-  sliderDisabled = false,
   syncPly,
   disableHoverScrub = false,
 }: EvalChartProps) {
@@ -1288,14 +1281,12 @@ export function EvalChart({
           }}
           data-testid={sliderTestId ?? `eval-slider-${gameId}`}
           aria-label={`Scrub move for game ${gameId}`}
-          disabled={sliderDisabled}
-          title={sliderDisabled ? 'Return to main game line to scrub' : undefined}
           // `block` (not the default inline-block) so the input leaves no inline
           // descender space below it — that 7px gap inflated the eval-chart container
           // past the slider's true bottom and made the analysis board controls (which
           // bottom-align to the container) hang ~7px below the slider (Quick w8k item 2,
           // round 6 follow-up: "bottom alignment of the eval chart slider and controls").
-          className={`block w-full h-5 appearance-none bg-transparent cursor-pointer${sliderDisabled ? ' opacity-40 cursor-not-allowed pointer-events-none' : ''}
+          className={`block w-full h-5 appearance-none bg-transparent cursor-pointer
             [&::-webkit-slider-runnable-track]:h-1.5
             [&::-webkit-slider-runnable-track]:rounded-full
             [&::-webkit-slider-runnable-track]:bg-border/40
