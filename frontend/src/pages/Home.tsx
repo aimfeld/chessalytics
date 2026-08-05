@@ -39,7 +39,7 @@ const FEATURES: {
         'The FlawChess Engine shows your best practical move, not just the objective one: every move is scored by how likely you are to find and execute it, including the follow-ups.',
         'Judged against a typical human opponent, not perfect defense: each move is scored against the replies a player at their level would realistically pick, so the practical best can differ from the Stockfish best.',
         'Tuned to your level: powered by Stockfish + Maia, with a “Play style” dial that shifts from human-realistic to engine-precise.',
-        'Play games against bots with different playstyles, then analyze the result with Stockfish, Maia, and the FlawChess Engine.',
+        'Play games against human-like bots with different playstyles, then analyze the result with Stockfish, Maia, and the FlawChess Engine.',
     ],
     screenshot: { src: '/screenshots/flawchess-engine.png', alt: 'FlawChess Engine board view showing the practical score and objective Stockfish evaluation for each candidate move' },
     imagePosition: 'right',
