@@ -2765,14 +2765,17 @@ class TestAtomicSubmitEndpoint:
         eval_worker_test_user: int,
     ) -> None:
         """CR-01 (147-REVIEW.md, Path B): a NULL-hole engine-game ply on the first
-        attempt must NOT stamp either completion marker, must increment
-        full_eval_attempts, and must NOT signal flaw completion (IN-01) — mirrors
-        /submit's SEED-045 bounded-retry invariant instead of unconditionally
-        stamping complete with a gap.
+        attempt must NOT stamp either completion marker and must NOT signal flaw
+        completion (IN-01) — mirrors /submit's SEED-045 bounded-retry invariant
+        instead of unconditionally stamping complete with a gap.
 
         The hole is engineered by nulling the terminal eval (ply=6) of
         _BLUNDER_SUBMIT_EVALS_142: row 5 = pos_eval[6] = None on a non-terminal
         row (the game is not over) -> failed_ply_count == 1.
+
+        SEED-139: all 6 game_positions rows start NULL (6 prior holes) and this
+        submit fills 5 of them (rows 0-4), leaving 1 residual — a progress-making
+        submit, so it is charge-free (Path B'): full_eval_attempts stays 0.
         """
         import app.routers.eval_remote as eval_remote_module
         from app.models.game import Game
@@ -2845,7 +2848,10 @@ class TestAtomicSubmitEndpoint:
                 assert full_pv_at is None, (
                     "Path B must NOT stamp full_pv_completed_at with a residual hole"
                 )
-                assert attempts == 1, f"full_eval_attempts must increment to 1, got {attempts}"
+                assert attempts == 0, (
+                    f"SEED-139: this submit fills 5 of 6 holes (progress) so it must be "
+                    f"charge-free (Path B'), full_eval_attempts must stay 0, got {attempts}"
+                )
 
             assert signal_calls == [], (
                 "IN-01: a Path-B (not-yet-complete) submit must NOT signal flaw "
@@ -2872,6 +2878,14 @@ class TestAtomicSubmitEndpoint:
         260803: also a regression guard that this cap path stays OUT of Sentry — it
         fired ~30x/hour in production for an expected outcome (FLAWCHESS-8B), so the
         capture_message spy must stay empty.
+
+        SEED-139: rows 0-4 are pre-seeded with the post-move eval this submit would
+        write (row p = pos_eval[p + 1] = _BLUNDER_SUBMIT_EVALS_142[p + 1]), leaving
+        row 5 NULL to match the nulled terminal eval below. Prior holes = 1
+        (row 5), residual = 1 -> a genuine no-progress round, so Path C must still
+        fire even though the submit "did nothing" (a naive per-submit charge would
+        have fired here too, but a naive progress check that only compared 0-vs-1
+        residual holes would wrongly treat this as charge-free).
         """
         import app.routers.eval_remote as eval_remote_module
         from app.models.game import Game
@@ -2904,7 +2918,12 @@ class TestAtomicSubmitEndpoint:
             user_id,
             game_id,
             [
-                {"ply": p, "full_hash": 51600 + p, "eval_cp": None, "eval_mate": None}
+                {
+                    "ply": p,
+                    "full_hash": 51600 + p,
+                    "eval_cp": _BLUNDER_SUBMIT_EVALS_142[p + 1]["eval_cp"] if p < 5 else None,
+                    "eval_mate": _BLUNDER_SUBMIT_EVALS_142[p + 1]["eval_mate"] if p < 5 else None,
+                }
                 for p in range(6)
             ],
         )
@@ -2989,6 +3008,292 @@ class TestAtomicSubmitEndpoint:
 
             assert signal_calls == [user_id], (
                 f"Path C (stamp_complete=True) must signal flaw completion, got {signal_calls}"
+            )
+        finally:
+            await _delete_games(eval_worker_session_maker, [game_id])
+
+    @pytest.mark.asyncio
+    async def test_atomic_submit_no_progress_under_cap_charges_attempt(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+        eval_worker_session_maker: async_sessionmaker[AsyncSession],
+        eval_worker_test_user: int,
+    ) -> None:
+        """SEED-139 item 3, Path B (no progress): a submit whose residual hole
+        count EQUALS the prior hole count (the game was already at this state) must
+        still charge an attempt and leave the game pending — the charge-free carve-
+        out (Path B') is strictly for a submit that REDUCES the hole count.
+
+        Rows 0-4 are pre-seeded with the post-move eval this submit re-confirms
+        (row p = pos_eval[p + 1]), row 5 stays NULL. Prior holes = 1, residual = 1
+        -> no progress.
+        """
+        import app.routers.eval_remote as eval_remote_module
+        from app.models.game import Game
+
+        monkeypatch.setattr(settings, "EVAL_OPERATOR_TOKEN", _TEST_TOKEN)
+        monkeypatch.setattr(settings, "EXPECTED_SF_VERSION", "")
+        _patch_router_session(monkeypatch, eval_worker_session_maker)
+
+        signal_calls: list[int] = []
+        monkeypatch.setattr(eval_remote_module, "_signal_flaw_completion", signal_calls.append)
+
+        user_id = eval_worker_test_user
+        game_id = await _insert_game(
+            eval_worker_session_maker,
+            user_id,
+            pgn=_SIX_PLY_PGN_142,
+            full_eval_attempts=0,  # under cap
+        )
+        await _insert_game_positions(
+            eval_worker_session_maker,
+            user_id,
+            game_id,
+            [
+                {
+                    "ply": p,
+                    "full_hash": 51700 + p,
+                    "eval_cp": _BLUNDER_SUBMIT_EVALS_142[p + 1]["eval_cp"] if p < 5 else None,
+                    "eval_mate": _BLUNDER_SUBMIT_EVALS_142[p + 1]["eval_mate"] if p < 5 else None,
+                }
+                for p in range(6)
+            ],
+        )
+
+        holed_evals: list[dict[str, object]] = [dict(e) for e in _BLUNDER_SUBMIT_EVALS_142]
+        holed_evals[6]["eval_cp"] = None
+        holed_evals[6]["eval_mate"] = None
+
+        payload = {
+            "game_id": game_id,
+            "sf_version": "Stockfish 18",
+            "worker_schema_version": 1,
+            "evals": holed_evals,
+            "blob_nodes": [],
+            "job_id": None,
+        }
+
+        try:
+            async with _make_client() as client:
+                resp = await client.post(
+                    _ATOMIC_SUBMIT_URL,
+                    json=payload,
+                    headers={"X-Operator-Token": _TEST_TOKEN},
+                )
+            assert resp.status_code == 200, f"Expected 200, got {resp.status_code}: {resp.text}"
+            body = resp.json()
+            assert body["failed_ply_count"] == 1, f"One residual hole expected: {body}"
+            assert body["stamp_complete"] is False, f"No-progress submit under cap: {body}"
+
+            async with eval_worker_session_maker() as verify:
+                game_row = (
+                    await verify.execute(
+                        select(
+                            Game.full_evals_completed_at,
+                            Game.full_pv_completed_at,
+                            Game.full_eval_attempts,
+                        ).where(Game.id == game_id)
+                    )
+                ).one()
+                full_evals_at, full_pv_at, attempts = game_row
+                assert full_evals_at is None, "no-progress submit must not stamp complete"
+                assert full_pv_at is None, "no-progress submit must not stamp complete"
+                assert attempts == 1, f"no-progress submit must charge an attempt, got {attempts}"
+
+            assert signal_calls == [], (
+                f"a pending (not-yet-complete) submit must NOT signal flaw completion, "
+                f"got {signal_calls}"
+            )
+        finally:
+            await _delete_games(eval_worker_session_maker, [game_id])
+
+    @pytest.mark.asyncio
+    async def test_atomic_submit_two_submit_sequence_still_terminates(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+        eval_worker_session_maker: async_sessionmaker[AsyncSession],
+        eval_worker_test_user: int,
+    ) -> None:
+        """SEED-139 D-03 termination proof, exercised end-to-end on ONE game: submit
+        1 fills 5 of 6 holes (charge-free, Path B', attempts stays 0), then submit 2
+        re-submits the IDENTICAL residual hole (no progress, Path B, attempts -> 1).
+        Proves the charge-free carve-out does not defeat the bounded-retry budget —
+        the game is still reachable at Path C on a later no-progress submit.
+        """
+        from app.models.game import Game
+
+        monkeypatch.setattr(settings, "EVAL_OPERATOR_TOKEN", _TEST_TOKEN)
+        monkeypatch.setattr(settings, "EXPECTED_SF_VERSION", "")
+        _patch_router_session(monkeypatch, eval_worker_session_maker)
+
+        user_id = eval_worker_test_user
+        game_id = await _insert_game(
+            eval_worker_session_maker,
+            user_id,
+            pgn=_SIX_PLY_PGN_142,
+            full_eval_attempts=0,
+        )
+        await _insert_game_positions(
+            eval_worker_session_maker,
+            user_id,
+            game_id,
+            [
+                {"ply": p, "full_hash": 51800 + p, "eval_cp": None, "eval_mate": None}
+                for p in range(6)
+            ],
+        )
+
+        holed_evals: list[dict[str, object]] = [dict(e) for e in _BLUNDER_SUBMIT_EVALS_142]
+        holed_evals[6]["eval_cp"] = None
+        holed_evals[6]["eval_mate"] = None
+        payload = {
+            "game_id": game_id,
+            "sf_version": "Stockfish 18",
+            "worker_schema_version": 1,
+            "evals": holed_evals,
+            "blob_nodes": [],
+            "job_id": None,
+        }
+
+        try:
+            async with _make_client() as client:
+                # Submit 1: all 6 rows start NULL, this fills 5 of 6 -> charge-free.
+                resp1 = await client.post(
+                    _ATOMIC_SUBMIT_URL,
+                    json=payload,
+                    headers={"X-Operator-Token": _TEST_TOKEN},
+                )
+            assert resp1.status_code == 200, f"Expected 200, got {resp1.status_code}"
+            assert resp1.json()["failed_ply_count"] == 1
+
+            async with eval_worker_session_maker() as verify:
+                attempts_after_1 = (
+                    await verify.execute(select(Game.full_eval_attempts).where(Game.id == game_id))
+                ).scalar_one()
+            assert attempts_after_1 == 0, (
+                f"submit 1 fills 5/6 holes and must be charge-free, got {attempts_after_1}"
+            )
+
+            async with _make_client() as client:
+                # Submit 2: the SAME residual hole re-submitted -> no progress.
+                resp2 = await client.post(
+                    _ATOMIC_SUBMIT_URL,
+                    json=payload,
+                    headers={"X-Operator-Token": _TEST_TOKEN},
+                )
+            assert resp2.status_code == 200, f"Expected 200, got {resp2.status_code}"
+            assert resp2.json()["failed_ply_count"] == 1
+
+            async with eval_worker_session_maker() as verify:
+                attempts_after_2 = (
+                    await verify.execute(select(Game.full_eval_attempts).where(Game.id == game_id))
+                ).scalar_one()
+            assert attempts_after_2 == 1, (
+                f"submit 2 re-submits the identical residual hole (no progress) and "
+                f"must charge an attempt, got {attempts_after_2}"
+            )
+        finally:
+            await _delete_games(eval_worker_session_maker, [game_id])
+
+    @pytest.mark.asyncio
+    async def test_atomic_submit_progress_at_cap_does_not_reach_path_c(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+        eval_worker_session_maker: async_sessionmaker[AsyncSession],
+        eval_worker_test_user: int,
+    ) -> None:
+        """SEED-139 item 3: a progress-making submit at
+        full_eval_attempts=MAX_EVAL_ATTEMPTS - 1 must NOT stamp complete and must
+        NOT increment full_eval_attempts — Path C must not fire on a submit that
+        reduced the hole count, even one attempt away from the cap.
+        """
+        import app.routers.eval_remote as eval_remote_module
+        from app.models.game import Game
+        from app.services.eval_drain import MAX_EVAL_ATTEMPTS
+
+        monkeypatch.setattr(settings, "EVAL_OPERATOR_TOKEN", _TEST_TOKEN)
+        monkeypatch.setattr(settings, "EXPECTED_SF_VERSION", "")
+        _patch_router_session(monkeypatch, eval_worker_session_maker)
+
+        signal_calls: list[int] = []
+        monkeypatch.setattr(eval_remote_module, "_signal_flaw_completion", signal_calls.append)
+
+        capture_message_calls: list[str] = []
+        monkeypatch.setattr(
+            eval_remote_module.sentry_sdk,
+            "capture_message",
+            lambda msg, **kw: capture_message_calls.append(msg),
+        )
+
+        user_id = eval_worker_test_user
+        assert MAX_EVAL_ATTEMPTS > 1, "test requires MAX_EVAL_ATTEMPTS > 1 for the cap path"
+        game_id = await _insert_game(
+            eval_worker_session_maker,
+            user_id,
+            pgn=_SIX_PLY_PGN_142,
+            full_eval_attempts=MAX_EVAL_ATTEMPTS - 1,  # one more no-progress attempt caps
+        )
+        # All 6 rows NULL -> this submit is progress-making (fills 5 of 6).
+        await _insert_game_positions(
+            eval_worker_session_maker,
+            user_id,
+            game_id,
+            [
+                {"ply": p, "full_hash": 51900 + p, "eval_cp": None, "eval_mate": None}
+                for p in range(6)
+            ],
+        )
+
+        holed_evals: list[dict[str, object]] = [dict(e) for e in _BLUNDER_SUBMIT_EVALS_142]
+        holed_evals[6]["eval_cp"] = None
+        holed_evals[6]["eval_mate"] = None
+
+        payload = {
+            "game_id": game_id,
+            "sf_version": "Stockfish 18",
+            "worker_schema_version": 1,
+            "evals": holed_evals,
+            "blob_nodes": [],
+            "job_id": None,
+        }
+
+        try:
+            async with _make_client() as client:
+                resp = await client.post(
+                    _ATOMIC_SUBMIT_URL,
+                    json=payload,
+                    headers={"X-Operator-Token": _TEST_TOKEN},
+                )
+            assert resp.status_code == 200, f"Expected 200, got {resp.status_code}: {resp.text}"
+            body = resp.json()
+            assert body["failed_ply_count"] == 1, f"One residual hole expected: {body}"
+            assert body["stamp_complete"] is False, (
+                f"a progress-making submit must NOT reach Path C, even at the cap: {body}"
+            )
+
+            async with eval_worker_session_maker() as verify:
+                game_row = (
+                    await verify.execute(
+                        select(
+                            Game.full_evals_completed_at,
+                            Game.full_pv_completed_at,
+                            Game.full_eval_attempts,
+                        ).where(Game.id == game_id)
+                    )
+                ).one()
+                full_evals_at, full_pv_at, attempts = game_row
+                assert full_evals_at is None, "progress at the cap must not stamp complete"
+                assert full_pv_at is None, "progress at the cap must not stamp complete"
+                assert attempts == MAX_EVAL_ATTEMPTS - 1, (
+                    f"a progress-making submit must not increment full_eval_attempts, "
+                    f"got {attempts}"
+                )
+
+            assert signal_calls == [], (
+                f"a pending submit must NOT signal flaw completion, got {signal_calls}"
+            )
+            assert capture_message_calls == [], (
+                f"a pending submit must NOT Sentry-capture, got {capture_message_calls}"
             )
         finally:
             await _delete_games(eval_worker_session_maker, [game_id])
@@ -4234,7 +4539,13 @@ async def test_atomic_submit_uncached_hole_bounded_by_path_c(
     eval_worker_test_user: int,
 ) -> None:
     """SEED-076 (req b): a genuinely-uncached residual hole stays bounded by Path C —
-    stamped complete after MAX_EVAL_ATTEMPTS, never re-leased forever."""
+    stamped complete after MAX_EVAL_ATTEMPTS, never re-leased forever.
+
+    SEED-139: rows 1-5 are pre-seeded with the post-move eval this submit would
+    write (row p = pos_eval[p + 1] = _BLUNDER_SUBMIT_EVALS_142[p + 1]), leaving
+    row 0 NULL to match the omitted ply=1 submit entry below. Prior holes = 1
+    (row 0), residual = 1 -> a genuine no-progress round, so Path C still fires.
+    """
     from app.routers.eval_remote import _apply_atomic_submit
     from app.services.eval_drain import MAX_EVAL_ATTEMPTS
 
@@ -4253,7 +4564,15 @@ async def test_atomic_submit_uncached_hole_bounded_by_path_c(
         eval_worker_session_maker,
         user_id,
         game_id,
-        [{"ply": p, "full_hash": base + p, "eval_cp": None, "eval_mate": None} for p in range(6)],
+        [
+            {
+                "ply": p,
+                "full_hash": base + p,
+                "eval_cp": _BLUNDER_SUBMIT_EVALS_142[p + 1]["eval_cp"] if p >= 1 else None,
+                "eval_mate": _BLUNDER_SUBMIT_EVALS_142[p + 1]["eval_mate"] if p >= 1 else None,
+            }
+            for p in range(6)
+        ],
     )
     # No cache entry → position 1 is a genuine hole; worker omits it.
     partial = [e for e in _BLUNDER_SUBMIT_EVALS_142 if e["ply"] != 1]

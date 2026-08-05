@@ -21,6 +21,19 @@ emitting nothing. The capture never carries the endpoint (a bearer
 capability) or any variable data in its message; only the status code and
 the (about-to-be-deleted) subscription id go into `set_context`.
 
+SEED-138 (2026-08-05): D1's first real firing (Sentry FLAWCHESS-9J) showed
+the capture was mis-graded and un-diagnosable. A 404/410 is the *designed*
+end of a subscription's life (PWA removed, browser reinstall, token
+rotation) -- not an error -- so the prune branch now calls
+`sentry_sdk.capture_message(..., level="info")` instead of synthesizing a
+RuntimeError; `capture_exception` is NEVER called on this path. Do not
+"restore" the error-level capture. The context also now carries `push_host`
+(the endpoint's HOST only, via `urlsplit().hostname` -- never the path,
+which remains the bearer capability and must never reach Sentry or a log
+record) plus the about-to-be-deleted row's `user_agent` and `user_id`, so a
+future prune can actually be diagnosed instead of proven only by
+elimination.
+
 Phase 204 D5 (2026-08-03): `_PUSH_TTL_SECONDS = 0` was wrong. D-08 already
 declares the scheduler's own hour gate unbounded within the local day --
 asking the push service for zero retention contradicted that stated bound,
@@ -41,6 +54,7 @@ import json
 import logging
 import time
 from dataclasses import dataclass
+from urllib.parse import urlsplit
 
 import httpx
 import sentry_sdk
@@ -104,6 +118,12 @@ def application_server_key() -> str | None:
     return push_crypto.application_server_key_from_pem(settings.VAPID_PUBLIC_KEY.encode())
 
 
+def _push_host(endpoint: str) -> str | None:
+    """The endpoint's host only (SEED-138 D-02) -- safe to report to Sentry
+    because the bearer capability is the endpoint PATH, not the host."""
+    return urlsplit(endpoint).hostname
+
+
 def push_http_client() -> httpx.AsyncClient:
     """Build the outbound client for push sends.
 
@@ -122,6 +142,8 @@ async def send_to_subscription(
     auth: str,
     payload: dict[str, object],
     subscription_id: int | None = None,
+    user_agent: str | None = None,
+    user_id: int | None = None,
     ttl_seconds: int = _DEFAULT_PUSH_TTL_SECONDS,
 ) -> bool:
     """Send one push message. Returns True if the subscription should be pruned.
@@ -139,6 +161,14 @@ async def send_to_subscription(
             BEFORE `capture_exception` fires (setting it at the
             `send_to_user` call site would attach to a later event), which
             is why it is threaded in rather than set outside.
+        user_agent: The device's stored User-Agent, threaded in so the prune
+            capture's `set_context` can identify WHICH device died (SEED-138)
+            -- `send_to_user` deletes the row moments later, taking
+            `user_agent` with it. Keyword-only and defaulted to None for the
+            same backward-compatibility reason as `subscription_id`.
+        user_id: The subscription's owning user's internal PK, threaded in
+            for the same SEED-138 diagnosability reason as `user_agent`.
+            Keyword-only and defaulted to None.
         ttl_seconds: RFC 8030 Sec. 5.2 `Ttl` header value, in seconds.
             Keyword-only and defaulted (Phase 204 D-02) for the same
             backward-compatibility reason as `subscription_id` -- the
@@ -176,18 +206,31 @@ async def send_to_subscription(
     if resp.status_code in _PRUNE_STATUS_CODES:
         # SEED-135 D1: this branch permanently deletes a push_subscriptions
         # row (via send_to_user below) -- it must never be the one silent
-        # branch. Mirrors the >= 300 branch's style exactly, except the
-        # RuntimeError message is a distinct fixed literal so Sentry groups
-        # prunes separately from transient failures. No endpoint, no
-        # variable data in the message (CLAUDE.md): the endpoint is a bearer
-        # capability and must never reach a log record or a Sentry payload.
+        # branch. The `logger.warning` line is what satisfies D1's
+        # never-delete-state-silently requirement.
+        #
+        # SEED-138 (2026-08-05): a 404/410 is normal device lifecycle (PWA
+        # removed, browser reinstall, token rotation), not an error, so this
+        # is graded `level="info"` via `capture_message` -- never
+        # `capture_exception`. The fixed literal string is unchanged so the
+        # existing Sentry issue keeps its grouping. The context carries
+        # `push_host` (HOST ONLY, via `_push_host()` -- never the endpoint
+        # PATH, which remains the bearer capability and must never reach
+        # Sentry or a log record) plus `user_agent`/`user_id`, read here
+        # while the row is still in hand, so a future prune is diagnosable.
         logger.warning("Push subscription pruned after status %d", resp.status_code)
         sentry_sdk.set_tag("source", "push_send")
         sentry_sdk.set_context(
             "push_send",
-            {"status_code": resp.status_code, "subscription_id": subscription_id},
+            {
+                "status_code": resp.status_code,
+                "subscription_id": subscription_id,
+                "push_host": _push_host(endpoint),
+                "user_agent": user_agent,
+                "user_id": user_id,
+            },
         )
-        sentry_sdk.capture_exception(RuntimeError("Push send returned a prune status"))
+        sentry_sdk.capture_message("Push send returned a prune status", level="info")
         return True
     # Anything outside 2xx is a non-delivery. The bound is 300, not 400: we send
     # with follow_redirects=False (an SSRF mitigation on a client-supplied
@@ -249,6 +292,8 @@ async def send_to_user(
                     auth=subscription.auth,
                     payload=payload,
                     subscription_id=subscription.id,
+                    user_agent=subscription.user_agent,
+                    user_id=user_id,
                     ttl_seconds=ttl_seconds,
                 )
             except Exception:

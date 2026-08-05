@@ -38,7 +38,7 @@ You don't need to be a programmer to set this up, and you don't need a database 
    ```
    uv run python scripts/remote_eval_worker.py --workers 4
    ```
-   `--workers 4` means it uses 4 CPU cores. 4 is a good default. If your computer is powerful and you want it to do more, you can go up to twice your number of CPU cores.
+   `--workers 4` means it uses 4 CPU cores. 4 is a good default. If your computer is powerful and you want it to do more, don't set `--workers` above your machine's physical core count — each worker runs its own copy of Stockfish on one thread, and a position that runs out of time gets thrown away rather than just taking longer, so more workers than cores can make even a fast machine quietly submit gaps in its analysis.
 
 7. **Leave it running** as long as you like. If it crashes or freezes up, it restarts itself automatically, no need to babysit it. To stop it, press `Ctrl-C` in the terminal — that always stops it cleanly and it will not restart on its own.
 

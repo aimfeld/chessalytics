@@ -5,6 +5,12 @@ holed-stamped population go-forward (see resweep_holed_games's docstring in
 app/services/eval_drain.py for the Path-C mechanism), so there is no
 population-exhaustion date for this tool.
 
+SEED-139 item 5: the app now ALSO runs this daily in-process against its own
+database (app/services/eval_drain.py's run_periodic_holed_game_resweep), so
+this is no longer the only way a holed game gets repaired. This script
+remains the ad-hoc, cross-database entry point (dev/benchmark/prod) — the
+in-process loop only ever touches the app's own DATABASE_URL.
+
 Finds engine games (lichess_evals_at IS NULL) whose full_evals_completed_at is set
 but that still carry at least one non-terminal hole (eval_cp IS NULL AND eval_mate IS NULL
 on a ply that is not the terminal game-over ply). Clears their completion markers

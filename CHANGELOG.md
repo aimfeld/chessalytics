@@ -10,6 +10,12 @@ in `YYYY-MM-DD` (Europe/Zurich).
 
 ### Fixed
 
+- Games no longer silently keep gaps in their move-by-move evaluation. A volunteer machine that runs out of time on a position now retries it once before giving up, so a merely slow or overloaded computer no longer leaves a hole behind. Re-analysis attempts are no longer spent on duplicate submissions when two machines happen to race on the same game, and the retry budget itself is larger. Any game that still ends up with gaps is now repaired automatically every day instead of waiting for someone to notice and run a script by hand. (SEED-139)
+
+## [v2.12] Train Reliability & Grading Agreement — 2026-08-05
+
+### Fixed
+
 - Train's "Also fine" list no longer names the same move twice (e.g. "Also fine: Be2, Bd3, Bd3"), and its green arrows no longer stack two on one square. The grading engine's candidate lines are collected per rank across deepening iterations, and the last iteration usually runs out of time part-way through, so a move that had just climbed the ranking could be committed at both its new rank and its old one.
 
 - The Train guess card no longer tells you things that aren't true. Guessing "One critical move" correctly but then playing a losing move used to be answered with "You identified the one critical move", which read as praise for a move you never found; it now separates the two ("Right, and you found it: only one move works here." versus "Right, only one move works here, but that wasn't it."). And a correct "Several fine moves" guess on one of your own blunders used to congratulate you with "You handled this fine in your game" at the exact position where you blundered; it now says several moves were fine, but not the one you played. The same clause was missing when you guessed "One critical move" and the position turned out to be one of your blunders with no single answer: a bare "Several moves are fine here" read as if nothing had gone wrong there.
@@ -1277,7 +1283,8 @@ bookmarks, game cards, and rating / stats pages.
 - Rating history, global stats, openings W/D/L charts.
 - Multi-user auth with data isolation.
 
-[Unreleased]: https://github.com/flawchess/flawchess/compare/v2.11...HEAD
+[Unreleased]: https://github.com/flawchess/flawchess/compare/v2.12...HEAD
+[v2.12]: https://github.com/flawchess/flawchess/compare/v2.11...v2.12
 [v2.11]: https://github.com/flawchess/flawchess/compare/v2.10...v2.11
 [v2.10]: https://github.com/flawchess/flawchess/compare/v2.9...v2.10
 [v2.9]: https://github.com/flawchess/flawchess/compare/v2.8...v2.9

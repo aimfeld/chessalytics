@@ -57,6 +57,18 @@ those two documents did not cover, plus two explicit corrections to the UI-SPEC.
   eval-chart slider position** (three-way sync). On any **sideline** the slider parks at the fork
   ply, disabled/dimmed (`opacity-40`, tooltip "Return to main game line to scrub") per the
   UI-SPEC — re-enabled on returning to the main line.
+  - **§-amendment (2026-08-05, `/gsd-fast`): the sideline parking is REVERSED.** The slider is now
+    always enabled, and scrubbing from a sideline navigates the board to the scrubbed main-line
+    ply. Two reasons: (1) `goToNode` only moves the current-node pointer, so the sideline survives
+    in the variation tree and is one move-list click away — nothing is lost by scrubbing out of it;
+    (2) the disable was only half-enforced, because the mobile touch-scrub overlay
+    (`EvalChart.tsx`) was never gated by `sliderDisabled`, so on a phone a sideline left the chart
+    looking tappable while the parent silently swallowed every tap. The `sliderDisabled` prop and
+    the "Return to main game line to scrub" tooltip are removed from `EvalChart` (no other caller
+    used them). The fork-ply parking of `syncPly` (Quick 260627-mt8) is KEPT — it is still the
+    correct resting position and now doubles as the natural start point for the drag. This
+    supersedes the D-05 sentence above and the corresponding lines in 140-UI-SPEC.md
+    (`Slider parked/dimmed` token row, copy table) and 140-VALIDATION.md.
 
 ### Unified Analyze button (CORRECTION to UI-SPEC)
 - **D-06:** The page-opening **Analyze** button is shown on **analyzed games only**

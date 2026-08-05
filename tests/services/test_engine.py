@@ -13,6 +13,9 @@ import pytest
 from app.services.engine import _STOCKFISH_PATH, evaluate
 
 if TYPE_CHECKING:
+    from collections.abc import Callable, Coroutine
+    from typing import Any
+
     from app.services.engine import EnginePool
 from app.services.zobrist import EVAL_CP_MAX_ABS, EVAL_MATE_MAX_ABS
 
@@ -283,6 +286,74 @@ class TestEvaluateNodesMultipv2:
         assert second_cp == MOCK_SECOND_MATE_CP
         assert second_mate is None
         assert second_uci == "d7d5"
+
+
+class TestNodesTimeoutOverride:
+    """SEED-139 D-04: evaluate_nodes_with_pv / evaluate_nodes_multipv2 accept an
+    optional keyword-only timeout_s, resolving to _NODES_TIMEOUT_S when omitted
+    and using the override otherwise. Asserts the value actually handed to
+    _acquire_and_analyse — the only load-bearing behavior of the parameter.
+    """
+
+    @staticmethod
+    def _make_timeout_spy(
+        captured: dict[str, object],
+    ) -> Callable[..., Coroutine[Any, Any, None]]:
+        """A drop-in replacement for `EnginePool._acquire_and_analyse` that just
+        records the `timeout` it was called with, matching its real signature so
+        `ty` sees a compatible assignment."""
+
+        async def fake_acquire_and_analyse(
+            board: chess.Board,
+            limit: chess.engine.Limit,
+            timeout: int | float,
+            *,
+            multipv: int | None = None,
+        ) -> None:
+            captured["timeout"] = timeout
+            return None
+
+        return fake_acquire_and_analyse
+
+    async def test_evaluate_nodes_with_pv_default_uses_nodes_timeout(self) -> None:
+        from app.services.engine import _NODES_TIMEOUT_S, EnginePool
+
+        pool = EnginePool(size=1)
+        pool._started = True
+        captured: dict[str, object] = {}
+        pool._acquire_and_analyse = self._make_timeout_spy(captured)  # ty: ignore[invalid-assignment] -- test spy narrows the return type deliberately
+        await pool.evaluate_nodes_with_pv(chess.Board())
+        assert captured["timeout"] == _NODES_TIMEOUT_S
+
+    async def test_evaluate_nodes_with_pv_override_used_verbatim(self) -> None:
+        from app.services.engine import EnginePool
+
+        pool = EnginePool(size=1)
+        pool._started = True
+        captured: dict[str, object] = {}
+        pool._acquire_and_analyse = self._make_timeout_spy(captured)  # ty: ignore[invalid-assignment] -- test spy narrows the return type deliberately
+        await pool.evaluate_nodes_with_pv(chess.Board(), timeout_s=15.0)
+        assert captured["timeout"] == 15.0
+
+    async def test_evaluate_nodes_multipv2_default_uses_nodes_timeout(self) -> None:
+        from app.services.engine import _NODES_TIMEOUT_S, EnginePool
+
+        pool = EnginePool(size=1)
+        pool._started = True
+        captured: dict[str, object] = {}
+        pool._acquire_and_analyse = self._make_timeout_spy(captured)  # ty: ignore[invalid-assignment] -- test spy narrows the return type deliberately
+        await pool.evaluate_nodes_multipv2(chess.Board())
+        assert captured["timeout"] == _NODES_TIMEOUT_S
+
+    async def test_evaluate_nodes_multipv2_override_used_verbatim(self) -> None:
+        from app.services.engine import EnginePool
+
+        pool = EnginePool(size=1)
+        pool._started = True
+        captured: dict[str, object] = {}
+        pool._acquire_and_analyse = self._make_timeout_spy(captured)  # ty: ignore[invalid-assignment] -- test spy narrows the return type deliberately
+        await pool.evaluate_nodes_multipv2(chess.Board(), timeout_s=15.0)
+        assert captured["timeout"] == 15.0
 
 
 class TestEngineNotStarted:

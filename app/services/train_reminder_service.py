@@ -323,12 +323,16 @@ async def run_periodic_train_reminders() -> None:
         return
     while True:
         await asyncio.sleep(_REMINDER_TICK_INTERVAL_SECONDS)
-        try:
-            await send_due_reminders(datetime.datetime.now(datetime.timezone.utc))
-        except Exception:
-            logger.exception("Periodic train reminder tick failed")
-            sentry_sdk.set_tag("source", "train_reminders")
-            sentry_sdk.capture_exception()
+        # SEED-138: per-tick isolation scope -- a background loop must never
+        # write to the shared lifespan scope (AsyncioIntegration is not
+        # enabled; see app/main.py's create_task comment for why).
+        with sentry_sdk.isolation_scope():
+            try:
+                await send_due_reminders(datetime.datetime.now(datetime.timezone.utc))
+            except Exception:
+                logger.exception("Periodic train reminder tick failed")
+                sentry_sdk.set_tag("source", "train_reminders")
+                sentry_sdk.capture_exception()
 
 
 __all__ = [

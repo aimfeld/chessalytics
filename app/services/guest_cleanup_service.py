@@ -208,9 +208,13 @@ async def run_periodic_guest_cleanup() -> None:
     """
     while True:
         await asyncio.sleep(_GUEST_CLEANUP_INTERVAL_SECONDS)
-        try:
-            await cleanup_inactive_guests()
-        except Exception:
-            logger.exception("Periodic guest cleanup failed")
-            sentry_sdk.set_tag("source", "guest_cleanup")
-            sentry_sdk.capture_exception()
+        # SEED-138: per-tick isolation scope -- a background loop must never
+        # write to the shared lifespan scope (AsyncioIntegration is not
+        # enabled; see app/main.py's create_task comment for why).
+        with sentry_sdk.isolation_scope():
+            try:
+                await cleanup_inactive_guests()
+            except Exception:
+                logger.exception("Periodic guest cleanup failed")
+                sentry_sdk.set_tag("source", "guest_cleanup")
+                sentry_sdk.capture_exception()
