@@ -18,12 +18,42 @@
  * 7. clearAllSidelines strips every non-mainLine node and empties pvNodeIds.
  * 8. goForward from a fork still steps into an open sideline (pvNodeIds membership).
  * 9. makeMove off a PV node yields a node with isOnPvLine=false (a free-move sub-fork).
+ *
+ * Quick 260805-p37 — move-sound emission (one seam covering both the Analysis board
+ * and the Train solution board's free-play, via useTrainFreePlay's wrap):
+ * 10. Landing on a node whose SAN carries a check/mate marker plays 'check'; a capture
+ *     marker (no check) plays 'capture'; an ordinary node (including castling) plays 'move'.
+ * 11. makeMove — both the fork path and the advance-or-fork reuse path — plays the
+ *     landed node's own event.
+ * 12. goForward plays the arrived child's event (including a capture); goBack plays
+ *     'move' even when the node it lands on is itself a capture.
+ * 13. goToNode to a deeper node plays that node's own event; to a shallower node plays
+ *     'move' even when the target itself is a capture.
+ * 14. goToRoot plays 'move'. playUciLine plays the event of the last grafted move.
+ * 15. loadMainLine plays nothing, even though it lands on the line's last move.
+ * 16. loadMainLine([], fen) immediately followed by playUciLine([...]) in the SAME
+ *     act() (the useTrainFreePlay.start() shape) DOES play the grafted move's event —
+ *     the stale silent claim (landing null) misses the batch's actual landing node.
+ * 17. goToNode(id, { silent: true }) plays nothing. Hook mount plays nothing. A command
+ *     that leaves currentNodeId unchanged (goToNode onto the current node, deleteSubtree
+ *     of an untouched line) plays nothing.
+ * 18. unlockAudio fires at most once across several commands, and never for loadMainLine
+ *     or a silent goToNode.
  */
 
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { renderHook, act } from '@testing-library/react';
 import { useAnalysisBoard } from '../useAnalysisBoard';
 import type { MoveNode, NodeId, AnalysisBoardState } from '../useAnalysisBoard';
+import { playSound, unlockAudio } from '@/lib/sounds';
+
+vi.mock('@/lib/sounds', () => ({
+  playSound: vi.fn(),
+  unlockAudio: vi.fn(),
+}));
+
+const mockPlaySound = vi.mocked(playSound);
+const mockUnlockAudio = vi.mocked(unlockAudio);
 
 // ─── Chess position constants ────────────────────────────────────────────────
 
@@ -47,7 +77,52 @@ const MOVE_BC4 = { from: 'f1', to: 'c4' } as const;
 // SAN representation for loadMainLine
 const MAIN_LINE_SANS = ['Nf3', 'Nc6', 'Bc4'];
 
+// ─── Quick 260805-p37: move-sound position constants ────────────────────────
+// Every sequence below is verified legal by construction: the test itself
+// plays each move via makeMove/loadMainLine rather than pasting an unverified
+// FEN (the sole exception is the universal starting FEN, captured live from
+// the hook's own `rootFen` rather than hardcoded).
+
+// Scholar's Mate: 1. e4 e5 2. Qh5 Nc6 3. Bc4 Nf6?? 4. Qxf7# — starting from
+// ROOT_FEN (already past 1. e4 e5). Qxf7# carries BOTH the 'x' and '#'
+// markers, exercising the check-wins-over-capture precedence.
+const SCHOLARS_MATE_MOVES = [
+  { from: 'd1', to: 'h5' }, // 2. Qh5
+  { from: 'b8', to: 'c6' }, // 2... Nc6
+  { from: 'f1', to: 'c4' }, // 3. Bc4
+  { from: 'g8', to: 'f6' }, // 3... Nf6?? (allows the mate; irrelevant to this test)
+  { from: 'h5', to: 'f7' }, // 4. Qxf7#
+] as const;
+
+// Plain capture, no check: 1. e4 d5 2. exd5 2... Nf6 — from the standard
+// starting position (ROOT_FEN already commits to 1...e5, which this needs
+// to avoid). The trailing Nf6 lets a later test goBack ONTO the capture node.
+const CAPTURE_MOVES = [
+  { from: 'e2', to: 'e4' }, // 1. e4
+  { from: 'd7', to: 'd5' }, // 1... d5
+  { from: 'e4', to: 'd5' }, // 2. exd5 (capture, no check)
+  { from: 'g8', to: 'f6' }, // 2... Nf6 (plain — lets goBack land back on exd5)
+] as const;
+
+// Castle: 1. e4 e5 2. Nf3 Nc6 3. Bc4 Bc5 4. O-O — castling has no dedicated
+// clip in SOUND_FILES, so it must classify as a plain 'move' despite the
+// special "O-O" SAN token (no 'x', '+', or '#' in it either way).
+const CASTLE_MOVES = [
+  { from: 'e2', to: 'e4' },
+  { from: 'e7', to: 'e5' },
+  { from: 'g1', to: 'f3' },
+  { from: 'b8', to: 'c6' },
+  { from: 'f1', to: 'c4' },
+  { from: 'f8', to: 'c5' },
+  { from: 'e1', to: 'g1' }, // O-O
+] as const;
+
 describe('useAnalysisBoard', () => {
+  beforeEach(() => {
+    mockPlaySound.mockClear();
+    mockUnlockAudio.mockClear();
+  });
+
   // ── Behavior 1: Mid-line fork ───────────────────────────────────────────
 
   it('mid-line fork: move at a mid-line node creates a child node; mainLine is unchanged', () => {
@@ -535,5 +610,248 @@ describe('useAnalysisBoard', () => {
 
     expect(result.current.nodes.size).toBe(sizeAfterFirst); // no duplicates
     expect(result.current.nodes.get(result.current.currentNodeId!)?.san).toBe('Nc6');
+  });
+
+  // ── Quick 260805-p37: move-sound emission ───────────────────────────────
+
+  it('mount plays no sound and does not unlock audio', () => {
+    renderHook(() => useAnalysisBoard(ROOT_FEN));
+    expect(mockPlaySound).not.toHaveBeenCalled();
+    expect(mockUnlockAudio).not.toHaveBeenCalled();
+  });
+
+  it('makeMove that forks a new node plays a plain move sound for an ordinary move', () => {
+    const { result } = renderHook(() => useAnalysisBoard(ROOT_FEN));
+
+    act(() => { result.current.makeMove(MOVE_NF3.from, MOVE_NF3.to); });
+
+    expect(mockPlaySound).toHaveBeenCalledTimes(1);
+    expect(mockPlaySound).toHaveBeenCalledWith('move');
+  });
+
+  it('makeMove that ADVANCES into an existing child (advance-or-fork reuse path) also plays its event', () => {
+    const { result } = renderHook(() => useAnalysisBoard(ROOT_FEN));
+
+    act(() => { result.current.loadMainLine(['Nf3', 'Nc6'], ROOT_FEN); });
+    const node0: NodeId = result.current.mainLine[0]!;
+    act(() => { result.current.goToNode(node0); });
+    mockPlaySound.mockClear(); // isolate the advance itself
+
+    let moved = false;
+    act(() => { moved = result.current.makeMove(MOVE_NC6.from, MOVE_NC6.to); });
+
+    expect(moved).toBe(true);
+    expect(mockPlaySound).toHaveBeenCalledWith('move');
+  });
+
+  it('landing on a node whose SAN carries a check/mate marker plays check (also proves check wins over capture)', () => {
+    const { result } = renderHook(() => useAnalysisBoard(ROOT_FEN));
+
+    for (const mv of SCHOLARS_MATE_MOVES.slice(0, 4)) {
+      act(() => { result.current.makeMove(mv.from, mv.to); });
+    }
+    mockPlaySound.mockClear();
+
+    const mate = SCHOLARS_MATE_MOVES[4]!;
+    act(() => { result.current.makeMove(mate.from, mate.to); });
+
+    const landed = result.current.nodes.get(result.current.currentNodeId!);
+    expect(landed?.san).toBe('Qxf7#'); // carries both 'x' and '#'
+    expect(mockPlaySound).toHaveBeenCalledWith('check');
+  });
+
+  it('landing on a node whose SAN carries a capture marker (no check) plays capture', () => {
+    const { result } = renderHook(() => useAnalysisBoard());
+
+    act(() => { result.current.makeMove(CAPTURE_MOVES[0].from, CAPTURE_MOVES[0].to); });
+    act(() => { result.current.makeMove(CAPTURE_MOVES[1].from, CAPTURE_MOVES[1].to); });
+    mockPlaySound.mockClear();
+
+    act(() => { result.current.makeMove(CAPTURE_MOVES[2].from, CAPTURE_MOVES[2].to); }); // exd5
+
+    const landed = result.current.nodes.get(result.current.currentNodeId!);
+    expect(landed?.san).toBe('exd5');
+    expect(mockPlaySound).toHaveBeenCalledWith('capture');
+  });
+
+  it('landing on a castle node (O-O) plays a plain move sound, not a dedicated castle sound', () => {
+    const { result } = renderHook(() => useAnalysisBoard());
+
+    for (const mv of CASTLE_MOVES.slice(0, 6)) {
+      act(() => { result.current.makeMove(mv.from, mv.to); });
+    }
+    mockPlaySound.mockClear();
+
+    const castle = CASTLE_MOVES[6];
+    act(() => { result.current.makeMove(castle.from, castle.to); });
+
+    const landed = result.current.nodes.get(result.current.currentNodeId!);
+    expect(landed?.san).toBe('O-O');
+    expect(mockPlaySound).toHaveBeenCalledWith('move');
+  });
+
+  it('goForward plays the arrived-at child event, including landing on a capture', () => {
+    const { result } = renderHook(() => useAnalysisBoard());
+
+    for (const mv of CAPTURE_MOVES.slice(0, 3)) { // e4, d5, exd5
+      act(() => { result.current.makeMove(mv.from, mv.to); });
+    }
+    act(() => { result.current.goBack(); }); // back to the node after d5
+    mockPlaySound.mockClear();
+
+    act(() => { result.current.goForward(); }); // forward into exd5 (capture)
+
+    const landed = result.current.nodes.get(result.current.currentNodeId!);
+    expect(landed?.san).toBe('exd5');
+    expect(mockPlaySound).toHaveBeenCalledWith('capture');
+  });
+
+  it('goBack plays a plain move even when landing on a node that is itself a capture', () => {
+    const { result } = renderHook(() => useAnalysisBoard());
+
+    for (const mv of CAPTURE_MOVES) { // e4, d5, exd5, Nf6
+      act(() => { result.current.makeMove(mv.from, mv.to); });
+    }
+    mockPlaySound.mockClear();
+
+    act(() => { result.current.goBack(); }); // lands on exd5 — must still be plain 'move'
+
+    const landed = result.current.nodes.get(result.current.currentNodeId!);
+    expect(landed?.san).toBe('exd5');
+    expect(mockPlaySound).toHaveBeenCalledWith('move');
+  });
+
+  it("goToNode to a deeper node plays that node's own event; to a shallower node plays plain move even when the target itself is a capture", () => {
+    const { result } = renderHook(() => useAnalysisBoard());
+    const startFen = result.current.rootFen; // read live, not pasted
+
+    act(() => {
+      result.current.loadMainLine(['e4', 'd5', 'exd5', 'Nc6'], startFen);
+    });
+    const [n0, , n2, n3] = result.current.mainLine as [NodeId, NodeId, NodeId, NodeId];
+
+    // Baseline navigation to the shallowest node.
+    act(() => { result.current.goToNode(n0); });
+    mockPlaySound.mockClear();
+
+    // Deeper: n0 -> n2 (capture node) plays THAT node's own event.
+    act(() => { result.current.goToNode(n2); });
+    expect(mockPlaySound).toHaveBeenCalledWith('capture');
+    mockPlaySound.mockClear();
+
+    // Deeper again: n2 -> n3 (plain) plays a plain move.
+    act(() => { result.current.goToNode(n3); });
+    expect(mockPlaySound).toHaveBeenCalledWith('move');
+    mockPlaySound.mockClear();
+
+    // Shallower: n3 -> n2 must play plain move even though n2's own SAN is a capture.
+    act(() => { result.current.goToNode(n2); });
+    expect(mockPlaySound).toHaveBeenCalledWith('move');
+  });
+
+  it('goToRoot plays a plain move sound', () => {
+    const { result } = renderHook(() => useAnalysisBoard(ROOT_FEN));
+
+    act(() => { result.current.makeMove(MOVE_NF3.from, MOVE_NF3.to); });
+    mockPlaySound.mockClear();
+
+    act(() => { result.current.goToRoot(); });
+
+    expect(mockPlaySound).toHaveBeenCalledWith('move');
+  });
+
+  it('playUciLine plays the event of the LAST move it grafts', () => {
+    const { result } = renderHook(() => useAnalysisBoard(ROOT_FEN));
+
+    act(() => { result.current.playUciLine(['g1f3', 'b8c6', 'f1c4']); });
+
+    const landed = result.current.nodes.get(result.current.currentNodeId!);
+    expect(landed?.san).toBe('Bc4');
+    expect(mockPlaySound).toHaveBeenCalledWith('move');
+  });
+
+  it("loadMainLine plays nothing, even though it lands the cursor on the line's last move", () => {
+    const { result } = renderHook(() => useAnalysisBoard(ROOT_FEN));
+
+    act(() => { result.current.loadMainLine(MAIN_LINE_SANS, ROOT_FEN); });
+
+    expect(result.current.currentNodeId).not.toBeNull();
+    expect(mockPlaySound).not.toHaveBeenCalled();
+  });
+
+  it('loadMainLine([], fen) immediately followed by playUciLine in the SAME batch DOES play the grafted move (useTrainFreePlay.start() shape)', () => {
+    const { result } = renderHook(() => useAnalysisBoard());
+    const startFen = result.current.rootFen;
+
+    // No preceding navigation — mount itself already recorded the { id: null,
+    // depth: 0 } baseline the emission effect needs (the plain first render,
+    // which plays nothing per the mount rule but still seeds prevNavRef).
+    // This mirrors the REAL useTrainFreePlay.start() call: it fires as the
+    // first free move on a board that was never separately navigated.
+    act(() => {
+      result.current.loadMainLine([], startFen); // resets the tree, claims silence on null
+      // prefixUci=['e2e4','d7d5'] + moveUci='e4d5' — the grafted LAST move
+      // (exd5) is a genuine capture, so a pass here proves the depth-based
+      // classification actually ran (not a coincidental 'move' fallback).
+      result.current.playUciLine(['e2e4', 'd7d5', 'e4d5']);
+    });
+
+    const landed = result.current.nodes.get(result.current.currentNodeId!);
+    expect(landed?.san).toBe('exd5');
+    // The stale "land on null" claim misses this batch's actual landing node.
+    expect(mockPlaySound).toHaveBeenCalledWith('capture');
+  });
+
+  it('goToNode(id, { silent: true }) plays nothing', () => {
+    const { result } = renderHook(() => useAnalysisBoard(ROOT_FEN));
+
+    act(() => { result.current.loadMainLine(MAIN_LINE_SANS, ROOT_FEN); });
+    mockPlaySound.mockClear();
+    const n0: NodeId = result.current.mainLine[0]!;
+
+    act(() => { result.current.goToNode(n0, { silent: true }); });
+
+    expect(result.current.currentNodeId).toBe(n0);
+    expect(mockPlaySound).not.toHaveBeenCalled();
+  });
+
+  it('a command leaving currentNodeId unchanged plays nothing (goToNode onto the current node; deleteSubtree of an untouched line)', () => {
+    const { result } = renderHook(() => useAnalysisBoard(ROOT_FEN));
+
+    act(() => { result.current.loadMainLine(MAIN_LINE_SANS, ROOT_FEN); });
+    const mainLine = [...result.current.mainLine];
+    const forkA: NodeId = mainLine[0]!;
+    act(() => { result.current.insertPvLine(['Nf6'], forkA); }); // id 3
+    const leafId: NodeId = mainLine[2]!;
+    act(() => { result.current.goToNode(leafId); }); // stay on the main-line leaf
+    mockPlaySound.mockClear();
+
+    // goToNode onto the current node — a true no-op.
+    act(() => { result.current.goToNode(leafId); });
+    expect(mockPlaySound).not.toHaveBeenCalled();
+
+    // deleteSubtree of a line the board is not inside — nodes change, position doesn't.
+    act(() => { result.current.deleteSubtree(3); });
+    expect(mockPlaySound).not.toHaveBeenCalled();
+  });
+
+  it('unlockAudio fires at most once across several commands, and never for loadMainLine or a silent goToNode', () => {
+    const { result } = renderHook(() => useAnalysisBoard(ROOT_FEN));
+
+    act(() => { result.current.loadMainLine(MAIN_LINE_SANS, ROOT_FEN); });
+    expect(mockUnlockAudio).not.toHaveBeenCalled();
+
+    const n0: NodeId = result.current.mainLine[0]!;
+    act(() => { result.current.goToNode(n0, { silent: true }); });
+    expect(mockUnlockAudio).not.toHaveBeenCalled();
+
+    act(() => { result.current.goToNode(n0); }); // first real gesture — unlocks once
+    expect(mockUnlockAudio).toHaveBeenCalledTimes(1);
+
+    act(() => { result.current.goForward(); });
+    act(() => { result.current.goBack(); });
+    act(() => { result.current.makeMove(MOVE_NF6.from, MOVE_NF6.to); });
+
+    expect(mockUnlockAudio).toHaveBeenCalledTimes(1); // still just once
   });
 });

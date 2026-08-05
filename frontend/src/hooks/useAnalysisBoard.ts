@@ -13,6 +13,8 @@
 import { useRef, useState, useCallback, useEffect } from 'react';
 import type { RefObject } from 'react';
 import { Chess } from 'chess.js';
+import { playSound, unlockAudio } from '@/lib/sounds';
+import type { SoundEvent } from '@/lib/sounds';
 
 // ─── Types ───────────────────────────────────────────────────────────────────
 
@@ -61,7 +63,18 @@ export interface AnalysisBoardReturn {
   makeMove: (from: string, to: string) => boolean;
   goBack: () => void;
   goForward: () => void;
-  goToNode: (id: NodeId) => void;
+  /**
+   * goToNode(id, opts?) — the optional second parameter exists for
+   * programmatic seeding (URL-driven navigation) and continuous scrubbing
+   * (the eval-chart drag), both of which pass `{ silent: true }` to suppress
+   * the landed-move sound (Quick 260805-p37). Omitting it — every UI click
+   * path (move-list, tags-panel cycling, engine-line chip fork navigation)
+   * — sounds. Widening from `(id: NodeId) => void` to `(id: NodeId, opts?) =>
+   * void` stays assignable to `VariationTree`'s `onNodeClick: (nodeId:
+   * NodeId) => void` prop, since every call site there passes exactly one
+   * argument.
+   */
+  goToNode: (id: NodeId, opts?: { silent?: boolean }) => void;
   /**
    * goToRoot() — jump to the root position (currentNodeId = null) without
    * altering nodes, mainLine, or rootFen. Used by tactic mode to land the
@@ -136,6 +149,41 @@ function getLastMove(s: AnalysisBoardState): { from: string; to: string } | null
 }
 
 /**
+ * Classify a stored SAN into the move-sound taxonomy `TrainLineStepper.
+ * replayLine` already uses: check marker (`+`/`#`) wins, then capture marker
+ * (`x`), else a plain move (Quick 260805-p37). No `Chess` instance is needed
+ * — chess.js already writes both markers into the SAN it returns from
+ * `move()`, and this reproduces that same `inCheck / captured / plain`
+ * precedence from the string alone. Castling (`O-O`/`O-O-O`) has no
+ * dedicated clip in `SOUND_FILES`, so it deliberately falls through to the
+ * plain move event.
+ */
+function classifySanSound(san: string): SoundEvent {
+  if (san.includes('+') || san.includes('#')) return 'check';
+  if (san.includes('x')) return 'capture';
+  return 'move';
+}
+
+/**
+ * Walk `id`'s `parentId` chain up to the root, returning the hop count
+ * (root/null = 0). The tree analogue of `TrainLineStepper`'s stepper index:
+ * a greater depth than the previous landing means the navigation moved
+ * forward (Quick 260805-p37). Breaks out on a `parentId` missing from the
+ * map rather than looping forever.
+ */
+function getNodeDepth(nodes: Map<NodeId, MoveNode>, id: NodeId | null): number {
+  let depth = 0;
+  let current = id;
+  while (current !== null) {
+    const node = nodes.get(current);
+    if (!node) break;
+    depth++;
+    current = node.parentId;
+  }
+  return depth;
+}
+
+/**
  * Scan the node map for the first child of `parentId` by insertion order
  * (lowest id wins — ids are auto-incremented at creation time).
  */
@@ -180,9 +228,41 @@ export function useAnalysisBoard(
   const stateRef = useRef(state);
   const containerRef = useRef<HTMLDivElement | null>(null);
 
+  // ── Move-sound state (Quick 260805-p37) ────────────────────────────────
+  // prevNavRef: the previously landed { id, depth }, seeded null so the first
+  // effect run (mount) only records a baseline and stays silent.
+  const prevNavRef = useRef<{ id: NodeId | null; depth: number } | null>(null);
+  // silentNavRef: NAMES the single landing node id whose arrival must not
+  // sound. A ref-held id (not a boolean) is load-bearing: useTrainFreePlay.
+  // start() calls loadMainLine([], startFen) and playUciLine([...prefixUci,
+  // moveUci]) in ONE React batch, producing ONE commit. A boolean set by
+  // loadMainLine would swallow the grafted move's sound; keying on the id
+  // lets loadMainLine's claim (landing null) miss the commit's actual
+  // landing node, so the first free-play move on the Train solution board
+  // still sounds.
+  const silentNavRef = useRef<{ id: NodeId | null } | null>(null);
+  // unlockedRef: one-shot guard for the iOS/WebKit playback unlock.
+  const unlockedRef = useRef(false);
+
   useEffect(() => {
     stateRef.current = state;
   });
+
+  /**
+   * One-shot iOS/WebKit playback unlock (Quick 260805-p37). WebKit grants a
+   * media element playback permission only when `play()` is first called
+   * inside a user gesture, and the move sound below is emitted from a
+   * passive effect one tick later. Called at the top of every command
+   * reached from a real gesture (board drop, control button, arrow key,
+   * move-list click, engine-line chip) — never from the programmatic paths
+   * (loadMainLine, insertPvLine, silent goToNode), which deliberately do NOT
+   * unlock. Mirrors what Bots.tsx / useBotGame already do.
+   */
+  function unlockAudioOnce(): void {
+    if (unlockedRef.current) return;
+    unlockedRef.current = true;
+    unlockAudio();
+  }
 
   /**
    * makeMove(from, to) — input-agnostic move entry point (BOARD-03).
@@ -198,6 +278,7 @@ export function useAnalysisBoard(
    * moves — this hook advances or forks instead.
    */
   const makeMove = useCallback((from: string, to: string): boolean => {
+    unlockAudioOnce();
     const { currentNodeId, nodes, rootFen } = stateRef.current;
     const parentFen =
       currentNodeId !== null ? (nodes.get(currentNodeId)?.fen ?? rootFen) : rootFen;
@@ -236,6 +317,7 @@ export function useAnalysisBoard(
    * Uses a functional setState updater to always act on the latest state.
    */
   const goBack = useCallback((): void => {
+    unlockAudioOnce();
     setState((prev) => {
       if (prev.currentNodeId === null) return prev; // already at root — no-op
       const node = prev.nodes.get(prev.currentNodeId);
@@ -256,6 +338,7 @@ export function useAnalysisBoard(
    * lowest-id child overall when no child is a PV member.
    */
   const goForward = useCallback((): void => {
+    unlockAudioOnce();
     setState((prev) => {
       if (prev.pvNodeIds.size > 0) {
         let pvChild: MoveNode | undefined;
@@ -273,10 +356,20 @@ export function useAnalysisBoard(
   }, []);
 
   /**
-   * goToNode(id) — O(1) jump: reads nodes.get(id).fen directly, no replay loop.
-   * (BOARD-02 / ARCHITECTURE Pattern 3 lines 208-209.)
+   * goToNode(id, opts?) — O(1) jump: reads nodes.get(id).fen directly, no
+   * replay loop. (BOARD-02 / ARCHITECTURE Pattern 3 lines 208-209.)
+   *
+   * `opts?.silent` (Quick 260805-p37) marks the landing id as sound-free —
+   * used by Analysis.tsx's URL-seeding effect and the eval-chart scrub
+   * callback. Every other caller (a real click) omits it and unlocks
+   * playback like the other gesture-driven commands.
    */
-  const goToNode = useCallback((id: NodeId): void => {
+  const goToNode = useCallback((id: NodeId, opts?: { silent?: boolean }): void => {
+    if (opts?.silent) {
+      silentNavRef.current = { id };
+    } else {
+      unlockAudioOnce();
+    }
     setState((prev) => {
       if (!prev.nodes.has(id)) return prev;
       // Bail when already on this node: returning a fresh state object for a no-op
@@ -313,9 +406,18 @@ export function useAnalysisBoard(
     }
 
     const lastId = newMainLine[newMainLine.length - 1];
+    const landingId = lastId !== undefined ? lastId : null;
+    // Seeding a tree from the URL or resetting free play is not a user move
+    // (Quick 260805-p37) — claim silence on the id this call will land on,
+    // BEFORE the setState so the emission effect sees the claim on its next
+    // run. useTrainFreePlay.start() calls this with sans=[] (landingId =
+    // null) immediately followed by playUciLine in the SAME React batch; the
+    // id-keyed claim lets that stale "land on null" claim miss the batch's
+    // actual landing node, so the grafted move still sounds.
+    silentNavRef.current = { id: landingId };
     setState({
       nodes: newNodes,
-      currentNodeId: lastId !== undefined ? lastId : null,
+      currentNodeId: landingId,
       mainLine: newMainLine,
       pvNodeIds: new Set<NodeId>(),
       rootFen: newRootFen,
@@ -330,6 +432,7 @@ export function useAnalysisBoard(
    * the stored PV so the user steps forward toward the punchline.
    */
   const goToRoot = useCallback((): void => {
+    unlockAudioOnce();
     setState((prev) => ({ ...prev, currentNodeId: null }));
   }, []);
 
@@ -491,6 +594,7 @@ export function useAnalysisBoard(
    * stateRef only syncs after render (L-1/L-7).
    */
   const playUciLine = useCallback((uciMoves: string[]): void => {
+    unlockAudioOnce();
     if (uciMoves.length === 0) return;
     setState((prev) => {
       const newNodes = new Map(prev.nodes);
@@ -545,6 +649,46 @@ export function useAnalysisBoard(
   const isOnPvLine = useCallback((nodeId: NodeId): boolean => {
     return stateRef.current.pvNodeIds.has(nodeId);
   }, []);
+
+  /**
+   * Move-sound emission effect (Quick 260805-p37). Fires once per COMMITTED
+   * navigation (currentNodeId/nodes change), never from inside a setState
+   * updater — React StrictMode double-invokes updaters in dev and would
+   * double-play. Reads the mutable prevNavRef/silentNavRef refs rather than
+   * being a useCallback with dependencies, so it never needs its own
+   * dependency on the returned command callbacks.
+   */
+  useEffect(() => {
+    const currentNodeId = state.currentNodeId;
+    const nodes = state.nodes;
+    const landingNode = currentNodeId !== null ? nodes.get(currentNodeId) : undefined;
+    const depth = getNodeDepth(nodes, currentNodeId);
+
+    // Read the previous record, then unconditionally overwrite it — a
+    // suppressed or no-op run still keeps the baseline honest.
+    const prevNav = prevNavRef.current;
+    prevNavRef.current = { id: currentNodeId, depth };
+
+    // A silent claim (loadMainLine or goToNode({ silent: true })) is
+    // consumed here. It only suppresses THIS run when its named id matches
+    // the actual landing id — a different node landing means the claim is
+    // stale (the useTrainFreePlay.start() same-batch loadMainLine+
+    // playUciLine shape), so evaluation continues instead of bailing.
+    const silent = silentNavRef.current;
+    if (silent !== null) {
+      silentNavRef.current = null;
+      if (silent.id === currentNodeId) return;
+    }
+
+    if (prevNav === null) return; // mount — never sound on initial render
+    if (prevNav.id === currentNodeId) return; // tree changed, shown position did not
+
+    const event: SoundEvent =
+      landingNode !== undefined && depth > prevNav.depth
+        ? classifySanSound(landingNode.san)
+        : 'move';
+    playSound(event);
+  }, [state.currentNodeId, state.nodes]);
 
   // Container-scoped keyboard handler (ArrowLeft = goBack, ArrowRight = goForward).
   // Scoped to containerRef — NOT window — to avoid clashing with page shortcuts.
