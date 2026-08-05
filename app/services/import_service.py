@@ -349,14 +349,18 @@ async def run_periodic_reaper() -> None:
     """
     while True:
         await asyncio.sleep(_REAPER_INTERVAL_SECONDS)
-        try:
-            await cleanup_orphaned_jobs(
-                orphan_age_threshold=timedelta(seconds=IMPORT_TIMEOUT_SECONDS)
-            )
-        except Exception:
-            logger.exception("Periodic orphan-job reaper failed")
-            sentry_sdk.set_tag("source", "import")
-            sentry_sdk.capture_exception()
+        # SEED-138: per-tick isolation scope -- a background loop must never
+        # write to the shared lifespan scope (AsyncioIntegration is not
+        # enabled; see app/main.py's create_task comment for why).
+        with sentry_sdk.isolation_scope():
+            try:
+                await cleanup_orphaned_jobs(
+                    orphan_age_threshold=timedelta(seconds=IMPORT_TIMEOUT_SECONDS)
+                )
+            except Exception:
+                logger.exception("Periodic orphan-job reaper failed")
+                sentry_sdk.set_tag("source", "import")
+                sentry_sdk.capture_exception()
 
 
 # Bug fix (Phase 90, SEED-017, FLAWCHESS-3Q): the original except-block

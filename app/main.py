@@ -104,6 +104,18 @@ async def lifespan(_app: FastAPI) -> AsyncIterator[None]:
     # (lean/worker images) — start_maia catches ImportError and disables Maia
     # gracefully (D-03a), so this can never block boot.
     await start_maia()
+    # SEED-138 convention for whoever adds a sixth lifespan background loop
+    # below: wrap each per-tick body in `with sentry_sdk.isolation_scope():`
+    # (enclosing the whole try/except, not just the awaited tick call) so a
+    # `set_tag`/`set_context` write in one loop's tick can never bleed onto a
+    # later, unrelated Sentry event -- including that same loop's own next
+    # tick. `AsyncioIntegration` is NOT enabled in `sentry_sdk.init` below:
+    # it forks a scope per asyncio TASK, which fixes cross-task bleed but
+    # leaves tick N's tags accumulating on tick N+1 of the SAME loop, and it
+    # changes scope behavior globally for every task in the process
+    # (including request handlers) -- a much larger blast radius than these
+    # five loops need. Per-tick isolation subsumes per-task isolation here.
+    #
     # Phase 90 / SEED-017: periodic reaper for the live process. Catches
     # orphans that arise from a Postgres-only restart (backend survives)
     # which the startup-only cleanup_orphaned_jobs() call would miss.

@@ -395,25 +395,33 @@ async def run_eval_drain() -> None:
     Wired in app/main.py lifespan alongside run_periodic_reaper.
     """
     while True:
-        try:
-            await _eval_drain_tick()
-        except asyncio.CancelledError:
-            # Lifespan shutdown — propagate without retry (cancellation contract
-            # mirrors WR-07 in import_service.py: CancelledError is BaseException,
-            # neither except clause below catches it).
-            raise
-        except _RETRIABLE_DB_OUTAGE_ERRORS as exc:
-            # Postgres restart mid-tick: log + short sleep, then re-poll.
-            # Games remain evals_completed_at IS NULL and will be re-picked.
-            logger.warning("eval_drain: DB outage, retrying in %ds", _DRAIN_IDLE_SLEEP_SECONDS)
-            sentry_sdk.set_tag("source", "eval_drain")
-            sentry_sdk.capture_exception(exc)
-            await asyncio.sleep(_DRAIN_IDLE_SLEEP_SECONDS)
-        except Exception:
-            logger.exception("eval_drain: unexpected error — continuing")
-            sentry_sdk.set_tag("source", "eval_drain")
-            sentry_sdk.capture_exception()
-            await asyncio.sleep(_DRAIN_IDLE_SLEEP_SECONDS)
+        # SEED-138: per-tick isolation scope -- a background loop must never
+        # write to the shared lifespan scope (AsyncioIntegration is not
+        # enabled; see app/main.py's create_task comment for why). Encloses
+        # the whole try/except: the except clauses below also call
+        # set_tag/capture_exception and would otherwise keep leaking.
+        with sentry_sdk.isolation_scope():
+            try:
+                await _eval_drain_tick()
+            except asyncio.CancelledError:
+                # Lifespan shutdown — propagate without retry (cancellation contract
+                # mirrors WR-07 in import_service.py: CancelledError is BaseException,
+                # neither except clause below catches it).
+                raise
+            except _RETRIABLE_DB_OUTAGE_ERRORS as exc:
+                # Postgres restart mid-tick: log + short sleep, then re-poll.
+                # Games remain evals_completed_at IS NULL and will be re-picked.
+                logger.warning(
+                    "eval_drain: DB outage, retrying in %ds", _DRAIN_IDLE_SLEEP_SECONDS
+                )
+                sentry_sdk.set_tag("source", "eval_drain")
+                sentry_sdk.capture_exception(exc)
+                await asyncio.sleep(_DRAIN_IDLE_SLEEP_SECONDS)
+            except Exception:
+                logger.exception("eval_drain: unexpected error — continuing")
+                sentry_sdk.set_tag("source", "eval_drain")
+                sentry_sdk.capture_exception()
+                await asyncio.sleep(_DRAIN_IDLE_SLEEP_SECONDS)
 
 
 async def _upsert_opening_cache(
@@ -1135,23 +1143,31 @@ async def run_full_eval_drain() -> None:
     Wired in app/main.py lifespan as full-eval-drain alongside the entry-ply drain.
     """
     while True:
-        try:
-            processed = await _full_drain_tick()
-            if not processed:
-                await asyncio.sleep(_DRAIN_IDLE_SLEEP_SECONDS)
+        # SEED-138: per-tick isolation scope -- a background loop must never
+        # write to the shared lifespan scope (AsyncioIntegration is not
+        # enabled; see app/main.py's create_task comment for why). Encloses
+        # the whole try/except: the except clauses below also call
+        # set_tag/capture_exception and would otherwise keep leaking.
+        with sentry_sdk.isolation_scope():
+            try:
+                processed = await _full_drain_tick()
+                if not processed:
+                    await asyncio.sleep(_DRAIN_IDLE_SLEEP_SECONDS)
 
-        except asyncio.CancelledError:
-            raise
-        except _RETRIABLE_DB_OUTAGE_ERRORS as exc:
-            logger.warning("full_eval_drain: DB outage, retrying in %ds", _DRAIN_IDLE_SLEEP_SECONDS)
-            sentry_sdk.set_tag("source", "full_eval_drain")
-            sentry_sdk.capture_exception(exc)
-            await asyncio.sleep(_DRAIN_IDLE_SLEEP_SECONDS)
-        except Exception:
-            logger.exception("full_eval_drain: unexpected error — continuing")
-            sentry_sdk.set_tag("source", "full_eval_drain")
-            sentry_sdk.capture_exception()
-            await asyncio.sleep(_DRAIN_IDLE_SLEEP_SECONDS)
+            except asyncio.CancelledError:
+                raise
+            except _RETRIABLE_DB_OUTAGE_ERRORS as exc:
+                logger.warning(
+                    "full_eval_drain: DB outage, retrying in %ds", _DRAIN_IDLE_SLEEP_SECONDS
+                )
+                sentry_sdk.set_tag("source", "full_eval_drain")
+                sentry_sdk.capture_exception(exc)
+                await asyncio.sleep(_DRAIN_IDLE_SLEEP_SECONDS)
+            except Exception:
+                logger.exception("full_eval_drain: unexpected error — continuing")
+                sentry_sdk.set_tag("source", "full_eval_drain")
+                sentry_sdk.capture_exception()
+                await asyncio.sleep(_DRAIN_IDLE_SLEEP_SECONDS)
 
 
 async def resweep_holed_games(
