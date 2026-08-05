@@ -291,6 +291,18 @@ vi.mock('@/hooks/useFlawFilterStore', () => ({
 // NOTE: useAnalysisBoard is NOT mocked — it is pure in-memory and must run for real
 // so ?line= seeding is genuinely exercised.
 
+// Quick 260805-p37: useAnalysisBoard now emits real move sounds, which would
+// otherwise construct real HTMLAudioElements and call play()/pause() — jsdom
+// doesn't implement either, so every test in this suite would log "Not
+// implemented" virtual-console noise. Mocked the same way the Train suites
+// already do (see TrainSolveScreen.test.tsx).
+vi.mock('@/lib/sounds', () => ({
+  playSound: vi.fn(),
+  unlockAudio: vi.fn(),
+  useMuted: () => false,
+  setMuted: vi.fn(),
+}));
+
 // jsdom shims required by react-chessboard and responsive components.
 Object.defineProperty(window, 'matchMedia', {
   writable: true,

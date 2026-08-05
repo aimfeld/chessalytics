@@ -179,10 +179,13 @@ vi.mock('@/api/client', async () => {
 
 // 190.1 UAT round 4: reveal-line stepping plays sounds and the button row
 // carries the shared mute toggle — mocked (same approach as useBotGame.test)
-// so jsdom never touches real Audio machinery.
+// so jsdom never touches real Audio machinery. `unlockAudio` (Quick 260805-p37)
+// added once useAnalysisBoard/useTrainFreePlay started calling it on every
+// gesture-driven command — free play on this screen wraps that hook.
 const mockSetMuted = vi.fn();
 vi.mock('@/lib/sounds', () => ({
   playSound: vi.fn(),
+  unlockAudio: vi.fn(),
   useMuted: () => false,
   setMuted: (muted: boolean) => mockSetMuted(muted),
 }));
