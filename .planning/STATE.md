@@ -2,18 +2,18 @@
 gsd_state_version: 1.0
 milestone: v2.12
 milestone_name: Train Reliability & Grading Agreement
-current_phase: none
 current_phase_name: Awaiting next milestone
 status: milestone_complete
 stopped_at: Closed milestone v2.12 (Phases 204, 205)
-last_updated: "2026-08-05T00:00:00.000Z"
+last_updated: "2026-08-05T13:02:20.908Z"
 last_activity: 2026-08-05
-last_activity_desc: v2.12 closed retroactively over the already-shipped Phases 204 and 205
+last_activity_desc: v2.12 Train Reliability & Grading Agreement closed
 progress:
-  total_phases: 2
-  completed_phases: 2
-  total_plans: 5
-  completed_plans: 5
+  total_phases: 0
+  completed_phases: 0
+  total_plans: 0
+  completed_plans: 0
+current_phase: none
 ---
 
 # Project State: FlawChess
@@ -691,6 +691,7 @@ None active.
 | 260803-nio | Make the push-subscription prune observable (SEED-135 D1). The 404/410 branch in `push_send.send_to_subscription` was the ONE branch that permanently deletes state (a `push_subscriptions` row) while emitting nothing — no log, no Sentry — which forced today's real prod incident (user 28, 16:05 Zurich, reminder never arrived) to be diagnosed entirely by inference from `train_settings.reminder_last_sent_on` being set plus an empty `push_subscriptions` table. It now logs at WARNING and captures to Sentry with `status_code` + `subscription_id` in `set_context`, and **never** the endpoint (a bearer capability). The Sentry message is a distinct fixed literal ("Push send returned a prune status") so prunes group separately from the `>= 300` branch's transient failures; no variable data in the message, per CLAUDE.md. `subscription_id` is threaded into `send_to_subscription` as a keyword-only param defaulted to `None` (it is exported in `__all__` and called directly by ~15 tests) and must be set BEFORE `capture_exception` fires, which is why it is threaded rather than set at the `send_to_user` call site. Second half: the per-tick reminder summary in `send_due_reminders` now escalates INFO→WARNING when `pruned>0 or failed>0`, because app-level INFO is filtered out of prod docker logs (verified 2026-08-03 — WARNING lines from other subsystems appear, this tick's INFO summary does not), so a tick that pruned left no production trace at all; one `logger.log(level, ...)` call site with one format string keeps the message byte-identical at both levels. Note this deliberately OVERRIDES a phase-201 decision: `test_..._404_prunes_no_capture` / `..._410_prunes_no_capture` explicitly asserted `call_count == 0`, i.e. the silence was intentional (a 410 is normal lifecycle churn — revoked permission, uninstall, cleared data); user confirmed the override, accepting Sentry noise at current volume in exchange for visibility. Mutation-proven twice, independently: reverting both production files to the parent commit turns exactly 6 tests red (4 push_send prune-capture/no-status-digits + 2 tick-summary-level), while the endpoint-leak and all-clear-at-INFO tests correctly stay green; restored → 59 passed. `ty` zero errors, ruff clean. Backend-only. SEED-135's D2 (frontend re-subscribe), D3 (claim-before-send ordering), D4 (applicationServerKey validation) and D5 (`_PUSH_TTL_SECONDS = 0`) deliberately left untouched for a later phase | 2026-08-03 | e63c3b7a1 | [260803-nio-make-the-push-subscription-prune-observa](./quick/260803-nio-make-the-push-subscription-prune-observa/) |
 | 46 | Center the Train QR handoff section (heading, QR, caption) | 2026-08-03 | 652438cda | — |
 | 48 | Bots mobile: h-12 action buttons, muted 'Saved to your Library', dialog dismiss routes to roster | 2026-08-04 | b1b4ecd67 | — |
+| 49 | Enable eval-chart slider on sidelines (reverse phase 140 D-05) + amend 140-CONTEXT | 2026-08-05 | a0eb1d109 | — |
 
 ## Deferred Items
 
