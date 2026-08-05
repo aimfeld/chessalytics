@@ -12,7 +12,6 @@
 import type { ReactElement } from 'react';
 import { format, parseISO } from 'date-fns';
 import { Link } from 'react-router-dom';
-import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { EmptyState } from '@/components/ui/empty-state';
 import { LoadError } from '@/components/ui/load-error';
@@ -135,13 +134,10 @@ function resolveLandingState(
 }
 
 /**
- * The "Train" heading with its Beta badge (190.1 UAT round 6) — the feature
- * is still beta-gated, and the landing screen should say so — plus the
- * tagline directly beneath it. `text-sm` overrides the Badge component's
- * baked-in `text-xs` (CLAUDE.md font floor).
+ * The "Train" heading plus the tagline directly beneath it.
  *
- * 191.1 UAT: the tagline sits directly under the "Train Beta" title in EVERY
- * landing state — the completed state used to push it below the progress row.
+ * 191.1 UAT: the tagline sits directly under the title in EVERY landing
+ * state — the completed state used to push it below the progress row.
  * 193 UAT round 3: the two are one `gap-1` unit rather than two children of
  * the container's uniform `gap-4`, which spaced title, tagline, and CTA
  * identically so nothing read as a group.
@@ -149,12 +145,7 @@ function resolveLandingState(
 function TrainHeader(): ReactElement {
   return (
     <div className="flex flex-col gap-1">
-      <div className="flex items-center gap-2">
-        <h1 className="text-xl font-semibold">Train</h1>
-        <Badge variant="secondary" className="text-sm" data-testid="train-beta-badge">
-          Beta
-        </Badge>
-      </div>
+      <h1 className="text-xl font-semibold">Train</h1>
       <p className="text-sm text-muted-foreground" data-testid="train-tagline">
         Learn from the mistakes in your games with personalized puzzles.
       </p>
