@@ -90,7 +90,13 @@ from app.services.opening_lookup import find_opening_ply_count
 # D-116-07 intent: a deterministically-unevaluable ply cannot loop forever. Pool
 # outages (all-fail circuit breaker WR-05) do NOT consume attempts, so a
 # transient outage cannot exhaust the budget and silently drop coverage.
-MAX_EVAL_ATTEMPTS: int = 3
+#
+# SEED-139 item 4: raised 3 -> 5. Nearly free since SEED-076 made re-leases
+# incremental — a retry re-sends only the still-missing plies, so an extra
+# attempt costs a handful of positions, not a whole game. Prod measured 9,988
+# games reaching the 3rd attempt, ALL of them hole-free afterwards with no 4th
+# attempt behind them: the budget, not the engine, was the binding constraint.
+MAX_EVAL_ATTEMPTS: int = 5
 
 # Phase 116 EVAL-03 / D-116-02: dedup only in the opening region. WR-08: aliased
 # from the model constant (single source of truth) so this boundary can never
@@ -526,6 +532,34 @@ def _is_lichess_best_move_hole(target: _FullPlyEvalTarget, preserve_existing_eva
     return True
 
 
+def _count_prior_holes(targets: Sequence[_FullPlyEvalTarget], is_lichess_eval_game: bool) -> int:
+    """Count plies that were ALREADY unresolved in the DB before this write (SEED-139 D-02).
+
+    Mirrors `_is_engine_hole` / `_is_lichess_best_move_hole` exactly, but reads the
+    target's PRE-WRITE snapshot fields (`eval_cp`/`eval_mate`/`stored_best_move` —
+    the row's DB values loaded by `_collect_full_ply_targets` BEFORE this pass wrote
+    anything) instead of a post-write query. A post-write query would read the state
+    this same write just produced and could never show progress, so `targets` is the
+    ONLY correct source for the prior count. Pure — no I/O, no session.
+
+    lichess-eval games: a target counts as a prior hole when its `stored_best_move`
+    is None (mirrors `_is_lichess_best_move_hole`'s resolved-ply signal). engine
+    games: a target counts when it is not `ends_game` and both `eval_cp` and
+    `eval_mate` are None (mirrors `_is_engine_hole`'s hole signal). The terminal
+    donor target has no game_positions row and is never counted.
+    """
+    prior_holes = 0
+    for target in targets:
+        if target.is_terminal:
+            continue
+        if is_lichess_eval_game:
+            if target.stored_best_move is None:
+                prior_holes += 1
+        elif not target.ends_game and target.eval_cp is None and target.eval_mate is None:
+            prior_holes += 1
+    return prior_holes
+
+
 async def _apply_full_eval_results(
     session: AsyncSession,
     targets: Sequence[_FullPlyEvalTarget],
@@ -721,8 +755,9 @@ async def apply_completion_decision(
     source: Literal["full_eval_drain", "remote_eval_worker"],
     on_path_c_capacity_reached: Callable[[int, int, int, str], None],
     maia_available: bool = False,
+    prior_failed_ply_count: int | None = None,
 ) -> bool:
-    """Apply the shared Path A/B/C completion decision + guarded eval_jobs stamp (R1).
+    """Apply the shared Path A/B'/B/C completion decision + guarded eval_jobs stamp (R1).
 
     Both live write lanes (_full_drain_tick / _apply_atomic_submit, via apply_full_eval
     below) branch on the identical SEED-045 bounded-retry invariant — this function is
@@ -730,17 +765,46 @@ async def apply_completion_decision(
     writes commit atomically with the evals/flaws already written this tick).
 
     Decision tree:
-      A. failed_ply_count == 0 -> no holes: stamp both completion markers, plus
-         best_moves_completed_at IFF maia_available (Phase 176 BACK-01/D-01
-         guardrail — see maia_available below). full_eval_attempts unchanged.
-      B. failed_ply_count > 0 AND current_attempts + 1 < MAX_EVAL_ATTEMPTS ->
-         under cap: do NOT stamp either marker. Increment full_eval_attempts so
-         the game is re-picked next tick with a fresh look at the same budget.
-      C. failed_ply_count > 0 AND current_attempts + 1 >= MAX_EVAL_ATTEMPTS ->
-         cap reached: stamp anyway (D-116-07 no-infinite-loop invariant),
-         including best_moves_completed_at IFF maia_available, and invoke the
-         caller-supplied on_path_c_capacity_reached callback exactly once. This
-         is the EXPECTED terminal state of the bounded-retry drain, not an error.
+      A.  failed_ply_count == 0 -> no holes: stamp both completion markers, plus
+          best_moves_completed_at IFF maia_available (Phase 176 BACK-01/D-01
+          guardrail — see maia_available below). full_eval_attempts unchanged.
+      B'. made_progress (SEED-139 item 3) -> the persistent DB hole count strictly
+          DECREASED this round. Leave pending, do NOT write full_eval_attempts at
+          all (no UPDATE on the games row), and do NOT reach Path C. A submit that
+          is making progress must never be charged nor capped.
+      B.  failed_ply_count > 0 AND NOT made_progress AND current_attempts + 1 <
+          MAX_EVAL_ATTEMPTS -> under cap: do NOT stamp either marker. Increment
+          full_eval_attempts so the game is re-picked next tick with a fresh look
+          at the same budget.
+      C.  failed_ply_count > 0 AND NOT made_progress AND current_attempts + 1 >=
+          MAX_EVAL_ATTEMPTS -> cap reached: stamp anyway (D-116-07 no-infinite-loop
+          invariant), including best_moves_completed_at IFF maia_available, and
+          invoke the caller-supplied on_path_c_capacity_reached callback exactly
+          once. This is the EXPECTED terminal state of the bounded-retry drain,
+          not an error.
+
+    SEED-139 item 3 — why the charge is per-ROUND, not per-SUBMIT: prod logs
+    showed one game Path-C-submitted by two different workers seconds apart — a
+    slow worker overran LEASE_TTL_SECONDS = 120, a second worker re-claimed the
+    same lease, and BOTH submitted, spending two of the three attempts in a
+    single round even though the second submit only re-confirmed work the first
+    had already done. `made_progress` (`prior_failed_ply_count is not None and
+    failed_ply_count < prior_failed_ply_count`) removes exactly that waste: a
+    submit that reduces the game's persistent hole count is never charged.
+
+    D-03 termination proof (verbatim in substance): under `preserve_existing_evals
+    =True` the write never replaces a non-NULL eval with NULL (see `_is_engine_hole`
+    / `_is_lichess_best_move_hole`), so `failed_ply_count < prior_failed_ply_count`
+    implies the game's persistent DB hole count strictly decreased. That count is
+    bounded below by 0, so at most `ply_count` charge-free (B') rounds can occur;
+    every round that does NOT reduce it charges an attempt (B/C), so the game
+    still reaches Path C after at most `ply_count + MAX_EVAL_ATTEMPTS` submits.
+    The retry loop still terminates.
+
+    prior_failed_ply_count contract: None means "unknown, charge as before" — any
+    caller that does not thread it through (the drain lane, D-01: its
+    failed_ply_count is not a comparable snapshot — see apply_full_eval's D-01
+    comment) keeps today's per-submit-charge behavior with zero blast radius.
 
     maia_available (Phase 176 BACK-01/D-01, THE guardrail): whether the process-
     wide Maia session was loaded (maia_engine.is_maia_available()) at the time
@@ -774,6 +838,7 @@ async def apply_completion_decision(
     """
     new_attempts = current_attempts + 1
     games_table = Game.__table__
+    made_progress = prior_failed_ply_count is not None and failed_ply_count < prior_failed_ply_count
 
     if failed_ply_count == 0:
         # Path A: no holes — stamp both markers complete.
@@ -782,9 +847,16 @@ async def apply_completion_decision(
         if maia_available:
             await _mark_best_moves_completed(write_session, game_id)
         stamp_complete = True
+    elif made_progress:
+        # Path B' (SEED-139 item 3): holes remain but the persistent DB hole
+        # count strictly decreased this round — charge-free. No UPDATE on the
+        # games row at all (full_eval_attempts untouched), and Path C can never
+        # fire on a progress-making submit.
+        stamp_complete = False
     elif new_attempts < MAX_EVAL_ATTEMPTS:
-        # Path B: holes remain, under cap — increment attempts, leave pending.
-        # Do NOT stamp full_evals_completed_at or full_pv_completed_at.
+        # Path B: holes remain, no progress, under cap — increment attempts,
+        # leave pending. Do NOT stamp full_evals_completed_at or
+        # full_pv_completed_at.
         await write_session.execute(
             update(games_table)  # ty: ignore[invalid-argument-type]
             .where(games_table.c.id == game_id)
@@ -2536,7 +2608,20 @@ async def apply_full_eval(
             write_session, list(engine_targets_for_cache), engine_result_map
         )
 
-    # R1: shared Path A/B/C completion decision + guarded eval_jobs stamp.
+    # SEED-139 D-01: the no-progress carve-out is threaded ONLY for the atomic
+    # lane (preserve_existing_evals=True). The drain lane's failed_ply_count is
+    # NOT a comparable snapshot: under preserve_existing_evals=False the write
+    # does not NULL out a row's surviving stored eval, so failed_ply_count
+    # over-counts relative to the DB, and the drain never threads
+    # stored_best_move, so on a lichess-eval game its prior count would be
+    # EVERY non-terminal ply — post < prior would hold on every tick and the
+    # loop would never charge an attempt (a D-116-07 violation). Passing None
+    # keeps the drain's existing per-submit charge with zero blast radius.
+    prior_failed_ply_count = (
+        _count_prior_holes(targets, is_lichess_eval_game) if preserve_existing_evals else None
+    )
+
+    # R1: shared Path A/B'/B/C completion decision + guarded eval_jobs stamp.
     stamp_complete = await apply_completion_decision(
         write_session,
         game_id=game_id,
@@ -2546,6 +2631,7 @@ async def apply_full_eval(
         source=source,
         on_path_c_capacity_reached=on_path_c_capacity_reached,
         maia_available=maia_available,
+        prior_failed_ply_count=prior_failed_ply_count,
     )
 
     if record_heartbeat:
