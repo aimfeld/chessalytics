@@ -144,16 +144,20 @@ async def _delete_games_by_ids(
 class TestGatherOutsideSession:
     """T-91-08: asyncio.gather must NEVER be inside an AsyncSession scope.
 
-    This test parses the AST of run_eval_drain and fails if a future edit
-    moves the gather call inside an `async with async_session_maker()` block.
-    It acts as a CI regression guard for the core architectural invariant.
+    Task 2 (SEED-138) extracted run_eval_drain's per-tick body into
+    _eval_drain_tick (mirroring _full_drain_tick) so the loop is thin enough
+    to carry a per-tick Sentry isolation scope. run_eval_drain itself no
+    longer contains a gather call at all, so this test parses the AST of
+    _eval_drain_tick instead and fails if a future edit moves the gather
+    call inside an `async with async_session_maker()` block. It acts as a
+    CI regression guard for the core architectural invariant.
     """
 
     def test_gather_outside_session(self) -> None:
-        """AST scan: asyncio.gather call in run_eval_drain is not inside an async-with block."""
-        from app.services.eval_drain import run_eval_drain
+        """AST scan: asyncio.gather call in _eval_drain_tick is not inside an async-with block."""
+        from app.services.eval_drain import _eval_drain_tick
 
-        source = inspect.getsource(run_eval_drain)
+        source = inspect.getsource(_eval_drain_tick)
         tree = ast.parse(source)
 
         # Walk the function body to find all `asyncio.gather(...)` Call nodes
@@ -165,6 +169,7 @@ class TestGatherOutsideSession:
         class GatherOutsideSessionChecker(ast.NodeVisitor):
             def __init__(self) -> None:
                 self.violations: list[int] = []
+                self.gather_calls_seen: int = 0
                 self._async_with_stack: int = 0  # depth counter for async-with scopes
 
             def visit_AsyncWith(self, node: ast.AsyncWith) -> None:  # noqa: N802
@@ -187,17 +192,26 @@ class TestGatherOutsideSession:
                 if isinstance(func, ast.Name) and func.id == "gather":
                     is_gather = True
 
-                if is_gather and self._async_with_stack > 0:
-                    self.violations.append(getattr(node, "lineno", -1))
+                if is_gather:
+                    self.gather_calls_seen += 1
+                    if self._async_with_stack > 0:
+                        self.violations.append(getattr(node, "lineno", -1))
 
                 self.generic_visit(node)
 
         checker = GatherOutsideSessionChecker()
         checker.visit(tree)
 
+        # A future rename of _eval_drain_tick (or a re-inlining into
+        # run_eval_drain without updating this test) must fail loudly rather
+        # than passing vacuously on zero observed gather calls.
+        assert checker.gather_calls_seen >= 1, (
+            "AST scan observed no asyncio.gather() call in _eval_drain_tick — "
+            "the guard would pass vacuously; check the retarget is correct."
+        )
         assert checker.violations == [], (
             f"asyncio.gather() found inside an async-with scope at line(s) "
-            f"{checker.violations} in run_eval_drain — violates CLAUDE.md "
+            f"{checker.violations} in _eval_drain_tick — violates CLAUDE.md "
             f"hard rule (T-91-08 / SEED-023 architectural invariant)."
         )
 

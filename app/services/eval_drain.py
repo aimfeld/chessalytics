@@ -275,6 +275,104 @@ async def _load_pgns_for_games(game_ids: Sequence[int]) -> list[tuple[int, str]]
 # ---------------------------------------------------------------------------
 
 
+async def _eval_drain_tick() -> None:
+    """One tick of the cold-lane entry-ply drain.
+
+    Split out of run_eval_drain (SEED-138) to mirror _full_drain_tick, so the
+    loop stays thin enough to carry a per-tick Sentry isolation scope and so
+    the body stops nesting past CLAUDE.md's hard limit of 4.
+    """
+    # Step 1: pick batch (short read tx, then close session).
+    # D-11: LIFO id-DESC, batch size = _DRAIN_BATCH_SIZE.
+    game_ids = await _pick_pending_game_ids(limit=_DRAIN_BATCH_SIZE)
+    if not game_ids:
+        await asyncio.sleep(_DRAIN_IDLE_SLEEP_SECONDS)
+        return
+
+    # Step 2: load PGNs (short read tx, then close session).
+    game_pgn_rows = await _load_pgns_for_games(game_ids)
+    pgn_map = {gid: pgn for gid, pgn in game_pgn_rows}
+
+    # Step 3: load GamePosition metadata and derive eval targets
+    # (separate short read session, then close).
+    async with async_session_maker() as read_session:
+        eval_targets = await _collect_eval_targets_from_db(read_session, game_ids, pgn_map)
+
+    # Step 4: fan out engine evaluations.
+    # CLAUDE.md hard rule: asyncio.gather must NEVER run inside an AsyncSession scope
+    if eval_targets:
+        eval_results: Sequence[tuple[int | None, int | None]] = await asyncio.gather(
+            *(engine_service.evaluate(t.board) for t in eval_targets)
+        )
+    else:
+        eval_results = []
+
+    # WR-05 mirror (Phase 148 item 2): when EVERY engine call in a
+    # non-empty batch failed, the cause is overwhelmingly a dead
+    # engine pool (all workers permanently failed after restart
+    # attempts — see the corrected EnginePool docstring in engine.py),
+    # not a position problem. Stamping evals_completed_at here would
+    # silently convert a transient pool outage into permanent
+    # complete-but-unevaluated games. Gate on `eval_targets` non-empty
+    # (not `game_ids`) so the legitimate D-09 zero-eval-target case
+    # (test_engine_none_marks_complete) still stamps complete — see
+    # Pitfall 2 in 148-RESEARCH.md. Leave the lease to expire via its
+    # ENTRY_LEASE_TTL_SECONDS TTL (the same reclaim mechanism
+    # test_idempotent_on_simulated_crash already relies on) rather
+    # than an explicit UPDATE.
+    if eval_targets and all(cp is None and mt is None for cp, mt in eval_results):
+        sentry_sdk.set_context(
+            "eval", {"game_id_count": len(game_ids), "failed_ply_count": len(eval_targets)}
+        )
+        sentry_sdk.set_tag("source", "eval_drain")
+        sentry_sdk.capture_message(
+            "entry-drain: all engine evals failed for batch — leaving pending",
+            level="warning",
+        )
+        await asyncio.sleep(_DRAIN_IDLE_SLEEP_SECONDS)
+        return
+
+    # Step 5: open session LATE, write all UPDATEs in one short tx.
+    # Session opens only AFTER gather completes — write window is <100 ms.
+    async with async_session_maker() as session:
+        if eval_targets:
+            await _apply_eval_results(session, eval_targets, list(eval_results))
+        # Phase 108-02 D-10: classify + bulk-insert game_flaws for all
+        # just-evaluated games. Runs AFTER _apply_eval_results so eval_cp
+        # is available for classification, and BEFORE _mark_evals_completed
+        # so flaw rows commit atomically with the eval results (Pitfall 2).
+        # Sequential, no asyncio.gather (CLAUDE.md hard rule).
+        await _classify_and_insert_flaws(session, game_ids)
+        # Mark all picked games done regardless of eval success/failure.
+        # engine.evaluate() returning (None, None) is treated as
+        # "evaluated — engine failed for this position, leave row NULL"
+        # per D-09 / R-02 — no permanent retry loop.
+        await _mark_evals_completed(session, game_ids)
+        await session.commit()
+
+    # Phase 94.1 D-01 / Pitfall 1: Stage B fires for users whose pending-eval
+    # count just transitioned to zero. Group just-drained game_ids by user_id,
+    # then in ONE aggregated query (WR-01 fix, 94.1-12) filter to users whose
+    # pending-eval count is now zero AND no active import_job exists (Plan 13
+    # Stage B gate). Without the active-import guard, Stage B fires multiple
+    # times as eval batches drain mid-import, producing transient intermediate
+    # values on the chip (user 28 case — see 94.1-13-PLAN.md gap_source).
+    # Fresh read session: never share the eval-write session across coroutines.
+    async with async_session_maker() as read_session:
+        user_id_rows = await read_session.execute(
+            select(Game.user_id).distinct().where(Game.id.in_(game_ids))
+        )
+        affected_user_ids = [row[0] for row in user_id_rows.all()]
+        if affected_user_ids:
+            zero_pending = await users_with_zero_pending(read_session, affected_user_ids)
+            for uid in zero_pending:
+                # Quick 260529-015: mark BEFORE scheduling so the 3s
+                # readiness poll can't observe pending==0 and unlock Tier 2
+                # in the window before compute_stage_b starts writing rows.
+                percentile_compute_registry.mark(uid)
+                asyncio.create_task(compute_stage_b(uid))
+
+
 async def run_eval_drain() -> None:
     """Continuously evaluate entry plies for games with evals_completed_at IS NULL.
 
@@ -298,96 +396,7 @@ async def run_eval_drain() -> None:
     """
     while True:
         try:
-            # Step 1: pick batch (short read tx, then close session).
-            # D-11: LIFO id-DESC, batch size = _DRAIN_BATCH_SIZE.
-            game_ids = await _pick_pending_game_ids(limit=_DRAIN_BATCH_SIZE)
-            if not game_ids:
-                await asyncio.sleep(_DRAIN_IDLE_SLEEP_SECONDS)
-                continue
-
-            # Step 2: load PGNs (short read tx, then close session).
-            game_pgn_rows = await _load_pgns_for_games(game_ids)
-            pgn_map = {gid: pgn for gid, pgn in game_pgn_rows}
-
-            # Step 3: load GamePosition metadata and derive eval targets
-            # (separate short read session, then close).
-            async with async_session_maker() as read_session:
-                eval_targets = await _collect_eval_targets_from_db(read_session, game_ids, pgn_map)
-
-            # Step 4: fan out engine evaluations.
-            # CLAUDE.md hard rule: asyncio.gather must NEVER run inside an AsyncSession scope
-            if eval_targets:
-                eval_results: Sequence[tuple[int | None, int | None]] = await asyncio.gather(
-                    *(engine_service.evaluate(t.board) for t in eval_targets)
-                )
-            else:
-                eval_results = []
-
-            # WR-05 mirror (Phase 148 item 2): when EVERY engine call in a
-            # non-empty batch failed, the cause is overwhelmingly a dead
-            # engine pool (all workers permanently failed after restart
-            # attempts — see the corrected EnginePool docstring in engine.py),
-            # not a position problem. Stamping evals_completed_at here would
-            # silently convert a transient pool outage into permanent
-            # complete-but-unevaluated games. Gate on `eval_targets` non-empty
-            # (not `game_ids`) so the legitimate D-09 zero-eval-target case
-            # (test_engine_none_marks_complete) still stamps complete — see
-            # Pitfall 2 in 148-RESEARCH.md. Leave the lease to expire via its
-            # ENTRY_LEASE_TTL_SECONDS TTL (the same reclaim mechanism
-            # test_idempotent_on_simulated_crash already relies on) rather
-            # than an explicit UPDATE.
-            if eval_targets and all(cp is None and mt is None for cp, mt in eval_results):
-                sentry_sdk.set_context(
-                    "eval", {"game_id_count": len(game_ids), "failed_ply_count": len(eval_targets)}
-                )
-                sentry_sdk.set_tag("source", "eval_drain")
-                sentry_sdk.capture_message(
-                    "entry-drain: all engine evals failed for batch — leaving pending",
-                    level="warning",
-                )
-                await asyncio.sleep(_DRAIN_IDLE_SLEEP_SECONDS)
-                continue
-
-            # Step 5: open session LATE, write all UPDATEs in one short tx.
-            # Session opens only AFTER gather completes — write window is <100 ms.
-            async with async_session_maker() as session:
-                if eval_targets:
-                    await _apply_eval_results(session, eval_targets, list(eval_results))
-                # Phase 108-02 D-10: classify + bulk-insert game_flaws for all
-                # just-evaluated games. Runs AFTER _apply_eval_results so eval_cp
-                # is available for classification, and BEFORE _mark_evals_completed
-                # so flaw rows commit atomically with the eval results (Pitfall 2).
-                # Sequential, no asyncio.gather (CLAUDE.md hard rule).
-                await _classify_and_insert_flaws(session, game_ids)
-                # Mark all picked games done regardless of eval success/failure.
-                # engine.evaluate() returning (None, None) is treated as
-                # "evaluated — engine failed for this position, leave row NULL"
-                # per D-09 / R-02 — no permanent retry loop.
-                await _mark_evals_completed(session, game_ids)
-                await session.commit()
-
-            # Phase 94.1 D-01 / Pitfall 1: Stage B fires for users whose pending-eval
-            # count just transitioned to zero. Group just-drained game_ids by user_id,
-            # then in ONE aggregated query (WR-01 fix, 94.1-12) filter to users whose
-            # pending-eval count is now zero AND no active import_job exists (Plan 13
-            # Stage B gate). Without the active-import guard, Stage B fires multiple
-            # times as eval batches drain mid-import, producing transient intermediate
-            # values on the chip (user 28 case — see 94.1-13-PLAN.md gap_source).
-            # Fresh read session: never share the eval-write session across coroutines.
-            async with async_session_maker() as read_session:
-                user_id_rows = await read_session.execute(
-                    select(Game.user_id).distinct().where(Game.id.in_(game_ids))
-                )
-                affected_user_ids = [row[0] for row in user_id_rows.all()]
-                if affected_user_ids:
-                    zero_pending = await users_with_zero_pending(read_session, affected_user_ids)
-                    for uid in zero_pending:
-                        # Quick 260529-015: mark BEFORE scheduling so the 3s
-                        # readiness poll can't observe pending==0 and unlock Tier 2
-                        # in the window before compute_stage_b starts writing rows.
-                        percentile_compute_registry.mark(uid)
-                        asyncio.create_task(compute_stage_b(uid))
-
+            await _eval_drain_tick()
         except asyncio.CancelledError:
             # Lifespan shutdown — propagate without retry (cancellation contract
             # mirrors WR-07 in import_service.py: CancelledError is BaseException,
