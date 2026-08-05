@@ -411,9 +411,7 @@ async def run_eval_drain() -> None:
             except _RETRIABLE_DB_OUTAGE_ERRORS as exc:
                 # Postgres restart mid-tick: log + short sleep, then re-poll.
                 # Games remain evals_completed_at IS NULL and will be re-picked.
-                logger.warning(
-                    "eval_drain: DB outage, retrying in %ds", _DRAIN_IDLE_SLEEP_SECONDS
-                )
+                logger.warning("eval_drain: DB outage, retrying in %ds", _DRAIN_IDLE_SLEEP_SECONDS)
                 sentry_sdk.set_tag("source", "eval_drain")
                 sentry_sdk.capture_exception(exc)
                 await asyncio.sleep(_DRAIN_IDLE_SLEEP_SECONDS)
