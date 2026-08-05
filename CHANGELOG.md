@@ -8,6 +8,8 @@ in `YYYY-MM-DD` (Europe/Zurich).
 
 ## [Unreleased]
 
+## [v2.12] Train Reliability & Grading Agreement — 2026-08-05
+
 ### Fixed
 
 - Train's "Also fine" list no longer names the same move twice (e.g. "Also fine: Be2, Bd3, Bd3"), and its green arrows no longer stack two on one square. The grading engine's candidate lines are collected per rank across deepening iterations, and the last iteration usually runs out of time part-way through, so a move that had just climbed the ranking could be committed at both its new rank and its old one.
@@ -1277,7 +1279,8 @@ bookmarks, game cards, and rating / stats pages.
 - Rating history, global stats, openings W/D/L charts.
 - Multi-user auth with data isolation.
 
-[Unreleased]: https://github.com/flawchess/flawchess/compare/v2.11...HEAD
+[Unreleased]: https://github.com/flawchess/flawchess/compare/v2.12...HEAD
+[v2.12]: https://github.com/flawchess/flawchess/compare/v2.11...v2.12
 [v2.11]: https://github.com/flawchess/flawchess/compare/v2.10...v2.11
 [v2.10]: https://github.com/flawchess/flawchess/compare/v2.9...v2.10
 [v2.9]: https://github.com/flawchess/flawchess/compare/v2.8...v2.9

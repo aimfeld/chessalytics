@@ -1,14 +1,14 @@
 ---
 gsd_state_version: 1.0
-milestone: v2.11
-milestone_name: Train Solve Surface & Push Reminders
-current_phase: 999.1
-current_phase_name: Password Reset (BACKLOG)
-status: planning
-stopped_at: Completed 205-02-PLAN.md
-last_updated: "2026-08-04T18:29:09.296Z"
-last_activity: 2026-08-04
-last_activity_desc: Phase 205 shipped, transitioned to Phase 999.1
+milestone: v2.12
+milestone_name: Train Reliability & Grading Agreement
+current_phase: none
+current_phase_name: Awaiting next milestone
+status: milestone_complete
+stopped_at: Closed milestone v2.12 (Phases 204, 205)
+last_updated: "2026-08-05T00:00:00.000Z"
+last_activity: 2026-08-05
+last_activity_desc: v2.12 closed retroactively over the already-shipped Phases 204 and 205
 progress:
   total_phases: 2
   completed_phases: 2
@@ -20,19 +20,27 @@ progress:
 
 ## Current Position
 
-Phase: 999.1 — Password Reset (BACKLOG)
+Phase: none — v2.12 closed, awaiting the next milestone
 Plan: Not started
-Status: Ready to plan
-Last activity: 2026-08-04 — Phase 205 shipped, transitioned to Phase 999.1
+Status: Milestone complete
+Last activity: 2026-08-05 — v2.12 Train Reliability & Grading Agreement closed
 
-Phase 205 (train-grading-oracle-agreement) shipped 2026-08-04 (2/2 plans, squash-merged to main as 278054955).
-Phase 204 (push-reminder-delivery-reliability) shipped 2026-08-03 (3/3 plans, squash-merged to main).
+**v2.12 closed 2026-08-05** retroactively over two already-shipped, already-deployed phases (lightweight close, no `/gsd-new-milestone` requirements cycle — same pattern as v2.6 and v2.8):
+
+- Phase 204 (push-reminder-delivery-reliability, SEED-135) shipped 2026-08-03 (3/3 plans, squash-merged to main), verification `passed` 6/6.
+- Phase 205 (train-grading-oracle-agreement, SEED-137) shipped 2026-08-04 (2/2 plans, squash-merged to main as 278054955), verification `passed` 6/6, browser-only UAT item operator-confirmed.
+
+Both deployed to production via releases #295 and #296; `main` and `origin/production` are identical at close. Phase dirs archived to `.planning/milestones/v2.12-phases/`; SEED-135 and SEED-137 both in `seeds/closed/`. Next: `/gsd-new-milestone`, or promote Phase 999.1 (Password Reset) from the backlog.
 
 ## Project Reference
 
-See: .planning/PROJECT.md (updated 2026-08-03 after v2.11 milestone)
+See: .planning/PROJECT.md (updated 2026-08-05 after v2.12 milestone)
 Core value: Position-precise WDL across openings + endgames + time pressure on top of users' actual chess.com / lichess games, with personalized LLM commentary and an auto-generated opening-strengths/weaknesses report.
-Current focus: **v2.11 shipped 2026-08-03 (tagged, not yet deployed). Awaiting next milestone — run `/gsd-new-milestone`.** v2.11 delivered the Train solve surface and the full push-reminder + PWA-install retention loop across four phases (200–203): a sidebar-as-legend reveal with per-move arrow glyphs and a hover/tap spotlight plus inline sideline exploration on the shared board (200, SEED-131); VAPID-signed Web Push infrastructure, the `push_subscriptions` table and a 15-minute scheduler tick that reminds only on scheduled, not-yet-trained days (201, SEED-132 Phase A); the one-shot-permission-safe score-screen pre-prompt and the Settings master toggle + hour picker (202, SEED-132 Phase A); and the install layer that re-admits the deferred SEED-132 Phase B — a 14-day/3-attempt cooldown replacing the permanent dismissal veto, a five-state device-aware reminder slot, the desktop→phone QR handoff, and the iOS install→revisit→permission path (203, SEED-134). Carried forward into the next milestone: the API is Bearer-token auth (`localStorage.auth_token`), not cookies; Brave needs "Use Google services for push messaging" enabled or `PushManager.subscribe()` throws `AbortError`; and the iOS branch of Phase 203 shipped **unverified but fail-safe** — the operator has no iPhone and BrowserStack was not used, so the iOS path is written to degrade to nothing rather than to a broken affordance. Verifying it on real hardware is the one open follow-up.
+Current focus: **v2.12 shipped 2026-08-05 (tagged, deployed via #295/#296). Awaiting next milestone — run `/gsd-new-milestone`.** v2.12 closed Train's two silent-failure surfaces: push reminders that fail to arrive now recover themselves (device re-sync without spending the one-shot permission, local-day-bounded TTL, VAPID mismatch repair on gesture, claim released on a no-delivery fan-out — Phase 204, SEED-135), and a Train puzzle can no longer contradict itself (free-play root ply graded from the mount search's own ranks, plus a dead band excluding items whose top-two margin sits inside browser-search noise at a measured 34.80% pool cost — Phase 205, SEED-137). Still open and carried forward: SEED-136 (verify the iOS push path on real hardware — no iPhone available, BrowserStack unused), SEED-138 (push-prune log noise + Sentry scope bleed), SEED-130 (uncleared browser Stockfish TT, the reason the dead band is 0.05 wide).
+
+### Superseded: focus after the v2.11 close
+
+**v2.11 shipped 2026-08-03 (tagged, not yet deployed at the time).** v2.11 delivered the Train solve surface and the full push-reminder + PWA-install retention loop across four phases (200–203): a sidebar-as-legend reveal with per-move arrow glyphs and a hover/tap spotlight plus inline sideline exploration on the shared board (200, SEED-131); VAPID-signed Web Push infrastructure, the `push_subscriptions` table and a 15-minute scheduler tick that reminds only on scheduled, not-yet-trained days (201, SEED-132 Phase A); the one-shot-permission-safe score-screen pre-prompt and the Settings master toggle + hour picker (202, SEED-132 Phase A); and the install layer that re-admits the deferred SEED-132 Phase B — a 14-day/3-attempt cooldown replacing the permanent dismissal veto, a five-state device-aware reminder slot, the desktop→phone QR handoff, and the iOS install→revisit→permission path (203, SEED-134). Carried forward into the next milestone: the API is Bearer-token auth (`localStorage.auth_token`), not cookies; Brave needs "Use Google services for push messaging" enabled or `PushManager.subscribe()` throws `AbortError`; and the iOS branch of Phase 203 shipped **unverified but fail-safe** — the operator has no iPhone and BrowserStack was not used, so the iOS path is written to degrade to nothing rather than to a broken affordance. Verifying it on real hardware is the one open follow-up.
 
 ### Superseded: focus during v2.11 development
 
@@ -82,7 +90,9 @@ No v2.7 milestone audit doc was generated (`/gsd-audit-milestone` not run): the 
 
 ## Milestone Progress
 
-Forty-three milestones complete (v1.0–v2.10). **v2.10 FlawChess Engine Improvements closed 2026-08-01.** **v2.11 Train Solve Surface & Push Reminders roadmap created 2026-08-01 (Phases 200–202); planning in progress.**
+Forty-five milestones complete (v1.0–v2.12). **v2.12 Train Reliability & Grading Agreement closed 2026-08-05.**
+
+v2.12 Train Reliability & Grading Agreement closed 2026-08-05 — 2 phases (204, 205), 5 plans, 39 commits on `main` since the `v2.11` tag (55 non-planning files, +3,543/−639; the range also carries the post-tag v2.11 quick tasks `260803-iv6` and `260803-nio`, a Bots mobile-UI quick task, and a `cryptography` CVE bump). A **retroactive lightweight close** — the milestone was assembled from two already-shipped, already-deployed defect phases with no `/gsd-new-milestone` requirements cycle, same pattern as v2.6 and v2.8; PUSHREL-01..06 and ORACLE-01..06 were minted at phase-planning time and live in each phase's first PLAN.md. **Phase 204 (SEED-135)** closed four distinct push-reminder failure modes found by the first real-world reminder after the v2.11 deploy, which never arrived and left no trace anywhere: a pruned device re-registers itself on app load (`useDevicePushResync` → `resyncExistingSubscription`, provably unable to reach `requestPermission()`/`subscribe()` — PERM-01 held by a 6-case fail-safe matrix asserting call count 0); `TTL: 0` — which made a discarded message return 201 and look byte-identical to a real delivery — replaced by `seconds_until_end_of_local_day`, matching D-08's own bound; `applicationServerKey` byte-compared, wired as a *detect-only* suppressor passively and a reuse-vs-repair branch on gesture (criterion 4 deliberately narrowed at planning per D-04, since Phase 201 D-02 had already rejected a passive self-heal), with `docs/push-vapid-rotation-runbook.md` written down; and the day's claim released when the fan-out delivered to nobody, the D-07 double-send invariant re-proved by an independently re-run mutation. **Phase 205 (SEED-137)** stopped a Train puzzle contradicting itself, sourced from two real prod contradictions (user 28, drill session 107, both `source = 0` with `herring_pool_id IS NULL` — so the pre-Phase-192 herring-sourcing explanation was ruled out *from the data*): the free-play root ply is now graded from the mount MultiPV-4 search's own rank via `rankLineForSquares`, gated on `parentId === null` so deeper plies stay engine-3-only and no new seam appears below the root; plus a selection-level dead band excluding items whose second-best drop sits in `[INACCURACY_DROP, BLUNDER_DROP)`, applied by one shared `dead_band_admissible` predicate at all three SR read sites and reading live `game_flaws`, never snapshotted onto `drill_items`. **The seed's 12.0% cost estimate did not reproduce** — re-measured against current prod the band drops 24.29% plus 10.51% for D-03's no-second-move exclusion, **34.80% total, ~3x**; the *viability* conclusion did reproduce exactly (260 users with pool material, 225 → 224 able to fill a session, 1 newly starved, 84.7% distinct-game retention), and D-02 had locked this as measure-and-record rather than a gate, so the overshoot ships as a published number. Both phases verified `passed` at 6/6 truths; Phase 205's single browser-only item operator-confirmed in `205-UAT.md`. Archived to `milestones/v2.12-ROADMAP.md`, phases to `milestones/v2.12-phases/`, CHANGELOG promoted, tagged v2.12, SEED-135 and SEED-137 closed. **Already deployed to production** at close via releases #295/#296 — `main` and `origin/production` identical. Carried forward, not closed: SEED-136 (verify the iOS push path on real hardware), SEED-138 (push-prune log noise + Sentry scope bleed), SEED-130 (uncleared browser Stockfish TT — the reason the dead band is 0.05 wide rather than the measured 0.025 stability tolerance).
 
 v2.10 FlawChess Engine Improvements closed 2026-08-01 — 6 phases (194, 195, 196, 197, 198, 199), 29 plans, 19 squash-merged commits over 3 days (240 files, +48,561/−602 since `v2.9`). The engine got measurably faster where it was structurally wasteful, two attractive-looking optimizations were measured and deliberately not shipped, and bot strength was re-verified against the engine that actually ships. **Phase 194** landed main-thread + cache hygiene (SEED-126 Phases 2–5): single-pass policy conversion, lazy board snapshots, abort-aware search, right-sized caches. **Phase 195** replaced the flat `GRADING_TARGET_DEPTH` with a measured depth-scaled grading ladder (SEED-126 Phase 1), tightened to ~1.4× faster searches end to end. **Phase 196** (SEED-118) fixed two prerequisite bugs and lit up Stockfish root injection on the analysis board, correcting its own premise along the way — the disagreement re-run is a fresh recompute (~4.5% cache-hit ceiling in production), not the cheap cache replay originally assumed. **Phase 197** (SEED-126 Phase 6) measured Maia WDL leaf values end to end and **rejected LEAF-01** at a pre-declared move-quality gate — it goes blind to forced tactics. **Phase 198** (SEED-127) closed at 5/8 plans, measured but not shipped, on operator risk judgement after the apply-order determinism design failed two independent reviews — which surfaced SEED-130 (browser Stockfish grades were never bit-reproducible to begin with). **Phase 199** re-scoped mid-milestone to a pre-registered 5-cell parity check (only the ladder actually shipped a strength change) and found **PARITY HOLDS** (Maia pooled shift −57.7 vs ±85.0; SF pooled −9.9 vs ±50.0), so no calibration artifact was refit. 31 requirements Complete, 7 Rejected (LEAF-01, DISPATCH-03..08), each recorded with its measurement — three of six phases ending measured-not-shipped is the pre-registration discipline working as intended, not three failures. Archived to `milestones/v2.10-ROADMAP.md` + `v2.10-REQUIREMENTS.md`, phases to `milestones/v2.10-phases/`, tagged v2.10, GitHub release published. **Production is current** — zero diff vs `origin/production` across `app/`, `frontend/src/`, `alembic/`. Deferred: **SEED-133** (full 24-persona recalibration against the post-v2.10 engine).
 
