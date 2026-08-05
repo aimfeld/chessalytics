@@ -3,10 +3,12 @@
 Coverage:
 - Status-branch table (one test per status, mirrors test_chesscom_client.py's
   granularity): 201/200 -> no prune, no Sentry; 404/410 -> prune, WARNING log
-  + exactly one Sentry capture whose message carries no status-code digits and
-  no endpoint (SEED-135 D1); 400/401/403/413/429/500/503 -> no prune, exactly
-  one Sentry capture whose message carries no status-code digits (the code
-  lives in set_context only).
+  + exactly one `sentry_sdk.capture_message` at `level="info"` (SEED-138) and
+  zero `capture_exception` calls, whose message carries no status-code digits
+  and no endpoint PATH (host is deliberately included, SEED-138 D-02);
+  400/401/403/413/429/500/503 -> no prune, exactly one Sentry
+  `capture_exception` call whose message carries no status-code digits (the
+  code lives in set_context only).
 - A transport error (httpx.ConnectError) -> no prune, one Sentry capture, no
   exception escapes.
 - test_no_key_leak_* : neither error branch ever leaks the configured VAPID
@@ -17,6 +19,10 @@ Coverage:
 - Phase 204 D-01/D-02: the `ttl` header carries a caller-supplied
   `ttl_seconds` value, and defaults to a non-zero module constant when
   omitted (never the old hardcoded "0").
+- SEED-138: the prune capture is downgraded to `level="info"` via
+  `capture_message` (never `capture_exception`), and its context carries
+  `push_host` (endpoint host only) plus the device's `user_agent`/`user_id`
+  read from the subscription row before it is deleted.
 
 Uses dependency injection for `send_to_subscription`'s `client` parameter
 (the signature already takes it -- cleaner than patching `httpx.AsyncClient`,
@@ -34,6 +40,7 @@ import subprocess
 import sys
 from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock, patch
+from urllib.parse import urlsplit
 
 import httpx
 import pytest
@@ -125,12 +132,18 @@ async def test_send_to_subscription_status_200_no_prune_no_capture() -> None:
 async def test_send_to_subscription_status_404_prunes_and_captures() -> None:
     p256dh, auth = _fresh_subscription_keys()
     client = _mock_client(404)
-    with patch("app.services.push_send.sentry_sdk.capture_exception") as mock_capture:
+    with (
+        patch("app.services.push_send.sentry_sdk.capture_message") as mock_capture_message,
+        patch("app.services.push_send.sentry_sdk.capture_exception") as mock_capture_exception,
+    ):
         should_prune = await push_send.send_to_subscription(
             client, endpoint=_ENDPOINT, p256dh=p256dh, auth=auth, payload=_PAYLOAD
         )
     assert should_prune is True
-    assert mock_capture.call_count == 1
+    # SEED-138: prune is graded info via capture_message, never capture_exception.
+    assert mock_capture_message.call_count == 1
+    assert mock_capture_message.call_args.kwargs["level"] == "info"
+    assert mock_capture_exception.call_count == 0
 
 
 @pytest.mark.asyncio
@@ -138,12 +151,18 @@ async def test_send_to_subscription_status_404_prunes_and_captures() -> None:
 async def test_send_to_subscription_status_410_prunes_and_captures() -> None:
     p256dh, auth = _fresh_subscription_keys()
     client = _mock_client(410)
-    with patch("app.services.push_send.sentry_sdk.capture_exception") as mock_capture:
+    with (
+        patch("app.services.push_send.sentry_sdk.capture_message") as mock_capture_message,
+        patch("app.services.push_send.sentry_sdk.capture_exception") as mock_capture_exception,
+    ):
         should_prune = await push_send.send_to_subscription(
             client, endpoint=_ENDPOINT, p256dh=p256dh, auth=auth, payload=_PAYLOAD
         )
     assert should_prune is True
-    assert mock_capture.call_count == 1
+    # SEED-138: prune is graded info via capture_message, never capture_exception.
+    assert mock_capture_message.call_count == 1
+    assert mock_capture_message.call_args.kwargs["level"] == "info"
+    assert mock_capture_exception.call_count == 0
 
 
 async def _assert_error_status_captures_once(status_code: int) -> None:
@@ -165,18 +184,20 @@ async def _assert_error_status_captures_once(status_code: int) -> None:
 async def _assert_prune_status_captures_no_digits(status_code: int) -> None:
     p256dh, auth = _fresh_subscription_keys()
     client = _mock_client(status_code)
-    with patch("app.services.push_send.sentry_sdk.capture_exception") as mock_capture:
+    with patch("app.services.push_send.sentry_sdk.capture_message") as mock_capture:
         should_prune = await push_send.send_to_subscription(
             client, endpoint=_ENDPOINT, p256dh=p256dh, auth=auth, payload=_PAYLOAD
         )
     assert should_prune is True
     assert mock_capture.call_count == 1
-    captured_exc = mock_capture.call_args.args[0]
-    # Mirrors _assert_error_status_captures_once: the status code must never
-    # appear in the exception's own message -- it lives only in
-    # sentry_sdk.set_context (CLAUDE.md: never embed variables in error
-    # messages, which fragments Sentry grouping).
-    assert str(status_code) not in str(captured_exc)
+    # SEED-138: the captured payload is now a plain string positional
+    # argument (capture_message), not an exception object. Mirrors
+    # _assert_error_status_captures_once: the status code must never appear
+    # in the message itself -- it lives only in sentry_sdk.set_context
+    # (CLAUDE.md: never embed variables in error messages, which fragments
+    # Sentry grouping).
+    captured_message = mock_capture.call_args.args[0]
+    assert str(status_code) not in captured_message
 
 
 @pytest.mark.asyncio
@@ -196,12 +217,17 @@ async def _assert_prune_status_leaks_no_endpoint(
 ) -> None:
     p256dh, auth = _fresh_subscription_keys()
     client = _mock_client(status_code)
-    # The endpoint's unique path segment, not the whole URL -- so a partial
-    # leak (e.g. only the host, or only the token) is still caught.
-    endpoint_segment = _ENDPOINT.rsplit("/", 1)[-1]
+    # The endpoint's full PATH -- not just its last segment (rsplit would
+    # have missed a partial leak of an earlier path component) -- because
+    # SEED-138 deliberately starts sending the endpoint's HOST in the
+    # context (push_host, D-02). A host-only value is safe (it is not the
+    # bearer capability) and must NOT trip this assertion; only the path is
+    # forbidden.
+    endpoint_path = urlsplit(_ENDPOINT).path
     caplog.set_level("WARNING", logger="app.services.push_send")
     with (
-        patch("app.services.push_send.sentry_sdk.capture_exception") as mock_capture,
+        patch("app.services.push_send.sentry_sdk.capture_exception") as mock_capture_exception,
+        patch("app.services.push_send.sentry_sdk.capture_message") as mock_capture_message,
         patch("app.services.push_send.sentry_sdk.set_context") as mock_set_context,
         patch("app.services.push_send.sentry_sdk.set_tag") as mock_set_tag,
     ):
@@ -210,7 +236,9 @@ async def _assert_prune_status_leaks_no_endpoint(
         )
     assert should_prune is True
     haystack = ""
-    for capture_call in mock_capture.call_args_list:
+    for capture_call in mock_capture_exception.call_args_list:
+        haystack += str(capture_call.args) + str(capture_call.kwargs)
+    for capture_call in mock_capture_message.call_args_list:
         haystack += str(capture_call.args) + str(capture_call.kwargs)
     for context_call in mock_set_context.call_args_list:
         haystack += str(context_call.args) + str(context_call.kwargs)
@@ -218,7 +246,7 @@ async def _assert_prune_status_leaks_no_endpoint(
         haystack += str(tag_call.args) + str(tag_call.kwargs)
     for record in caplog.records:
         haystack += record.getMessage()
-    assert endpoint_segment not in haystack
+    assert endpoint_path not in haystack
 
 
 @pytest.mark.asyncio
@@ -235,6 +263,23 @@ async def test_send_to_subscription_status_410_leaks_no_endpoint(
     caplog: pytest.LogCaptureFixture,
 ) -> None:
     await _assert_prune_status_leaks_no_endpoint(410, caplog)
+
+
+@pytest.mark.asyncio
+@pytest.mark.usefixtures("vapid_keypair")
+async def test_send_to_subscription_prune_context_carries_endpoint_host() -> None:
+    """SEED-138 D-02: `push_host` in the prune context equals the endpoint's
+    host -- sent deliberately, unlike the forbidden endpoint path."""
+    p256dh, auth = _fresh_subscription_keys()
+    client = _mock_client(410)
+    with patch("app.services.push_send.sentry_sdk.set_context") as mock_set_context:
+        should_prune = await push_send.send_to_subscription(
+            client, endpoint=_ENDPOINT, p256dh=p256dh, auth=auth, payload=_PAYLOAD
+        )
+    assert should_prune is True
+    context_payload = mock_set_context.call_args.args[1]
+    assert context_payload["push_host"] == urlsplit(_ENDPOINT).hostname
+    assert context_payload["push_host"] == "fcm.googleapis.com"
 
 
 @pytest.mark.asyncio
@@ -401,13 +446,20 @@ async def test_send_to_subscription_default_ttl_seconds_is_not_zero() -> None:
     assert ttl_header != "0"
 
 
-async def _seed_subscriptions(session: AsyncSession, *, user_id: int, count: int) -> list[str]:
+async def _seed_subscriptions(
+    session: AsyncSession, *, user_id: int, count: int, user_agent: str | None = None
+) -> list[str]:
     endpoints = []
     for i in range(count):
         p256dh, auth = _fresh_subscription_keys()
         endpoint = f"https://fcm.googleapis.com/fcm/send/fanout-{user_id}-{i}"
         await push_repository.upsert_subscription(
-            session, user_id=user_id, endpoint=endpoint, p256dh=p256dh, auth=auth, user_agent=None
+            session,
+            user_id=user_id,
+            endpoint=endpoint,
+            p256dh=p256dh,
+            auth=auth,
+            user_agent=user_agent,
         )
         endpoints.append(endpoint)
     await session.flush()
@@ -471,6 +523,66 @@ async def test_send_to_user_prune_is_idempotent_across_two_calls(
     assert second.attempted == 0
     assert second.pruned == 0
     mock_post_2.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+@pytest.mark.usefixtures("vapid_keypair")
+async def test_send_to_user_prune_context_carries_real_user_agent_and_user_id(
+    db_session: AsyncSession,
+) -> None:
+    """SEED-138: `user_agent`/`user_id` must be read from the row while it is
+    still in hand -- `send_to_user` deletes it moments later. Driven through
+    the real DB-backed fan-out (not a unit-level default) so this proves the
+    ACTUAL stored user_agent lands in the context, not a placeholder."""
+    distinctive_user_agent = "SEED-138-diagnosability-probe/1.0"
+    user = User(email="push-context-diagnosability@example.com", hashed_password="fakehash")
+    db_session.add(user)
+    await db_session.flush()
+    await _seed_subscriptions(
+        db_session, user_id=user.id, count=1, user_agent=distinctive_user_agent
+    )
+
+    with (
+        patch("httpx.AsyncClient.post", new_callable=AsyncMock) as mock_post,
+        patch("app.services.push_send.sentry_sdk.set_context") as mock_set_context,
+    ):
+        mock_post.return_value = MagicMock(status_code=410)
+        result = await push_send.send_to_user(db_session, user_id=user.id, payload=_PAYLOAD)
+
+    assert result.pruned == 1
+    context_payload = mock_set_context.call_args.args[1]
+    assert context_payload["user_agent"] == distinctive_user_agent
+    assert context_payload["user_id"] == user.id
+
+
+@pytest.mark.asyncio
+async def test_list_subscriptions_surfaces_stored_user_agent(db_session: AsyncSession) -> None:
+    """push_repository.list_subscriptions must project user_agent -- without
+    it, send_to_user has nothing to thread through to the prune context
+    (SEED-138); the row is deleted moments after it is read."""
+    distinctive_user_agent = "SEED-138-repository-probe/1.0"
+    user = User(email="push-repo-user-agent@example.com", hashed_password="fakehash")
+    db_session.add(user)
+    await db_session.flush()
+    await _seed_subscriptions(
+        db_session, user_id=user.id, count=1, user_agent=distinctive_user_agent
+    )
+
+    rows = await push_repository.list_subscriptions(db_session, user_id=user.id)
+    assert len(rows) == 1
+    assert rows[0].user_agent == distinctive_user_agent
+
+
+@pytest.mark.asyncio
+async def test_list_subscriptions_user_agent_none_stays_none(db_session: AsyncSession) -> None:
+    user = User(email="push-repo-user-agent-none@example.com", hashed_password="fakehash")
+    db_session.add(user)
+    await db_session.flush()
+    await _seed_subscriptions(db_session, user_id=user.id, count=1, user_agent=None)
+
+    rows = await push_repository.list_subscriptions(db_session, user_id=user.id)
+    assert len(rows) == 1
+    assert rows[0].user_agent is None
 
 
 @pytest.mark.asyncio

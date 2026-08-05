@@ -29,6 +29,7 @@ class PushSubscriptionRow:
     endpoint: str
     p256dh: str
     auth: str
+    user_agent: str | None
 
 
 async def upsert_subscription(
@@ -96,12 +97,19 @@ async def list_subscriptions(session: AsyncSession, *, user_id: int) -> list[Pus
             PushSubscription.endpoint,
             PushSubscription.p256dh,
             PushSubscription.auth,
+            PushSubscription.user_agent,
         )
         .where(PushSubscription.user_id == user_id)
         .order_by(PushSubscription.id)
     )
     return [
-        PushSubscriptionRow(id=row.id, endpoint=row.endpoint, p256dh=row.p256dh, auth=row.auth)
+        PushSubscriptionRow(
+            id=row.id,
+            endpoint=row.endpoint,
+            p256dh=row.p256dh,
+            auth=row.auth,
+            user_agent=row.user_agent,
+        )
         for row in result.all()
     ]
 
