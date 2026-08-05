@@ -962,14 +962,18 @@ export default function Analysis() {
       const forkNodeId = mainLine[forkPlyForOrientation(initialTactic.ply, initialTactic.orientation)];
       if (forkNodeId !== undefined) {
         setPendingFlaw(initialTactic);
-        goToNode(forkNodeId);
+        // Quick 260805-p37: URL seeding, not a user move — this effect runs in a
+        // SEPARATE commit from loadMainLine (per the comment above), so
+        // loadMainLine's own silencing (inside useAnalysisBoard) does not reach it.
+        goToNode(forkNodeId, { silent: true });
         return;
       }
     }
     // No tactic chip here (or fork out of bounds): navigate to initialPly as before.
     // T-140-02b: L-8 guard — out-of-bounds ply is a no-op, not a crash.
     const nodeId = mainLine[ply];
-    if (nodeId !== undefined) goToNode(nodeId);
+    // Quick 260805-p37: same URL-seeding rationale as the fork branch above.
+    if (nodeId !== undefined) goToNode(nodeId, { silent: true });
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [mainLine.length, isGameMode]);
 
@@ -2579,7 +2583,10 @@ export default function Analysis() {
     if (ply === null) return;
     // T-140-02b: L-8 guard — ply from eval chart may not align exactly with mainLine.
     const nodeId = mainLine[ply];
-    if (nodeId !== undefined) goToNode(nodeId);
+    // Quick 260805-p37: this fires once per ply while the user drags the eval
+    // chart / touch overlay — an unsilenced call would machine-gun one sound
+    // per ply during a scrub.
+    if (nodeId !== undefined) goToNode(nodeId, { silent: true });
   };
 
   // Cycling a flaw tag/severity/motif chip surfaces the eval-chart tooltip on the

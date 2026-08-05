@@ -8,18 +8,17 @@
   "high": true,
   "skip-dev": true,
   "allowlist": [
-    // react-router / react-router-dom high advisories. FlawChess is a
+    // react-router / react-router-dom high advisory. FlawChess is a
     // client-only SPA that mounts a plain <BrowserRouter> (see App.tsx) —
     // we do NOT use React Router's RSC framework mode, SSR, or data-router
-    // server handlers, which is the attack surface these advisories cover.
-    // No forward fix exists in the 7.x line (all 7.12+ are flagged; the fix
-    // lands in 8.3.0, unreleased). Re-evaluate and drop these when react
-    // router ships a patched release we can upgrade to.
+    // server handlers, which is the attack surface this advisory covers.
     //
     // RSC Mode CSRF Bypass — requires React Router RSC server actions; N/A to a client SPA.
-    "GHSA-qwww-vcr4-c8h2",
-    // DoS via inefficient route matching — client-side only; a crafted URL can
-    // slow the user's OWN browser tab, no server-side amplification for a static SPA.
-    "GHSA-chx6-hx7r-mcp5"
+    // Vulnerable range is >= 7.12.0, < 8.3.0, so no 7.x release clears it; dropping this
+    // entry means moving to the 8.x line. Re-evaluate at the next major upgrade.
+    //
+    // GHSA-chx6-hx7r-mcp5 (DoS via inefficient route matching) was dropped from this
+    // list on 2026-08-05 — patched in 7.18.0 and we now pin ^7.18.2.
+    "GHSA-qwww-vcr4-c8h2"
   ]
 }
