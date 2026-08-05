@@ -1,8 +1,11 @@
 """Regression tests for SEED-138 Problem 2: background-task Sentry scope bleed.
 
-Prior to this fix, all five lifespan background loops (run_periodic_reaper,
-run_eval_drain, run_full_eval_drain, run_periodic_guest_cleanup,
-run_periodic_train_reminders) shared ONE Sentry isolation scope, because
+Prior to the SEED-138 fix, all lifespan background loops shared ONE Sentry
+isolation scope. This parametrized suite now covers all SIX lifespan loops
+(run_periodic_reaper, run_eval_drain, run_full_eval_drain,
+run_periodic_guest_cleanup, run_periodic_train_reminders, and SEED-139's
+run_periodic_holed_game_resweep — the newest loop, added carrying the SAME
+per-tick isolation requirement from the start), because
 `AsyncioIntegration` is not enabled and nothing wrapped a per-tick scope
 (SEED-135's FLAWCHESS-9J event carried context/spans from a completely
 different background task). Fix: each loop now wraps its per-tick body in
@@ -127,7 +130,7 @@ def _install_tick_stub(
 
 @dataclass
 class _LoopCase:
-    """One of the five lifespan background loops under test."""
+    """One of the six lifespan background loops under test."""
 
     name: str
     module_path: str
@@ -174,6 +177,12 @@ _LOOP_CASES = [
         loop_attr="run_periodic_train_reminders",
         tick_attr="send_due_reminders",
         extra_setup=_reminders_extra_setup,
+    ),
+    _LoopCase(
+        name="run_periodic_holed_game_resweep",
+        module_path="app.services.eval_drain",
+        loop_attr="run_periodic_holed_game_resweep",
+        tick_attr="resweep_holed_games",
     ),
 ]
 

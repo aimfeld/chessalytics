@@ -133,6 +133,17 @@ _DRAIN_IDLE_SLEEP_SECONDS = 5  # D-13 (poll interval when queue empty)
 # behaviorally identical to the pre-batching code.
 _RESWEEP_UPDATE_CHUNK_SIZE = 1000
 
+# SEED-139 item 5: the app now runs resweep_holed_games itself once a day (below),
+# instead of relying on an operator remembering to run scripts/resweep_holed_games.py.
+# 24 hours, expressed the same way as the guest-cleanup analog
+# (_GUEST_CLEANUP_INTERVAL_SECONDS, app/services/guest_cleanup_service.py).
+_RESWEEP_INTERVAL_SECONDS = 24 * 60 * 60
+
+# D-07: a burst guard on the drain and the volunteer fleet, NOT a correctness
+# device — the daily cadence above picks up any remainder next tick. Chosen well
+# above _RESWEEP_UPDATE_CHUNK_SIZE so a single day's sweep is rarely chunked.
+_RESWEEP_TICK_LIMIT = 5000
+
 # MAX_EVAL_ATTEMPTS moved to eval_apply.py (Phase 150 R7) — apply_completion_decision
 # is defined there now. Imported below (re-exported for backward compatibility with
 # existing `from app.services.eval_drain import MAX_EVAL_ATTEMPTS` test/script imports).
@@ -1175,7 +1186,7 @@ async def resweep_holed_games(
 ) -> int:
     """Re-arm already-stamped engine games that still carry non-terminal holes (SEED-045).
 
-    Permanent manual re-arm tool for Path-C mid-game holes — NOT pre-Phase-119 legacy.
+    Permanent re-arm tool for Path-C mid-game holes — NOT pre-Phase-119 legacy.
     `apply_completion_decision` (`eval_apply.py`, Path C) deliberately stamps a game's
     completion markers when `current_attempts + 1 >= MAX_EVAL_ATTEMPTS`, even though
     `failed_ply_count > 0` — this is the EXPECTED terminal state of the bounded-retry
@@ -1188,6 +1199,12 @@ async def resweep_holed_games(
     retry budget at all — D-116-07 — so this tool's original 2026 motivation was
     cleaning up that one-time backlog. The tool has remained load-bearing ever since
     as the only way to re-arm Path-C-stamped holes.)
+
+    SEED-139 item 5: no longer manual-only. `run_periodic_holed_game_resweep` (below)
+    now also calls this function once a day, in-process, so a game that still ends up
+    holed is repaired without an operator remembering to run the script. The
+    prod-tunnel entry point (`scripts/resweep_holed_games.py`) stays the ad-hoc,
+    cross-database (dev/benchmark/prod) way to run it by hand.
 
     A "hole" is a non-terminal, non-game-ending-move, non-mate ply:
         eval_cp IS NULL AND eval_mate IS NULL AND ply < MAX(ply) - 1 for that game.
@@ -1316,3 +1333,49 @@ async def resweep_holed_games(
             sentry_sdk.set_tag("source", "resweep_holed_games")
             sentry_sdk.capture_exception(exc)
             raise
+
+
+# SEED-139 D-07: daily in-process automation, following the exact
+# run_periodic_guest_cleanup pattern (app/services/guest_cleanup_service.py) —
+# sleep-first, per-tick sentry_sdk.isolation_scope(), Exception-only catch so
+# CancelledError propagates on lifespan shutdown.
+async def run_periodic_holed_game_resweep() -> None:
+    """Automates resweep_holed_games: re-arm holed games once a day, in-process.
+
+    This is the automation of what was a manual chore (`scripts/resweep_holed_
+    games.py`, still available for an ad-hoc or cross-database run — see that
+    module and resweep_holed_games' own docstring). Every tick calls
+    `resweep_holed_games(limit=_RESWEEP_TICK_LIMIT, dry_run=False)` — NEVER a
+    dry run; `_RESWEEP_TICK_LIMIT` is a burst guard on the drain and the
+    volunteer fleet (D-07), not a correctness device, since the next day's tick
+    picks up any remainder.
+
+    D-07 accepted trade-off: the sweep resets `full_eval_attempts` to 0, so a
+    genuinely unevaluable game is re-armed every cycle and burns its budget
+    again. This is accepted for now on current prod evidence — every swept game
+    has gotten fixed, and a dry run against prod returns 0 candidates. If that
+    stops being true, the fix is a bounded `resweep_count` column (so a game
+    that has been swept N times without ever clearing stops being re-armed),
+    NOT dropping this automation.
+
+    Called as `resweep_holed_games` (module global, not imported into a local
+    name) so a test can monkeypatch this module's attribute directly.
+
+    Wired in app/main.py lifespan — started on startup, cancelled+awaited on
+    shutdown, alongside the other five background tasks (reaper, eval-drain,
+    full-eval-drain, guest-cleanup, train-reminders). No ordering dependency
+    with stop_engine/stop_maia — this loop never touches the engine.
+    """
+    while True:
+        await asyncio.sleep(_RESWEEP_INTERVAL_SECONDS)
+        # SEED-138: per-tick isolation scope -- a background loop must never
+        # write to the shared lifespan scope (AsyncioIntegration is not
+        # enabled; see app/main.py's create_task comment for why).
+        with sentry_sdk.isolation_scope():
+            try:
+                swept = await resweep_holed_games(limit=_RESWEEP_TICK_LIMIT, dry_run=False)
+                logger.info("holed_game_resweep: re-armed %d games", swept)
+            except Exception:
+                logger.exception("Periodic holed-game resweep failed")
+                sentry_sdk.set_tag("source", "holed_game_resweep")
+                sentry_sdk.capture_exception()

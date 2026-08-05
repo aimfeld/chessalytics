@@ -30,7 +30,11 @@ from app.routers.train import router as train_router
 from app.routers.users import router as users_router
 from app.services.engine import start_engine, stop_engine
 from app.services.maia_engine import start_maia, stop_maia
-from app.services.eval_drain import run_eval_drain, run_full_eval_drain
+from app.services.eval_drain import (
+    run_eval_drain,
+    run_full_eval_drain,
+    run_periodic_holed_game_resweep,
+)
 from app.services.guest_cleanup_service import run_periodic_guest_cleanup
 from app.services.import_service import cleanup_orphaned_jobs, run_periodic_reaper
 from app.services.insights_llm import get_insights_agent
@@ -104,7 +108,7 @@ async def lifespan(_app: FastAPI) -> AsyncIterator[None]:
     # (lean/worker images) — start_maia catches ImportError and disables Maia
     # gracefully (D-03a), so this can never block boot.
     await start_maia()
-    # SEED-138 convention for whoever adds a sixth lifespan background loop
+    # SEED-138 convention for whoever adds a SEVENTH lifespan background loop
     # below: wrap each per-tick body in `with sentry_sdk.isolation_scope():`
     # (enclosing the whole try/except, not just the awaited tick call) so a
     # `set_tag`/`set_context` write in one loop's tick can never bleed onto a
@@ -114,7 +118,7 @@ async def lifespan(_app: FastAPI) -> AsyncIterator[None]:
     # leaves tick N's tags accumulating on tick N+1 of the SAME loop, and it
     # changes scope behavior globally for every task in the process
     # (including request handlers) -- a much larger blast radius than these
-    # five loops need. Per-tick isolation subsumes per-task isolation here.
+    # six loops need. Per-tick isolation subsumes per-task isolation here.
     #
     # Phase 90 / SEED-017: periodic reaper for the live process. Catches
     # orphans that arise from a Postgres-only restart (backend survives)
@@ -138,6 +142,11 @@ async def lifespan(_app: FastAPI) -> AsyncIterator[None]:
     # there is exactly one ticker; D-07's claim UPDATE covers restarts and any
     # future multi-process case.
     reminder_task = asyncio.create_task(run_periodic_train_reminders(), name="train-reminders")
+    # SEED-139 item 5: daily automated re-arm of Path-C-stamped holed games
+    # (app/services/eval_drain.py's resweep_holed_games, now run in-process
+    # instead of only by hand). No ordering dependency with
+    # stop_engine/stop_maia -- this loop never touches the engine.
+    resweep_task = asyncio.create_task(run_periodic_holed_game_resweep(), name="holed-game-resweep")
     try:
         yield
     finally:
@@ -151,6 +160,7 @@ async def lifespan(_app: FastAPI) -> AsyncIterator[None]:
         full_drain_task.cancel()
         guest_cleanup_task.cancel()
         reminder_task.cancel()
+        resweep_task.cancel()
         try:
             try:
                 await reaper_task
@@ -182,6 +192,12 @@ async def lifespan(_app: FastAPI) -> AsyncIterator[None]:
                 pass  # expected on shutdown
             except Exception:
                 logger.exception("Train reminder task raised on shutdown")
+            try:
+                await resweep_task
+            except asyncio.CancelledError:
+                pass  # expected on shutdown
+            except Exception:
+                logger.exception("Holed-game resweep task raised on shutdown")
         finally:
             await stop_engine()
             # Phase 174 / D-03: tear down the Maia session alongside Stockfish. No

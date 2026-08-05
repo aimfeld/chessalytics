@@ -27,11 +27,12 @@ Stockfish required.
 from __future__ import annotations
 
 import ast
+import asyncio
 import inspect
 import uuid
 from datetime import datetime, timezone
 from typing import Any
-from unittest.mock import AsyncMock
+from unittest.mock import AsyncMock, patch
 
 import chess
 import pytest
@@ -3951,6 +3952,96 @@ class TestResweepHoledGames:
             assert g[2] == 0, f"Swept game: full_eval_attempts must be reset to 0, got {g[2]}"
         finally:
             await _delete_games(full_drain_session_maker, [game_id])
+
+
+# ─── SEED-139 item 5: run_periodic_holed_game_resweep ────────────────────────
+
+
+class TestRunPeriodicHoledGameResweep:
+    """Unit tests for run_periodic_holed_game_resweep (mocked -- no real DB).
+
+    Mirrors tests/test_guest_cleanup_service.py::TestRunPeriodicGuestCleanup:
+    monkeypatch asyncio.sleep to drive a bounded number of loop iterations
+    (raising CancelledError to stop the infinite loop), and monkeypatch
+    resweep_holed_games to a spy/failing stub.
+    """
+
+    @pytest.mark.asyncio
+    async def test_calls_resweep_once_per_tick_never_dry_run(self, monkeypatch: Any) -> None:
+        """Every tick calls resweep_holed_games(limit=_RESWEEP_TICK_LIMIT, dry_run=False)
+        -- the loop must NEVER run a dry sweep."""
+        import app.services.eval_drain as drain_module
+        from app.services.eval_drain import (
+            _RESWEEP_TICK_LIMIT,
+            run_periodic_holed_game_resweep,
+        )
+
+        sleep_count = 0
+
+        async def _mock_sleep(_seconds: float) -> None:
+            nonlocal sleep_count
+            sleep_count += 1
+            if sleep_count >= 3:
+                raise asyncio.CancelledError()
+
+        calls: list[dict[str, object]] = []
+
+        async def _mock_resweep(*, limit: int | None = None, dry_run: bool = False) -> int:
+            calls.append({"limit": limit, "dry_run": dry_run})
+            return 0
+
+        monkeypatch.setattr(drain_module.asyncio, "sleep", _mock_sleep)
+        monkeypatch.setattr(drain_module, "resweep_holed_games", _mock_resweep)
+
+        with pytest.raises(asyncio.CancelledError):
+            await run_periodic_holed_game_resweep()
+
+        assert len(calls) >= 2, "resweep_holed_games must be called once per tick"
+        for call in calls:
+            assert call["limit"] == _RESWEEP_TICK_LIMIT, (
+                f"every tick must pass the bounded per-tick limit, got {call}"
+            )
+            assert call["dry_run"] is False, f"the loop must NEVER run a dry sweep, got {call}"
+
+    @pytest.mark.asyncio
+    async def test_survives_resweep_exception(self, monkeypatch: Any) -> None:
+        """A raise from resweep_holed_games is logged, Sentry-captured, and swallowed --
+        the loop continues to the next tick."""
+        import app.services.eval_drain as drain_module
+        from app.services.eval_drain import run_periodic_holed_game_resweep
+
+        sleep_count = 0
+
+        async def _mock_sleep(_seconds: float) -> None:
+            nonlocal sleep_count
+            sleep_count += 1
+            if sleep_count >= 3:
+                raise asyncio.CancelledError()
+
+        call_count = 0
+
+        async def _mock_resweep(*, limit: int | None = None, dry_run: bool = False) -> int:
+            nonlocal call_count
+            call_count += 1
+            if call_count == 1:
+                raise RuntimeError("simulated resweep failure")
+            return 0
+
+        monkeypatch.setattr(drain_module.asyncio, "sleep", _mock_sleep)
+        monkeypatch.setattr(drain_module, "resweep_holed_games", _mock_resweep)
+
+        with (
+            patch("app.services.eval_drain.sentry_sdk.capture_exception") as mock_capture,
+            pytest.raises(asyncio.CancelledError),
+        ):
+            await run_periodic_holed_game_resweep()
+
+        assert call_count >= 2, (
+            f"loop must continue after a resweep exception, called {call_count} time(s)"
+        )
+        assert mock_capture.call_count >= 1, (
+            "sentry_sdk.capture_exception must be called when resweep_holed_games raises"
+        )
 
 
 # ─── SEED-049: game-ending ply is not a hole ──────────────────────────────────
