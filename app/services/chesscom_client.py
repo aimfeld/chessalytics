@@ -206,6 +206,7 @@ async def fetch_chesscom_games(
     user_id: int,
     since_timestamp: datetime | None = None,
     on_game_fetched: Callable[[], None] | None = None,
+    on_archive_skipped: Callable[[tuple[int, int]], None] | None = None,
 ) -> AsyncIterator[NormalizedGame]:
     """Async generator that yields normalized NormalizedGame objects for a chess.com user.
 
@@ -222,6 +223,10 @@ async def fetch_chesscom_games(
             Also applies during month-enumeration fallback: enumeration starts at
             max(joined_month, since_timestamp_month).
         on_game_fetched: Optional callback called once per yielded game (for progress tracking).
+        on_archive_skipped: Optional callback invoked with the (year, month) of each
+            monthly archive skipped due to a 404/410 (D-03). Lets the caller hold
+            `last_synced_at` back to the earliest skipped month instead of letting
+            it advance past a month that was never actually fetched.
 
     Raises:
         ValueError: Two distinct cases on archives-list failure:
@@ -333,13 +338,18 @@ async def fetch_chesscom_games(
 
         # Shared rate limiter: limits concurrent archive fetches across all users
         async with get_chesscom_semaphore():
-            resp = await _fetch_archive_with_retries(client, archive_url)
+            resp = await _fetch_archive_with_retries(client, archive_url, user_id)
 
         # _fetch_archive_with_retries returns None only for skippable client errors
         # (404/410). Transient/persistent failures raise RuntimeError instead — this
         # is the fix for the silent-data-loss bug where a transient 5xx on one
         # archive completed the import with 0 games and advanced last_synced_at.
         if resp is None:
+            # D-03: report the skipped month so the forward-pass caller can hold
+            # last_synced_at back to it instead of letting it advance past a month
+            # that was never actually fetched.
+            if on_archive_skipped is not None:
+                on_archive_skipped(_parse_archive_year_month(archive_url))
             continue
 
         games = resp.json().get("games", [])
@@ -384,10 +394,12 @@ async def fetch_chesscom_games_backward(
     down to the player's joined month. ``should_stop`` is checked BEFORE every
     month fetch (including the very first) so a caller whose budgets are
     already full performs zero HTTP requests. ``on_month_attempted`` fires
-    after EVERY attempted month, regardless of whether it yielded any
-    TC-matching games -- Pitfall 1: the persisted cursor must track fetch
-    ATTEMPTS, not successful inserts, or a month with zero matches would be
-    re-fetched forever.
+    after every attempted month up to and excluding the first skipped
+    (404/410) month, regardless of whether it yielded any TC-matching games --
+    Pitfall 1: the persisted cursor must track fetch ATTEMPTS, not successful
+    inserts, or a month with zero matches would be re-fetched forever. D-03:
+    once a month is skipped, the cursor must not advance past it, so the
+    callback stops firing for that month and every OLDER month in this walk.
 
     Args:
         client: Shared httpx.AsyncClient instance.
@@ -403,8 +415,10 @@ async def fetch_chesscom_games_backward(
         on_game_fetched: Optional callback called once per yielded game.
         on_month_attempted: Optional ASYNC callback awaited with the
             (year, month) of each month AFTER it has been fetched (or
-            skipped), so the caller can persist the new oldest-attempted
-            cursor incrementally (typically an awaited DB write).
+            skipped -- as a zero-match 200), so the caller can persist the new
+            oldest-attempted cursor incrementally (typically an awaited DB
+            write). Stops firing from the first 404/410-skipped month onward
+            (D-03) -- a 200-with-zero-games month still fires normally.
 
     Raises:
         RuntimeError: If a per-archive fetch fails persistently (5xx after
@@ -436,13 +450,23 @@ async def fetch_chesscom_games_backward(
 
     archive_urls = _enumerate_archive_urls(api_username, start_ym, end_ym)
 
+    # D-03: once a month's fetch is skipped (404/410), the cursor must not move
+    # past it or that month is lost permanently. Suppressing on_month_attempted
+    # for the remainder of this walk (months only get OLDER from here, since
+    # the walk is newest -> oldest) pins the persisted cursor to the last clean
+    # month. Re-walking already-attempted older months next Sync is deliberate
+    # and safe: bulk_insert_games is ON CONFLICT DO NOTHING, and the CR-01 dedup
+    # in _admit_backward_game means an already-imported platform_game_id never
+    # counts against the budget again -- re-attempts cost time, not correctness.
+    skipped_any = False
+
     for archive_url in reversed(archive_urls):
         if should_stop():
             break
 
         # Shared rate limiter: limits concurrent archive fetches across all users.
         async with get_chesscom_semaphore():
-            resp = await _fetch_archive_with_retries(client, archive_url)
+            resp = await _fetch_archive_with_retries(client, archive_url, user_id)
 
         year, month = _parse_archive_year_month(archive_url)
 
@@ -462,15 +486,24 @@ async def fetch_chesscom_games_backward(
                     yield normalized
                     if on_game_fetched is not None:
                         on_game_fetched()
+        else:
+            skipped_any = True
 
-        if on_month_attempted is not None:
+        if on_month_attempted is not None and not skipped_any:
             await on_month_attempted((year, month))
 
 
 async def _fetch_archive_with_retries(
-    client: httpx.AsyncClient, archive_url: str
+    client: httpx.AsyncClient, archive_url: str, user_id: int
 ) -> httpx.Response | None:
     """Fetch a single monthly archive with retry policy.
+
+    Args:
+        client: Shared httpx.AsyncClient instance.
+        archive_url: Full monthly archive URL, e.g. .../games/2024/03.
+        user_id: Internal database user ID, attached to the skip-event Sentry
+            context (D-02) so a skip is triageable without reconstructing the
+            user + month from the event timestamp against import_jobs.
 
     Returns:
         The 200 response on success, or ``None`` if the archive returned a permanent
@@ -521,6 +554,28 @@ async def _fetch_archive_with_retries(
                 "chess.com archive %s returned %d, skipping",
                 archive_url,
                 resp.status_code,
+            )
+            # Bug fix (FLAWCHESS-39, quick-260806-p9n): a 404 on /games/YYYY/MM for a
+            # valid user is a chess.com server-side fault, not an empty month —
+            # genuinely empty and pre-join months both return 200 with {"games": []}
+            # (probed live 2026-08-06 for ocnafr: 2025/09 and 2020/01 returned 200-empty,
+            # while 2025/11 returned a persistent 404 with the same ambiguous "internal
+            # error" body the archives-list handler above already distrusts, despite
+            # 2025/11 being listed in that player's archives index). Treating it as
+            # attempted-but-empty was silent data loss of the same class as the 5xx bug
+            # in .planning/debug/prod-import-missed-games.md, and the event was
+            # untriageable from Sentry alone because it previously carried only
+            # source/platform tags. Context must be set BEFORE capture_message, and the
+            # message string must stay a literal with no interpolation (CLAUDE.md Sentry
+            # rule) so this issue keeps its existing grouping.
+            sentry_sdk.set_context(
+                "import",
+                {
+                    "platform": "chess.com",
+                    "user_id": user_id,
+                    "archive_url": archive_url,
+                    "status": resp.status_code,
+                },
             )
             sentry_sdk.capture_message(
                 "chess.com archive skipped",

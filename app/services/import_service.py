@@ -176,6 +176,12 @@ class JobState:
     since_ms_override: int | None = None
     max_games: int | None = None
     perf_type: str | None = None
+    # Bug fix (FLAWCHESS-39, quick-260806-p9n, D-03): records the oldest chess.com
+    # monthly archive the FORWARD pass had to skip (404/410) this run. A non-None
+    # value holds last_synced_at back at completion so the skipped month (and
+    # everything after it) is re-attempted on the next sync instead of being
+    # permanently filtered out by _archive_before_timestamp.
+    earliest_skipped_archive_ym: tuple[int, int] | None = None
 
 
 # Module-level in-memory job registry
@@ -655,6 +661,12 @@ async def _flush_batch_with_progress(
         await session.commit()
 
 
+def _month_start_utc(ym: tuple[int, int]) -> datetime:
+    """Return the first instant of (year, month) as a UTC-aware datetime."""
+    year, month = ym
+    return datetime(year, month, 1, tzinfo=timezone.utc)
+
+
 async def _complete_import_job(job: JobState, job_id: str) -> None:
     """Completion scope: mark job complete and advance last_synced_at.
 
@@ -662,8 +674,31 @@ async def _complete_import_job(job: JobState, job_id: str) -> None:
     advances last_synced_at so a no-op sync (0 new games) still confirms
     we're caught up; without this, the next sync would re-fetch everything
     if the previous completed job had last_synced_at=NULL.
+
+    Exception: when the FORWARD pass had to skip a chess.com monthly archive
+    (404/410, D-03), last_synced_at is held back to the first instant of the
+    earliest skipped month instead of `now`.
     """
     now = datetime.now(timezone.utc)
+    # Bug fix (FLAWCHESS-39, quick-260806-p9n, D-03): last_synced_at=now was set
+    # unconditionally even when the forward walk had skipped a month, so
+    # _archive_before_timestamp filtered that month out on the next sync and its
+    # games were lost permanently. Clamping to the first instant of the earliest
+    # skipped month makes that month (and everything after it) pass the filter
+    # again on the next sync, at the cost of re-fetching already-imported months
+    # whose inserts are no-op'd by ON CONFLICT DO NOTHING. 404 is deliberately
+    # NOT promoted to a hard failure (D-01): a month chess.com never recovers
+    # would otherwise fail the user's imports forever with no way to complete.
+    last_synced_at = now
+    if job.earliest_skipped_archive_ym is not None:
+        last_synced_at = min(now, _month_start_utc(job.earliest_skipped_archive_ym))
+        logger.warning(
+            "Import job %s: holding last_synced_at back to %s (earliest skipped "
+            "chess.com archive month %s) instead of now",
+            job_id,
+            last_synced_at.isoformat(),
+            job.earliest_skipped_archive_ym,
+        )
     async with async_session_maker() as session:
         await import_job_repository.update_import_job(
             session,
@@ -672,7 +707,7 @@ async def _complete_import_job(job: JobState, job_id: str) -> None:
             games_fetched=job.games_fetched,
             games_imported=job.games_imported,
             completed_at=now,
-            last_synced_at=now,
+            last_synced_at=last_synced_at,
         )
         await session.commit()
     # Phase 94.1 D-03 / ROADMAP SC 3: Stage A fires AFTER commit, NOT inside the
@@ -905,12 +940,22 @@ async def _make_game_iterator(
     if job.platform == "chess.com":
         since_timestamp: datetime | None = previous_last_synced_at
 
+        def _on_archive_skipped(ym: tuple[int, int]) -> None:
+            # D-03: keep the MINIMUM skipped month across the whole forward walk
+            # so the hold-back in _complete_import_job covers every skip,
+            # regardless of arrival order (the forward walk proceeds oldest ->
+            # newest, so arrival order already matches month order in practice,
+            # but min() makes the invariant hold even if that ever changes).
+            current = job.earliest_skipped_archive_ym
+            job.earliest_skipped_archive_ym = ym if current is None else min(current, ym)
+
         async for game in chesscom_client.fetch_chesscom_games(
             client,
             username=job.username,
             user_id=job.user_id,
             since_timestamp=since_timestamp,
             on_game_fetched=on_game_fetched,
+            on_archive_skipped=_on_archive_skipped,
         ):
             yield game
 
