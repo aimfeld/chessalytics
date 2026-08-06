@@ -496,7 +496,11 @@ class TestFetchChesscomGames:
     async def test_410_on_archive_fetch_skips_archive(self):
         """410 on a per-archive fetch should skip that archive gracefully — this is a
         permanent client error meaning the archive is gone, not a transient failure
-        that risks data loss for the rest of the import."""
+        that risks data loss for the rest of the import.
+
+        D-05: also asserts the skip is REPORTED via on_archive_skipped, not just
+        silently dropped — distinguishes "skipped and remembered" from "skipped
+        and forgotten" (results == [] alone stays true under a broken D-03 fix)."""
         archives_resp = _make_response(
             {"archives": ["https://api.chess.com/pub/player/testuser/games/2024/03"]}
         )
@@ -505,12 +509,139 @@ class TestFetchChesscomGames:
         mock_client = AsyncMock()
         mock_client.get = AsyncMock(side_effect=[archives_resp, gone_resp])
 
+        skipped_months: list[tuple[int, int]] = []
+
         with patch("app.services.chesscom_client.asyncio.sleep", new=AsyncMock()):
             results = []
-            async for game in fetch_chesscom_games(mock_client, "testuser", user_id=1):
+            async for game in fetch_chesscom_games(
+                mock_client,
+                "testuser",
+                user_id=1,
+                on_archive_skipped=skipped_months.append,
+            ):
                 results.append(game)
 
         assert results == []
+        assert skipped_months == [(2024, 3)]
+
+    @pytest.mark.asyncio
+    async def test_404_on_archive_skip_reports_sentry_context_before_message(self):
+        """D-02: a skipped archive attaches an 'import' Sentry context carrying
+        archive_url, status, user_id and platform BEFORE capture_message fires,
+        and the capture_message text stays the literal 'chess.com archive
+        skipped' with zero interpolated variables so FLAWCHESS-39 keeps its
+        existing grouping (CLAUDE.md Sentry rule)."""
+        archives_resp = _make_response(
+            {"archives": ["https://api.chess.com/pub/player/testuser/games/2024/03"]}
+        )
+        not_found_resp = _make_response({}, status_code=404)
+
+        mock_client = AsyncMock()
+        mock_client.get = AsyncMock(side_effect=[archives_resp, not_found_resp])
+
+        call_order: list[str] = []
+
+        def _record_context(*args: object, **kwargs: object) -> None:
+            call_order.append("set_context")
+
+        def _record_message(*args: object, **kwargs: object) -> None:
+            call_order.append("capture_message")
+
+        with (
+            patch("app.services.chesscom_client.asyncio.sleep", new=AsyncMock()),
+            patch(
+                "app.services.chesscom_client.sentry_sdk.set_context",
+                side_effect=_record_context,
+            ) as mock_set_context,
+            patch(
+                "app.services.chesscom_client.sentry_sdk.capture_message",
+                side_effect=_record_message,
+            ) as mock_capture_message,
+        ):
+            async for _ in fetch_chesscom_games(mock_client, "testuser", user_id=42):
+                pass
+
+        assert call_order == ["set_context", "capture_message"]
+
+        context_args = mock_set_context.call_args
+        assert context_args.args[0] == "import"
+        context_payload = context_args.args[1]
+        assert context_payload["archive_url"] == (
+            "https://api.chess.com/pub/player/testuser/games/2024/03"
+        )
+        assert context_payload["status"] == 404
+        assert context_payload["user_id"] == 42
+        assert context_payload["platform"] == "chess.com"
+
+        message_args = mock_capture_message.call_args
+        assert message_args.args[0] == "chess.com archive skipped"
+
+    @pytest.mark.asyncio
+    async def test_forward_skip_reports_month_and_still_yields_later_games(self):
+        """D-03 forward: a 404'd month fires on_archive_skipped exactly once with
+        its (year, month) and the walk still yields games from a later month."""
+        archives_resp = _make_response(
+            {
+                "archives": [
+                    "https://api.chess.com/pub/player/testuser/games/2024/03",
+                    "https://api.chess.com/pub/player/testuser/games/2024/04",
+                ]
+            }
+        )
+        not_found_resp = _make_response({}, status_code=404)
+        april_resp = _make_response({"games": [_make_game(uuid="april-game")]})
+
+        mock_client = AsyncMock()
+        mock_client.get = AsyncMock(side_effect=[archives_resp, not_found_resp, april_resp])
+
+        skipped_months: list[tuple[int, int]] = []
+
+        with patch("app.services.chesscom_client.asyncio.sleep", new=AsyncMock()):
+            results = []
+            async for game in fetch_chesscom_games(
+                mock_client,
+                "testuser",
+                user_id=1,
+                on_archive_skipped=skipped_months.append,
+            ):
+                results.append(game)
+
+        assert skipped_months == [(2024, 3)]
+        assert [g.platform_game_id for g in results] == ["april-game"]
+
+    @pytest.mark.asyncio
+    async def test_forward_empty_200_month_is_not_a_skip(self):
+        """D-03 forward: a 200 with an empty games array is NOT a skip — Pitfall 1
+        must not be reintroduced as an infinite re-fetch loop for legitimately
+        empty months."""
+        archives_resp = _make_response(
+            {
+                "archives": [
+                    "https://api.chess.com/pub/player/testuser/games/2024/03",
+                    "https://api.chess.com/pub/player/testuser/games/2024/04",
+                ]
+            }
+        )
+        empty_march_resp = _make_response({"games": []})
+        april_resp = _make_response({"games": [_make_game(uuid="april-game")]})
+
+        mock_client = AsyncMock()
+        mock_client.get = AsyncMock(side_effect=[archives_resp, empty_march_resp, april_resp])
+
+        skipped_months: list[tuple[int, int]] = []
+
+        with patch("app.services.chesscom_client.asyncio.sleep", new=AsyncMock()):
+            results = []
+            async for game in fetch_chesscom_games(
+                mock_client,
+                "testuser",
+                user_id=1,
+                on_archive_skipped=skipped_months.append,
+            ):
+                results.append(game)
+
+        assert skipped_months == []
+        assert [g.platform_game_id for g in results] == ["april-game"]
 
     @pytest.mark.asyncio
     async def test_404_on_archive_fetch_skips_archive(self):
@@ -879,6 +1010,45 @@ class TestFetchChesscomGamesBackward:
 
         assert results == []
         assert visited_months == [(2024, 2)]
+
+    @pytest.mark.asyncio
+    async def test_backward_skip_freezes_cursor_but_keeps_walking_older_months(self):
+        """D-03 backward (load-bearing): a 404'd month stops on_month_attempted from
+        firing for that month AND every older month in this same walk, so the
+        persisted cursor cannot move past the skip -- but the walk itself keeps
+        fetching and yielding games from older months within the run."""
+        joined_ts = int(datetime(2024, 1, 15, tzinfo=timezone.utc).timestamp())
+        joined_resp = _make_response({"joined": joined_ts})
+        march_resp = _make_response({"games": [_make_game(uuid="march-game")]})
+        feb_404 = _make_response({}, status_code=404)
+        jan_resp = _make_response({"games": [_make_game(uuid="jan-game")]})
+
+        mock_client = AsyncMock()
+        mock_client.get = AsyncMock(side_effect=[joined_resp, march_resp, feb_404, jan_resp])
+
+        visited_months: list[tuple[int, int]] = []
+
+        with (
+            patch("app.services.chesscom_client.asyncio.sleep", new=AsyncMock()),
+            patch("app.services.chesscom_client._current_year_month", return_value=(2024, 3)),
+        ):
+            results = []
+            async for game in fetch_chesscom_games_backward(
+                mock_client,
+                "testuser",
+                user_id=1,
+                oldest_attempted_ym=None,
+                should_stop=lambda: False,
+                on_month_attempted=_make_async_recorder(visited_months),
+            ):
+                results.append(game)
+
+        # Only March (before the skip) is remembered -- Feb and Jan are absent,
+        # so the persisted cursor cannot advance past the skipped Feb month.
+        assert visited_months == [(2024, 3)]
+        # But the walk itself did not stall: both March and January games were
+        # still fetched and yielded within this run.
+        assert [g.platform_game_id for g in results] == ["march-game", "jan-game"]
 
     @pytest.mark.asyncio
     async def test_backward_should_stop_halts_before_next_month_fetch(self):
