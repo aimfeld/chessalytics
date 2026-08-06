@@ -555,3 +555,151 @@ async def test_stage_b_gate_exception_is_swallowed_and_captured(
     assert capture_spy.call_args.args == (boom,), (
         "Sentry capture must receive the raised RuntimeError"
     )
+
+
+# ── D-03: chess.com skipped-archive cursor hold-back (quick-260806-p9n) ──────
+#
+# _complete_import_job normally advances last_synced_at to `now` unconditionally.
+# When the forward pass had to skip a chess.com monthly archive (404/410), that
+# would silently drop the skipped month from every future sync (see D-01/D-02/D-03
+# in quick/260806-p9n-PLAN.md). These tests pin the clamp and the earliest-wins
+# accumulation the forward iterator wires into JobState.earliest_skipped_archive_ym.
+
+
+def _make_stage_b_gate_and_stage_ab_mocks(
+    monkeypatch: pytest.MonkeyPatch, *, zero_pending: bool = False
+) -> None:
+    """Shared monkeypatch setup for _complete_import_job's post-commit hooks.
+
+    Stage A/B are no-op'd and the Stage-B zero-pending gate returns [] (or the
+    user_id list) so these tests only exercise the last_synced_at clamp itself.
+    """
+    from app.services import import_service
+
+    monkeypatch.setattr(
+        import_service,
+        "compute_stage_a",
+        MagicMock(side_effect=lambda *_a, **_kw: asyncio.sleep(0)),
+    )
+    monkeypatch.setattr(
+        import_service,
+        "compute_stage_b",
+        MagicMock(side_effect=lambda *_a, **_kw: asyncio.sleep(0)),
+    )
+
+    async def _fake_gate(_session: Any, user_ids: Any) -> list[int]:
+        return list(user_ids) if zero_pending else []
+
+    monkeypatch.setattr(import_service.game_repository, "users_with_zero_pending", _fake_gate)
+
+
+@pytest.mark.asyncio
+async def test_complete_import_job_no_skip_last_synced_at_equals_completed_at(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Test A (no-skip regression, D-03): when earliest_skipped_archive_ym is
+    None, last_synced_at == completed_at (both `now`) -- byte-identical to
+    today's behavior when nothing was skipped."""
+    from app.services import import_service
+
+    session = _make_stage_b_session()
+    monkeypatch.setattr(import_service, "async_session_maker", _make_stage_b_session_maker(session))
+    _make_stage_b_gate_and_stage_ab_mocks(monkeypatch)
+
+    update_mock = AsyncMock()
+    monkeypatch.setattr(import_service.import_job_repository, "update_import_job", update_mock)
+
+    job = _make_job_state()
+    assert job.earliest_skipped_archive_ym is None
+
+    await import_service._complete_import_job(job, _TEST_JOB_ID_STAGE_B)
+
+    call_kwargs = update_mock.call_args.kwargs
+    assert call_kwargs["last_synced_at"] == call_kwargs["completed_at"]
+    assert call_kwargs["status"] == "completed"
+
+
+@pytest.mark.asyncio
+async def test_complete_import_job_clamps_last_synced_at_to_earliest_skip(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Test B (the clamp, D-03): when earliest_skipped_archive_ym is set,
+    last_synced_at is clamped to the first instant of that month exactly,
+    completed_at is still `now` and strictly greater, and status stays
+    'completed' -- a skip must NOT fail the job (D-01)."""
+    from datetime import datetime, timezone as tz
+
+    from app.services import import_service
+    from app.services.import_service import JobState
+
+    session = _make_stage_b_session()
+    monkeypatch.setattr(import_service, "async_session_maker", _make_stage_b_session_maker(session))
+    _make_stage_b_gate_and_stage_ab_mocks(monkeypatch)
+
+    update_mock = AsyncMock()
+    monkeypatch.setattr(import_service.import_job_repository, "update_import_job", update_mock)
+
+    job = JobState(
+        job_id="test-clamp-job",
+        user_id=_TEST_USER_ID_STAGE_B,
+        platform="chess.com",
+        username="test_user_clamp",
+        earliest_skipped_archive_ym=(2025, 11),
+    )
+
+    await import_service._complete_import_job(job, "test-clamp-job")
+
+    call_kwargs = update_mock.call_args.kwargs
+    assert call_kwargs["last_synced_at"] == datetime(2025, 11, 1, tzinfo=tz.utc)
+    assert call_kwargs["completed_at"] > call_kwargs["last_synced_at"]
+    assert call_kwargs["status"] == "completed"
+
+
+@pytest.mark.asyncio
+async def test_forward_iterator_keeps_minimum_skipped_month(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Test C (earliest wins, D-03): the on_archive_skipped callback wired by
+    _make_game_iterator for a chess.com job keeps the MINIMUM reported month
+    regardless of arrival order, so the hold-back covers every skipped month."""
+    from typing import AsyncIterator
+
+    from app.services import import_service
+    from app.services.import_service import JobState
+
+    job = JobState(
+        job_id="test-earliest-wins",
+        user_id=1,
+        platform="chess.com",
+        username="testuser",
+    )
+
+    async def _fake_fetch_chesscom_games(
+        client: Any,
+        username: str,
+        user_id: int,
+        since_timestamp: Any = None,
+        on_game_fetched: Any = None,
+        on_archive_skipped: Any = None,
+    ) -> AsyncIterator[Any]:
+        assert on_archive_skipped is not None
+        # Later-arriving skip is an EARLIER month -- min() must still win.
+        on_archive_skipped((2025, 11))
+        on_archive_skipped((2025, 3))
+        return
+        yield  # pragma: no cover -- makes this an async generator
+
+    monkeypatch.setattr(
+        import_service.chesscom_client, "fetch_chesscom_games", _fake_fetch_chesscom_games
+    )
+
+    game_iter = import_service._make_game_iterator(
+        client=MagicMock(),
+        job=job,
+        previous_last_synced_at=None,
+        on_game_fetched=MagicMock(),
+    )
+    async for _ in game_iter:
+        pass
+
+    assert job.earliest_skipped_archive_ym == (2025, 3)
