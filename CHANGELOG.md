@@ -18,6 +18,8 @@ in `YYYY-MM-DD` (Europe/Zurich).
 
 - A chess.com month that temporarily fails to load is now retried on the next sync instead of being silently skipped and forgotten forever.
 
+- Guests who open Train now get a sign-up prompt instead of a page that silently fails.
+
 ### Security
 
 - Cleared 11 build-toolchain vulnerability advisories (`fast-uri`, `ip-address`, `postcss`, `undici`, `@hono/node-server`, `hono`, `brace-expansion`, `js-yaml`) by pinning patched versions of transitive dependencies. All were development- and build-time only; none were reachable from the shipped app.

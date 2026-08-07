@@ -37,14 +37,16 @@
  * see `trainRevealCache.ts` and the `restoredReveal` state below.
  */
 
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import type { ReactElement } from 'react';
 import { useTrainSession } from '@/hooks/useTrainSession';
 import { useTrainGradingEngine } from '@/hooks/useTrainGradingEngine';
+import { useUserProfile } from '@/hooks/useUserProfile';
 import { TrainStartScreen } from '@/components/train/TrainStartScreen';
 import { TrainSolveScreen } from '@/components/train/TrainSolveScreen';
 import { TrainScoreScreen } from '@/components/train/TrainScoreScreen';
 import { TrainDevClock } from '@/components/train/TrainDevClock';
+import { TrainGuestGate } from '@/components/train/TrainGuestGate';
 import { clearTrainRevealCache, readTrainRevealCache } from '@/lib/trainRevealCache';
 import type { CachedTrainReveal } from '@/lib/trainRevealCache';
 import { DEV_CLOCK_ENABLED } from '@/lib/devClock';
@@ -52,7 +54,13 @@ import { TRAIN_POINTS_PER_PUZZLE } from '@/lib/trainScore';
 
 export default function TrainPage(): ReactElement {
   const trainSession = useTrainSession();
-  const gradingEngine = useTrainGradingEngine({ enabled: true });
+  // FLAWCHESS-64: is_guest read from useUserProfile(), never useAuth().user
+  // (always null, carries no is_guest — D-02, cf. the Analysis.tsx:789
+  // free-play ELO source comment).
+  const { data: profile, isError: profileError } = useUserProfile();
+  const isGuest = profile?.is_guest === true;
+  const canTrain = profile != null && !isGuest;
+  const gradingEngine = useTrainGradingEngine({ enabled: canTrain });
   const [hasEnteredLoop, setHasEnteredLoop] = useState(false);
   const [showScoreScreen, setShowScoreScreen] = useState(false);
   // 190.1 UAT round 5 (Analyze -> browser back): a cached solved reveal,
@@ -64,11 +72,20 @@ export default function TrainPage(): ReactElement {
   );
 
   const { startSession } = trainSession;
+  const hasStartedRef = useRef(false);
   useEffect(() => {
+    // FLAWCHESS-64: every /train/* endpoint 403s guests via _reject_guest
+    // (app/routers/train.py:54, Phase 189 D-05 — correct, and it stays).
+    // Firing this status read for a guest, or before the profile has
+    // resolved, is a guaranteed 403 that reaches Sentry. canTrain requires
+    // BOTH a resolved and a non-guest profile; the ref latch — not an empty
+    // dep array — is what keeps this a once-per-mount status read now that
+    // the effect has real dependencies (it re-fires once canTrain flips
+    // from false to true as the profile resolves).
+    if (hasStartedRef.current || !canTrain) return;
+    hasStartedRef.current = true;
     startSession();
-    // Runs once per page mount — a status read, not a loop-entry action.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
+  }, [canTrain, startSession]);
 
   // Drop a cached reveal from another session (e.g. a new day's session was
   // composed since the cache was written) — never restore across sessions.
@@ -136,6 +153,34 @@ export default function TrainPage(): ReactElement {
   // loop parked on puzzles from the previous "now".
   function handleDevClockChange(): void {
     returnToLanding();
+  }
+
+  // FLAWCHESS-64 D-04: a guest sees a sign-up CTA INSTEAD of TrainStartScreen
+  // — rendering TrainStartScreen at all re-triggers the /train/progress and
+  // /train/settings 403s. App.tsx is untouched (D-05): the Train nav item
+  // stays visible to guests, and this gate is the conversion moment.
+  if (isGuest) {
+    return (
+      <div className="px-4 py-6 md:px-6" data-testid="train-page">
+        <TrainGuestGate />
+      </div>
+    );
+  }
+
+  if (profile == null) {
+    return (
+      <div className="px-4 py-6 md:px-6" data-testid="train-page">
+        {profileError ? (
+          <p className="text-sm text-muted-foreground" data-testid="train-profile-error">
+            Failed to load your profile. Something went wrong. Please try again in a moment.
+          </p>
+        ) : (
+          <p className="text-sm text-muted-foreground" data-testid="train-profile-loading">
+            Loading your profile…
+          </p>
+        )}
+      </div>
+    );
   }
 
   return (
