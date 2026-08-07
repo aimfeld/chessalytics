@@ -5,15 +5,15 @@ milestone_name: Train Reliability & Grading Agreement
 current_phase: 206
 status: completed
 stopped_at: Completed 206-03-PLAN.md
-last_updated: "2026-08-07T14:53:55.102Z"
+last_updated: "2026-08-07T15:07:08.851Z"
 last_activity: 2026-08-07
-last_activity_desc: Phase 206 complete
 progress:
   total_phases: 1
   completed_phases: 1
   total_plans: 3
   completed_plans: 3
 current_phase_name: train-warmup-sharp-filler
+last_activity_desc: Phase 206 shipped — squash-merged to main (560e99371)
 ---
 
 # Project State: FlawChess
@@ -22,8 +22,8 @@ current_phase_name: train-warmup-sharp-filler
 
 Phase: 206
 Plan: Not started
-Status: All phases complete
-Last activity: 2026-08-07 — Phase 206 complete
+Status: All phases complete — Phase 206 shipped (squash-merged to main, 560e99371)
+Last activity: 2026-08-07 — Phase 206 shipped
 
 **v2.12 closed 2026-08-05** retroactively over two already-shipped, already-deployed phases (lightweight close, no `/gsd-new-milestone` requirements cycle — same pattern as v2.6 and v2.8):
 
