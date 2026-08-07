@@ -1,18 +1,23 @@
 ---
 id: SEED-140
-status: active
+status: promoted
+promoted_to: Phase 206 (Train Warm-Up Sessions & Sharp Filler Pool), 2026-08-07
 planted: 2026-08-07
 planted_during: /gsd-explore — "new user imports, trains immediately, gets only red herrings.
   Do red herrings enter the SR rotation? Better idea?"
 trigger_when: next milestone that touches Train onboarding or the Train session-composition
-  path. Not urgent-blocking, but every new signup hits it once, so it front-loads the worst
-  possible first impression of Train.
+  path. Not urgent-blocking, but any signup that reaches Train before the ES lottery has
+  delivered hits it, so it front-loads the worst possible first impression of Train.
 scope: medium (a static sharp puzzle set + a serve path + a landing state, plus a third
   `DrillSource` value and the `puzzle_type`-to-`source` predicate fix it forces; no new
   sampling infrastructure, no pool generator, no rating-matching schema, no tier-1 fast path)
 ---
 
-# SEED-140: Train's first session is 100% red herrings, silently — give new users a labeled warm-up
+# SEED-140: a session with no analyzed blunders is 100% red herrings, silently — serve a labeled warm-up instead
+
+> Trigger is material scarcity, not session ordinal — see "The Design". The new-user case is
+> the common one, which is why the slug says "first-session", but the condition is never
+> "is this their first session".
 
 ## The Defect
 
@@ -77,9 +82,30 @@ user is told about it.
 
 ## The Design
 
-A **one-shot labeled warm-up**, shown only for the very first session, while real material is
-still being analyzed.
+A **labeled warm-up**, shown whenever the user's own analyzed blunders are too scarce to fill
+a session.
 
+- **Triggered by material, NOT by session ordinal.** "First session" is the common case, not
+  the condition. A user may well import, go play bots or browse Openings for a while, and
+  arrive at Train with blunders already analyzed — that is an ordinary session with no warm-up
+  label, even though it is their first. Conversely a returning user whose material has run dry
+  gets the warm-up again. Derive the state from what composition actually produced, never from
+  "is this their first session".
+- **The discriminant is zero, not a threshold (DECIDED).** Show warm-up framing **only when the
+  composed session contains no puzzle sourced from the user's own blunders at all**. One
+  qualifying blunder is enough to make it an ordinary, unlabeled session, however much filler
+  sits alongside it — calling a session that drills a real mistake of theirs a "warm-up" would
+  undersell it. Concretely: warm-up ⟺ the composed session has zero `DrillSource.SR_ITEM`
+  puzzles (`len(surviving_sr_keys) == 0` at `train_repository.py:1693-1697`).
+  Two implementation notes that follow from it:
+  - **Server-computed, like `pool_state`.** Surface a boolean on the session response rather
+    than letting the client count sources. This mirrors the existing convention documented at
+    `TrainStartScreen.tsx:157-162` (T-191-24): "The client performs no arithmetic over
+    `mastered_count`/`waiting_count`/`blob_pending_count` to pick between them."
+  - **It must survive resume.** `_resume_session` re-serves an existing session, so the flag
+    has to be derived from the stored `drill_solves.source` rows (or persisted on
+    `drill_sessions`), not recomputed from current pool state — otherwise a warm-up reloaded
+    after the lottery lands would silently shed its label mid-session.
 - **Deliberately easy.** The warm-up's job is teaching the mechanic (the critical/several
   guess, the board, the reveal), not benchmarking the user. Clarity beats calibration.
 - **Sharp puzzles come from a small static lichess set.** The vendored CC0 fixtures at
@@ -90,8 +116,14 @@ still being analyzed.
 - **Mixed with several-fine-moves positions.** A lichess-only warm-up has the mirror-image
   degeneracy of a herring-only one: every lichess puzzle is critical, so the guess would always
   be "critical." The mix is what makes the guess real.
-- **Labeled and uncounted.** Explicitly framed as a warm-up; no streak credit, no points that
-  read as session performance.
+- **Labeled, but otherwise a normal session.** Explicitly framed as a warm-up in the UI, and
+  that is the ONLY difference — it accrues streak and scores exactly like any other session
+  (user decision, 2026-08-07). The earlier "fake streak day" objection applied specifically to
+  the *degenerate* all-herring session, where always guessing "several" scored 100%; once the
+  filler mix is honest, the streak measures what it is meant to measure — that the user showed
+  up and trained. Treating it uniformly also removes special-casing from scoring and streak
+  settling. **See the `pool_eligible_since` gotcha below — this constraint is a silent no-op
+  without it.**
 
 ### Locked constraints
 
@@ -184,9 +216,14 @@ Consequences to design for, all acceptable under this decision:
   an all-filler session of 8 is roughly 6 sharp + 2 herrings, so a set of ~50 low-rated lichess
   positions covers about a week before any repeat. Cheap to seed, and it keeps the degenerate
   case (a user who genuinely waits) from looking threadbare.
-- **No streak until real material.** Filler sessions do not count (see the locked constraints),
-  so a user in an extended wait sees no streak progress. That is the honest outcome and is
-  preferred over crediting filler.
+- **`pool_eligible_since` must be stamped for filler sessions too, or the streak decision is
+  a silent no-op.** `_stamp_pool_eligibility` (`train_repository.py:558-561`) returns early
+  without stamping when `has_material` is false, and `has_material` is
+  `has_drill_items or has_pool_candidates` — filler satisfies neither. That watermark is the
+  D-06 floor handed to `tick_days` (`:584-585`), so with it NULL a warm-up user accrues no
+  streak at all regardless of what the UI says. The fix is to widen the stamp condition to
+  "has material OR was served a filler session". Nothing about this failure is visible in
+  types or tests; it just quietly never ticks.
 
 Related: [[project_prod_log_retention_use_sentry]] is not involved here; the relevant prior
 context is the Train pool/scheduler work in `.planning/milestones/v2.9-phases/189-*` and

@@ -164,6 +164,7 @@ const BASE_SESSION: TrainSessionResponse = {
   blob_pending_count: 0,
   puzzles: [],
   solved_results: [],
+  is_warmup: false,
 };
 
 // D-04: session_id null and puzzle_count 0 is the shape that reaches the
@@ -241,30 +242,6 @@ describe('TrainStartScreen — six landing states', () => {
     expect(screen.getByTestId('btn-train-start').textContent).toBe('Start session — 1 puzzle');
   });
 
-  it('short (positive case): pending blobs AND puzzle_count below requested shows the count + the notice', () => {
-    renderScreen({
-      session: { ...BASE_SESSION, puzzle_count: 4, requested_count: 10, blob_pending_count: 3 },
-    });
-    expect(screen.getByTestId('btn-train-start').textContent).toBe('Start session — 4 puzzles');
-    expect(screen.getByText('More of your games are still being analyzed.')).not.toBeNull();
-  });
-
-  it('short negative case 1: pending blobs but a FULL session shows no notice', () => {
-    renderScreen({
-      session: { ...BASE_SESSION, puzzle_count: 10, requested_count: 10, blob_pending_count: 5 },
-    });
-    expect(screen.getByTestId('btn-train-start').textContent).toBe('Start session — 10 puzzles');
-    expect(screen.queryByText(/still being analyzed/)).toBeNull();
-  });
-
-  it('short negative case 2: puzzle_count below requested but zero pending blobs shows no notice', () => {
-    renderScreen({
-      session: { ...BASE_SESSION, puzzle_count: 4, requested_count: 10, blob_pending_count: 0 },
-    });
-    expect(screen.getByTestId('btn-train-start').textContent).toBe('Start session — 4 puzzles');
-    expect(screen.queryByText(/still being analyzed/)).toBeNull();
-  });
-
   it('resume: an open session with solved > 0 and solved < total shows the Resume button labelled with counts', () => {
     // A real resume response always carries the remaining unsolved puzzles
     // (load_session_puzzles) — an empty array with progress means completed.
@@ -328,6 +305,113 @@ describe('TrainStartScreen — six landing states', () => {
 
     expect(saveMock).toHaveBeenCalledTimes(1);
     expect(onSettingsSaved).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe('TrainStartScreen — Phase 206 D-06/D-08/D-09 warm-up banner (replaces the dead "short" state)', () => {
+  it('is_warmup true, solved_count 0: renders exactly one warm-up banner with the locked title', () => {
+    renderScreen({
+      session: { ...BASE_SESSION, puzzle_count: 8, requested_count: 8, is_warmup: true },
+    });
+    expect(screen.getAllByTestId('train-warmup-banner')).toHaveLength(1);
+    expect(screen.getByTestId('train-warmup-banner-title').textContent).toBe('Warm-up session');
+    expect(screen.getByTestId('btn-train-start').textContent).toBe('Start session — 8 puzzles');
+  });
+
+  it('is_warmup false: renders no warm-up banner', () => {
+    renderScreen({
+      session: { ...BASE_SESSION, puzzle_count: 8, requested_count: 8, is_warmup: false },
+    });
+    expect(screen.queryByTestId('train-warmup-banner')).toBeNull();
+  });
+
+  it('next_due_date set: the caught-up body renders and ends with the "Next review: {date}." clause', () => {
+    trainProgressMock = {
+      data: { ...DEFAULT_TRAIN_PROGRESS, next_due_date: '2026-08-20' },
+      isPending: false,
+      isError: false,
+    };
+    renderScreen({ session: { ...BASE_SESSION, is_warmup: true } });
+    const body = screen.getByTestId('train-warmup-banner-body').textContent ?? '';
+    expect(body).toBe(
+      "You're all caught up on your own mistakes. In the meantime, here are some practice puzzles. Next review: Aug 20, 2026.",
+    );
+  });
+
+  it('next_due_date null: the cold-start body renders and the clause is omitted entirely — no "Next review" text, no dangling artifact', () => {
+    trainProgressMock = {
+      data: { ...DEFAULT_TRAIN_PROGRESS, next_due_date: null },
+      isPending: false,
+      isError: false,
+    };
+    renderScreen({ session: { ...BASE_SESSION, is_warmup: true } });
+    const body = screen.getByTestId('train-warmup-banner-body').textContent ?? '';
+    expect(body).toBe(
+      "We're analyzing your games to find your blunders. In the meantime, here are some practice puzzles.",
+    );
+    expect(body).not.toContain('Next review');
+  });
+
+  // 206 UAT round 1: the two warm-up causes get DIFFERENT body copy, branched
+  // on next_due_date. The pair below is the mutation guard — collapsing the
+  // branch back to one shared string turns both assertions red at once.
+  it('the two warm-up causes render different body copy, and neither leaks the other’s claim', () => {
+    trainProgressMock = {
+      data: { ...DEFAULT_TRAIN_PROGRESS, next_due_date: null },
+      isPending: false,
+      isError: false,
+    };
+    renderScreen({ session: { ...BASE_SESSION, is_warmup: true } });
+    const coldStartBody = screen.getByTestId('train-warmup-banner-body').textContent ?? '';
+    cleanup();
+
+    trainProgressMock = {
+      data: { ...DEFAULT_TRAIN_PROGRESS, next_due_date: '2026-08-20' },
+      isPending: false,
+      isError: false,
+    };
+    renderScreen({ session: { ...BASE_SESSION, is_warmup: true } });
+    const caughtUpBody = screen.getByTestId('train-warmup-banner-body').textContent ?? '';
+
+    expect(coldStartBody).not.toBe(caughtUpBody);
+    // A caught-up user has nothing being analyzed — that claim must never appear.
+    expect(caughtUpBody).not.toContain('analyzing your games');
+    // A cold-start user is not "caught up" — they have never had material.
+    expect(coldStartBody).not.toContain('caught up');
+  });
+
+  it('resumed warm-up session (solved_count > 0, is_warmup true): the banner still renders alongside the Resume CTA', () => {
+    renderScreen({
+      session: {
+        ...BASE_SESSION,
+        puzzle_count: 8,
+        solved_count: 3,
+        is_warmup: true,
+        puzzles: [STUB_PUZZLE],
+      },
+    });
+    expect(screen.getByTestId('train-warmup-banner')).not.toBeNull();
+    expect(screen.getByTestId('btn-train-resume')).not.toBeNull();
+  });
+
+  it('loading, error, empty, and completed states render zero warm-up banners', () => {
+    renderScreen({ isLoading: true, session: null });
+    expect(screen.queryByTestId('train-warmup-banner')).toBeNull();
+    cleanup();
+
+    renderScreen({ isError: true, session: null });
+    expect(screen.queryByTestId('train-warmup-banner')).toBeNull();
+    cleanup();
+
+    renderScreen({ session: EMPTY_SESSION });
+    expect(screen.queryByTestId('train-warmup-banner')).toBeNull();
+    cleanup();
+
+    renderScreen({
+      session: { ...BASE_SESSION, puzzle_count: 6, solved_count: 6, is_warmup: true },
+      sessionScore: 6,
+    });
+    expect(screen.queryByTestId('train-warmup-banner')).toBeNull();
   });
 });
 

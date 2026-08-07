@@ -871,11 +871,19 @@ export function TrainReveal({
 
   // PROG-03/D-14: the mastery banner supersedes the old plain "Mastered —
   // retired." comeback hint. Same trigger condition the removed
-  // `comebackHint` used — a herring carries no SR bookkeeping (POOL-08) so
-  // it never shows the banner.
+  // `comebackHint` used — a herring or a sharp filler carries no SR
+  // bookkeeping (POOL-08/WARM-04) so neither ever shows the banner. Phase
+  // 206 (D-19): `verdict.source === 'sr_item'` replaces the old
+  // `puzzle_type !== 'herring'` proxy — a sharp filler has `puzzle_type:
+  // 'sharp'`, which the old two-way check would have wrongly satisfied.
   const showFlawFixedBanner =
-    verdict.puzzle_type !== 'herring' && verdict.item_status === 'mastered';
+    verdict.source === 'sr_item' && verdict.item_status === 'mastered';
   const gameMoveSan = revealQuery.data?.played_in_game_san ?? null;
+  // Phase 206 (D-20): unlike the D-19 predicates above, this has no
+  // synchronous-timing requirement — it only adds a line once the async
+  // reveal resolves, never gates a suppression, so reading `revealQuery.data`
+  // here is safe.
+  const motif = revealQuery.data?.motif ?? null;
   // Shared header for the non-ready standalone game-move-box states
   // (loading/error/idle) — the SAN is the only reveal-payload value ever
   // shown here (never a stored eval/line as a failure-mode fallback).
@@ -912,17 +920,20 @@ export function TrainReveal({
   // Quick 260803-iv6 (Task 3): the guess card states the verdict but never
   // says WHY it landed where it did — one locked prose sentence, derived
   // next to `showAlsoFine` since both render inside the same card body.
-  // `verdict.puzzle_type !== 'herring'` is the "one of the user's own
-  // blunders vs a red herring" predicate — the SAME one the game footer below
-  // already uses, no extra field needed. `move_quality` joins it (2026-08-03
-  // bug fix) so the sentence can never claim the user PLAYED the critical
-  // move on the strength of the guess alone; see `guessFeedbackProse`.
+  // `verdict.source === 'sr_item'` (Phase 206, D-19) is the "one of the
+  // user's own blunders vs a red herring/sharp filler" predicate — the SAME
+  // one the game footer below already uses, no extra field needed. Reads
+  // `verdict`, not `revealQuery.data`, for the same synchronous-timing
+  // reason the game footer's comment documents below (RESEARCH Pitfall 1).
+  // `move_quality` joins it (2026-08-03 bug fix) so the sentence can never
+  // claim the user PLAYED the critical move on the strength of the guess
+  // alone; see `guessFeedbackProse`.
   const guessProse =
     guess !== null
       ? guessFeedbackProse(
           guess,
           verdict.correct_guess,
-          verdict.puzzle_type !== 'herring',
+          verdict.source === 'sr_item',
           verdict.move_quality,
         )
       : null;
@@ -1189,7 +1200,7 @@ export function TrainReveal({
             testid="train-verdict-guess-points"
           />
         </CardHeader>
-        {(guessProse !== null || showAlsoFine) && (
+        {(guessProse !== null || showAlsoFine || motif !== null) && (
           <CardBody className="flex flex-col gap-2 p-3">
             {guessProse !== null && (
               <p className="text-sm" data-testid="train-verdict-guess-prose">
@@ -1199,6 +1210,11 @@ export function TrainReveal({
             {showAlsoFine && (
               <p className="text-sm" data-testid="train-reveal-also-fine">
                 Also fine: {alsoFineSanList}
+              </p>
+            )}
+            {motif !== null && (
+              <p className="text-sm text-muted-foreground" data-testid="train-reveal-motif">
+                Motif: {motif}
               </p>
             )}
           </CardBody>
@@ -1257,13 +1273,21 @@ export function TrainReveal({
           D-07 (Phase 192): a herring reveal omits this footer entirely — "vs
           <opponent>" has no referent when the solver was never a participant
           in a stranger's game, and the reveal already labels the puzzle a
-          herring outright, so dropping the line leaks nothing new. Both the
-          error branch and the success branch sit behind the SAME
-          `puzzle_type !== 'herring'` gate — gating only the success branch
-          would leave a herring free to render "Failed to load the game" for
+          herring outright, so dropping the line leaks nothing new. A sharp
+          filler (Phase 206) is suppressed the same way — it has no game at
+          all (`game_id` is structurally NULL). Both the error branch and the
+          success branch sit behind the SAME `verdict.source === 'sr_item'`
+          gate (Phase 206, D-19 — replaces the old `puzzle_type !== 'herring'`
+          proxy, which a sharp filler's `puzzle_type: 'sharp'` would have
+          wrongly satisfied) — gating only the success branch would leave a
+          herring/sharp filler free to render "Failed to load the game" for
           a `useLibraryGame` query that (for a null `game_id`, D-09) never
-          fired in the first place. */}
-      {verdict.puzzle_type !== 'herring' && (
+          fired in the first place. Reads `verdict`, never `revealQuery.data`
+          (RESEARCH Pitfall 1): `revealQuery` is a separate, asynchronously
+          fetched query that only starts once `verdict` lands, so reading its
+          `source` here would open a real post-solve window where a real SR
+          puzzle briefly misrenders as suppressed. */}
+      {verdict.source === 'sr_item' && (
         <>
           {gameQuery.isError && (
             <LoadError resource="the game" data-testid="train-gamecard-error" />

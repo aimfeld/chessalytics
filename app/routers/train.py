@@ -108,6 +108,7 @@ async def compose_or_resume_session(
         blob_pending_count=composed.blob_pending_count,
         puzzles=puzzles,
         solved_results=solved_results,
+        is_warmup=composed.is_warmup,
     )
 
 
@@ -151,6 +152,7 @@ async def solve_puzzle(
         correct_move=recorded.correct_move,
         move_quality=recorded.move_quality,
         puzzle_type=recorded.puzzle_type,
+        source=recorded.source,
         item_status=recorded.item_status,
         streak=recorded.streak,
         due_date=recorded.due_date,
@@ -192,6 +194,7 @@ async def reveal_puzzle(
         puzzle_type=result.puzzle_type,
         source=result.source,
         has_tactic_lines=result.has_tactic_lines,
+        motif=result.motif,
     )
 
 

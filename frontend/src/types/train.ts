@@ -42,6 +42,12 @@ export interface SolvedResult {
  * device that never saw the original solve responses — see `SolvedResult`'s
  * docstring. Empty for a freshly composed session and for the
  * no-eligible-material (`session_id === null`) case.
+ *
+ * `is_warmup` (Phase 206, D-06/D-07) is frozen at composition and derived
+ * purely from material scarcity — true iff the session contains zero
+ * surviving SR_ITEM puzzles at the moment it was (re-)composed. Never
+ * derived from session ordinal, session count, or account age. The client
+ * performs no arithmetic over it — a single equality read (T-191-24).
  */
 export interface TrainSessionResponse {
   session_id: number | null;
@@ -53,6 +59,7 @@ export interface TrainSessionResponse {
   blob_pending_count: number;
   puzzles: TrainPuzzle[];
   solved_results: SolvedResult[];
+  is_warmup: boolean;
 }
 
 /**
@@ -79,12 +86,19 @@ export interface SolveRequest {
  * ladder's pass/fail verdict, also what the reveal's check/cross mark
  * reads. `move_quality` is the new three-way scoring tier the client's
  * points formula consumes.
+ *
+ * Phase 206 (RESEARCH Pitfall 1): `source` mirrors `puzzle_type` — it lands
+ * synchronously with this response, so the D-19 your-game predicates in
+ * TrainReveal.tsx read `verdict.source`, never the separate, asynchronously
+ * fetched `PuzzleRevealResponse.source` (which would open a post-solve
+ * window where a real SR puzzle misrenders as suppressed).
  */
 export interface SolveResponse {
   correct_guess: boolean;
   correct_move: boolean;
   move_quality: TrainMoveTier;
   puzzle_type: 'sharp' | 'soft' | 'herring';
+  source: 'sr_item' | 'red_herring' | 'sharp_filler';
   item_status: 'active' | 'mastered' | 'parked' | null;
   streak: number | null;
   due_date: string | null;
@@ -121,8 +135,12 @@ export interface PuzzleRevealResponse {
   played_in_game_san: string | null;
   played_in_game_move_uci: string | null;
   puzzle_type: 'sharp' | 'soft' | 'herring';
-  source: 'sr_item' | 'red_herring';
+  source: 'sr_item' | 'red_herring' | 'sharp_filler';
   has_tactic_lines: boolean;
+  /** Phase 206 (D-20): the sharp filler's motif label ("Fork", "Skewer",
+   * ...), read straight from the committed data file. null for every
+   * sr_item/red_herring reveal — no motif taxonomy exists for those today. */
+  motif: string | null;
 }
 
 /** Response for GET /train/settings.

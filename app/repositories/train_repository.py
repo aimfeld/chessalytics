@@ -37,6 +37,12 @@ from app.models.game_position import GamePosition
 from app.models.herring_pool import HerringPool
 from app.models.train_settings import TrainSettings
 from app.services.best_move_candidates import mover_color_for_ply
+from app.services.sharp_filler import (
+    SHARP_SET_BY_ID,
+    pick_sharp_fillers,
+    served_sharp_ids_stmt,
+    sharp_filler_available,
+)
 from app.services.train_pool import (
     MAX_ITEMS_PER_GAME_PER_SESSION,
     answer_key_present,
@@ -211,6 +217,15 @@ class ComposedSession:
     `solved_results` (260728-tgc) is one `ComposedSolvedResult` per recorded
     solve, in `position` order — `[]` for a fresh composition and for the
     nothing-qualified case. `solved_count` always equals its length.
+
+    `is_warmup` (Phase 206, D-06/D-07) is the frozen-at-composition warm-up
+    discriminant: `len(surviving_sr_keys) == 0` at the moment the session was
+    (re-)composed, never a ratio or a threshold, and never derived from
+    session ordinal, session count, `session_date`, or account age. `False`
+    for the nothing-qualified case (`session_id is None`). `_resume_session`
+    reads it straight off the stored `drill_sessions.is_warmup` column rather
+    than recomputing it, so the label cannot be shed mid-session when the ES
+    lottery lands new material.
     """
 
     session_id: int | None
@@ -222,6 +237,7 @@ class ComposedSession:
     blob_pending_count: int
     puzzles: list[ComposedPuzzle]
     solved_results: list[ComposedSolvedResult]
+    is_warmup: bool
 
 
 async def get_settings(session: AsyncSession, *, user_id: int) -> TrainSettingsRow | None:
@@ -546,7 +562,12 @@ async def _stamp_pool_eligibility(
         settings_row: The user's current `TrainSettingsRow`.
         today: The local calendar day (from `local_today`).
         has_material: `has_drill_items OR has_pool_candidates` from
-            `_material_flags`, resolved once by the caller.
+            `_material_flags`, resolved once by the caller. Phase 206
+            (ROADMAP Success Criterion 5): a caller composing a session may
+            additionally OR in `sharp_filler_available()` — a filler-only
+            session is still a real, completable session, so the
+            eligibility floor `tick_days` reads must exist for a
+            warm-up-only user too.
 
     Returns:
         `settings_row.pool_eligible_since` unchanged when already set;
@@ -1197,6 +1218,26 @@ async def load_session_puzzles(
 
     puzzles: list[ComposedPuzzle] = []
     for solve, game, herring_row in rows:
+        if solve.source == DrillSource.SHARP_FILLER:
+            # Phase 206: resolved straight from the in-memory sharp set by
+            # sharp_puzzle_id — no games/herring_pool join needed (both
+            # outer joins above naturally yield None for a sharp row).
+            sharp_row = SHARP_SET_BY_ID.get(solve.sharp_puzzle_id)
+            if sharp_row is None:
+                continue  # data file entry missing (should not happen; committed file is static)
+            puzzles.append(
+                ComposedPuzzle(
+                    position=solve.position,
+                    game_id=None,
+                    ply=solve.ply,
+                    fen=sharp_row.fen,
+                    side_to_move=mover_color_for_ply(solve.ply),
+                    last_move_uci=sharp_row.first_move_uci,
+                    herring_pool_id=None,
+                )
+            )
+            continue
+
         if solve.source == DrillSource.RED_HERRING:
             if herring_row is None:
                 continue  # pool row itself is gone — drop, never serve broken
@@ -1285,6 +1326,10 @@ async def _resume_session(
         blob_pending_count=blob_pending_count,
         puzzles=puzzles,
         solved_results=solved_results,
+        # Phase 206 (D-07): read the stored column, never recompute — a
+        # recomputed flag would silently shed the warm-up label the moment
+        # the ES lottery delivers material mid-session.
+        is_warmup=drill_session.is_warmup,
     )
 
 
@@ -1336,6 +1381,10 @@ class _ReconstructedPuzzle:
     positional fields is past readable as a tuple). `herring_pool_id` is
     non-None only for a `RED_HERRING` row (D-04); an `SR_ITEM` row always
     carries `herring_pool_id=None`.
+
+    Phase 206 (D-10): `sharp_puzzle_id` mirrors `herring_pool_id`'s exact
+    nullability contract — non-None only for a `SHARP_FILLER` row; an
+    `SR_ITEM`/`RED_HERRING` row always carries `sharp_puzzle_id=None`.
     """
 
     game_id: int | None
@@ -1345,135 +1394,67 @@ class _ReconstructedPuzzle:
     side_to_move: Literal["white", "black"]
     source: int
     herring_pool_id: int | None
+    sharp_puzzle_id: str | None
 
 
-async def compose_and_materialize_session(
-    session: AsyncSession, *, user_id: int, now_utc: datetime.datetime
-) -> ComposedSession:
-    """Compose or resume a Train session at the full POOL-07 75/25 mix.
+@dataclass(frozen=True)
+class _SessionCandidates:
+    """The SR/herring candidate-selection stage's output (Phase 206 e0
+    extraction). Three fields, three DIFFERENT downstream readers in
+    `compose_and_materialize_session`: `sr_candidates` feeds the FEN
+    reconstruction loop, `herring_candidates` feeds the herring
+    reconstruction loop, `new_sr_items` feeds the `DrillItem` inserts inside
+    the SAVEPOINT. Not a context object — see `_select_candidates`'s
+    docstring for why this is the one cut that removes state-threading
+    rather than introducing it.
+    """
 
-    1. Resolve `train_settings` (create-on-first-touch), today's local date,
-       and the `(sr_slots, herring_slots)` split (`compose_slots`).
-    1b. D-06 (Plan 02): stamp the `pool_eligible_since` watermark if it is
-       still NULL and real material (`_material_flags`) is present — a user
-       whose first `drill_items` row is created by THIS composition call
-       also gets the eligibility floor immediately, without waiting for a
-       `GET /train/progress` read to discover it. Reuses the same
-       `_material_flags`/`_stamp_pool_eligibility` pair `get_progress`
-       already calls; stamp-if-null only, never an overwrite.
-    2. D-11: `expire_stale_sessions` closes out a stale open session before
-       anything else runs.
-    3. D-12: if an open session still exists after expiry, RESUME it
-       (`load_session_puzzles`) rather than composing a new one — this is the
-       only path taken on a second call inside an open session's window,
-       including an ad-hoc "train now" request from a future phase that hits
-       this same endpoint. EXCEPTION (191-06 UAT bug fix,
-       `_discard_if_untouched_and_resized`): an open session with ZERO
-       recorded solves whose frozen `puzzle_count` no longer matches the
-       CURRENT `puzzles_per_session` is discarded instead, falling through to
-       fresh composition below — this is what lets a same-day settings edit
-       actually take effect before the first puzzle is solved.
-    3b. D-10 guard (190.1 bug fix): if a COMPLETED session's window still
-       covers today (`completed_session_in_window`), return it instead of
-       composing fresh — completing a session must not unlock an immediate
-       replacement on reload; the next session arrives when the window rolls
-       over. Phase 191's ad-hoc "train now" (SCHD-03) will need an explicit
-       opt-out of this guard, not a bypass of the open-session resume above.
-    4. Otherwise compose fresh: due `drill_items` (most-overdue-first) padded
-       from `pool_entry_stmt` up to `sr_slots`, plus `herring_stmt` up to
-       `herring_slots` (retried with `exclude_served=False` when the source
-       is exhausted). Cross-backfill (Pitfall 4): if one side comes up short,
-       the OTHER side fills the gap up to `n`, so a lopsided pool still
-       yields a full session whenever enough total material exists.
+    sr_candidates: list[tuple[int, int, Game]]
+    herring_candidates: list[HerringPool]
+    new_sr_items: list[tuple[int, int, Game]]
 
-       Quick task 260728-pgp: both SR sources are capped at
-       `MAX_ITEMS_PER_GAME_PER_SESSION` per `game_id`, SESSION-WIDE, via one
-       shared `per_game_counts` Counter threaded through the due loop, the
-       `sr_needed` padding loop, and the herring-shortfall cross-backfill
-       loop. A due item deferred by the cap is skipped for THIS session only
-       and left completely untouched (`status` stays `ACTIVE`, `due_date` is
-       not modified, nothing deleted) — it resurfaces `due_date`-first next
-       session. The fresh-pool side's within-game choice is instead a
-       seeded UNIFORM RANDOM pick (`pick_one_per_game`), never earliest-ply
-       — a permanently-tracked `drill_items` row makes an earliest-ply bias
-       there permanent, unlike the due side's transient ordering. A
-       cap-shortened SR side still routes through the existing
-       cross-backfill above rather than relaxing the cap.
-    5. Reconstruct each puzzle's full FEN + arriving move via
-       `fen_and_last_move_at_ply`; a puzzle whose FEN cannot be
-       reconstructed is dropped rather than served broken (never
-       backfilled — the slot arithmetic already ran).
-    6. If nothing survives, return zero puzzles and write NO `drill_sessions`
-       row. Otherwise shuffle deterministically by `(user_id, today)` (D-09:
-       a red herring's position must not be inferable from ordering) and
-       materialize the session header plus one pre-inserted `DrillSolve` per
-       puzzle.
-    7. The `DrillSession` insert (plus any new `drill_items` padding rows) is
-       wrapped in a SAVEPOINT (`session.begin_nested()`). A concurrent second
-       composition winning the `uq_drill_sessions_user_open` race — or
-       colliding on a `drill_items` primary key from the same simultaneous
-       padding scan — raises `IntegrityError`; that partial unique index is
-       the authority for "at most one open session per user" (T-189-14), so
-       the loser resumes the winner's session instead of erroring.
 
-    Sequential awaits only — never `asyncio.gather` on this `AsyncSession`
-    (CLAUDE.md: AsyncSession is not safe for concurrent use).
+async def _select_candidates(
+    session: AsyncSession,
+    *,
+    user_id: int,
+    today: datetime.date,
+    n: int,
+    sr_slots: int,
+    herring_slots: int,
+) -> _SessionCandidates:
+    """The SR-due + SR-pool + herring candidate-selection stage, extracted
+    from `compose_and_materialize_session` (Phase 206 e0, CLAUDE.md
+    "refactor bloated code on sight" — the parent was 249 logic LOC / depth 5
+    before this extraction, past the hard ceiling).
+
+    This is a pure move: the `per_game_counts` Counter, the `sr_pool` scan
+    cursor (`pool_idx`), the `existing_pairs` dedup set, `herring_rows`, and
+    `herring_idx` are today live across ~160 lines specifically because the
+    cross-backfill loop resumes the same `sr_pool` scan the SR-padding loop
+    left off — moving the whole stage makes every one of them helper-local
+    and none of them crosses a function boundary. Do NOT extract the SR side
+    alone: that would force a context object, since the cross-backfill would
+    have to receive `pool_idx`/`per_game_counts`/`sr_pool`/`sr_candidates`/
+    `new_sr_items` back and hand three of them out again.
 
     Args:
         session: AsyncSession. Caller commits.
         user_id: Authenticated user's internal PK (V4: never client-supplied).
-        now_utc: The current UTC instant (D-06: converted to a local date via
-            `local_today` using the user's stored timezone).
+        today: The composition's local calendar day.
+        n: Requested puzzles per session (`sr_slots + herring_slots`, used
+            directly for the herring over-fetch and the shortfall
+            arithmetic — not re-derivable losslessly from the two slot
+            counts alone at every call site, so it is passed explicitly).
+        sr_slots: `compose_slots(n)`'s SR share.
+        herring_slots: `compose_slots(n)`'s herring share (`HERRING_SHARE`
+            cap, D-02 — never grown past by this function).
+
+    Returns:
+        `_SessionCandidates` — `sr_candidates`/`herring_candidates` summing
+        to at most `n`, plus `new_sr_items` (the subset of `sr_candidates`
+        that needs a brand-new `drill_items` row).
     """
-    settings_row = await get_or_create_settings(session, user_id=user_id)
-    n = settings_row.puzzles_per_session
-    today = local_today(settings_row.timezone, now_utc)
-
-    has_drill_items, has_pool_candidates = await _material_flags(session, user_id=user_id)
-    await _stamp_pool_eligibility(
-        session,
-        user_id=user_id,
-        settings_row=settings_row,
-        today=today,
-        has_material=has_drill_items or has_pool_candidates,
-    )
-
-    await expire_stale_sessions(session, user_id=user_id, today=today)
-
-    blob_pending_count = (await session.execute(blob_pending_stmt(user_id))).scalar_one()
-
-    open_session = await open_session_for_user(session, user_id=user_id)
-    if open_session is not None:
-        if await _discard_if_untouched_and_resized(
-            session, drill_session=open_session, requested_count=n
-        ):
-            open_session = None
-        else:
-            return await _resume_session(
-                session,
-                user_id=user_id,
-                drill_session=open_session,
-                requested_count=n,
-                blob_pending_count=blob_pending_count,
-            )
-
-    # Step 3b (190.1 bug fix): a completed session still inside its D-10
-    # window blocks fresh composition — without this, a reload right after
-    # finishing a session composed a brand-new one (status='completed' rows
-    # are invisible to the open-session resume above), granting unlimited
-    # same-day sessions and draining the pool.
-    completed = await completed_session_in_window(session, user_id=user_id, today=today)
-    if completed is not None:
-        return await _resume_session(
-            session,
-            user_id=user_id,
-            drill_session=completed,
-            requested_count=n,
-            blob_pending_count=blob_pending_count,
-        )
-
-    sr_slots, herring_slots = compose_slots(n)
-
     # Quick task 260728-pgp: the SINGLE session-wide per-game count, threaded
     # through every SR take-site below (the due loop, the sr_needed padding
     # loop, and the herring-shortfall cross-backfill loop) — this shared
@@ -1603,34 +1584,245 @@ async def compose_and_materialize_session(
         herring_rows = list(
             (await session.execute(herring_stmt(user_id, exclude_served=False).limit(n))).scalars()
         )
+    # Phase 206 (D-02): herring_candidates is CAPPED at herring_slots and
+    # never grows past it — the pre-Phase-206 "SR side came up short -> pull
+    # EXTRA herrings" cross-backfill arm is retired. Any residual shortfall
+    # (whether from a short SR side or a short herring side) is the caller's
+    # job (compose_and_materialize_session's post-reconstruction
+    # _backfill_sharp_fillers call, D-03) — an 8-puzzle all-filler session is
+    # now 2 herrings + 6 sharp, matching the real 75/25 base rate, instead of
+    # 10 herrings skewing the critical/several prior a warm-up teaches.
     herring_candidates = herring_rows[:herring_slots]
-    herring_idx = herring_slots
 
-    # --- Cross-backfill (Pitfall 4): a short side never silently shrinks the
-    # session while the OTHER side has spare material. ---
+    # --- Cross-backfill (Pitfall 4), herring-short side only: a short
+    # herring side never silently shrinks the session while the SR side has
+    # spare material. Retiring the sibling arm above collapses this to one
+    # `if` (was `if .. elif ..`) — drops this helper's deepest path to
+    # nesting depth 3. ---
     shortfall = n - (len(sr_candidates) + len(herring_candidates))
-    if shortfall > 0:
-        if len(sr_candidates) < sr_slots:
-            # SR side came up short -> pull extra herrings, continuing the same
-            # deterministic herring_stmt ordering from where herring_slots left off.
-            herring_candidates = (
-                herring_candidates + herring_rows[herring_idx : herring_idx + shortfall]
+    if shortfall > 0 and len(herring_candidates) < herring_slots:
+        # Herring side came up short -> pull extra SR, continuing the same
+        # pool_entry_stmt scan from where sr_slots left off.
+        while shortfall > 0 and pool_idx < len(sr_pool):
+            pick = sr_pool[pool_idx]
+            pool_idx += 1
+            # Quick task 260728-pgp: same session-wide guard as the
+            # sr_needed padding loop above — never relax the cap even
+            # when backfilling a herring shortfall.
+            if per_game_counts[pick[0]] >= MAX_ITEMS_PER_GAME_PER_SESSION:
+                continue
+            per_game_counts[pick[0]] += 1
+            sr_candidates.append(pick)
+            new_sr_items.append(pick)
+            shortfall -= 1
+
+    return _SessionCandidates(
+        sr_candidates=sr_candidates,
+        herring_candidates=herring_candidates,
+        new_sr_items=new_sr_items,
+    )
+
+
+async def _backfill_sharp_fillers(
+    session: AsyncSession, *, user_id: int, shortfall: int
+) -> list[_ReconstructedPuzzle]:
+    """Draw `shortfall` puzzles from the static sharp set (D-02/D-03), the
+    new post-reconstruction stage that replaces the retired "pull extra
+    herrings" cross-backfill arm.
+
+    Three scalar inputs, one list output, no state threaded back to the
+    caller — a self-contained stage, unlike `_select_candidates`'s SR/
+    herring selection it deliberately does NOT join (it runs at a different
+    point in the pipeline — AFTER FEN reconstruction, so it can absorb
+    puzzles `compose_and_materialize_session` dropped for an unparseable
+    FEN, which the pre-reconstruction slot arithmetic cannot see).
+
+    Dedupes with a LOCAL `set[str]` of already-picked `sharp_puzzle_id`s:
+    `uq_drill_solves_session_puzzle` is `(session_id, game_id, ply)` and
+    every sharp-filler row has `game_id=None`, so Postgres's "NULLs are
+    distinct" rule means the DB constraint cannot catch a duplicate
+    `sharp_puzzle_id` within one session (D-18) — this function must.
+
+    Args:
+        session: AsyncSession. Caller commits.
+        user_id: Authenticated user's internal PK (V4: never client-supplied).
+        shortfall: Number of sharp fillers to draw (already computed by the
+            caller as `n - len(reconstructed)` post-reconstruction).
+
+    Returns:
+        Up to `shortfall` `_ReconstructedPuzzle` entries with `game_id=None`,
+        `herring_pool_id=None`, `source=DrillSource.SHARP_FILLER`, and a
+        unique (within this call) `sharp_puzzle_id`.
+    """
+    # sharp_puzzle_id is a nullable column at the type level (shared with
+    # game_id/herring_pool_id's three-arm-union shape), but every SHARP_FILLER
+    # row this query matches carries a non-None value by construction — the
+    # None-filter here is a type narrowing, not a real runtime case.
+    served = {
+        pid
+        for pid in (await session.execute(served_sharp_ids_stmt(user_id))).scalars()
+        if pid is not None
+    }
+    picks = pick_sharp_fillers(served, limit=shortfall)
+
+    picked: list[_ReconstructedPuzzle] = []
+    seen_ids: set[str] = set()
+    for puzzle in picks:
+        if puzzle.puzzle_id in seen_ids:
+            continue
+        seen_ids.add(puzzle.puzzle_id)
+        picked.append(
+            _ReconstructedPuzzle(
+                game_id=None,
+                ply=puzzle.ply,
+                fen=puzzle.fen,
+                last_move_uci=puzzle.first_move_uci,
+                side_to_move=puzzle.side_to_move,
+                source=DrillSource.SHARP_FILLER,
+                herring_pool_id=None,
+                sharp_puzzle_id=puzzle.puzzle_id,
             )
-        elif len(herring_candidates) < herring_slots:
-            # Herring side came up short -> pull extra SR, continuing the same
-            # pool_entry_stmt scan from where sr_slots left off.
-            while shortfall > 0 and pool_idx < len(sr_pool):
-                pick = sr_pool[pool_idx]
-                pool_idx += 1
-                # Quick task 260728-pgp: same session-wide guard as the
-                # sr_needed padding loop above — never relax the cap even
-                # when backfilling a herring shortfall.
-                if per_game_counts[pick[0]] >= MAX_ITEMS_PER_GAME_PER_SESSION:
-                    continue
-                per_game_counts[pick[0]] += 1
-                sr_candidates.append(pick)
-                new_sr_items.append(pick)
-                shortfall -= 1
+        )
+    return picked
+
+
+async def compose_and_materialize_session(
+    session: AsyncSession, *, user_id: int, now_utc: datetime.datetime
+) -> ComposedSession:
+    """Compose or resume a Train session at the full POOL-07 75/25 mix.
+
+    1. Resolve `train_settings` (create-on-first-touch), today's local date,
+       and the `(sr_slots, herring_slots)` split (`compose_slots`).
+    1b. D-06 (Plan 02): stamp the `pool_eligible_since` watermark if it is
+       still NULL and real material (`_material_flags`) is present — a user
+       whose first `drill_items` row is created by THIS composition call
+       also gets the eligibility floor immediately, without waiting for a
+       `GET /train/progress` read to discover it. Reuses the same
+       `_material_flags`/`_stamp_pool_eligibility` pair `get_progress`
+       already calls; stamp-if-null only, never an overwrite.
+    2. D-11: `expire_stale_sessions` closes out a stale open session before
+       anything else runs.
+    3. D-12: if an open session still exists after expiry, RESUME it
+       (`load_session_puzzles`) rather than composing a new one — this is the
+       only path taken on a second call inside an open session's window,
+       including an ad-hoc "train now" request from a future phase that hits
+       this same endpoint. EXCEPTION (191-06 UAT bug fix,
+       `_discard_if_untouched_and_resized`): an open session with ZERO
+       recorded solves whose frozen `puzzle_count` no longer matches the
+       CURRENT `puzzles_per_session` is discarded instead, falling through to
+       fresh composition below — this is what lets a same-day settings edit
+       actually take effect before the first puzzle is solved.
+    3b. D-10 guard (190.1 bug fix): if a COMPLETED session's window still
+       covers today (`completed_session_in_window`), return it instead of
+       composing fresh — completing a session must not unlock an immediate
+       replacement on reload; the next session arrives when the window rolls
+       over. Phase 191's ad-hoc "train now" (SCHD-03) will need an explicit
+       opt-out of this guard, not a bypass of the open-session resume above.
+    4. Otherwise compose fresh: due `drill_items` (most-overdue-first) padded
+       from `pool_entry_stmt` up to `sr_slots`, plus `herring_stmt` up to
+       `herring_slots` (retried with `exclude_served=False` when the source
+       is exhausted). Cross-backfill (Pitfall 4): if one side comes up short,
+       the OTHER side fills the gap up to `n`, so a lopsided pool still
+       yields a full session whenever enough total material exists.
+
+       Quick task 260728-pgp: both SR sources are capped at
+       `MAX_ITEMS_PER_GAME_PER_SESSION` per `game_id`, SESSION-WIDE, via one
+       shared `per_game_counts` Counter threaded through the due loop, the
+       `sr_needed` padding loop, and the herring-shortfall cross-backfill
+       loop. A due item deferred by the cap is skipped for THIS session only
+       and left completely untouched (`status` stays `ACTIVE`, `due_date` is
+       not modified, nothing deleted) — it resurfaces `due_date`-first next
+       session. The fresh-pool side's within-game choice is instead a
+       seeded UNIFORM RANDOM pick (`pick_one_per_game`), never earliest-ply
+       — a permanently-tracked `drill_items` row makes an earliest-ply bias
+       there permanent, unlike the due side's transient ordering. A
+       cap-shortened SR side still routes through the existing
+       cross-backfill above rather than relaxing the cap.
+    5. Reconstruct each puzzle's full FEN + arriving move via
+       `fen_and_last_move_at_ply`; a puzzle whose FEN cannot be
+       reconstructed is dropped rather than served broken (never
+       backfilled — the slot arithmetic already ran).
+    6. If nothing survives, return zero puzzles and write NO `drill_sessions`
+       row. Otherwise shuffle deterministically by `(user_id, today)` (D-09:
+       a red herring's position must not be inferable from ordering) and
+       materialize the session header plus one pre-inserted `DrillSolve` per
+       puzzle.
+    7. The `DrillSession` insert (plus any new `drill_items` padding rows) is
+       wrapped in a SAVEPOINT (`session.begin_nested()`). A concurrent second
+       composition winning the `uq_drill_sessions_user_open` race — or
+       colliding on a `drill_items` primary key from the same simultaneous
+       padding scan — raises `IntegrityError`; that partial unique index is
+       the authority for "at most one open session per user" (T-189-14), so
+       the loser resumes the winner's session instead of erroring.
+
+    Sequential awaits only — never `asyncio.gather` on this `AsyncSession`
+    (CLAUDE.md: AsyncSession is not safe for concurrent use).
+
+    Args:
+        session: AsyncSession. Caller commits.
+        user_id: Authenticated user's internal PK (V4: never client-supplied).
+        now_utc: The current UTC instant (D-06: converted to a local date via
+            `local_today` using the user's stored timezone).
+    """
+    settings_row = await get_or_create_settings(session, user_id=user_id)
+    n = settings_row.puzzles_per_session
+    today = local_today(settings_row.timezone, now_utc)
+
+    has_drill_items, has_pool_candidates = await _material_flags(session, user_id=user_id)
+    # ROADMAP Success Criterion 5 (Phase 206): widened with sharp_filler_available()
+    # so a filler-only session still stamps the eligibility floor tick_days
+    # reads — without this term a warm-up user accrues NO streak regardless
+    # of what the UI says. Do not "simplify" this third term away.
+    await _stamp_pool_eligibility(
+        session,
+        user_id=user_id,
+        settings_row=settings_row,
+        today=today,
+        has_material=has_drill_items or has_pool_candidates or sharp_filler_available(),
+    )
+
+    await expire_stale_sessions(session, user_id=user_id, today=today)
+
+    blob_pending_count = (await session.execute(blob_pending_stmt(user_id))).scalar_one()
+
+    open_session = await open_session_for_user(session, user_id=user_id)
+    if open_session is not None:
+        if await _discard_if_untouched_and_resized(
+            session, drill_session=open_session, requested_count=n
+        ):
+            open_session = None
+        else:
+            return await _resume_session(
+                session,
+                user_id=user_id,
+                drill_session=open_session,
+                requested_count=n,
+                blob_pending_count=blob_pending_count,
+            )
+
+    # Step 3b (190.1 bug fix): a completed session still inside its D-10
+    # window blocks fresh composition — without this, a reload right after
+    # finishing a session composed a brand-new one (status='completed' rows
+    # are invisible to the open-session resume above), granting unlimited
+    # same-day sessions and draining the pool.
+    completed = await completed_session_in_window(session, user_id=user_id, today=today)
+    if completed is not None:
+        return await _resume_session(
+            session,
+            user_id=user_id,
+            drill_session=completed,
+            requested_count=n,
+            blob_pending_count=blob_pending_count,
+        )
+
+    sr_slots, herring_slots = compose_slots(n)
+
+    candidates = await _select_candidates(
+        session, user_id=user_id, today=today, n=n, sr_slots=sr_slots, herring_slots=herring_slots
+    )
+    sr_candidates = candidates.sr_candidates
+    herring_candidates = candidates.herring_candidates
+    new_sr_items = candidates.new_sr_items
 
     # --- Reconstruct FENs + arriving move, dropping (never backfilling)
     # unparseable puzzles ---
@@ -1649,6 +1841,7 @@ async def compose_and_materialize_session(
                 side_to_move=mover_color_for_ply(ply),
                 source=DrillSource.SR_ITEM,
                 herring_pool_id=None,
+                sharp_puzzle_id=None,
             )
         )
     # D-10: own-game herrings are permitted, so a position can legitimately be
@@ -1668,7 +1861,20 @@ async def compose_and_materialize_session(
                 side_to_move=cast(Literal["white", "black"], pool_row.mover_color),
                 source=DrillSource.RED_HERRING,
                 herring_pool_id=pool_row.id,
+                sharp_puzzle_id=None,
             )
+        )
+    # Phase 206 (D-03): sharp filler fills EVERY residual shortfall after SR
+    # + herring reconstruction — not gated on "is this an all-filler
+    # session". Computed POST-reconstruction on purpose: it absorbs puzzles
+    # dropped above for an unparseable FEN, which the pre-reconstruction slot
+    # arithmetic in _select_candidates cannot see. This is why the sharp
+    # stage is not folded into _select_candidates — it runs at a different
+    # point in the pipeline.
+    sharp_shortfall = n - len(reconstructed)
+    if sharp_shortfall > 0:
+        reconstructed.extend(
+            await _backfill_sharp_fillers(session, user_id=user_id, shortfall=sharp_shortfall)
         )
     reconstructed = reconstructed[:n]  # defensive cap; slot arithmetic already sums to <= n
 
@@ -1683,6 +1889,7 @@ async def compose_and_materialize_session(
             blob_pending_count=blob_pending_count,
             puzzles=[],
             solved_results=[],
+            is_warmup=False,
         )
 
     # D-09: deterministic (user_id, session_date)-seeded shuffle so a red
@@ -1695,6 +1902,10 @@ async def compose_and_materialize_session(
         for puzzle in reconstructed
         if puzzle.source == DrillSource.SR_ITEM
     }
+    # Phase 206 (D-06/D-07): the warm-up discriminant is a plain equality
+    # against zero — never a ratio, never a threshold — computed from
+    # surviving_sr_keys alone and frozen onto the drill_sessions row below.
+    is_warmup = len(surviving_sr_keys) == 0
 
     try:
         async with session.begin_nested():
@@ -1721,6 +1932,7 @@ async def compose_and_materialize_session(
                 puzzle_count=len(reconstructed),
                 requested_count=n,
                 expires_on=session_window(today, settings_row.weekday_mask),
+                is_warmup=is_warmup,
             )
             session.add(drill_session)
             # Populate drill_session.id for the DrillSolve FK below, and
@@ -1745,6 +1957,7 @@ async def compose_and_materialize_session(
                         ply=puzzle.ply,
                         source=puzzle.source,
                         herring_pool_id=puzzle.herring_pool_id,
+                        sharp_puzzle_id=puzzle.sharp_puzzle_id,
                         solved_at=None,
                     )
                 )
@@ -1788,12 +2001,41 @@ async def compose_and_materialize_session(
         blob_pending_count=blob_pending_count,
         puzzles=puzzles,
         solved_results=[],
+        is_warmup=is_warmup,
     )
 
 
 # ---------------------------------------------------------------------------
 # Solve (POOL-08, Plan 05 Task 1)
 # ---------------------------------------------------------------------------
+
+
+def _wire_source(source: int) -> Literal["sr_item", "red_herring", "sharp_filler"]:
+    """Convert a `DrillSource` integer to its published wire string — the
+    SINGLE mapping site for this conversion (RESEARCH Pitfall 2). Both
+    `record_solve` (via `RecordedSolve.source`) and `reveal_for_puzzle`
+    call this rather than each hand-rolling their own ternary. Exhaustive
+    over `DrillSource` and raises on an unrecognized member rather than
+    defaulting — a two-way `if/else` here would silently mislabel a third
+    source as `"red_herring"` with no exception and no test failure unless a
+    test explicitly checks that source's wire value (Success Criterion 8).
+
+    Args:
+        source: A `DrillSource` value (or the raw stored SMALLINT).
+
+    Returns:
+        The published wire string for that source.
+
+    Raises:
+        ValueError: `source` is not a recognized `DrillSource` member.
+    """
+    if source == DrillSource.SR_ITEM:
+        return "sr_item"
+    if source == DrillSource.RED_HERRING:
+        return "red_herring"
+    if source == DrillSource.SHARP_FILLER:
+        return "sharp_filler"
+    raise ValueError(f"Unrecognized DrillSource value: {source!r}")
 
 
 @dataclass(frozen=True)
@@ -1804,12 +2046,19 @@ class RecordedSolve:
     keeps its exact prior meaning (the SR ladder verdict, `move_quality !=
     "wrong"`). Both are always populated with the FIRST recorded outcome,
     even on a re-submit with a different tier.
+
+    Phase 206: `source` mirrors `puzzle_type`'s existing shape — populated
+    from `_wire_source(solve_row.source)`, landing on `SolveResponse`
+    synchronously with the solve mutation (RESEARCH Pitfall 1) so the three
+    D-19 frontend predicates never depend on the separate, asynchronous
+    reveal fetch.
     """
 
     correct_guess: bool
     correct_move: bool
     move_quality: Literal["good", "inaccuracy", "wrong"]
     puzzle_type: Literal["sharp", "soft", "herring"]
+    source: Literal["sr_item", "red_herring", "sharp_filler"]
     item_status: Literal["active", "mastered", "parked"] | None
     streak: int | None
     due_date: datetime.date | None
@@ -1822,13 +2071,20 @@ async def _classify_solve_puzzle_type(
     """Server-side puzzle-type classification at solve/reveal time (D-01).
 
     A red herring is always `"herring"` (no `game_flaws` row exists for it).
-    An SR-source row reads the LIVE `game_flaws.missed_pv_lines` blob — never
-    a snapshot — so a reclassified-away flaw naturally falls through
+    A sharp filler is always `"sharp"` (D-15 — D-13's offline MultiPV-5
+    verification pass at authoring time is what makes this constant
+    assertion provably true rather than assumed; no `game_flaws` row exists
+    for it either). Both early returns sit above the `game_flaws` read so
+    the "no blob read for a non-SR source" invariant reads as one visual
+    block. An SR-source row reads the LIVE `game_flaws.missed_pv_lines` blob
+    — never a snapshot — so a reclassified-away flaw naturally falls through
     `classify_puzzle_type`'s None-blob default of `"soft"` rather than
     failing the solve.
     """
     if solve.source == DrillSource.RED_HERRING:
         return "herring"
+    if solve.source == DrillSource.SHARP_FILLER:
+        return "sharp"
     flaw_row = (
         await session.execute(
             select(GameFlaw)
@@ -2022,6 +2278,14 @@ async def _mark_session_complete_if_done(
             or_(
                 DrillSolve.source != DrillSource.RED_HERRING,
                 HerringPool.id.isnot(None),
+            ),
+            # Phase 206 (SEED-123 symmetry): a sharp filler with a NULL
+            # identity column cannot be served (`load_session_puzzles`
+            # already `continue`s past it), so it must not pin the session
+            # open either.
+            or_(
+                DrillSolve.source != DrillSource.SHARP_FILLER,
+                DrillSolve.sharp_puzzle_id.isnot(None),
             ),
         )
     )
@@ -2327,6 +2591,7 @@ async def record_solve(
         correct_move=stored_correct_move,
         move_quality=stored_move_quality,
         puzzle_type=puzzle_type,
+        source=_wire_source(solve_row.source),
         item_status=item_status,
         streak=streak,
         due_date=due_date,
@@ -2363,8 +2628,12 @@ class RevealedPuzzle:
     # post-attempt 409 gate as every other answer-key field.
     played_in_game_move_uci: str | None
     puzzle_type: Literal["sharp", "soft", "herring"]
-    source: Literal["sr_item", "red_herring"]
+    source: Literal["sr_item", "red_herring", "sharp_filler"]
     has_tactic_lines: bool
+    # Phase 206 (D-20): the sharp filler's motif label, read straight from
+    # the committed data file's precomputed `motif` column. None for every
+    # SR_ITEM/RED_HERRING row — there is no motif taxonomy for those today.
+    motif: str | None
 
 
 async def reveal_for_puzzle(
@@ -2433,6 +2702,14 @@ async def reveal_for_puzzle(
         # result, used to not exist at all). Never invent a new "reveal with
         # an empty FEN" state for this case.
         return "not_found"
+    # Phase 206 (RESEARCH Pitfall 2, site 1): the sharp set is an in-memory
+    # dict, not a table — it cannot become a third `outerjoin` above, so it
+    # is resolved here by `sharp_puzzle_id` instead.
+    sharp_row = (
+        SHARP_SET_BY_ID.get(solve.sharp_puzzle_id)
+        if solve.source == DrillSource.SHARP_FILLER
+        else None
+    )
 
     # D-06 (T-192-02 mitigation): the position lookup resolves the SOURCE
     # GAME'S OWNER (`game.user_id`), not the solving `user_id` — a red
@@ -2462,9 +2739,14 @@ async def reveal_for_puzzle(
     # P-03: game_flaws.fen is board_fen() only (no castling/en-passant) —
     # reconstruct the full FEN the same way composition did. D-03: a herring
     # always reads its FEN off the pool row (never the PGN), alive game-link
-    # or not — the only exception to "game is None -> degrade" above.
+    # or not. Phase 206: a sharp filler always reads its FEN off the
+    # in-memory data file — both are exceptions to "game is None -> degrade"
+    # above; a real three-way branch (RESEARCH Pitfall 2), not a fourth `if`
+    # bolted onto the pre-Phase-206 two-way shape.
     if solve.source == DrillSource.RED_HERRING:
         fen = herring_row.fen if herring_row is not None else ""
+    elif solve.source == DrillSource.SHARP_FILLER:
+        fen = sharp_row.fen if sharp_row is not None else ""
     else:
         # The not_found gate above already excluded (game is None and
         # source == SR_ITEM), so game is guaranteed non-None here — narrowed
@@ -2483,9 +2765,20 @@ async def reveal_for_puzzle(
         except (ValueError, chess.IllegalMoveError, AssertionError):
             played_in_game_move_uci = None  # never raise on an unparseable move_san
 
+    motif: str | None = None
     if solve.source == DrillSource.RED_HERRING:
         puzzle_type: Literal["sharp", "soft", "herring"] = "herring"
         has_tactic_lines = False
+    elif solve.source == DrillSource.SHARP_FILLER:
+        # D-15: constant, not derived — D-13's offline MultiPV-5 verification
+        # pass at authoring time is what makes this assertion provably true.
+        puzzle_type = "sharp"
+        # D-20: no tactic-lines pointer for a foreign lichess puzzle — the
+        # tactic-lines endpoint reads game_flaws, which does not exist here.
+        has_tactic_lines = False
+        # D-20: the label is free — already in the data file, no runtime
+        # camelCase-theme -> display-label map needed (RESEARCH Pitfall 3).
+        motif = sharp_row.motif if sharp_row is not None else None
     else:
         # Same not_found-gate invariant as above: source == SR_ITEM implies
         # game is not None by this point.
@@ -2514,8 +2807,12 @@ async def reveal_for_puzzle(
         played_in_game_san=played_in_game_san,
         played_in_game_move_uci=played_in_game_move_uci,
         puzzle_type=puzzle_type,
-        source="sr_item" if solve.source == DrillSource.SR_ITEM else "red_herring",
+        # Phase 206 (RESEARCH Pitfall 2, site 4 — the highest-risk site: this
+        # line fails silently, no exception, if left as the old two-way
+        # ternary). _wire_source is exhaustive over DrillSource.
+        source=_wire_source(solve.source),
         has_tactic_lines=has_tactic_lines,
+        motif=motif,
     )
 
 

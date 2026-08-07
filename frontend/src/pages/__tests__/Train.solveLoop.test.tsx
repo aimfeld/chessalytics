@@ -112,6 +112,7 @@ const SESSION_RESPONSE: TrainSessionResponse = {
     { position: 1, game_id: 100, ply: 20, fen: START_FEN, side_to_move: 'white', last_move_uci: 'd7d5' },
   ],
   solved_results: [],
+  is_warmup: false,
 };
 
 const SOLVE_RESPONSE: SolveResponse = {
@@ -347,6 +348,7 @@ describe('Train solve loop (end-to-end tracer)', () => {
         { position: 8, game_id: 200, ply: 30, fen: REMAINING_FEN, side_to_move: 'white', last_move_uci: 'c8e6' },
       ],
       solved_results: [],
+      is_warmup: false,
     });
 
     await renderTrainPage();
@@ -384,6 +386,7 @@ describe('Train solve loop (end-to-end tracer)', () => {
         { position: 1, game_id: 200, ply: 30, fen: NEXT_FEN, side_to_move: 'white', last_move_uci: 'c8e6' },
       ],
       solved_results: [],
+      is_warmup: false,
     });
     solvePuzzle.mockResolvedValueOnce({ ...SOLVE_RESPONSE, session_complete: false });
 
@@ -437,6 +440,7 @@ describe('Train solve loop (end-to-end tracer)', () => {
         { position: 8, game_id: 200, ply: 30, fen: REMAINING_FEN, side_to_move: 'white', last_move_uci: 'c8e6' },
       ],
       solved_results: RESUMED_SOLVED_RESULTS,
+      is_warmup: false,
     });
 
     await renderTrainPage();
@@ -481,6 +485,7 @@ describe('Train solve loop (end-to-end tracer)', () => {
       blob_pending_count: 0,
       puzzles: [],
       solved_results: PROD_REPRO_SOLVED_RESULTS,
+      is_warmup: false,
     });
 
     await renderTrainPage();
@@ -553,6 +558,7 @@ describe('Train solve loop (end-to-end tracer)', () => {
         { position: 2, game_id: 200, ply: 30, fen: RESTORE_REMAINING_FEN, side_to_move: 'white', last_move_uci: 'c8e6' },
       ],
       solved_results: [{ correct_guess: true, move_quality: 'wrong' }],
+      is_warmup: false,
     });
 
     await renderTrainPage();

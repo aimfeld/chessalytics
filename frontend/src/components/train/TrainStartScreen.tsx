@@ -11,8 +11,10 @@
 
 import type { ReactElement } from 'react';
 import { format, parseISO } from 'date-fns';
+import { Dumbbell } from 'lucide-react';
 import { Link } from 'react-router';
 import { Button } from '@/components/ui/button';
+import { Card } from '@/components/ui/card';
 import { EmptyState } from '@/components/ui/empty-state';
 import { LoadError } from '@/components/ui/load-error';
 import { TRAIN_CTA_BUTTON_CLASS } from '@/components/train/buttonStyles';
@@ -73,21 +75,53 @@ const LANDING_CONTAINER_CLASS =
  */
 const LANDING_CARD_GRID_CLASS = 'grid w-full grid-cols-1 gap-4 sm:grid-cols-2';
 
+/**
+ * The warm-up banner's two body strings (206 UAT round 1, refining D-09).
+ *
+ * `is_warmup` is a single server flag covering two causes (D-06): the
+ * cold-start user whose games have not yielded analyzed blunders yet, and the
+ * caught-up user who has reviewed everything and is waiting on the next due
+ * date. D-09's original single string ("None of your own mistakes are due
+ * today — these are practice puzzles.") was true for both but explained
+ * neither.
+ *
+ * `next_due_date` discriminates them exactly: it is null only in the
+ * cold-start case, and it is already read here for the "Next review" clause.
+ * Keep these two strings mutually exclusive and each one true ONLY of its own
+ * case — telling a caught-up user their games are being analyzed is false, and
+ * that falsehood is the reason D-09 reached for one string in the first place.
+ */
+const WARMUP_BODY_COLD_START =
+  "We're analyzing your games to find your blunders. In the meantime, here are some practice puzzles.";
+const WARMUP_BODY_CAUGHT_UP =
+  "You're all caught up on your own mistakes. In the meantime, here are some practice puzzles.";
+
 type LandingState =
   | { kind: 'loading' }
   | { kind: 'error' }
   | { kind: 'empty' }
   | { kind: 'completed'; score: number; totalPoints: number; nextSessionDate: string }
-  | { kind: 'resume'; solved: number; total: number }
-  | { kind: 'short'; puzzleCount: number }
+  | { kind: 'resume'; solved: number; total: number; isWarmup: boolean }
+  | { kind: 'warmup'; puzzleCount: number }
   | { kind: 'fresh'; puzzleCount: number };
 
 /**
  * Single explicit resolution of the six landing states. Order matters:
  * loading/error must be checked first; empty (no session_id) before any
  * puzzle-count math; completed/resume (both require solved_count > 0, or
- * solved_count === puzzle_count) before short/fresh (both require
+ * solved_count === puzzle_count) before warmup/fresh (both require
  * solved_count === 0) — see 190-04-PLAN.md's must_haves.
+ *
+ * Phase 206 (D-06/D-07/D-08): the 'warmup' kind replaces the dead 'short'
+ * kind (F-03: a sharp-filler backfill means a session is now always full,
+ * so puzzle_count < requested_count never legitimately fires). The
+ * discriminant is the server-persisted TrainSessionResponse.is_warmup
+ * boolean — a single equality check, no client arithmetic over counts
+ * (T-191-24). is_warmup is ALSO carried on the 'resume' variant (not only
+ * a standalone 'warmup' kind): a partially-solved session resolves to
+ * 'resume', never 'warmup', so without isWarmup on 'resume' too the label
+ * would be dropped the moment the user solves one puzzle — contradicting
+ * the "the label survives leaving and resuming the session" contract.
  */
 function resolveLandingState(
   session: TrainSessionResponse | null,
@@ -123,12 +157,15 @@ function resolveLandingState(
     };
   }
   if (session.solved_count > 0 && session.solved_count < session.puzzle_count) {
-    return { kind: 'resume', solved: session.solved_count, total: session.puzzle_count };
+    return {
+      kind: 'resume',
+      solved: session.solved_count,
+      total: session.puzzle_count,
+      isWarmup: session.is_warmup,
+    };
   }
-  // Both conditions required (D-02): a full session with pending blobs shows
-  // no notice, and a short session with zero pending blobs shows fresh copy.
-  if (session.blob_pending_count > 0 && session.puzzle_count < session.requested_count) {
-    return { kind: 'short', puzzleCount: session.puzzle_count };
+  if (session.is_warmup) {
+    return { kind: 'warmup', puzzleCount: session.puzzle_count };
   }
   return { kind: 'fresh', puzzleCount: session.puzzle_count };
 }
@@ -267,7 +304,7 @@ export function TrainStartScreen({
     );
   }
 
-  // 193 UAT round 3: the fresh/short states' puzzle count moved OFF its own
+  // 193 UAT round 3: the fresh/warmup states' puzzle count moved OFF its own
   // loose line and into the label, matching the shape 'resume' already used.
   // Two states describing the same button no longer disagree on where the
   // number lives, and the fresh state drops a whole line above the CTA.
@@ -276,6 +313,23 @@ export function TrainStartScreen({
       ? `Resume session — ${state.solved} of ${state.total} done`
       : `Start session — ${state.puzzleCount} ${state.puzzleCount === 1 ? 'puzzle' : 'puzzles'}`;
 
+  // D-06/D-08: is_warmup and next_due_date are independent signals — is_warmup
+  // alone decides whether the banner renders, next_due_date alone decides
+  // whether the "Next review" clause appears inside it. Neither blocks nor
+  // defaults the other (UI-SPEC row 5).
+  const isWarmupState = state.kind === 'warmup' || (state.kind === 'resume' && state.isWarmup);
+  const nextDueDate = progress.isPending || progress.isError ? null : (progress.data?.next_due_date ?? null);
+  // 206 UAT round 1: D-09 shipped ONE body string covering both warm-up causes.
+  // It was true in both but explained neither, so the cold-start user — the
+  // case this phase exists for — was told what was absent rather than what was
+  // happening. The body now branches on the SAME `nextDueDate` signal the
+  // "Next review" clause already reads, so no new client-side state is
+  // consulted (D-06's actual constraint was against reading `pool_state`, not
+  // against varying copy). The split is load-bearing for honesty: a caught-up
+  // user has nothing being analyzed, so the cold-start sentence would be a
+  // false statement for them.
+  const warmupBody = nextDueDate === null ? WARMUP_BODY_COLD_START : WARMUP_BODY_CAUGHT_UP;
+
   // 193 UAT round 2: the CTA moved ABOVE the cards. With the stats boxed into
   // card chrome, leaving Start/Resume underneath them pushed the one action on
   // the page below a screenful of read-only numbers.
@@ -283,6 +337,20 @@ export function TrainStartScreen({
     <div className={LANDING_CONTAINER_CLASS} data-testid="train-start-screen">
       <TrainReminderResurfaceBanner />
       <TrainHeader />
+      {isWarmupState && (
+        <Card className="w-full p-4" data-testid="train-warmup-banner">
+          <div className="flex items-center gap-2">
+            <Dumbbell className="size-4 shrink-0" aria-hidden="true" />
+            <p className="text-sm font-semibold" data-testid="train-warmup-banner-title">
+              Warm-up session
+            </p>
+          </div>
+          <p className="mt-1 text-sm text-muted-foreground" data-testid="train-warmup-banner-body">
+            {warmupBody}
+            {nextDueDate !== null && ` Next review: ${format(parseISO(nextDueDate), 'MMM d, yyyy')}.`}
+          </p>
+        </Card>
+      )}
       <Button
         variant="default"
         className={TRAIN_CTA_BUTTON_CLASS}
@@ -291,9 +359,6 @@ export function TrainStartScreen({
       >
         {buttonLabel}
       </Button>
-      {state.kind === 'short' && (
-        <p className="text-sm text-muted-foreground">More of your games are still being analyzed.</p>
-      )}
       <div className={LANDING_CARD_GRID_CLASS}>
         <TrainStreakCard />
         <TrainStatsCard />
