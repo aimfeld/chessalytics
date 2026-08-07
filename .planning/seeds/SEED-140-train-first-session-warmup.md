@@ -90,12 +90,21 @@ a session.
   label, even though it is their first. Conversely a returning user whose material has run dry
   gets the warm-up again. Derive the state from what composition actually produced, never from
   "is this their first session".
-  The natural discriminant is **the presence of sharp filler**: herrings at the normal
-  `HERRING_SHARE` are what every healthy session already contains, whereas sharp filler exists
-  only because the SR side could not fill its slots. Open sub-question for the planner: whether
-  a *partially* short session (say 6 real blunders topped up with 2 filler) deserves the full
-  warm-up framing or something softer, closer to the existing short-session notice at
-  `TrainStartScreen.tsx:130`. A hard ordinal rule is wrong either way.
+- **The discriminant is zero, not a threshold (DECIDED).** Show warm-up framing **only when the
+  composed session contains no puzzle sourced from the user's own blunders at all**. One
+  qualifying blunder is enough to make it an ordinary, unlabeled session, however much filler
+  sits alongside it — calling a session that drills a real mistake of theirs a "warm-up" would
+  undersell it. Concretely: warm-up ⟺ the composed session has zero `DrillSource.SR_ITEM`
+  puzzles (`len(surviving_sr_keys) == 0` at `train_repository.py:1693-1697`).
+  Two implementation notes that follow from it:
+  - **Server-computed, like `pool_state`.** Surface a boolean on the session response rather
+    than letting the client count sources. This mirrors the existing convention documented at
+    `TrainStartScreen.tsx:157-162` (T-191-24): "The client performs no arithmetic over
+    `mastered_count`/`waiting_count`/`blob_pending_count` to pick between them."
+  - **It must survive resume.** `_resume_session` re-serves an existing session, so the flag
+    has to be derived from the stored `drill_solves.source` rows (or persisted on
+    `drill_sessions`), not recomputed from current pool state — otherwise a warm-up reloaded
+    after the lottery lands would silently shed its label mid-session.
 - **Deliberately easy.** The warm-up's job is teaching the mechanic (the critical/several
   guess, the board, the reveal), not benchmarking the user. Clarity beats calibration.
 - **Sharp puzzles come from a small static lichess set.** The vendored CC0 fixtures at
