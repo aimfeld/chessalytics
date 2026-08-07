@@ -90,8 +90,14 @@ still being analyzed.
 - **Mixed with several-fine-moves positions.** A lichess-only warm-up has the mirror-image
   degeneracy of a herring-only one: every lichess puzzle is critical, so the guess would always
   be "critical." The mix is what makes the guess real.
-- **Labeled and uncounted.** Explicitly framed as a warm-up; no streak credit, no points that
-  read as session performance.
+- **Labeled, but otherwise a normal session.** Explicitly framed as a warm-up in the UI, and
+  that is the ONLY difference — it accrues streak and scores exactly like any other session
+  (user decision, 2026-08-07). The earlier "fake streak day" objection applied specifically to
+  the *degenerate* all-herring session, where always guessing "several" scored 100%; once the
+  filler mix is honest, the streak measures what it is meant to measure — that the user showed
+  up and trained. Treating it uniformly also removes special-casing from scoring and streak
+  settling. **See the `pool_eligible_since` gotcha below — this constraint is a silent no-op
+  without it.**
 
 ### Locked constraints
 
@@ -184,9 +190,14 @@ Consequences to design for, all acceptable under this decision:
   an all-filler session of 8 is roughly 6 sharp + 2 herrings, so a set of ~50 low-rated lichess
   positions covers about a week before any repeat. Cheap to seed, and it keeps the degenerate
   case (a user who genuinely waits) from looking threadbare.
-- **No streak until real material.** Filler sessions do not count (see the locked constraints),
-  so a user in an extended wait sees no streak progress. That is the honest outcome and is
-  preferred over crediting filler.
+- **`pool_eligible_since` must be stamped for filler sessions too, or the streak decision is
+  a silent no-op.** `_stamp_pool_eligibility` (`train_repository.py:558-561`) returns early
+  without stamping when `has_material` is false, and `has_material` is
+  `has_drill_items or has_pool_candidates` — filler satisfies neither. That watermark is the
+  D-06 floor handed to `tick_days` (`:584-585`), so with it NULL a warm-up user accrues no
+  streak at all regardless of what the UI says. The fix is to widen the stamp condition to
+  "has material OR was served a filler session". Nothing about this failure is visible in
+  types or tests; it just quietly never ticks.
 
 Related: [[project_prod_log_retention_use_sentry]] is not involved here; the relevant prior
 context is the Train pool/scheduler work in `.planning/milestones/v2.9-phases/189-*` and
