@@ -166,6 +166,65 @@
 | 203. PWA Install Re-prompting & Train-Anchored Install Offer (SEED-134, v2.11) | 4/4 | Complete | 2026-08-02 |
 | 204. Push Reminder Delivery Reliability (SEED-135, v2.12) | 3/3 | Complete | 2026-08-03 |
 | 205. Train Grading Oracle Agreement (SEED-137, v2.12) | 2/2 | Complete    | 2026-08-04 |
+| 206. Train Warm-Up Sessions & Sharp Filler Pool (SEED-140, unassigned) | 0 plans | Not planned | — |
+
+## Active Phases (unassigned milestone)
+
+Phases added after the v2.12 close and not yet assigned to a milestone. `/gsd-new-milestone` folds these into the next milestone section; until then they are active work, not backlog.
+
+### Phase 206: Train Warm-Up Sessions & Sharp Filler Pool
+
+**Goal**: A Train session that contains none of the user's own analyzed blunders stops silently masquerading as a normal session. When the SR side is empty, the user gets an explicitly labeled warm-up built from an honest mix of sharp static puzzles and several-fine-moves red herrings — not a full deck of herrings whose critical/several answer is always "several". The same static sharp set becomes the co-filler for *any* SR shortfall, so no session's critical/several base rate is skewed by the backfill. Backend + frontend, one migration expected (a third `DrillSource` value + a nullable static-puzzle identity column).
+
+**Depends on**: Phase 189 (drill pool, session composition, `DrillSource`, `drill_solves`), Phase 192 (`herring_pool` and the exhaustion contract the sharp set must mirror), Phase 193 (`pool_eligible_since` / `tick_days`, which the warm-up must not silently bypass), Phase 205 (the dead band that made SR material scarcer, raising how often this fires)
+
+**Requirements**: TBD (derive at planning; source is SEED-140)
+
+**Source**: [SEED-140](../seeds/SEED-140-train-first-session-warmup.md) — planted 2026-08-07 during `/gsd-explore` from "new user imports, trains immediately, gets only red herrings". The seed's original question ("do red herrings enter the SR rotation?") was **checked and answered: they do not** (`train_repository.py:1701-1715`, `:1659-1672`, POOL-08 at `:2178`). The SR ladder is uncontaminated; the defect is purely session *composition* and what the user is told about it. Do not re-derive that.
+
+**Scope**:
+
+- **The defect — two correct code paths combining into a pathological one.** The cross-backfill (`train_repository.py:1609-1618`) fills every empty SR slot with herrings so a short side never silently shrinks the session; with zero analyzed blunders that makes all `n` slots herrings. That in turn guarantees `puzzle_count == requested_count`, so the "still analyzing" notice at `TrainStartScreen.tsx:130` — gated on `blob_pending_count > 0 && puzzle_count < requested_count` — can never fire. The user is told nothing. Consequences in severity order: every `herring_pool` row is by construction a several-genuinely-fine-moves position, so the binary guess is **always** "several" and a user who works this out scores 100% having learned an actively harmful prior about their own games; a perfect score and a streak day for zero learning; and `n` herrings permanently retired per session from a manually generated pool (`herring_stmt(..., exclude_served=True)`, `train_pool.py:731-740`).
+- **Trigger is material scarcity, NOT session ordinal.** Never derive this from "is this their first session". A user who imports, plays bots for a while, then opens Train with blunders already analyzed gets an ordinary unlabeled session; a returning user whose material ran dry gets the warm-up again.
+- **The discriminant is zero, not a threshold (DECIDED).** Warm-up framing ⟺ the composed session contains **no** `DrillSource.SR_ITEM` puzzle at all (`len(surviving_sr_keys) == 0` at `train_repository.py:1693-1697`). One qualifying blunder makes it an ordinary session however much filler sits beside it.
+- **Server-computed and resume-stable.** Surface a boolean on the session response rather than letting the client count sources (the existing convention, `TrainStartScreen.tsx:157-162` / T-191-24). It must be derived from stored `drill_solves.source` rows or persisted on `drill_sessions` — `_resume_session` re-serves an existing session, so a flag recomputed from *current* pool state would silently shed its label mid-session once the lottery lands.
+- **Sharp puzzles come from a small static lichess set.** The vendored CC0 fixtures `fixtures/tagger/detector_fixture_{train,test}.csv` already carry `FEN,PreFlawFEN,FirstMove,PV,Themes,Rating` — Train's puzzle shape including the arriving move, plus a Glicko rating from millions of real solves. Selecting ~50 low-rated unambiguous positions is data selection, not new infrastructure. Deliberately easy: the warm-up teaches the mechanic, it does not benchmark the user.
+- **The sharp pool is a general SR-shortfall filler, and that is load-bearing rather than optional.** Today *every* shortfall is backfilled with herrings alone, skewing that session's base rate toward "several"; a sharp co-filler keeps it honest wherever a shortfall occurs. It is also the mechanism the no-material fallback runs on (below), so plan the two together.
+- **Labeled, but otherwise a normal session (user decision 2026-08-07).** It accrues streak and scores exactly like any other session — the earlier "fake streak day" objection applied specifically to the degenerate all-herring case, and an honest mix removes it. Uniform treatment also keeps special-casing out of scoring and streak settling.
+
+**Locked constraints (do not re-open)**:
+
+1. **Warm-up sharp puzzles must not enter the SR rotation** — structurally guaranteed, not merely conventional: `drill_items` has PK `(user_id, game_id, ply)` with `game_id` a `ForeignKey("games.id")` (`app/models/drill_item.py:80-83`), and a lichess puzzle has no `games` row, so the database refuses it. No `drill_items` row means no `streak`/`ever_correct`/`due_date` for `_advance_drill_item` to touch. This is a positive argument for the lichess source over the discarded "sample other users' analyzed blunders" alternative, whose rows *do* exist in `games`.
+2. **No rating-matching for red herrings** — explicitly out of scope; a several-fine-moves position barely depends on solver strength, and 25% of every real session is already sampled across all users' games.
+3. **Repeats while material is scarce, but never deepens** — if the lottery still hasn't delivered by the next session, serve filler again rather than an empty screen. Same easy warm-up every time; no deepening or leveling filler track.
+4. **No tier-1 enqueue on import — DECIDED, explicitly rejected by the user 2026-08-07.** A new user's games are analyzed by the ES lottery like everyone else's. Do not reintroduce this as a "small optimization".
+
+**Plan-time decisions to resolve explicitly (not default)**:
+
+1. **Where the warm-up's several-fine-moves positions come from** (the seed leaves this open): from `herring_pool` — reuses the whole serve/reveal/solve machinery, but every serve permanently retires that herring for the user; or fully static — burns nothing, but needs a serve path that does not go through `drill_solves`, which every reveal and progress surface reads today.
+2. **Whether generic tactics should fill `pool_state == "exhausted"` days.** That is where the sharp co-filler would most often fire beyond the cold-start case, and it currently renders the "Next review: {date}" empty state. Filling those days dilutes the your-own-mistakes thesis. Decide it deliberately; do not let it fall out of the backfill change.
+3. **Whether to cap the herring cross-backfill at `HERRING_SHARE`** independently of the warm-up. Worth doing on its own merits — it stops the silent all-filler session and makes the existing short-session notice start firing correctly — but it changes composition for existing users, so scope it consciously.
+
+**Success Criteria** (what must be TRUE):
+
+1. A user whose composed session contains zero `DrillSource.SR_ITEM` puzzles sees an explicitly labeled warm-up, and that label survives leaving and resuming the session even if the ES lottery lands in between.
+2. A user with at least one qualifying blunder sees an ordinary unlabeled session, however much filler accompanies it — and the label is never derived from session ordinal anywhere in the stack.
+3. A warm-up session's critical/several answer is genuinely mixed: neither always-"several" (today's all-herring deck) nor always-"critical" (an all-lichess deck).
+4. No warm-up or filler puzzle ever produces a `drill_items` row, and no static sharp puzzle can acquire SR state.
+5. **`pool_eligible_since` is stamped for filler-only sessions.** `_stamp_pool_eligibility` (`train_repository.py:558-561`) returns early unless `has_drill_items or has_pool_candidates`, and filler satisfies neither; that watermark is the D-06 floor handed to `tick_days` (`:584-585`), so with it NULL a warm-up user accrues **no streak at all** regardless of what the UI says. The "accrues streak like any other session" decision is a silent no-op without this, and nothing about the failure is visible in types or tests — prove it with a test that goes red when the widened condition is reverted.
+6. The `puzzle_type !== 'herring'` "this is one of the user's own games" proxy is replaced by a `source`-based predicate at **all** sites together (`TrainReveal.tsx:874`, `:915-917`, `:925`, `:1266`) — a foreign sharp puzzle satisfies the old expression, would render your-game prose, and would then fail to load a game the user does not own.
+7. The static sharp set has a stable no-repeat ordering that degrades to repeats once exhausted, mirroring `herring_stmt`'s documented contract (`train_pool.py:683-698`), and is sized for several days rather than one session (~50 positions ≈ a week at ~6 sharp per all-filler session of 8).
+8. Each production change is mutation-tested (revert it, confirm the test goes red) rather than accepted on symbol presence.
+
+**Non-goals**: an automatic tier-1 fast path on import (rejected, constraint 4); rating-matched red herrings; a pool generator or new sampling infrastructure for the sharp set (it is a static selection from committed CC0 fixtures); a deepening/leveling filler track; a `bu` best-move key on the server answer key (out of scope since Phase 205, still an eval-pipeline change).
+
+**Plans**: 0 plans
+
+Plans:
+
+- [ ] TBD (run `/gsd-plan-phase 206` to break down)
+
+**UI hint**: small — a warm-up label/framing on the Train start and session surfaces, plus the `source`-based rewrite of the your-game predicate in `TrainReveal`. No new pages, no new components expected beyond the label treatment.
 
 ## Backlog
 

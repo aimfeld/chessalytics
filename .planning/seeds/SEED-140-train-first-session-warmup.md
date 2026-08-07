@@ -1,6 +1,7 @@
 ---
 id: SEED-140
-status: active
+status: promoted
+promoted_to: Phase 206 (Train Warm-Up Sessions & Sharp Filler Pool), 2026-08-07
 planted: 2026-08-07
 planted_during: /gsd-explore — "new user imports, trains immediately, gets only red herrings.
   Do red herrings enter the SR rotation? Better idea?"
