@@ -7,8 +7,9 @@ planted_during: /gsd-explore — "new user imports, trains immediately, gets onl
 trigger_when: next milestone that touches Train onboarding or the Train session-composition
   path. Not urgent-blocking, but every new signup hits it once, so it front-loads the worst
   possible first impression of Train.
-scope: small-to-medium (a static warm-up puzzle set + a serve path + a landing state; no new
-  sampling infrastructure, no new pool generator, no schema for rating-matching)
+scope: medium (a static sharp puzzle set + a serve path + a landing state, plus a third
+  `DrillSource` value and the `puzzle_type`-to-`source` predicate fix it forces; no new
+  sampling infrastructure, no pool generator, no rating-matching schema, no tier-1 fast path)
 ---
 
 # SEED-140: Train's first session is 100% red herrings, silently — give new users a labeled warm-up
@@ -106,7 +107,10 @@ still being analyzed.
 - **No rating-matching for red herrings.** Explicitly out of scope — a several-fine-moves
   position does not depend much on the solver's strength, and the existing production
   behavior stays as-is.
-- **First session only.** Do not build a repeatable or deepening warm-up track.
+- **Repeats while there is no SR material, but never deepens.** Not strictly one-shot: if the
+  ES lottery has still not analyzed anything by the next session, serve filler again rather
+  than an empty screen (see "Analysis Timing" below). It stays the same easy warm-up every
+  time — do not build a deepening or leveling filler track.
 
 ### Open fork for the planner
 
@@ -119,11 +123,12 @@ Where the warm-up's several-fine-moves positions come from:
   self-contained, burns nothing, but needs a serve path that does not go through
   `drill_solves`, and the reveal/progress surfaces read `drill_solves` today.
 
-## Extension: the sharp pool as a general SR-shortfall filler
+## The sharp pool as a general SR-shortfall filler (load-bearing, not optional)
 
-Once the static sharp set exists, it can serve as filler in *any* session where the SR side
-comes up short, not only the first one. The motivating argument is stronger than "it's rare
-and comes for free": today **every** SR shortfall is backfilled with herrings alone
+The static sharp set serves as filler in *any* session where the SR side comes up short, not
+only the first one. Per "Analysis Timing" below this is the mechanism the no-material fallback
+runs on, so it is part of the core scope rather than a follow-up. It also fixes a standing
+skew on its own merits: today **every** SR shortfall is backfilled with herrings alone
 (`train_repository.py:1609-1618`), which skews that session's critical/several base rate
 toward "several." A sharp co-filler keeps the base rate honest wherever a shortfall occurs.
 
@@ -155,16 +160,33 @@ warm-up ships: it stops the silent all-filler session, and it makes the existing
 notice at `TrainStartScreen.tsx:130` start firing correctly, since `puzzle_count` would then
 legitimately fall below `requested_count`.
 
-## Assumption This Scope Rests On
+## Analysis Timing — DECIDED, do not re-open
 
-The warm-up is one-shot because **real blunders are assumed available by the next day**.
-User-confirmed during the exploration, deliberately not measured. If that turns out to be
-false — plausible, given tier-3 is a global lottery rather than a per-user queue, and given
-there is no automatic tier-1 enqueue on import — then a new user hits an empty Train screen on
-day 2 and this seed's scope is wrong. The cheap way to buy down that risk is an automatic
-tier-1 enqueue of the N most recent games on first import (tier-1 fans a single game across
-the whole Stockfish pool in roughly 10s, per `eval_queue_service.py:45`), which would make
-the wait bounded and countable instead of probabilistic.
+**No tier-1 enqueue on import.** A new user's games are analyzed by the ES lottery like
+everyone else's; the expectation is that material exists by the next session. An automatic
+tier-1 fast path on first import was considered and **explicitly rejected** by the user
+(2026-08-07). Do not reintroduce it as a "small optimization" — it is a deliberate call, not
+an oversight.
+
+**The fallback when the lottery hasn't delivered:** keep serving red herrings and sharp filler
+puzzles. Never an empty Train screen, never a bare "come back later." This is why the warm-up
+is not one-shot and why the sharp-pool-as-general-filler extension above is **load-bearing
+rather than optional** — it is the mechanism the fallback runs on, so plan the two together.
+
+Consequences to design for, all acceptable under this decision:
+
+- **Filler must tolerate repetition.** For herrings this already works: `herring_stmt`'s
+  documented exhaustion contract re-runs with `exclude_served=False` once every candidate has
+  been served to that user (`app/services/train_pool.py:683-698`), so repeats are the existing
+  behavior, not new work. The static sharp set needs the same shape — a stable no-repeat
+  ordering first, then repeats.
+- **Size the static set for a few days, not one session.** Mirroring the real 75/25 base rate,
+  an all-filler session of 8 is roughly 6 sharp + 2 herrings, so a set of ~50 low-rated lichess
+  positions covers about a week before any repeat. Cheap to seed, and it keeps the degenerate
+  case (a user who genuinely waits) from looking threadbare.
+- **No streak until real material.** Filler sessions do not count (see the locked constraints),
+  so a user in an extended wait sees no streak progress. That is the honest outcome and is
+  preferred over crediting filler.
 
 Related: [[project_prod_log_retention_use_sentry]] is not involved here; the relevant prior
 context is the Train pool/scheduler work in `.planning/milestones/v2.9-phases/189-*` and
