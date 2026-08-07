@@ -119,6 +119,34 @@ Where the warm-up's several-fine-moves positions come from:
   self-contained, burns nothing, but needs a serve path that does not go through
   `drill_solves`, and the reveal/progress surfaces read `drill_solves` today.
 
+## Extension: the sharp pool as a general SR-shortfall filler
+
+Once the static sharp set exists, it can serve as filler in *any* session where the SR side
+comes up short, not only the first one. The motivating argument is stronger than "it's rare
+and comes for free": today **every** SR shortfall is backfilled with herrings alone
+(`train_repository.py:1609-1618`), which skews that session's critical/several base rate
+toward "several." A sharp co-filler keeps the base rate honest wherever a shortfall occurs.
+
+Cheap, but explicitly **not free** — three costs a planner must budget:
+
+1. **The `puzzle_type !== 'herring'` proxy breaks.** Today that expression is used as the
+   "this is one of the user's own games" predicate, documented as such at
+   `frontend/src/components/train/TrainReveal.tsx:915-917` ("the SAME one the game footer
+   below already uses, no extra field needed"), and reused at `:874`, `:925` and `:1266`.
+   A foreign *sharp* puzzle satisfies `puzzle_type !== 'herring'`, so it would render the
+   your-game guess prose and then hit the game footer and fail to load a game the user does
+   not own. **The correct predicate becomes `source`, not `puzzle_type`** — fix all sites
+   together or this ships as a bug.
+2. **Schema.** `DrillSource` is a 2-value IntEnum (`app/models/drill_solve.py:79-83`) guarded
+   by `CheckConstraint("source IN (0, 1)")` at `:114`. A third source value needs a migration,
+   plus a nullable identity column for the static puzzle — `herring_pool_id` FKs `herring_pool`
+   and cannot carry it.
+3. **A product decision that must not be inherited silently.** The state where this would
+   most often fire beyond day 1 is `pool_state == "exhausted"` (nothing due today), which
+   currently renders the "Next review: {date}" empty state. Filling those days with generic
+   tactics dilutes the your-own-mistakes thesis. Decide it deliberately; do not let it fall
+   out of the backfill change.
+
 ## Related, Independently Valuable
 
 **Cap the herring cross-backfill** so a composed session can never exceed `HERRING_SHARE`
