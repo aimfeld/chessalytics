@@ -37,7 +37,7 @@
  * see `trainRevealCache.ts` and the `restoredReveal` state below.
  */
 
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useState } from 'react';
 import type { ReactElement } from 'react';
 import { useTrainSession } from '@/hooks/useTrainSession';
 import { useTrainGradingEngine } from '@/hooks/useTrainGradingEngine';
@@ -72,18 +72,28 @@ export default function TrainPage(): ReactElement {
   );
 
   const { startSession } = trainSession;
-  const hasStartedRef = useRef(false);
   useEffect(() => {
     // FLAWCHESS-64: every /train/* endpoint 403s guests via _reject_guest
     // (app/routers/train.py:54, Phase 189 D-05 — correct, and it stays).
     // Firing this status read for a guest, or before the profile has
     // resolved, is a guaranteed 403 that reaches Sentry. canTrain requires
-    // BOTH a resolved and a non-guest profile; the ref latch — not an empty
-    // dep array — is what keeps this a once-per-mount status read now that
-    // the effect has real dependencies (it re-fires once canTrain flips
-    // from false to true as the profile resolves).
-    if (hasStartedRef.current || !canTrain) return;
-    hasStartedRef.current = true;
+    // BOTH a resolved and a non-guest profile.
+    //
+    // NO ref latch here, deliberately. A "fire only once per mount" latch
+    // looks harmless but hangs the page under StrictMode (dev): React mounts,
+    // runs this effect, unmounts, and remounts. The throwaway first pass
+    // fires the mutation, and TanStack's MutationObserver.onUnsubscribe
+    // detaches the observer from that in-flight mutation when the simulated
+    // unmount removes its last listener (query-core mutationObserver.js) —
+    // re-subscribing never re-attaches, so the result freezes at
+    // isPending:true and onSuccess never runs. The landing screen then sits
+    // on "Loading…" forever, and a reload does not help. The second effect
+    // pass calling startSession() again IS the recovery: mutate() rebuilds
+    // the mutation and re-adds the live observer. Composition is idempotent
+    // server-side (it resumes the day's open session), so the extra dev-only
+    // call is free. `startSession` is stable (see useTrainSession), so this
+    // runs once per mount in production, and again only if canTrain flips.
+    if (!canTrain) return;
     startSession();
   }, [canTrain, startSession]);
 

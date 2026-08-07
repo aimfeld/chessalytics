@@ -9,6 +9,7 @@
  * composed exactly once, no CTA), and profile-unresolved (zero calls, no
  * premature guest/non-guest assumption).
  */
+import { StrictMode } from 'react';
 import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { act, cleanup, render, screen, waitFor, fireEvent } from '@testing-library/react';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
@@ -168,18 +169,22 @@ afterAll(() => {
 
 // ─── Render helper ──────────────────────────────────────────────────────────
 
-async function renderTrainPage() {
+async function renderTrainPage({ strict = false }: { strict?: boolean } = {}) {
   const TrainPage = (await import('@/pages/Train')).default;
   const queryClient = new QueryClient({
     defaultOptions: { queries: { retry: false }, mutations: { retry: false } },
   });
-  return render(
+  const tree = (
     <MemoryRouter>
       <QueryClientProvider client={queryClient}>
         <TrainPage />
       </QueryClientProvider>
-    </MemoryRouter>,
+    </MemoryRouter>
   );
+  // `strict` mirrors main.tsx:55 — the real app renders inside <StrictMode>,
+  // so its dev double-mount is production-equivalent behavior for this page,
+  // not a test artifact. See the StrictMode case below.
+  return render(strict ? <StrictMode>{tree}</StrictMode> : tree);
 }
 
 describe('Train guest gate (FLAWCHESS-64)', () => {
@@ -232,6 +237,25 @@ describe('Train guest gate (FLAWCHESS-64)', () => {
 
     await waitFor(() => expect(composeOrResumeSession).toHaveBeenCalledTimes(1));
     expect(screen.queryByTestId('train-guest-gate')).toBeNull();
+  });
+
+  it('non-guest under StrictMode: the landing screen resolves instead of hanging on "Loading…"', async () => {
+    // Regression, dev-only symptom with a production-shaped cause (main.tsx:55
+    // wraps the app in <StrictMode>). A "fire only once per mount" ref latch in
+    // Train.tsx's mount effect suppressed the second StrictMode effect pass.
+    // That is fatal because TanStack's MutationObserver.onUnsubscribe detaches
+    // the observer from the in-flight mutation when the simulated unmount drops
+    // its last listener, and re-subscribing never re-attaches: isPending froze
+    // at true, onSuccess never fired, and the page sat on "Loading…" forever
+    // (a reload did not help). The second startSession() call is the recovery.
+    userProfileMock = { data: makeProfile({ is_guest: false }), isError: false };
+
+    await act(async () => {
+      await renderTrainPage({ strict: true });
+    });
+
+    await waitFor(() => expect(screen.getByTestId('train-start-screen')).not.toBeNull());
+    expect(screen.queryByTestId('train-session-loading')).toBeNull();
   });
 
   it('profile unresolved (still loading): zero /train/* requests, loading state renders', async () => {

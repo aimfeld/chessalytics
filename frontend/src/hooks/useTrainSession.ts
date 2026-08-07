@@ -217,9 +217,17 @@ export function useTrainSession(): UseTrainSessionResult {
     },
   });
 
+  // Depends on `.mutate` (stable for the component's lifetime — TanStack v5
+  // memoizes it on the observer) rather than on the whole `sessionMutation`
+  // result object, which is a NEW object every render. An unstable
+  // `startSession` makes any caller effect that depends on it re-run every
+  // render, which is what forced Train.tsx into a ref latch — and that latch
+  // then broke StrictMode's double-mount recovery (see Train.tsx's mount
+  // effect for the full story).
+  const { mutate: mutateSession } = sessionMutation;
   const startSession = useCallback(() => {
-    sessionMutation.mutate();
-  }, [sessionMutation]);
+    mutateSession();
+  }, [mutateSession]);
 
   const advance = useCallback(() => {
     // T-190-12 block-and-retry: never advance past a puzzle whose solve has
