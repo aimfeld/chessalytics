@@ -1,4 +1,4 @@
-import { useNavigate, useLocation, Navigate } from 'react-router-dom';
+import { useNavigate, useLocation, Navigate } from 'react-router';
 import { BarChart2, Swords, DownloadIcon, AlertTriangle } from 'lucide-react';
 import { Tabs, TabsList, TabsTrigger, TabsContent } from '@/components/ui/tabs';
 import { useUserProfile } from '@/hooks/useUserProfile';

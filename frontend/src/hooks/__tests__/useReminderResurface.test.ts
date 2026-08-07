@@ -15,8 +15,8 @@ vi.mock('@/lib/push', () => ({ getDeviceSubscription: vi.fn() }));
 const navigateSpy = vi.fn();
 let currentPathname = '/library';
 
-vi.mock('react-router-dom', async (importOriginal) => ({
-  ...(await importOriginal<typeof import('react-router-dom')>()),
+vi.mock('react-router', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('react-router')>()),
   useNavigate: () => navigateSpy,
   useLocation: () => ({ pathname: currentPathname, search: '', hash: '', state: null, key: 'test' }),
 }));

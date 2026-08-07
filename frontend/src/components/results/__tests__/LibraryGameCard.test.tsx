@@ -16,7 +16,7 @@
 
 import { afterEach, beforeAll, describe, expect, it, vi } from 'vitest';
 import { render, screen, cleanup, fireEvent } from '@testing-library/react';
-import { MemoryRouter } from 'react-router-dom';
+import { MemoryRouter } from 'react-router';
 import type { ReactNode } from 'react';
 
 // Stub Tooltip so tests don't need a TooltipProvider wrapper.

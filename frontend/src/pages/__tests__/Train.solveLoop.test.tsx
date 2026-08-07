@@ -28,7 +28,7 @@ import {
   fireEvent,
 } from '@testing-library/react';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
-import { MemoryRouter } from 'react-router-dom';
+import { MemoryRouter } from 'react-router';
 import { saveTrainRevealCache } from '@/lib/trainRevealCache';
 import type { CachedTrainReveal } from '@/lib/trainRevealCache';
 import type {
@@ -37,6 +37,22 @@ import type {
   SolvedResult,
   TrainProgressResponse,
 } from '@/types/train';
+import type { UserProfile } from '@/types/users';
+
+// FLAWCHESS-64: Train.tsx is now profile-gated (startSession() only fires
+// once useUserProfile() resolves to a non-guest profile). This file's
+// `@/api/client` mock spreads `...actual`, so `apiClient` is the REAL axios
+// instance and useUserProfile would never resolve under jsdom — leaving
+// `profile` undefined and startSession() permanently unfired. A settled
+// non-guest profile keeps this tracer's existing assertions unchanged.
+vi.mock('@/hooks/useUserProfile', () => ({
+  useUserProfile: () => ({
+    data: {
+      is_guest: false,
+    } as UserProfile,
+    isError: false,
+  }),
+}));
 
 // ─── ResizeObserver stub ────────────────────────────────────────────────────
 // jsdom has no ResizeObserver; TrainSolveScreen's useFitBoardToViewport

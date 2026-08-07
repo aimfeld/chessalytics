@@ -26,7 +26,7 @@
 
 import { afterEach, beforeAll, describe, expect, it, vi } from 'vitest';
 import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
-import { MemoryRouter } from 'react-router-dom';
+import { MemoryRouter } from 'react-router';
 
 // useEvalCoverage calls useQuery which requires a QueryClientProvider.
 // Return safe defaults so the component renders without a provider.

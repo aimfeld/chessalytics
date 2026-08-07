@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import { useLocation } from 'react-router-dom';
+import { useLocation } from 'react-router';
 import axios from 'axios';
 import { toast } from 'sonner';
 import { Star } from 'lucide-react';

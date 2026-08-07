@@ -217,9 +217,23 @@ export function useTrainSession(): UseTrainSessionResult {
     },
   });
 
+  // Every callback below depends on the mutation's own `.mutate`/
+  // `.mutateAsync`/`.reset` rather than on the whole `sessionMutation` /
+  // `solveMutation` RESULT object, which is a NEW object on every render.
+  // Those three are bound once in MutationObserver's constructor
+  // (query-core mutationObserver.js `bindMethods`) and the observer is
+  // created once per component (react-query useMutation's `useState`), so
+  // they are stable for the component's lifetime — which makes each callback
+  // below stable too.
+  //
+  // This is not a micro-optimization. An unstable callback makes any CALLER
+  // effect that depends on it re-run every render, and the workaround for
+  // that (a "fire only once" ref latch in Train.tsx's mount effect) hung the
+  // page under StrictMode — see that effect's comment for the full story.
+  const { mutate: mutateSession } = sessionMutation;
   const startSession = useCallback(() => {
-    sessionMutation.mutate();
-  }, [sessionMutation]);
+    mutateSession();
+  }, [mutateSession]);
 
   const advance = useCallback(() => {
     // T-190-12 block-and-retry: never advance past a puzzle whose solve has
@@ -240,6 +254,8 @@ export function useTrainSession(): UseTrainSessionResult {
       ? (puzzles[currentIndex] ?? null)
       : null;
 
+  const { mutateAsync: mutateSolveAsync, reset: resetSolveMutation } = solveMutation;
+
   const solvePuzzle = useCallback(
     (body: SolveRequest): Promise<SolveResponse> => {
       const sessionId = session?.session_id;
@@ -247,9 +263,9 @@ export function useTrainSession(): UseTrainSessionResult {
         return Promise.reject(new Error('No active Train session'));
       }
       setLastSolvePayload(body);
-      return solveMutation.mutateAsync({ sessionId, body });
+      return mutateSolveAsync({ sessionId, body });
     },
-    [session?.session_id, solveMutation],
+    [session?.session_id, mutateSolveAsync],
   );
 
   const retrySolve = useCallback(() => {
@@ -260,8 +276,8 @@ export function useTrainSession(): UseTrainSessionResult {
   }, [lastSolvePayload, solvePuzzle]);
 
   const resetSolve = useCallback(() => {
-    solveMutation.reset();
-  }, [solveMutation]);
+    resetSolveMutation();
+  }, [resetSolveMutation]);
 
   return {
     session,

@@ -1,7 +1,7 @@
 import { lazy, Suspense, useState, useCallback, useEffect, useRef } from 'react';
-import { Navigate, Outlet, Route, BrowserRouter as Router, Routes, useLocation, useNavigate, useSearchParams } from 'react-router-dom';
+import { Navigate, Outlet, Route, BrowserRouter as Router, Routes, useLocation, useNavigate, useSearchParams } from 'react-router';
 import * as Sentry from "@sentry/react";
-import { Link } from 'react-router-dom';
+import { Link } from 'react-router';
 import { QueryClientProvider, useQueryClient } from '@tanstack/react-query';
 import { queryClient } from '@/lib/queryClient';
 import { Toaster } from '@/components/ui/sonner';

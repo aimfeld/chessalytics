@@ -44,11 +44,11 @@ vi.mock('@/hooks/useEnqueueGame', () => ({
   useTier1Enqueue: () => ({ mutate: vi.fn(), isPending: false }),
 }));
 
-// Mock react-router-dom navigate — NoAnalysisState uses useNavigate for guest CTA.
+// Mock react-router navigate — NoAnalysisState uses useNavigate for guest CTA.
 // Link is rendered without a Router context here (FlawCard's Explore button uses
 // <Button asChild><Link>), so stub it as a plain anchor to avoid the router context.
-vi.mock('react-router-dom', async () => {
-  const actual = await vi.importActual<typeof import('react-router-dom')>('react-router-dom');
+vi.mock('react-router', async () => {
+  const actual = await vi.importActual<typeof import('react-router')>('react-router');
   return {
     ...actual,
     useNavigate: () => vi.fn(),
@@ -333,7 +333,7 @@ describe('FlawCard', () => {
     it('btn-flaw-analyze href is /analysis?game_id=42&ply=2', () => {
       render(<FlawCard flaw={makeFlaw()} />);
       const btns = screen.getAllByTestId('btn-flaw-analyze');
-      // Link renders as <a> via the react-router-dom stub
+      // Link renders as <a> via the react-router stub
       expect(btns[0]!.getAttribute('href')).toBe('/analysis?game_id=42&ply=2');
     });
 

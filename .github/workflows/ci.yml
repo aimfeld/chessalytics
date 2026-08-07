@@ -181,7 +181,7 @@ jobs:
         run: docker build -t flawchess:ci .
 
       - name: Container vulnerability scan (Trivy)
-        uses: aquasecurity/trivy-action@v0.35.0
+        uses: aquasecurity/trivy-action@v0.36.0
         with:
           image-ref: flawchess:ci
           severity: HIGH,CRITICAL

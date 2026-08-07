@@ -1,6 +1,6 @@
-import { Navigate, useNavigate } from 'react-router-dom';
+import { Navigate, useNavigate } from 'react-router';
 import { isWelcomeDismissed } from '@/lib/welcomeDismissal';
-import { Link } from 'react-router-dom';
+import { Link } from 'react-router';
 import * as Sentry from '@sentry/react';
 import { useQuery } from '@tanstack/react-query';
 import { toast } from 'sonner';

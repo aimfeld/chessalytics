@@ -1,5 +1,5 @@
 import { useState, useCallback, useEffect, useMemo, useRef } from 'react';
-import { useNavigate, useLocation, useSearchParams, Navigate, Link } from 'react-router-dom';
+import { useNavigate, useLocation, useSearchParams, Navigate, Link } from 'react-router';
 import { SlidersHorizontal, BarChart2Icon, SwordsIcon, Lightbulb, Cpu } from 'lucide-react';
 import { SidebarLayout } from '@/components/layout/SidebarLayout';
 import { Accordion, AccordionItem, AccordionTrigger, AccordionContent } from '@/components/ui/accordion';

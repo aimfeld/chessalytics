@@ -33,7 +33,7 @@
 
 import type { CSSProperties } from 'react';
 
-import { Link } from 'react-router-dom';
+import { Link } from 'react-router';
 import { Cpu, Swords } from 'lucide-react';
 
 import { EndgameGauge } from '@/components/charts/EndgameGauge';

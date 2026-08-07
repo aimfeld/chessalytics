@@ -32,11 +32,11 @@
     "onnxruntime-web": "1.27.0",
     "qrcode.react": "^4.2.0",
     "radix-ui": "^1.4.3",
-    "react": "^19.2.6",
+    "react": "^19.2.8",
     "react-chessboard": "^5.10.0",
     "react-day-picker": "^10.0.1",
-    "react-dom": "^19.2.6",
-    "react-router-dom": "^7.18.2",
+    "react-dom": "^19.2.8",
+    "react-router": "^8.3.0",
     "recharts": "^3.8.1",
     "sonner": "^2.0.7",
     "stockfish": "18.0.8",
@@ -73,10 +73,15 @@
     "vitest": "^4.1.7"
   },
   "overrides": {
-    "fast-uri": "^3.1.2",
+    "fast-uri": "^3.1.5",
     "@babel/plugin-transform-modules-systemjs": "^7.29.4",
-    "hono": "^4.12.25",
-    "undici": "^7.28.0",
-    "qs": "^6.15.2"
+    "hono": "^4.12.34",
+    "undici": "^7.29.0",
+    "qs": "^6.15.2",
+    "ip-address": "^10.3.1",
+    "postcss": "^8.5.23",
+    "@hono/node-server": "^2.0.5",
+    "brace-expansion": "^5.0.9",
+    "js-yaml": "^4.3.1"
   }
 }
