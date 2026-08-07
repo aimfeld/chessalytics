@@ -91,6 +91,10 @@ function makeVerdict(overrides: Partial<SolveResponse> = {}): SolveResponse {
     correct_move: true,
     move_quality: 'good',
     puzzle_type: 'sharp',
+    // Phase 206 (D-19): defaults to 'sr_item' so pre-existing callers that
+    // only override `puzzle_type` keep exercising the "own game" branch at
+    // all three D-19 sites exactly as before this field existed.
+    source: 'sr_item',
     item_status: 'active',
     streak: 1,
     due_date: '2026-08-01',
@@ -109,6 +113,7 @@ function makeReveal(overrides: Partial<PuzzleRevealResponse> = {}): PuzzleReveal
     puzzle_type: 'sharp',
     source: 'sr_item',
     has_tactic_lines: false,
+    motif: null,
     ...overrides,
   };
 }
@@ -387,6 +392,7 @@ describe('TrainReveal', () => {
       verdict: makeVerdict({
         correct_move: false,
         puzzle_type: 'herring',
+        source: 'red_herring',
         item_status: null,
         due_date: null,
         streak: null,
@@ -457,7 +463,13 @@ describe('TrainReveal', () => {
 
   it('a herring (item_status null) renders neither the banner nor a comeback line', () => {
     renderReveal({
-      verdict: makeVerdict({ puzzle_type: 'herring', item_status: null, due_date: null, streak: null }),
+      verdict: makeVerdict({
+        puzzle_type: 'herring',
+        source: 'red_herring',
+        item_status: null,
+        due_date: null,
+        streak: null,
+      }),
     });
     expect(screen.queryByTestId('train-flaw-fixed-banner')).toBeNull();
     expect(screen.queryByTestId('train-comeback-hint')).toBeNull();
@@ -792,6 +804,40 @@ describe('TrainReveal', () => {
     expect(screen.queryByTestId('btn-train-tactic-step')).toBeNull();
   });
 
+  // ─── Sharp filler motif line (Phase 206, D-20) ────────────────────────────
+
+  it('a non-null motif renders exactly one Motif row inside the guess card', async () => {
+    revealPuzzle.mockResolvedValue(
+      makeReveal({ source: 'sharp_filler', puzzle_type: 'sharp', motif: 'Fork' }),
+    );
+    renderReveal({ verdict: makeVerdict({ puzzle_type: 'sharp', source: 'sharp_filler' }) });
+    await waitFor(() => expect(screen.getByTestId('train-reveal-motif')).not.toBeNull());
+    expect(screen.getByTestId('train-reveal-motif').textContent).toBe('Motif: Fork');
+    expect(screen.getAllByTestId('train-reveal-motif')).toHaveLength(1);
+  });
+
+  it('a null motif (the normal SR/herring case) renders no Motif row, no placeholder, no dash', async () => {
+    revealPuzzle.mockResolvedValue(makeReveal({ motif: null }));
+    // guess set (-> non-null guessProse) so the guess CardBody itself
+    // renders regardless of motif — otherwise this test would trivially
+    // pass whenever the whole card is absent, never actually exercising
+    // the motif row's own null guard.
+    renderReveal({ guess: 'several' });
+    await waitFor(() => expect(getGame).toHaveBeenCalled());
+    expect(screen.getByTestId('train-verdict-guess-prose')).not.toBeNull();
+    expect(screen.queryByTestId('train-reveal-motif')).toBeNull();
+  });
+
+  it('the motif row text size is text-sm, never text-xs', async () => {
+    revealPuzzle.mockResolvedValue(
+      makeReveal({ source: 'sharp_filler', puzzle_type: 'sharp', motif: 'Skewer' }),
+    );
+    renderReveal({ verdict: makeVerdict({ puzzle_type: 'sharp', source: 'sharp_filler' }) });
+    const motifRow = await screen.findByTestId('train-reveal-motif');
+    expect(motifRow.className).toContain('text-sm');
+    expect(motifRow.className).not.toContain('text-xs');
+  });
+
   // ─── Opponent-and-date footer (190.1-03 D-03, Task 2) ─────────────────────
 
   it('the game-card query is disabled while the solve response is absent, and enabled once it is present', async () => {
@@ -852,7 +898,13 @@ describe('TrainReveal', () => {
   it('renders no game footer for a herring reveal', async () => {
     getGame.mockResolvedValue(makeGame());
     const { client } = renderReveal({
-      verdict: makeVerdict({ puzzle_type: 'herring', item_status: null, due_date: null, streak: null }),
+      verdict: makeVerdict({
+        puzzle_type: 'herring',
+        source: 'red_herring',
+        item_status: null,
+        due_date: null,
+        streak: null,
+      }),
     });
     // Waits for the game query to actually SETTLE (not just be dispatched) —
     // otherwise this test would pass trivially before the success branch
@@ -866,7 +918,13 @@ describe('TrainReveal', () => {
   it('renders no game-load error for a herring reveal', async () => {
     getGame.mockRejectedValue(new Error('boom'));
     const { client } = renderReveal({
-      verdict: makeVerdict({ puzzle_type: 'herring', item_status: null, due_date: null, streak: null }),
+      verdict: makeVerdict({
+        puzzle_type: 'herring',
+        source: 'red_herring',
+        item_status: null,
+        due_date: null,
+        streak: null,
+      }),
     });
     // T-192-12: a herring's game query can still reject (game_id non-null,
     // per D-08 — the in-game move survives independently of the game row's
@@ -881,6 +939,56 @@ describe('TrainReveal', () => {
   it('still renders the game footer for an SR reveal (positive control)', async () => {
     getGame.mockResolvedValue(makeGame());
     renderReveal({ verdict: makeVerdict({ puzzle_type: 'sharp' }) });
+    await waitFor(() => expect(screen.getByTestId('train-reveal-footer')).not.toBeNull());
+  });
+
+  // ─── Phase 206 D-19: source === 'sr_item' replaces puzzle_type !== 'herring' ──
+
+  it('a sharp_filler verdict (puzzle_type "sharp", same as a real SR puzzle) suppresses the mastery banner, the game footer, and the own-game guess prose all together', async () => {
+    getGame.mockResolvedValue(makeGame());
+    const { client } = renderReveal({
+      guess: 'several',
+      verdict: makeVerdict({
+        puzzle_type: 'sharp',
+        source: 'sharp_filler',
+        correct_guess: true,
+        item_status: null,
+        due_date: null,
+        streak: null,
+      }),
+    });
+    // No mastery banner (item_status is null anyway, but the source gate
+    // must ALSO suppress it independently of item_status).
+    expect(screen.queryByTestId('train-flaw-fixed-banner')).toBeNull();
+    // The non-own-game guess prose renders — same sentence a herring gets —
+    // never the SR "not the one you played in the game" variant.
+    expect(screen.getByTestId('train-verdict-guess-prose').textContent).toBe(
+      'Indeed, several moves are fine here.',
+    );
+    // No game footer, and no game-load error either — a sharp filler has no
+    // game at all (game_id is structurally null server-side).
+    await waitFor(() =>
+      expect(client.getQueryState(['library-game', 100])?.status).toBe('success'),
+    );
+    expect(screen.queryByTestId('train-reveal-footer')).toBeNull();
+  });
+
+  it('an sr_item verdict with puzzle_type "sharp" (the exact literal a sharp_filler also carries) still renders all three D-19 sites — proves the predicate reads source, not puzzle_type', async () => {
+    getGame.mockResolvedValue(makeGame());
+    renderReveal({
+      guess: 'several',
+      verdict: makeVerdict({
+        puzzle_type: 'sharp',
+        source: 'sr_item',
+        correct_guess: true,
+        item_status: 'mastered',
+        due_date: null,
+      }),
+    });
+    expect(screen.getByTestId('train-flaw-fixed-banner')).not.toBeNull();
+    expect(screen.getByTestId('train-verdict-guess-prose').textContent).toBe(
+      'Several moves are fine here, but not the one you played in the game.',
+    );
     await waitFor(() => expect(screen.getByTestId('train-reveal-footer')).not.toBeNull());
   });
 
@@ -1353,6 +1461,7 @@ describe('TrainReveal', () => {
         correct_guess: true,
         correct_move: false,
         puzzle_type: 'herring',
+        source: 'red_herring',
         item_status: null,
         due_date: null,
         streak: null,
@@ -1517,6 +1626,7 @@ describe('TrainReveal', () => {
       verdict: makeVerdict({
         correct_guess: true,
         puzzle_type: 'herring',
+        source: 'red_herring',
         item_status: null,
         due_date: null,
         streak: null,
@@ -1573,6 +1683,7 @@ describe('TrainReveal', () => {
       verdict: makeVerdict({
         correct_guess: false,
         puzzle_type: 'herring',
+        source: 'red_herring',
         item_status: null,
         due_date: null,
         streak: null,

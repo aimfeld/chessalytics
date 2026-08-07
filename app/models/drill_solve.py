@@ -55,6 +55,12 @@ identity for a herring puzzle (the source game link is nullable, D-01/D-05),
 exclusion in `herring_stmt` keys on `herring_pool_id` instead. NULL for every
 pre-Phase-192 row and every SR row (a herring's `herring_pool_id` is the only
 non-NULL case).
+
+Phase 206 (D-10/D-17): a third `DrillSource` member, `SHARP_FILLER`, backs a
+static committed CC0 lichess puzzle set (`app.services.sharp_filler`) rather
+than a table. `sharp_puzzle_id` is non-None only for a `SHARP_FILLER` row —
+`game_id` and `herring_pool_id` both stay NULL for it, mirroring how
+`herring_pool_id` is non-None only for a `RED_HERRING` row.
 """
 
 from __future__ import annotations
@@ -69,6 +75,7 @@ from sqlalchemy import (
     ForeignKey,
     SmallInteger,
     String,
+    Text,
     UniqueConstraint,
 )
 from sqlalchemy.orm import Mapped, mapped_column
@@ -77,10 +84,12 @@ from app.models.base import Base
 
 
 class DrillSource(IntEnum):
-    """Which pool a puzzle was drawn from (POOL-07 75/25 mix)."""
+    """Which pool a puzzle was drawn from (POOL-07 75/25 mix; Phase 206 adds
+    a third member for the static sharp-filler set, D-17)."""
 
     SR_ITEM = 0
     RED_HERRING = 1
+    SHARP_FILLER = 2
 
 
 class DrillGuess(IntEnum):
@@ -111,7 +120,7 @@ class DrillSolve(Base):
 
     __tablename__ = "drill_solves"
     __table_args__ = (
-        CheckConstraint("source IN (0, 1)", name="ck_drill_solves_source"),
+        CheckConstraint("source IN (0, 1, 2)", name="ck_drill_solves_source"),
         CheckConstraint("guess IS NULL OR guess IN (0, 1)", name="ck_drill_solves_guess"),
         CheckConstraint(
             "move_quality IS NULL OR move_quality IN (0, 1, 2)",
@@ -141,6 +150,12 @@ class DrillSolve(Base):
     herring_pool_id: Mapped[int | None] = mapped_column(
         ForeignKey("herring_pool.id", ondelete="SET NULL"), nullable=True
     )
+
+    # Phase 206 (D-10/D-17): the lichess PuzzleId, opaque external identifier
+    # (TEXT, not an enumeration -- CLAUDE.md DB rule). No ForeignKey — the
+    # referent is a committed data file, not a table. Non-None only for a
+    # SHARP_FILLER row; NULL for every SR_ITEM/RED_HERRING row.
+    sharp_puzzle_id: Mapped[str | None] = mapped_column(Text, nullable=True)
 
     source: Mapped[int] = mapped_column(SmallInteger, nullable=False)
     # P-02: the user's raw pre-attempt guess, submitted by the client. NULL

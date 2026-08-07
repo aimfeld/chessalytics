@@ -26,7 +26,9 @@ from app.models.drill_solve import DrillSolve
 from app.models.game import Game
 from app.models.import_job import ImportJob
 from app.models.train_settings import TrainSettings
+from app.repositories import train_repository
 from app.repositories.game_repository import bulk_insert_games
+from app.services import sharp_filler
 
 
 # ---------------------------------------------------------------------------
@@ -910,9 +912,22 @@ class TestDeleteAllGamesDrillCascade:
             )
 
     @pytest.mark.asyncio
-    async def test_compose_session_after_delete_all_returns_empty(self) -> None:
+    async def test_compose_session_after_delete_all_returns_empty(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
         """POST /train/sessions after a full delete-all returns 200 with zero
-        puzzles -- not a 500 from a dangling drill_items reference."""
+        puzzles -- not a 500 from a dangling drill_items reference.
+
+        Phase 206 (D-05): composition no longer returns an empty session
+        once real material exists in the committed sharp-filler set — this
+        test's actual regression guard is "no 500 from a dangling
+        drill_items reference" after the cascade, which is orthogonal to
+        Phase 206's backfill; the sharp set is patched empty here so the
+        original "returns empty" assertion still exercises exactly that.
+        """
+        monkeypatch.setattr(sharp_filler, "SHARP_SET", ())
+        monkeypatch.setattr(sharp_filler, "SHARP_SET_BY_ID", {})
+        monkeypatch.setattr(train_repository, "SHARP_SET_BY_ID", {})
         user_id, headers = await _register_and_login()
 
         from app.core.database import async_session_maker

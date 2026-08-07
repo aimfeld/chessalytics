@@ -21,6 +21,7 @@ from __future__ import annotations
 import datetime
 
 from sqlalchemy import (
+    Boolean,
     CheckConstraint,
     Date,
     DateTime,
@@ -86,6 +87,13 @@ class DrillSession(Base):
     completed_at: Mapped[datetime.datetime | None] = mapped_column(
         DateTime(timezone=True), nullable=True
     )
+    # Phase 206 (D-06/D-07): frozen at composition, same precedent as
+    # puzzle_count/requested_count above — is_warmup is computed exactly
+    # once (`len(surviving_sr_keys) == 0`) at composition time and never
+    # recomputed on resume, so the label provably cannot be shed mid-session
+    # even if the ES lottery lands material in between. Written and read in
+    # plan 03; this plan (206-01) only adds the column.
+    is_warmup: Mapped[bool] = mapped_column(Boolean, nullable=False, server_default="false")
 
 
 __all__ = ["DrillSession"]

@@ -166,7 +166,7 @@
 | 203. PWA Install Re-prompting & Train-Anchored Install Offer (SEED-134, v2.11) | 4/4 | Complete | 2026-08-02 |
 | 204. Push Reminder Delivery Reliability (SEED-135, v2.12) | 3/3 | Complete | 2026-08-03 |
 | 205. Train Grading Oracle Agreement (SEED-137, v2.12) | 2/2 | Complete    | 2026-08-04 |
-| 206. Train Warm-Up Sessions & Sharp Filler Pool (SEED-140, unassigned) | 0 plans | Not planned | — |
+| 206. Train Warm-Up Sessions & Sharp Filler Pool (SEED-140, unassigned) | 3/3 | Complete    | 2026-08-07 |
 
 ## Active Phases (unassigned milestone)
 
@@ -178,7 +178,7 @@ Phases added after the v2.12 close and not yet assigned to a milestone. `/gsd-ne
 
 **Depends on**: Phase 189 (drill pool, session composition, `DrillSource`, `drill_solves`), Phase 192 (`herring_pool` and the exhaustion contract the sharp set must mirror), Phase 193 (`pool_eligible_since` / `tick_days`, which the warm-up must not silently bypass), Phase 205 (the dead band that made SR material scarcer, raising how often this fires)
 
-**Requirements**: TBD (derive at planning; source is SEED-140)
+**Requirements**: WARM-01, WARM-02, WARM-03, WARM-04, WARM-05, WARM-06, WARM-07, WARM-08 (minted at planning, one per Success Criterion below in order; traceability table in `phases/206-train-warmup-sharp-filler/206-01-PLAN.md` § Requirements — this phase predates its milestone's REQUIREMENTS.md)
 
 **Source**: [SEED-140](../seeds/SEED-140-train-first-session-warmup.md) — planted 2026-08-07 during `/gsd-explore` from "new user imports, trains immediately, gets only red herrings". The seed's original question ("do red herrings enter the SR rotation?") was **checked and answered: they do not** (`train_repository.py:1701-1715`, `:1659-1672`, POOL-08 at `:2178`). The SR ladder is uncontaminated; the defect is purely session *composition* and what the user is told about it. Do not re-derive that.
 
@@ -218,11 +218,17 @@ Phases added after the v2.12 close and not yet assigned to a milestone. `/gsd-ne
 
 **Non-goals**: an automatic tier-1 fast path on import (rejected, constraint 4); rating-matched red herrings; a pool generator or new sampling infrastructure for the sharp set (it is a static selection from committed CC0 fixtures); a deepening/leveling filler track; a `bu` best-move key on the server answer key (out of scope since Phase 205, still an eval-pipeline change).
 
-**Plans**: 0 plans
+**Plans**: 3 plans
 
 Plans:
+**Wave 1**
 
-- [ ] TBD (run `/gsd-plan-phase 206` to break down)
+- [x] 206-01-PLAN.md — Sharp-filler spine: migration, third `DrillSource`, and the end-to-end vertical slice (tracer) through composition, solve, reveal, and the `source`-based your-game predicate
+
+**Wave 2** *(blocked on Wave 1 completion)*
+
+- [x] 206-02-PLAN.md — The real 200-position sharp set: one-off Stockfish-verified authoring pass and the committed CC0 data file
+- [x] 206-03-PLAN.md — The warm-up label: `is_warmup` frozen at composition, the `pool_eligible_since` widening, and the `'warmup'` landing state replacing `'short'`
 
 **UI hint**: small — a warm-up label/framing on the Train start and session surfaces, plus the `source`-based rewrite of the your-game predicate in `TrainReveal`. No new pages, no new components expected beyond the label treatment.
 

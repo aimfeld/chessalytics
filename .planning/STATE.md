@@ -2,28 +2,28 @@
 gsd_state_version: 1.0
 milestone: v2.12
 milestone_name: Train Reliability & Grading Agreement
-current_phase_name: Train Warm-Up Sessions & Sharp Filler Pool
-status: Phase 206 added, not planned
-stopped_at: "Added Phase 206 to ROADMAP (unassigned milestone) — not planned yet"
-last_updated: "2026-08-07T10:30:00.000Z"
+current_phase: 206
+status: completed
+stopped_at: Completed 206-03-PLAN.md
+last_updated: "2026-08-07T14:53:55.102Z"
 last_activity: 2026-08-07
-last_activity_desc: "Added Phase 206 — Train warm-up sessions & sharp filler pool (SEED-140)"
+last_activity_desc: Phase 206 complete
 progress:
   total_phases: 1
-  completed_phases: 0
-  total_plans: 0
-  completed_plans: 0
-current_phase: 206
+  completed_phases: 1
+  total_plans: 3
+  completed_plans: 3
+current_phase_name: train-warmup-sharp-filler
 ---
 
 # Project State: FlawChess
 
 ## Current Position
 
-Phase: 206 — Train Warm-Up Sessions & Sharp Filler Pool (SEED-140), added 2026-08-07, not planned yet
+Phase: 206
 Plan: Not started
-Status: Phase added to the neutral `## Active Phases (unassigned milestone)` section; v2.12 closed, next milestone not yet named
-Last activity: 2026-08-07 — Completed quick task 260807-dr9: FLAWCHESS-64 guest sign-up gate on /train (guests get a promote-in-place CTA instead of three guaranteed 403s) + FLAWCHESS-24 drop of unactionable axios network-error noise in Sentry beforeSend
+Status: All phases complete
+Last activity: 2026-08-07 — Phase 206 complete
 
 **v2.12 closed 2026-08-05** retroactively over two already-shipped, already-deployed phases (lightweight close, no `/gsd-new-milestone` requirements cycle — same pattern as v2.6 and v2.8):
 
@@ -630,6 +630,14 @@ v1.29 Live-Engine Analysis Page shipped 2026-06-29 — 5 phases (136–140), 14 
 - [Phase ?]: D-10 (inherited, applied): trainRevealCache.ts untouched — graceful fallback lives entirely in the consumer's single nullish default
 - [Phase ?]: rankLineForMove relocated to uciParser.ts rather than exported in place, avoiding a new hook-to-hook dependency (205-RESEARCH.md A1)
 - [Phase ?]: Phase 205 dead-band exclusion (205-02): dead_band_admissible applied live at all three SR selection sites (pool_entry_stmt, due_stmt, get_waiting_puzzle_count), never snapshotted; measured cost 34.80% of pool (24.29% band + 10.51% degenerate su==""), 260 users with material, 1 newly starved, 84.7% game retention — shipped as documented CHANGELOG number per D-02
+- [Phase ?]: D-02/D-03 landed: herring cross-backfill capped at floor(n*HERRING_SHARE), sharp filler fills every residual shortfall via a new post-reconstruction _backfill_sharp_fillers stage
+- [Phase ?]: D-19: TrainReveal.tsx your-game predicates rewritten from puzzle_type !== 'herring' to verdict.source === 'sr_item', reading SolveResponse.source synchronously to avoid the async reveal-fetch timing gap
+- [Phase ?]: compose_and_materialize_session refactored via a pure-move _select_candidates extraction (committed separately, 249->169 logic LOC) before D-02/D-03 landed (169->177), keeping it under CLAUDE.md's 200-line hard limit
+- [Phase ?]: 206-02: PER_MOTIF_CAP=16 across 13 target motifs (208 rows) -- real run hit full cap on every motif with 100% sharpness-gate acceptance, no --limit-candidates/--per-motif-cap fallback needed
+- [Phase ?]: 206-02: first_move_uci-legality checked via a self-contained structural invariant (piece at to-square belongs to the mover) rather than full FEN reconstruction, since captured-piece/castling data isn't persisted in the committed columns
+- [Phase ?]: is_warmup: frozen at composition (len(surviving_sr_keys)==0), read never recomputed on resume
+- [Phase ?]: isWarmup carried on both 'warmup' and 'resume' LandingState kinds so the banner survives a partially-solved session
+- [Phase ?]: _stamp_pool_eligibility has_material widened with sharp_filler_available() so a filler-only session accrues streak (ROADMAP SC5)
 
 ### Pending Todos
 
@@ -750,9 +758,9 @@ Items acknowledged and deferred at **v1.29 milestone close on 2026-06-29** (user
 
 ## Session Continuity
 
-**Stopped at:** Completed quick task 260807-dr9: FLAWCHESS-64 guest gate on /train + FLAWCHESS-24 drop unactionable axios network-error Sentry noise
+**Stopped at:** Completed 206-03-PLAN.md
 
-**Last session:** 2026-08-07T08:14:46.539Z
+**Last session:** 2026-08-07T13:33:53.287Z
 
 **Resume file:**
 
@@ -887,6 +895,9 @@ None
 | Phase 205 P01 | 27min | 3 tasks | 7 files |
 | Phase 205 P02 | 25min | 3 tasks | 8 files |
 | Phase quick-260807-dr9 P01 | ~55 minutes | 2 tasks | 7 files |
+| Phase 206 P01 | 50min | 3 tasks | 16 files |
+| Phase 206 P02 | 55min | 2 tasks | 4 files |
+| Phase 206 P03 | 40min | 3 tasks | 12 files |
 
 ## Performance Metrics
 

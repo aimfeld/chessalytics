@@ -96,6 +96,13 @@ class TrainSessionResponse(BaseModel):
     case. This is what makes "Scored today" correct on a device that never
     saw the original solve responses (the reproduced prod bug: a
     localStorage-only tally read "0 of 18" on a second device).
+
+    `is_warmup` (Phase 206, D-06/D-07) is frozen at composition and derived
+    purely from material scarcity — `True` iff the session contains zero
+    surviving SR_ITEM puzzles at the moment it was (re-)composed. It is
+    never derived from session ordinal, session count, or account age, and
+    the client performs no arithmetic to reproduce it: it is a single
+    server-computed boolean to branch on (T-191-24).
     """
 
     session_id: int | None
@@ -107,6 +114,7 @@ class TrainSessionResponse(BaseModel):
     blob_pending_count: int
     puzzles: list[TrainPuzzle]
     solved_results: list[SolvedResult]
+    is_warmup: bool
 
 
 class SolveRequest(BaseModel):
@@ -141,12 +149,19 @@ class SolveResponse(BaseModel):
     reveal's check/cross mark reads. `move_quality` is the new three-way
     scoring tier the client's points formula consumes; it is NOT a synonym
     for `correct_move` (an "inaccuracy" tier still means `correct_move=True`).
+
+    Phase 206 (RESEARCH Pitfall 1): `source` mirrors `puzzle_type`'s existing
+    shape and lands synchronously with this response — the client's D-19
+    your-game predicates read `verdict.source`, never the separate,
+    asynchronously-fetched `PuzzleRevealResponse.source`, to avoid a
+    post-solve window where a real SR puzzle misrenders as suppressed.
     """
 
     correct_guess: bool
     correct_move: bool
     move_quality: Literal["good", "inaccuracy", "wrong"]
     puzzle_type: Literal["sharp", "soft", "herring"]
+    source: Literal["sr_item", "red_herring", "sharp_filler"]
     item_status: Literal["active", "mastered", "parked"] | None
     streak: int | None
     due_date: date | None
@@ -191,8 +206,11 @@ class PuzzleRevealResponse(BaseModel):
     played_in_game_san: str | None
     played_in_game_move_uci: str | None
     puzzle_type: Literal["sharp", "soft", "herring"]
-    source: Literal["sr_item", "red_herring"]
+    source: Literal["sr_item", "red_herring", "sharp_filler"]
     has_tactic_lines: bool
+    # Phase 206 (D-20): the sharp filler's motif label. None for every
+    # SR_ITEM/RED_HERRING row.
+    motif: str | None
 
 
 class TrainSettingsResponse(BaseModel):

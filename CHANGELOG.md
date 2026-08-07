@@ -10,6 +10,10 @@ in `YYYY-MM-DD` (Europe/Zurich).
 
 ### Added
 
+- Train now tells you when a session contains none of your own blunders instead of quietly handing you a full deck of red herrings. Those sessions are labeled as a warm-up, with a banner explaining what you are about to solve, and they still count toward your streak like any other session. This fires when you simply do not have enough analyzed material yet, not on a fixed session number. (Phase 206)
+
+- Train sessions short on your own material are now topped up from a curated pool of 208 sharp tactical positions (13 motifs, engine-verified, CC0 lichess), rather than only from red herrings. Because every red herring is by construction a "several fine moves" position, the old backfill made the critical/several question answerable without looking at the board and taught the wrong instinct about your own games. (Phase 206)
+
 - The analysis board and the puzzle solution board's free moves now play a move sound (check/capture/plain), matching the sound the Train reveal's line stepper already plays. Honors the existing mute toggle; loading a position from a link and dragging the eval-chart scrubber stay silent.
 
 ### Fixed

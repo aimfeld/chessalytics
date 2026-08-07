@@ -85,6 +85,7 @@ from __future__ import annotations
 import asyncio
 import datetime
 import uuid
+from collections.abc import Sequence
 
 import httpx
 import pytest
@@ -101,7 +102,10 @@ from app.models.game import Game
 from app.models.game_flaw import GameFlaw
 from app.models.game_position import GamePosition
 from app.models.herring_pool import HerringPool
+from app.repositories import train_repository
 from app.schemas.train import SolveRequest
+from app.services import sharp_filler
+from app.services.sharp_filler import SharpPuzzle
 
 ENDPOINT = "/api/train/sessions"
 
@@ -132,6 +136,54 @@ _MISSED_PV_LINES = [{"b": 40, "bm": None, "s": 30, "sm": None, "su": "g8f6"}]
 _WINNABLE_CP = 300
 # A hopeless eval for White (well below the floor).
 _HOPELESS_CP = -2000
+
+# Phase 206: a small deterministic sharp-filler fixture, sibling to
+# tests/repositories/test_train_repository.py's identically-shaped constant.
+_TEST_SHARP_PUZZLES: tuple[SharpPuzzle, ...] = tuple(
+    SharpPuzzle(
+        puzzle_id=f"sharp-router-test-{i:02d}",
+        fen="rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1",
+        first_move_uci="e2e4",
+        solution_uci="d2d4",
+        ply=0,
+        side_to_move="white",
+        motif="Fork",
+        rating=1200,
+        themes="fork short",
+    )
+    for i in range(10)
+)
+
+
+def _install_sharp_fixture(
+    monkeypatch: pytest.MonkeyPatch, puzzles: tuple[SharpPuzzle, ...] = _TEST_SHARP_PUZZLES
+) -> None:
+    """Install a small deterministic sharp-filler fixture in place of the
+    committed data file (Phase 206) — sibling to
+    tests/repositories/test_train_repository.py's identically-named helper.
+    Both `sharp_filler.SHARP_SET`/`SHARP_SET_BY_ID` (read at call time by
+    `pick_sharp_fillers`) and `train_repository.SHARP_SET_BY_ID` (bound by
+    reference at import time) must be patched independently.
+    """
+    ordered = tuple(sorted(puzzles, key=lambda p: p.puzzle_id))
+    by_id = {p.puzzle_id: p for p in ordered}
+    monkeypatch.setattr(sharp_filler, "SHARP_SET", ordered)
+    monkeypatch.setattr(sharp_filler, "SHARP_SET_BY_ID", by_id)
+    monkeypatch.setattr(train_repository, "SHARP_SET_BY_ID", by_id)
+
+
+@pytest.fixture(autouse=True)
+def _default_empty_sharp_set(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Phase 206: every test in this file defaults to an EMPTY sharp-filler
+    set unless it opts in via `_install_sharp_fixture` — see the identically
+    documented fixture in tests/repositories/test_train_repository.py for
+    why this is needed (D-05: composition never returns an empty session
+    once real material exists in `SHARP_SET`, which would otherwise mask
+    every pre-existing pool-entry-gate test's "zero material -> zero
+    puzzles" assertion)."""
+    monkeypatch.setattr(sharp_filler, "SHARP_SET", ())
+    monkeypatch.setattr(sharp_filler, "SHARP_SET_BY_ID", {})
+    monkeypatch.setattr(train_repository, "SHARP_SET_BY_ID", {})
 
 
 # ---------------------------------------------------------------------------
@@ -282,6 +334,23 @@ async def _delete_games(test_engine, game_ids: list[int]) -> None:
             await session.execute(delete(Game).where(Game.id.in_(game_ids)))
 
 
+async def _delete_sessions(test_engine, session_ids: list[int]) -> None:
+    """Explicit cleanup for a directly-seeded drill_sessions row that has no
+    backing `game_id` to clean up via `_delete_games` (Phase 206: a
+    SHARP_FILLER-only session, `game_id` structurally None throughout).
+    `drill_solves` rows cascade-delete with their `drill_sessions` parent.
+    Required so a real committed SHARP_FILLER row (source=2) does not
+    survive into an unrelated later test in the same per-worker DB clone
+    that downgrades Alembic past this phase's CHECK-widening migration.
+    """
+    if not session_ids:
+        return
+    session_maker = async_sessionmaker(test_engine, expire_on_commit=False)
+    async with session_maker() as session:
+        async with session.begin():
+            await session.execute(delete(DrillSession).where(DrillSession.id.in_(session_ids)))
+
+
 async def _set_guest(test_engine, user_id: int) -> None:
     from app.models.user import User
 
@@ -425,16 +494,19 @@ async def _seed_drill_item(
 async def _seed_session(
     test_engine,
     user_id: int,
-    entries: list[tuple[int, int, int]],
+    entries: Sequence[tuple[int | None, int, int]],
     *,
     requested_count: int | None = None,
     herring_pool_ids: dict[int, int] | None = None,
+    sharp_puzzle_ids: dict[int, str] | None = None,
 ) -> int:
     """Seed one open drill_sessions row plus one unsolved drill_solves row per entry.
 
     `entries` is a list of `(game_id, ply, source)` tuples, one per frozen
     position (0-based, in list order) — mirrors exactly what
-    `compose_and_materialize_session` would have pre-inserted.
+    `compose_and_materialize_session` would have pre-inserted. `game_id` is
+    `int | None` (Phase 206: a SHARP_FILLER entry passes `None`, mirroring
+    the structural guarantee `_ReconstructedPuzzle` enforces).
 
     `requested_count` defaults to `None` (the "pre-migration row / direct
     test fixture" shape — see `DrillSession.requested_count`'s docstring),
@@ -448,6 +520,10 @@ async def _seed_session(
     `herring_pool.id` that entry's `RED_HERRING` row should carry — omitted
     entirely (default `None`) for every pre-Phase-192 caller of this helper,
     which never needed a real pool link.
+
+    `sharp_puzzle_ids` (Phase 206) maps a 0-based `position` to the
+    `sharp_puzzle_id` that entry's `SHARP_FILLER` row should carry — mirrors
+    `herring_pool_ids`'s shape exactly.
     """
     session_maker = async_sessionmaker(test_engine, expire_on_commit=False)
     today = datetime.datetime.now(datetime.timezone.utc).date()
@@ -465,6 +541,7 @@ async def _seed_session(
             await session.flush()
             for position, (game_id, ply, source) in enumerate(entries):
                 herring_pool_id = herring_pool_ids.get(position) if herring_pool_ids else None
+                sharp_puzzle_id = sharp_puzzle_ids.get(position) if sharp_puzzle_ids else None
                 session.add(
                     DrillSolve(
                         session_id=drill_session.id,
@@ -474,6 +551,7 @@ async def _seed_session(
                         ply=ply,
                         source=source,
                         herring_pool_id=herring_pool_id,
+                        sharp_puzzle_id=sharp_puzzle_id,
                         solved_at=None,
                     )
                 )
@@ -711,6 +789,53 @@ async def test_compose_session_serves_own_blunder(test_engine) -> None:
         # empty here since nothing has been solved in this freshly composed
         # session yet.
         assert body["solved_results"] == []
+    finally:
+        await _delete_games(test_engine, [game_id])
+
+
+@pytest.mark.asyncio
+async def test_session_response_exposes_is_warmup(
+    test_engine, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """WARM-01/WARM-02: TrainSessionResponse.is_warmup round-trips over
+    HTTP for both values — True for a filler-only composition (zero SR
+    material, backfilled entirely from the sharp set), False for a
+    composition carrying the user's own qualifying blunder."""
+    _install_sharp_fixture(monkeypatch)
+
+    # --- True: zero SR material, sharp-filler-only session ---
+    warmup_email = f"train-warmup-true-{uuid.uuid4().hex[:8]}@example.com"
+    _, warmup_token = await _register_and_login(warmup_email)
+    warmup_session_id: int | None = None
+    try:
+        async with httpx.AsyncClient(
+            transport=httpx.ASGITransport(app=app), base_url="http://test"
+        ) as client:
+            resp = await client.post(ENDPOINT, headers={"Authorization": f"Bearer {warmup_token}"})
+        assert resp.status_code == 200, f"Expected 200, got {resp.status_code}: {resp.text}"
+        body = resp.json()
+        assert body["session_id"] is not None
+        warmup_session_id = body["session_id"]
+        assert body["is_warmup"] is True
+    finally:
+        if warmup_session_id is not None:
+            await _delete_sessions(test_engine, [warmup_session_id])
+
+    # --- False: one qualifying blunder alongside whatever filler backfills ---
+    ordinary_email = f"train-warmup-false-{uuid.uuid4().hex[:8]}@example.com"
+    ordinary_user_id, ordinary_token = await _register_and_login(ordinary_email)
+    game_id = await _seed_game_with_blunder(test_engine, ordinary_user_id)
+    try:
+        async with httpx.AsyncClient(
+            transport=httpx.ASGITransport(app=app), base_url="http://test"
+        ) as client:
+            resp = await client.post(
+                ENDPOINT, headers={"Authorization": f"Bearer {ordinary_token}"}
+            )
+        assert resp.status_code == 200, f"Expected 200, got {resp.status_code}: {resp.text}"
+        body = resp.json()
+        assert body["session_id"] is not None
+        assert body["is_warmup"] is False
     finally:
         await _delete_games(test_engine, [game_id])
 
@@ -1272,6 +1397,45 @@ async def test_solve_herring_touches_no_drill_item(test_engine) -> None:
 
 
 @pytest.mark.asyncio
+async def test_solve_sharp_filler_touches_no_drill_item(
+    test_engine, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """WARM-04: a sharp-filler solve returns puzzle_type "sharp", source
+    "sharp_filler", null item_status/streak/due_date (mirrors a herring's SR
+    bookkeeping absence exactly), and creates/modifies no drill_items row —
+    a sharp filler has no games row at all (game_id is None)."""
+    _install_sharp_fixture(monkeypatch)
+    email = f"train-sharp-solve-{uuid.uuid4().hex[:8]}@example.com"
+    user_id, token = await _register_and_login(email)
+    puzzle = _TEST_SHARP_PUZZLES[0]
+    session_id = await _seed_session(
+        test_engine,
+        user_id,
+        [(None, puzzle.ply, int(DrillSource.SHARP_FILLER))],
+        sharp_puzzle_ids={0: puzzle.puzzle_id},
+    )
+
+    try:
+        before = await _count_drill_items(test_engine, user_id)
+        resp = await _solve(token, session_id, 0, guess="critical", move_quality="good")
+        assert resp.status_code == 200
+        body = resp.json()
+        assert body["puzzle_type"] == "sharp"
+        assert body["source"] == "sharp_filler"
+        assert body["item_status"] is None
+        assert body["streak"] is None
+        assert body["due_date"] is None
+        after = await _count_drill_items(test_engine, user_id)
+        assert after == before
+    finally:
+        # No game_id to clean up via _delete_games (game_id is structurally
+        # None) — delete the session directly so this committed
+        # source=SHARP_FILLER row does not outlive the test and break a
+        # later Alembic-downgrade migration test in the same DB clone.
+        await _delete_sessions(test_engine, [session_id])
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize(
     "pv_lines,expected_puzzle_type,guess,expected_correct_guess",
     [
@@ -1688,6 +1852,7 @@ async def test_reveal_key_set_excludes_stored_answer_key_fields(test_engine) -> 
             "puzzle_type",
             "source",
             "has_tactic_lines",
+            "motif",
         }
     finally:
         await _delete_games(test_engine, [game_id])
@@ -1695,7 +1860,9 @@ async def test_reveal_key_set_excludes_stored_answer_key_fields(test_engine) -> 
 
 @pytest.mark.asyncio
 async def test_reveal_herring_reports_herring_type(test_engine) -> None:
-    """A solved red herring reveals puzzle_type "herring" and source "red_herring"."""
+    """A solved red herring reveals puzzle_type "herring", source
+    "red_herring", and (Task 3, D-20) motif null — no motif taxonomy exists
+    for a herring."""
     email = f"train-reveal-herring-{uuid.uuid4().hex[:8]}@example.com"
     user_id, token = await _register_and_login(email)
     game_id = await _seed_bare_game(test_engine, user_id, "reveal-herring")
@@ -1712,8 +1879,46 @@ async def test_reveal_herring_reports_herring_type(test_engine) -> None:
         body = resp.json()
         assert body["puzzle_type"] == "herring"
         assert body["source"] == "red_herring"
+        assert body["motif"] is None
     finally:
         await _delete_games(test_engine, [game_id])
+
+
+@pytest.mark.asyncio
+async def test_reveal_sharp_filler_reports_sharp_filler_source(
+    test_engine, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """WARM-06/D-15/D-20: a solved sharp filler reveals source "sharp_filler",
+    puzzle_type "sharp", has_tactic_lines false, game_id null, and a
+    non-empty fen — the four-site three-way branch in reveal_for_puzzle."""
+    _install_sharp_fixture(monkeypatch)
+    email = f"train-reveal-sharp-{uuid.uuid4().hex[:8]}@example.com"
+    user_id, token = await _register_and_login(email)
+    puzzle = _TEST_SHARP_PUZZLES[0]
+    session_id = await _seed_session(
+        test_engine,
+        user_id,
+        [(None, puzzle.ply, int(DrillSource.SHARP_FILLER))],
+        sharp_puzzle_ids={0: puzzle.puzzle_id},
+    )
+
+    try:
+        solved = await _solve(token, session_id, 0, guess="critical", move_quality="good")
+        assert solved.status_code == 200
+
+        resp = await _reveal(token, session_id, 0)
+        assert resp.status_code == 200
+        body = resp.json()
+        assert body["source"] == "sharp_filler"
+        assert body["puzzle_type"] == "sharp"
+        assert body["has_tactic_lines"] is False
+        assert body["game_id"] is None
+        assert body["fen"] == puzzle.fen
+        assert body["motif"] == puzzle.motif
+    finally:
+        # See test_solve_sharp_filler_touches_no_drill_item's finally block
+        # for why this direct delete is required (no game_id to clean up).
+        await _delete_sessions(test_engine, [session_id])
 
 
 @pytest.mark.asyncio
@@ -1774,6 +1979,7 @@ async def test_reveal_cross_user_herring_shows_game_move_and_no_owner_scope_leak
             "puzzle_type",
             "source",
             "has_tactic_lines",
+            "motif",
         }
     finally:
         await _delete_herring_pool_rows(test_engine, [pool_id])
