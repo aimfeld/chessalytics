@@ -5,14 +5,18 @@ planted: 2026-08-07
 planted_during: /gsd-explore — "new user imports, trains immediately, gets only red herrings.
   Do red herrings enter the SR rotation? Better idea?"
 trigger_when: next milestone that touches Train onboarding or the Train session-composition
-  path. Not urgent-blocking, but every new signup hits it once, so it front-loads the worst
-  possible first impression of Train.
+  path. Not urgent-blocking, but any signup that reaches Train before the ES lottery has
+  delivered hits it, so it front-loads the worst possible first impression of Train.
 scope: medium (a static sharp puzzle set + a serve path + a landing state, plus a third
   `DrillSource` value and the `puzzle_type`-to-`source` predicate fix it forces; no new
   sampling infrastructure, no pool generator, no rating-matching schema, no tier-1 fast path)
 ---
 
-# SEED-140: Train's first session is 100% red herrings, silently — give new users a labeled warm-up
+# SEED-140: a session with no analyzed blunders is 100% red herrings, silently — serve a labeled warm-up instead
+
+> Trigger is material scarcity, not session ordinal — see "The Design". The new-user case is
+> the common one, which is why the slug says "first-session", but the condition is never
+> "is this their first session".
 
 ## The Defect
 
@@ -77,9 +81,21 @@ user is told about it.
 
 ## The Design
 
-A **one-shot labeled warm-up**, shown only for the very first session, while real material is
-still being analyzed.
+A **labeled warm-up**, shown whenever the user's own analyzed blunders are too scarce to fill
+a session.
 
+- **Triggered by material, NOT by session ordinal.** "First session" is the common case, not
+  the condition. A user may well import, go play bots or browse Openings for a while, and
+  arrive at Train with blunders already analyzed — that is an ordinary session with no warm-up
+  label, even though it is their first. Conversely a returning user whose material has run dry
+  gets the warm-up again. Derive the state from what composition actually produced, never from
+  "is this their first session".
+  The natural discriminant is **the presence of sharp filler**: herrings at the normal
+  `HERRING_SHARE` are what every healthy session already contains, whereas sharp filler exists
+  only because the SR side could not fill its slots. Open sub-question for the planner: whether
+  a *partially* short session (say 6 real blunders topped up with 2 filler) deserves the full
+  warm-up framing or something softer, closer to the existing short-session notice at
+  `TrainStartScreen.tsx:130`. A hard ordinal rule is wrong either way.
 - **Deliberately easy.** The warm-up's job is teaching the mechanic (the critical/several
   guess, the board, the reveal), not benchmarking the user. Clarity beats calibration.
 - **Sharp puzzles come from a small static lichess set.** The vendored CC0 fixtures at
