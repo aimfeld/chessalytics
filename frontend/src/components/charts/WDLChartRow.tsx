@@ -1,5 +1,5 @@
 import type { ReactNode } from 'react';
-import { Link } from 'react-router-dom';
+import { Link } from 'react-router';
 import { Swords } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import { Tooltip } from '@/components/ui/tooltip';

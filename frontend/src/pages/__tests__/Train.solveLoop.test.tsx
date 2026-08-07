@@ -28,7 +28,7 @@ import {
   fireEvent,
 } from '@testing-library/react';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
-import { MemoryRouter } from 'react-router-dom';
+import { MemoryRouter } from 'react-router';
 import { saveTrainRevealCache } from '@/lib/trainRevealCache';
 import type { CachedTrainReveal } from '@/lib/trainRevealCache';
 import type {

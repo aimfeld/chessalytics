@@ -1,6 +1,6 @@
 import { renderToString } from 'react-dom/server';
-import { StaticRouter } from 'react-router-dom';
-import { Routes, Route } from 'react-router-dom';
+import { StaticRouter } from 'react-router';
+import { Routes, Route } from 'react-router';
 import { QueryClientProvider } from '@tanstack/react-query';
 import { QueryClient } from '@tanstack/react-query';
 import { AuthProvider } from './hooks/useAuth';

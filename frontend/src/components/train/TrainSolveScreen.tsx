@@ -36,7 +36,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import type { CSSProperties, ReactElement } from 'react';
 import { Chess, type Move } from 'chess.js';
 import { Loader2, Search, Volume2, VolumeX } from 'lucide-react';
-import { Link } from 'react-router-dom';
+import { Link } from 'react-router';
 import { buildGameAnalysisUrl } from '@/lib/analysisUrl';
 import { cn } from '@/lib/utils';
 import { ChessBoard } from '@/components/board/ChessBoard';

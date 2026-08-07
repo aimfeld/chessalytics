@@ -1,5 +1,5 @@
 import { useCallback } from 'react';
-import { useNavigate } from 'react-router-dom';
+import { useNavigate } from 'react-router';
 import { pgnToSanArray } from '@/lib/pgn';
 import { useReorderPositionBookmarks } from '@/hooks/usePositionBookmarks';
 import type { FilterState } from '@/components/filters/FilterPanel';

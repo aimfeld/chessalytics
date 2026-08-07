@@ -1,4 +1,4 @@
-import { Link } from 'react-router-dom';
+import { Link } from 'react-router';
 import type { UseQueryResult } from '@tanstack/react-query';
 import { Button } from '@/components/ui/button';
 import { LoadError } from '@/components/ui/load-error';

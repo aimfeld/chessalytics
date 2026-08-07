@@ -1,4 +1,4 @@
-import { Navigate } from 'react-router-dom';
+import { Navigate } from 'react-router';
 
 import { useUserProfile } from '@/hooks/useUserProfile';
 import { ImpersonationSelector } from '@/components/admin/ImpersonationSelector';

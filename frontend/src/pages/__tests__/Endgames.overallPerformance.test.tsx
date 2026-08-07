@@ -21,7 +21,7 @@
 
 import { afterEach, beforeAll, describe, expect, it, vi } from 'vitest';
 import { act, cleanup, fireEvent, render, screen } from '@testing-library/react';
-import { MemoryRouter } from 'react-router-dom';
+import { MemoryRouter } from 'react-router';
 import type { ReactElement } from 'react';
 import { cloneElement, isValidElement } from 'react';
 import { TooltipProvider } from '@/components/ui/tooltip';

@@ -16,7 +16,7 @@ afterEach(() => {
   cleanup();
 });
 
-// WDLChartRow uses react-router-dom Link and recharts — mock it to a simple testid div
+// WDLChartRow uses react-router Link and recharts — mock it to a simple testid div
 // so the tests focus on filtering logic in GlobalStatsCharts itself.
 vi.mock('@/components/charts/WDLChartRow', () => ({
   WDLChartRow: ({ testId, label }: { testId?: string; label?: ReactNode }) => (

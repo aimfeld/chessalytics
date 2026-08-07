@@ -8,8 +8,8 @@ vi.mock('@/hooks/useFeedback', () => ({
   useFeedback: vi.fn(),
 }));
 
-// Mock react-router-dom useLocation
-vi.mock('react-router-dom', () => ({
+// Mock react-router useLocation
+vi.mock('react-router', () => ({
   useLocation: vi.fn().mockReturnValue({ pathname: '/openings', search: '' }),
 }));
 

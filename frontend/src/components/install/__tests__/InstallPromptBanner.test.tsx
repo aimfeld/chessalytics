@@ -5,7 +5,7 @@
  */
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { cleanup, render, screen } from '@testing-library/react';
-import { MemoryRouter } from 'react-router-dom';
+import { MemoryRouter } from 'react-router';
 import { InstallPromptBanner } from '@/components/install/InstallPromptBanner';
 import { HANDOFF_MARKER_KEY } from '@/lib/handoffMarker';
 

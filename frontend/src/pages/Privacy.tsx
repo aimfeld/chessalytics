@@ -1,5 +1,5 @@
 import { useEffect } from 'react';
-import { Link } from 'react-router-dom';
+import { Link } from 'react-router';
 import { PublicHeader } from '@/components/layout/PublicHeader';
 
 const DEFAULT_TITLE = 'FlawChess — Chess Opening Analysis';

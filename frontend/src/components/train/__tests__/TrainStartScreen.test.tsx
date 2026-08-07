@@ -5,7 +5,7 @@
  */
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { act, cleanup, fireEvent, render, screen, within } from '@testing-library/react';
-import { MemoryRouter } from 'react-router-dom';
+import { MemoryRouter } from 'react-router';
 
 // 191-01/191-06: TrainStartScreen calls useTrainProgress() directly (for the
 // PROG-05/D-16 tailored empty states) AND renders <TrainStreakCard /> +

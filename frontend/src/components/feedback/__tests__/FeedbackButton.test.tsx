@@ -21,8 +21,8 @@ vi.mock('@/hooks/useFeedback', () => ({
     error: null,
   }),
 }));
-// Mock react-router-dom useLocation so FeedbackModal can render
-vi.mock('react-router-dom', () => ({
+// Mock react-router useLocation so FeedbackModal can render
+vi.mock('react-router', () => ({
   useLocation: vi.fn().mockReturnValue({ pathname: '/openings', search: '' }),
 }));
 

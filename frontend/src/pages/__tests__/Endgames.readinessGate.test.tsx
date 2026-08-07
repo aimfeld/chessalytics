@@ -10,7 +10,7 @@
 
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { cleanup, render, screen } from '@testing-library/react';
-import { MemoryRouter } from 'react-router-dom';
+import { MemoryRouter } from 'react-router';
 import { TooltipProvider } from '@/components/ui/tooltip';
 
 // ── Mock useReadiness so tests control tier flags without a real endpoint.

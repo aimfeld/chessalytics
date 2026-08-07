@@ -18,7 +18,7 @@
 
 import { afterEach, beforeAll, describe, expect, it, vi } from 'vitest';
 import { cleanup, render, screen } from '@testing-library/react';
-import { MemoryRouter } from 'react-router-dom';
+import { MemoryRouter } from 'react-router';
 
 import { TooltipProvider } from '@/components/ui/tooltip';
 import type {

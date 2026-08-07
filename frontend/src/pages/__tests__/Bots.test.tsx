@@ -38,7 +38,7 @@ import {
   waitFor,
 } from '@testing-library/react';
 import { useState } from 'react';
-import { MemoryRouter } from 'react-router-dom';
+import { MemoryRouter } from 'react-router';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { TooltipProvider } from '@/components/ui/tooltip';
 
@@ -55,8 +55,8 @@ configure({ asyncUtilTimeout: ASYNC_UTIL_TIMEOUT_MS });
 // no route to probe — the navigate() call itself is the only observable.
 // `importOriginal` preserves `MemoryRouter` (imported from this module above).
 const navigateSpy = vi.fn();
-vi.mock('react-router-dom', async (importOriginal) => ({
-  ...(await importOriginal<typeof import('react-router-dom')>()),
+vi.mock('react-router', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('react-router')>()),
   useNavigate: () => navigateSpy,
 }));
 

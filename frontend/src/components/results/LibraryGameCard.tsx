@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from 'react';
-import { Link } from 'react-router-dom';
+import { Link } from 'react-router';
 import { Chess } from 'chess.js';
 import { BookOpen, Calendar, Clock, Equal, ExternalLink, Hash, Minus, Plus, Search } from 'lucide-react';
 import type { LucideIcon } from 'lucide-react';

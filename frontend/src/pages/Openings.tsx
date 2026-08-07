@@ -8,7 +8,7 @@ function getChartEnabled(bookmarkId: number): boolean {
 function setChartEnabledStorage(bookmarkId: number, enabled: boolean): void {
   localStorage.setItem(`bookmark-chart-enabled-${bookmarkId}`, String(enabled));
 }
-import { useNavigate, useLocation, Navigate } from 'react-router-dom';
+import { useNavigate, useLocation, Navigate } from 'react-router';
 import { useUserProfile } from '@/hooks/useUserProfile';
 import { Chess } from 'chess.js';
 import { useQuery } from '@tanstack/react-query';

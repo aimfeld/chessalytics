@@ -1,5 +1,5 @@
 import { useState, useEffect } from 'react';
-import { useNavigate, Link } from 'react-router-dom';
+import { useNavigate, Link } from 'react-router';
 import { toast } from 'sonner';
 import axios from 'axios';
 import * as Sentry from '@sentry/react';

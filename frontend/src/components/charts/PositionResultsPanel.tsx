@@ -1,4 +1,4 @@
-import { Link } from 'react-router-dom';
+import { Link } from 'react-router';
 import { Cpu, Swords } from 'lucide-react';
 import type { ReactNode } from 'react';
 import { WDLChartRow } from '@/components/charts/WDLChartRow';

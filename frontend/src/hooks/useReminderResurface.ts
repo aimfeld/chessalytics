@@ -23,7 +23,7 @@
  *   separate so the decision hook above stays router-free.
  */
 import { useEffect, useRef, useState } from 'react';
-import { useLocation, useNavigate } from 'react-router-dom';
+import { useLocation, useNavigate } from 'react-router';
 import { useInstallPrompt } from '@/hooks/useInstallPrompt';
 import { useTrainSettings } from '@/hooks/useTrainSettings';
 import { getDeviceSubscription } from '@/lib/push';

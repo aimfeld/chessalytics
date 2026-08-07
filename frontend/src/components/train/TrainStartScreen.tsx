@@ -11,7 +11,7 @@
 
 import type { ReactElement } from 'react';
 import { format, parseISO } from 'date-fns';
-import { Link } from 'react-router-dom';
+import { Link } from 'react-router';
 import { Button } from '@/components/ui/button';
 import { EmptyState } from '@/components/ui/empty-state';
 import { LoadError } from '@/components/ui/load-error';

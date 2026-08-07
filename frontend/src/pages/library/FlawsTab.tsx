@@ -1,6 +1,6 @@
 import { useState, useCallback, useMemo, useRef, useEffect } from 'react';
 import { useQueryClient } from '@tanstack/react-query';
-import { Link, useSearchParams } from 'react-router-dom';
+import { Link, useSearchParams } from 'react-router';
 import { SlidersHorizontal, Tags } from 'lucide-react';
 import { SidebarLayout } from '@/components/layout/SidebarLayout';
 import { Button } from '@/components/ui/button';

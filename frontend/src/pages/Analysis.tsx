@@ -36,7 +36,7 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import type { CSSProperties, ReactNode, RefObject } from 'react';
-import { useSearchParams } from 'react-router-dom';
+import { useSearchParams } from 'react-router';
 import { Chess } from 'chess.js';
 import {
   ArrowLeftRight,
