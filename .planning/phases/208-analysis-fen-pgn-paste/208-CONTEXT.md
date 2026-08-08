@@ -185,8 +185,17 @@ below are numbered D-11 onward to avoid collision, and resolve what the seed lef
 - The specific mechanism for per-surface platform lists in D-14 (new prop vs. per-caller
   constant) — the constraint is only that the shared `Platform` type and `FilterPanel`'s
   hardcoded `PLATFORMS` must not gain a chip that renders on Openings/Endgames/GlobalStats.
-- SAN normalization details feeding the D-16 hash (whitespace, move-number handling), as
-  long as it is deterministic and header-independent.
+- Normalization details feeding the D-16 hash, as long as the result is deterministic and
+  header-independent. This covers **both** halves of the hash input:
+  - **SAN side:** whitespace, move-number handling.
+  - **Root-FEN side:** a raw FEN string is not a canonical position identity. Its last two
+    fields are counters (halfmove clock, fullmove number) and its en passant field is
+    inconsistently produced in the wild — some producers emit the ep square on every pawn
+    double-step, others only when a capture is actually available. Two sources publishing
+    the same `[SetUp]` position can therefore emit different FEN strings for an identical
+    position, which would defeat D-16's dedup. Planning must decide which fields
+    participate in the hash (piece placement + side to move + castling rights is the
+    likely core) rather than hashing the raw header string.
 
 </decisions>
 
