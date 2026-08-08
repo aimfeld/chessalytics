@@ -52,6 +52,19 @@ router.include_router(
     tags=["auth"],
 )
 
+# Password reset (forgot-password / reset-password) — Phase 207, RESET-01.
+# FastAPIUsers.get_reset_password_router() (the bound instance method) takes
+# NO arguments — it already closes over self.get_user_manager internally and
+# delegates to the module-level get_reset_password_router(get_user_manager).
+# Deviation from RESEARCH/PATTERNS, which assumed the instance method forwards
+# get_user_manager positionally like get_register_router's schema args do;
+# verified against the installed fastapi-users==15.0.5 source (Rule 1/3 fix).
+router.include_router(
+    fastapi_users.get_reset_password_router(),
+    prefix="/auth",
+    tags=["auth"],
+)
+
 # ── Google OAuth ──────────────────────────────────────────────────────────────
 # Custom implementation that redirects to the SPA after successful OAuth.
 #

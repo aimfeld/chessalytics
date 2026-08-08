@@ -136,6 +136,15 @@ export function LoginForm() {
             {submitting ? 'Signing in…' : 'Log In'}
           </Button>
         </form>
+        <p className="mt-2 text-center text-sm text-muted-foreground">
+          <Link
+            to="/auth/forgot-password"
+            className="underline underline-offset-4 hover:text-primary"
+            data-testid="link-forgot-password"
+          >
+            Forgot password?
+          </Link>
+        </p>
         <p className="mt-4 text-center text-sm text-muted-foreground">
           Don&apos;t have an account?{' '}
           <Link to="/login?tab=register" className="underline underline-offset-4 hover:text-primary">

@@ -3,17 +3,17 @@ gsd_state_version: 1.0
 milestone: v2.12
 milestone_name: Train Reliability & Grading Agreement
 current_phase: 207
-status: planned
-stopped_at: Phase 207 planned and revised (3 plans, re-verification passed) — awaiting /gsd-execute-phase 207
-last_updated: "2026-08-08T00:00:00.000Z"
+status: completed
+stopped_at: Completed 207-03-PLAN.md (operator handoff + Step-0-gated verification) — RESET-01/RESET-07 PASSED, RESET-05 real-mailbox observation logged NOT PERFORMED, Phase 207 ready for verification
+last_updated: "2026-08-08T13:38:06.229Z"
 last_activity: 2026-08-08
+last_activity_desc: Phase 207 replanned after D-04 reversal — 3 plans, plan-checker PASSED on re-verify, blocked on operator Step 0 for RESET-01/07 UAT
 progress:
   total_phases: 2
-  completed_phases: 1
+  completed_phases: 2
   total_plans: 6
-  completed_plans: 3
+  completed_plans: 6
 current_phase_name: self-serve-password-reset
-last_activity_desc: Phase 207 replanned after D-04 reversal — 3 plans, plan-checker PASSED on re-verify, blocked on operator Step 0 for RESET-01/07 UAT
 ---
 
 # Project State: FlawChess
@@ -21,9 +21,9 @@ last_activity_desc: Phase 207 replanned after D-04 reversal — 3 plans, plan-ch
 ## Current Position
 
 Phase: 207
-Plan: 207-01-PLAN.md (not started)
-Status: Phase 207 (Self-Serve Password Reset, SEED-143) PLANNED AND REVISED — 3 plans across 3 waves. D-04 was reversed mid-planning (reset is for accounts with a password); plans, RESEARCH and PATTERNS were revised and the plan-checker returned VERIFICATION PASSED on re-verify. Phase 206 shipped (squash-merged to main, 560e99371).
-Last activity: 2026-08-08 — Phase 207 planned via `/gsd-plan-phase 207`. Plans 01 (backend spine, tracer-first) and 02 (frontend forms) are fully executable now; Plan 03 (RESET-01/RESET-07 UAT) is **gated on operator Step 0** (Resend account + additive DNS) and accepts "deferred" as a first-class answer. No task requires a live RESEND_API_KEY.
+Plan: Not started
+Status: All phases complete
+Last activity: 2026-08-08 — Phase 207 complete
 
 **v2.12 closed 2026-08-05** retroactively over two already-shipped, already-deployed phases (lightweight close, no `/gsd-new-milestone` requirements cycle — same pattern as v2.6 and v2.8):
 
@@ -640,6 +640,13 @@ v1.29 Live-Engine Analysis Page shipped 2026-06-29 — 5 phases (136–140), 14 
 - [Phase ?]: is_warmup: frozen at composition (len(surviving_sr_keys)==0), read never recomputed on resume
 - [Phase ?]: isWarmup carried on both 'warmup' and 'resume' LandingState kinds so the banner survives a partially-solved session
 - [Phase ?]: _stamp_pool_eligibility has_material widened with sharp_filler_available() so a filler-only session accrues streak (ROADMAP SC5)
+- [Phase ?]: fastapi_users.get_reset_password_router() is a zero-arg bound method, not a get_user_manager pass-through — fixed mount call site (Task 1)
+- [Phase ?]: Eligibility for password reset is credential state (non-empty hashed_password), never account type — a 125-account dual (password+Google) fixture pins the regression a naive oauth_account check would cause
+- [Phase ?]: forgot-password 202 response body is the literal 'null' (4 bytes), not truly empty; RESET-02 indistinguishability is proven as a (status, body) tuple, not status alone
+- [Phase ?]: 207-02: forgot-password confirmation is one static string covering both the anti-enumeration hedge and the Google-account redirection, per operator's 2026-08-08 exact wording
+- [Phase ?]: 207-02: client-side password checks (length, equality) are advisory only — the server's 400 reason is always what's rendered
+- [Phase ?]: 207-02 checkpoint: operator additionally verified a real end-to-end send via a live Resend account to a real mailbox over a Tailscale tunnel, exceeding this plan's scope; formal RESET-01/RESET-07 verdict remains Plan 03's, pending apex-domain DKIM/DMARC (not the resend.dev sandbox sender used here)
+- [Phase ?]: Phase 207 Step 0 complete 2026-08-08: DKIM landed at apex, RESET-01/RESET-07 PASSED with live Resend evidence against the verified flawchess.com apex domain; RESET-05 real-mailbox observation logged NOT PERFORMED to WINDOWS.md, automated coverage stands in its place
 
 ### Pending Todos
 
@@ -761,9 +768,9 @@ Items acknowledged and deferred at **v1.29 milestone close on 2026-06-29** (user
 
 ## Session Continuity
 
-**Stopped at:** Completed 206-03-PLAN.md
+**Stopped at:** Completed 207-03-PLAN.md (operator handoff + Step-0-gated verification) — RESET-01/RESET-07 PASSED, RESET-05 real-mailbox observation logged NOT PERFORMED, Phase 207 ready for verification
 
-**Last session:** 2026-08-07T13:33:53.287Z
+**Last session:** 2026-08-08T13:27:33.807Z
 
 **Resume file:**
 
@@ -901,6 +908,9 @@ None
 | Phase 206 P01 | 50min | 3 tasks | 16 files |
 | Phase 206 P02 | 55min | 2 tasks | 4 files |
 | Phase 206 P03 | 40min | 3 tasks | 12 files |
+| Phase 207 P01 | 65min | 3 tasks | 9 files |
+| Phase 207 P02 | 25min | 3 tasks | 8 files |
+| Phase 207 P03 | 15min | 2 tasks | 4 files |
 
 ## Performance Metrics
 

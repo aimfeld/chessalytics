@@ -30,8 +30,10 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.config import settings
 from app.core.database import async_session_maker, get_async_session
+from app.core.reset_password_rate_limiter import reset_password_limiter
 from app.models.oauth_account import OAuthAccount
 from app.models.user import User
+from app.services import email_service
 
 
 # ---------------------------------------------------------------------------
@@ -88,6 +90,53 @@ class UserManager(IntegerIDMixin, BaseUserManager[User, int]):
                 sa_update(User).where(User.id == user.id).values(last_login=func.now())
             )
             await session.commit()
+
+    async def on_after_forgot_password(
+        self,
+        user: User,
+        token: str,
+        request: Request | None = None,
+    ) -> None:
+        """Send the reset email, gated by eligibility (RESET-05) and rate-limited (D-06).
+
+        Runs only for a real, active user — the router already filtered
+        UserNotExists/UserInactive upstream (fastapi_users router/reset.py),
+        so a throttled or ineligible request here still returns the router's
+        identical 202 with zero enumeration signal (RESET-02). This hook must
+        NEVER raise, log, or emit a Sentry event that distinguishes which
+        branch was taken — both guards below are silent no-ops, deviating
+        deliberately from guest_create_limiter/feedback_limiter, which both
+        reject with an HTTP "too many requests" error on rejection.
+        """
+        # 1. Eligibility gate (RESET-05). The predicate is credential state —
+        # "does this account have a password to reset" — NOT account type
+        # ("is this a Google account"). 125 of the 172 eligible prod accounts
+        # hold BOTH a password and a linked Google account, so an
+        # account-type reading (checking oauth_account/oauth_accounts/
+        # is_guest) would strand 73% of the target population. Guests share
+        # the empty hash, so no separate is_guest check is needed. Do not
+        # consult user.oauth_accounts, the oauth_account table, or
+        # user.is_guest here, and do not inspect the hash's algorithm prefix.
+        if not user.hashed_password:
+            return
+
+        # 2. Per-email rate limit (D-06). Silent no-op on rejection — see
+        # module docstring on reset_password_limiter for why this deviates
+        # from the two existing limiter call sites.
+        if not reset_password_limiter.is_allowed(user.email.lower()):
+            return
+
+        # 3. Reset URL — host comes only from settings.FRONTEND_URL, never
+        # from the Request object (T-207-09: host-header poisoning).
+        reset_url = f"{settings.FRONTEND_URL}/auth/reset-password?token={token}"
+
+        # 4. Dispatch the send without awaiting the network (T-207-02: an
+        # existing address must not cost a round-trip that a non-existent
+        # address never pays). email_service.spawn_password_reset_email opens
+        # its own client and fires the send as a detached task.
+        email_service.spawn_password_reset_email(
+            to=user.email, reset_url=reset_url, user_id=user.id
+        )
 
 
 async def get_user_manager(

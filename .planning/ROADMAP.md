@@ -167,7 +167,7 @@
 | 204. Push Reminder Delivery Reliability (SEED-135, v2.12) | 3/3 | Complete | 2026-08-03 |
 | 205. Train Grading Oracle Agreement (SEED-137, v2.12) | 2/2 | Complete    | 2026-08-04 |
 | 206. Train Warm-Up Sessions & Sharp Filler Pool (SEED-140, unassigned) | 3/3 | Complete    | 2026-08-07 |
-| 207. Self-Serve Password Reset (SEED-143, unassigned) | 0/3 | Planned | - |
+| 207. Self-Serve Password Reset (SEED-143, unassigned) | 3/3 | Complete    | 2026-08-08 |
 
 ## Active Phases (unassigned milestone)
 
@@ -282,6 +282,7 @@ Plans:
    Gating on "is a Google account" (an `oauth_account` row) would strand **125 of the 172** accounts that need reset — 73% of the target population — all of whom carry real `$argon2id$` hashes and can genuinely forget them.
 
    (Guests share the empty hash and are therefore also excluded, so no separate `is_guest` check is needed. This is a note on the predicate's shape, not a reason for it — D-07 already established the guest path is unreachable, since a guest's `guest_<uuid4hex>@guest.local` address cannot be typed into the form without guessing a uuid4.)
+
 5. **No enumeration fix needed** — fastapi-users' `forgot_password` already returns `202` regardless of whether the address exists. Default token TTL 3600s is fine as-is. Don't build either.
 
 **Explicitly OUT of scope (D-07 — decided, not oversights)**:
@@ -310,15 +311,15 @@ Plans:
 Plans:
 **Wave 1**
 
-- [ ] 207-01-PLAN.md — Backend spine: a `type="tracer"` end-to-end slice (config → eligibility gate + per-email limiter → email service → `on_after_forgot_password` → mounted reset router → HTTP test proving forgot → token → reset → login), then the rate-limit/non-blocking-dispatch/Sentry contract and the credential-state eligibility tests, all mutation-tested
+- [x] 207-01-PLAN.md — Backend spine: a `type="tracer"` end-to-end slice (config → eligibility gate + per-email limiter → email service → `on_after_forgot_password` → mounted reset router → HTTP test proving forgot → token → reset → login), then the rate-limit/non-blocking-dispatch/Sentry contract and the credential-state eligibility tests, all mutation-tested
 
 **Wave 2** *(blocked on Wave 1 — consumes the HTTP contract recorded in 207-01-SUMMARY.md)*
 
-- [ ] 207-02-PLAN.md — Frontend: `ForgotPasswordForm` + `ResetPasswordForm`, their two public routes, the sign-in entry link, Vitest suites, and a 375px human-verify checkpoint
+- [x] 207-02-PLAN.md — Frontend: `ForgotPasswordForm` + `ResetPasswordForm`, their two public routes, the sign-in entry link, Vitest suites, and a 375px human-verify checkpoint
 
 **Wave 3** *(blocked on Waves 1–2)*
 
-- [ ] 207-03-PLAN.md — Operator handoff: `.env.example` entries, `docs/email-resend-runbook.md`, CHANGELOG bullet, and the two Step-0-gated HUMAN-UAT verdicts (RESET-01 real mailbox, RESET-07 apex-SPF regression)
+- [x] 207-03-PLAN.md — Operator handoff: `.env.example` entries, `docs/email-resend-runbook.md`, CHANGELOG bullet, and the two Step-0-gated HUMAN-UAT verdicts (RESET-01 real mailbox, RESET-07 apex-SPF regression)
 
 **UI hint**: small — one new form component, one new route, one link on `LoginForm.tsx`. No new pages beyond the reset-password route, no design-system additions.
 
