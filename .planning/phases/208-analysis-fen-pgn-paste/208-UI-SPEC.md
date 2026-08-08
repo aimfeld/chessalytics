@@ -1,7 +1,7 @@
 ---
 phase: 208
 slug: analysis-fen-pgn-paste
-status: draft
+status: approved
 shadcn_initialized: true
 preset: "style=radix-nova, baseColor=neutral, iconLibrary=lucide, rsc=false, cssVariables=true"
 created: 2026-08-08
@@ -181,6 +181,12 @@ explicitly left two of them at "Claude's discretion."
 - `<Textarea>` reused verbatim from `textarea.tsx`. `rows={6}` for a visible starting height
   generous enough for a pasted game (the component's own `field-sizing-content` grows it
   further as content is typed/pasted).
+- **Bounded growth (locked).** `field-sizing-content` (`textarea.tsx:10`) grows the box with its
+  content, so a several-hundred-ply PGN would otherwise push `DialogContent` past the viewport.
+  Add an explicit `max-h` with internal scroll (`overflow-y-auto`) on the textarea so the modal
+  height stays bounded regardless of paste size. This supersedes an earlier draft claim that the
+  dialog's inherited behavior already handled it — that claim was not verifiable against the
+  primitives, and the cap is cheap and deterministic.
 - `id="paste-input"`, `data-testid="paste-textarea"`, `aria-label="FEN or PGN"`,
   paired with a visible `<label htmlFor="paste-input" className="text-sm font-medium">` reading
   "Position or game" (matches `FeedbackModal`'s label pattern exactly: `text-sm font-medium`
@@ -336,22 +342,78 @@ authenticated users — no guest-specific copy, no disabled state, no upsell.**
 > Empty-state and error-state COPY live in `## Copywriting Contract` above — this section covers
 > state coverage and REFERENCES those rows rather than restating the copy (de-dup).
 
-Applicable state considerations resolved: 11 covered, 2 backstop, 0 unresolved.
+Probe run: 9 elements, **33 applicable considerations** — 21 covered (explicit), 2 backstop,
+10 dismissed, **0 unresolved**.
 
-| Category | Element(s) | Status | Resolution / Reason |
-|----------|------------|--------|---------------------|
-| empty | paste-form (form) | ✅ covered | Empty-textarea state disables "Load", shows no error, no side selector — see § Interaction Contract 4, "Empty" row |
-| empty | Library list-collection, "Pasted" chip on with zero pasted games | ✅ covered | Falls through to the existing `EmptyState title="No games matched"` (`GamesTab.tsx:406`) — accurate as-is, no new copy needed |
-| loading | paste-form (form, "Analyze full game" submit) | ✅ covered | Both buttons disable, secondary label becomes "Analyzing…" — mirrors `FeedbackModal`'s `isPending` → `"Sending..."` pattern (see Copywriting Contract) |
-| error | paste-form (form, client parse failure) | ✅ covered | Locked D-22 copy, inline `role="alert" text-sm text-destructive`, `data-testid="paste-error"` |
-| error | paste-form (form, server save/enqueue failure) | ✅ covered | Generic project-voice copy, same inline slot pattern, `data-testid="paste-save-error"` — distinct from the client parse error (different trigger, same visual treatment) |
-| error | nav-analysis (nav) | ✅ covered | No error state applies — the route is always reachable (D-10, `IMPORT_EXEMPT_ROUTES`), and `Link` navigation has no failure mode of its own |
-| populated | Library list-collection, pasted games with the chip on | ✅ covered | Renders exactly like any other `LibraryGameCard`, plus the "Pasted" badge in the pre-existing empty slot — no new card layout |
-| partial | paste-form (form, PGN headers with missing Elo/date/one player name) | ✅ covered | `PlayerBar`'s `rating: number | null` already omits the parenthetical when absent (`PlayerBar.tsx:40`); § Interaction Contract 6 specifies the same tolerance for the result/date slot and § 5's meta line |
-| overflow | paste-form (form, side-selector meta line with a long parsed name) | 🧪 backstop | Recommended per-name truncation (§ Interaction Contract 5) at 375px is unverified against the actual longest observed header name (SEED-144's corpus scout found names spelled 12 different ways but did not measure max length) — needs a real long-name check at build/verify time, not assumed safe |
-| overflow | player-info-area (static-content, result/date slot at 375px with a long player name already filling the row) | 🧪 backstop | § Interaction Contract 6 reuses the clock's slot for result+date; whether that slot has room alongside a long truncating name at 375px on the SAME row is unverified — flag for a real-device/viewport check, not a copy problem |
-| long-text | paste-form (form, textarea with a full multi-hundred-ply PGN pasted) | ✅ covered | `Textarea`'s `field-sizing-content` (`textarea.tsx:10`) grows with content; the `DialogContent` itself does not scroll internally, but the textarea's own growth plus the page's natural scroll (mobile) / the modal's `max-h` behavior (desktop, inherited from `dialog.tsx`, unmodified) already handles this — no new scroll container needed |
-| zero-one-many | (dismissed — not applicable) | — | A single paste-and-analyze action creates at most one `Game` row; this phase has no user-facing list of "your pasted games" distinct from the existing Library list (already covered under populated/empty above) |
+Element kinds were authored as explicit `elements` overrides rather than left to prose
+classification: the heuristic cue-match over this spec's prose over-fired badly (a single ghost
+trigger button classified into all 8 categories on the words "icon", "label", "controls" and
+"cards", yielding 57 spurious considerations). The overrides below are the honest kinds.
+
+| # | Element | Kind(s) |
+|---|---------|---------|
+| E1 | paste trigger button (movelist header) | interactive-control |
+| E2 | paste modal form (textarea + state machine) | form |
+| E3 | side selector + parsed-header meta line | interactive-control, static-content |
+| E4 | modal footer actions (Load / Analyze full game) | interactive-control |
+| E5 | inline error region | static-content |
+| E6 | player info area (ephemeral pasted game) | static-content |
+| E7 | Library "Pasted" filter chip | interactive-control |
+| E8 | Library games list (+ "Pasted" badge) | list-collection |
+| E9 | `/analysis` nav entry | nav |
+
+### Covered (✅ explicit → `must_haves.truths` string)
+
+| Category | Element | Truth |
+|----------|---------|-------|
+| long-text | E1 | The trigger label is the fixed literal "Paste"; at 375px the compact movelist `CardHeader` renders icon + label alongside the "Moves" title without wrapping or truncating either |
+| empty | E2 | An empty (whitespace-only) textarea leaves "Load" `disabled`, renders no error, and hides the side selector — no copy narrates the state |
+| loading | E2 | While "Analyze full game" is in flight both footer buttons are `disabled` and the secondary label reads "Analyzing…" |
+| error | E2 | A client parse failure renders the locked D-22 copy inline at `data-testid="paste-error"` with `role="alert"`; a server save failure renders the generic project-voice copy at `data-testid="paste-save-error"` |
+| partial | E2 | A PGN missing `WhiteElo`/`BlackElo`/`Date`, or carrying headerless movetext, parses and displays with the absent fields omitted rather than rendered as blank or `undefined` |
+| long-text | E2 | The textarea carries an explicit `max-h` with internal scroll, so a several-hundred-ply PGN can never grow `DialogContent` past the viewport (resolved by user decision — supersedes the earlier "inherited behavior already handles this" claim, which was unverifiable against `textarea.tsx:10`'s `field-sizing-content`) |
+| long-text | E3 | Parsed player names in the meta line truncate individually (not the line as a whole), and the rating parenthetical is omitted when the Elo header is absent |
+| loading | E4 | Both footer buttons enter a `disabled` state together during submit — neither is independently clickable mid-flight |
+| error | E4 | On save failure both buttons return to `enabled` so the action can be retried without reopening the modal |
+| long-text | E4 | Button labels are fixed literals ("Load", "Analyze full game", "Analyzing…"); at 375px `DialogFooter`'s `flex-col-reverse` gives each a full-width row, so no label truncates |
+| overflow | E5 | Both error strings are fixed literals that wrap within the modal width at 375px — never truncated, never horizontally scrolled |
+| long-text | E5 | Raw chess.js error text is never surfaced (D-22), so the error string is bounded by the two locked literals |
+| long-text | E6 | Player names sourced from PGN headers truncate rather than wrap or push the rating and result/date content out of the `PlayerBar` row |
+| empty | E8 | Enabling the "Pasted" chip with zero pasted games falls through to the existing `EmptyState title="No games matched"` (`GamesTab.tsx:406`) — no new copy |
+| loading | E8 | The Library list's existing loading path is reused unchanged; adding a platform value introduces no new loading surface |
+| error | E8 | The Library list's existing `isError` branch (CLAUDE.md's mandated copy shape) covers the pasted-games case unchanged — no new error surface |
+| populated | E8 | A pasted game renders as a standard `LibraryGameCard` plus an outline "Pasted" badge with `className="text-sm"` in the existing empty `ml-auto shrink-0` slot |
+| partial | E8 | A pasted game's null `white_rating`/`black_rating` and null `time_control_bucket` are already null-guarded by the existing card (`LibraryGameCard.tsx:781-782`, `:878`), including the conditional `·` separator (`:924-925`) — no blank fields and no dangling separator |
+| overflow | E8 | Long parsed player names on a pasted card use the card's existing truncation — the "Pasted" badge is `shrink-0` and is never pushed out of the row |
+| zero-one-many | E8 | Re-pasting the same game reuses the existing row (D-17), so the Library never shows duplicate pasted entries for one source game |
+| error | E9 | `/analysis` is reachable and clickable with zero imported games (`IMPORT_EXEMPT_ROUTES`, D-10) — it never renders the locked/disabled nav treatment |
+
+### Backstop (🧪 → flat scalar `{ statement, verification: backstop }`)
+
+| Category | Element | Statement | Verification |
+|----------|---------|-----------|--------------|
+| overflow | E3 | The side-selector meta line fits at 375px with a realistically long parsed header name, with per-name truncation applied and the toggle's 50/50 item widths unchanged | backstop |
+| overflow | E6 | The result + date slot (reusing the empty clock slot, § Interaction Contract 6) has room on the same `PlayerBar` row alongside a long truncating player name at 375px | backstop |
+
+Both are viewport measurements, not copy or logic decisions — SEED-144's corpus scout found
+names spelled twelve different ways but never measured a maximum length, so neither can be
+asserted from the spec. At verify time, an unproven statement here routes to
+`insufficient_spec → human_needed` rather than passing silently (#1154).
+
+### Dismissed (reason recorded — never a silent drop)
+
+| Category | Element | Reason |
+|----------|---------|--------|
+| loading | E1 | Opening a local modal is synchronous — no async work, so no loading state exists |
+| error | E1 | Opening a modal has no failure mode |
+| loading | E3 | The toggle is local state with no request behind it |
+| error | E3 | A two-item local toggle cannot fail |
+| loading | E7 | The chip reuses `ToggleChipButton` exactly as the existing platform chips do; the refetch it triggers is the list's loading state, covered under E8-loading |
+| error | E7 | Same — the failure surface belongs to the list, covered under E8-error |
+| long-text | E7 | The chip label is the fixed literal "Pasted" |
+| loading | E9 | A `react-router` `Link` has no loading state of its own |
+| overflow | E9 | **Pre-existing condition this phase inherits rather than causes** (resolved by user decision). The desktop header already renders a 6th item for superusers (`navItems = profile?.is_superuser ? [...NAV_ITEMS, ADMIN_NAV_ITEM] : NAV_ITEMS`, `App.tsx:174`) inside a `hidden sm:block ... overflow-hidden` container that begins at 640px (`App.tsx:177`), so density at narrow desktop widths predates `/analysis`. Recorded here so the constraint is visible to the planner without widening this phase's scope |
+| long-text | E9 | The nav label is a fixed literal, set in the `NAV_ITEMS` array |
 
 <!-- Status vocabulary (locked by probe-core projectTruths):
      ✅ covered   → a plain truth string lifted into must_haves.truths
@@ -376,11 +438,21 @@ project, and none is introduced by this phase. Nothing to vet.
 
 ## Checker Sign-Off
 
-- [ ] Dimension 1 Copywriting: PASS
-- [ ] Dimension 2 Visuals: PASS
-- [ ] Dimension 3 Color: PASS
-- [ ] Dimension 4 Typography: PASS
-- [ ] Dimension 5 Spacing: PASS
-- [ ] Dimension 6 Registry Safety: PASS
+- [x] Dimension 1 Copywriting: PASS (1 non-blocking FLAG — see below)
+- [x] Dimension 2 Visuals: PASS
+- [x] Dimension 3 Color: PASS
+- [x] Dimension 4 Typography: PASS
+- [x] Dimension 5 Spacing: PASS
+- [x] Dimension 6 Registry Safety: PASS
 
-**Approval:** pending
+**Approval:** APPROVED — 6/6 dimensions, 0 BLOCKERs.
+
+The checker independently re-verified every codebase claim in this spec against the real files
+(`button.tsx:8,29-32`, `toggle.tsx:14`, `badge.tsx:8`, `index.css:68-70`, `FilterPanel.tsx:283-291`,
+`App.tsx:76-89,330-345,525-545`, `LibraryGameCard.tsx:817-819`, `PlatformIcon.tsx:39-43`,
+`query_utils.py:24-30`) and found **no false anchors** — the `text-[0.8rem]` / `text-xs` traps and
+their mandated overrides are all real.
+
+**Non-blocking FLAG (Dimension 1):** the "Load" CTA is a single verb without an explicit noun.
+The rationale (only one thing on screen to load) is reasoned and the label is unambiguous in
+context; "Load position" would close it cleanly if the planner prefers. No functional impact.
