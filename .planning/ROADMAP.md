@@ -168,7 +168,7 @@
 | 205. Train Grading Oracle Agreement (SEED-137, v2.12) | 2/2 | Complete    | 2026-08-04 |
 | 206. Train Warm-Up Sessions & Sharp Filler Pool (SEED-140, unassigned) | 3/3 | Complete    | 2026-08-07 |
 | 207. Self-Serve Password Reset (SEED-143, unassigned) | 3/3 | Complete    | 2026-08-08 |
-| 208. Paste a FEN or PGN on /analysis (SEED-144, unassigned) | 0/0 | Not planned | — |
+| 208. Paste a FEN or PGN on /analysis (SEED-144, unassigned) | 4/4 | Complete    | 2026-08-08 |
 
 ## Active Phases (unassigned milestone)
 

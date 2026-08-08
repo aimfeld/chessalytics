@@ -4,26 +4,32 @@ milestone: v2.12
 milestone_name: Train Reliability & Grading Agreement
 current_phase: 208
 current_phase_name: analysis-fen-pgn-paste
-status: executing
-stopped_at: Phase 208 UI-SPEC approved
-last_updated: "2026-08-08T17:13:09.189Z"
+status: shipped
+stopped_at: Phase 208 squash-merged to main (not deployed)
+last_updated: "2026-08-08T20:10:00.000Z"
 last_activity: 2026-08-08
-last_activity_desc: Phase 208 added (SEED-144, paste a FEN or PGN on /analysis) — not planned yet
+last_activity_desc: Phase 208 shipped — squash-merged to main as 432075a03
 progress:
   total_phases: 3
-  completed_phases: 2
+  completed_phases: 3
   total_plans: 10
-  completed_plans: 6
+  completed_plans: 10
 ---
 
 # Project State: FlawChess
 
 ## Current Position
 
-Phase: 208 (analysis-fen-pgn-paste) — EXECUTING
-Plan: 1 of 4
-Status: Executing Phase 208
-Last activity: 2026-08-08 — Phase 208 execution started
+Phase: 208 (analysis-fen-pgn-paste) — SHIPPED
+Plan: 4 of 4
+Status: Phase 208 squash-merged to main (432075a03) — not yet deployed
+Last activity: 2026-08-08 — Phase 208 shipped to main
+
+Phase 208 shipped with the full pre-merge gate green (backend 4252 passed, frontend
+3411 passed, ruff/ty/eslint/tsc/knip clean). Verification is `human_needed`: 5 UAT
+items (4 viewport backstops at 375px + the CR-01 same-page-switch browser
+confirmation) are still `[pending]` in 208-UAT.md, shipped on the operator's explicit
+instruction. Deploy deliberately deferred.
 
 **v2.12 closed 2026-08-05** retroactively over two already-shipped, already-deployed phases (lightweight close, no `/gsd-new-milestone` requirements cycle — same pattern as v2.6 and v2.8):
 
