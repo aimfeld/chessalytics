@@ -106,7 +106,19 @@ Authorization: Bearer <RESEND_API_KEY>
 Neither Resend nor Postmark publishes an inactivity-purge policy, but **neither guarantees
 survival either** — see the Known Risks section.
 
-### D-04 — Google-only accounts get a normal reset link
+### D-04 — ~~Google-only accounts get a normal reset link~~ **REVERSED 2026-08-08**
+
+> **Operator decision during `/gsd-plan-phase 207`: password reset is for accounts that have a password. Google-only accounts get no reset email.** The text below is retained for the record only; `ROADMAP.md` Phase 207 locked constraint 4 is operative.
+>
+> **The seed's population table above is also incomplete in a way that matters.** It splits 216 signed-up accounts into "172 with a password" and "44 Google-only", which implies password and Google are alternatives. Measured on prod 2026-08-08 they overlap heavily:
+>
+> | Group | Password | Google linked | Count |
+> |---|---|---|---|
+> | Pure email/password | `$argon2id$` | no | 47 |
+> | **Both** | `$argon2id$` | yes | **125** |
+> | Google-only | `''` | yes | 44 |
+>
+> So the eligibility predicate is `hashed_password != ''` ("has a password to reset"), **not** "has no linked Google account". The latter would strand the 125 dual accounts — 73% of the target population, all holding real `$argon2id$` hashes. The credential-state predicate also excludes all 304 guests for free, which retires D-07's guest-guard item instead of accepting it as residual risk.
 
 The 44 accounts with an empty `hashed_password` (Google SSO) receive the standard reset email.
 They end up with both login methods on one account. No special-casing, no second template.

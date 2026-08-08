@@ -270,7 +270,16 @@ Plans:
 1. **Fully self-serve (D-01)** — emailed token link, user sets a new password, zero operator involvement. The "email the maintainer" manual path was considered and rejected despite the tiny volume.
 2. **No self-hosted mail server (D-02)** — rejected on deliverability, not on effort. Hetzner blocks outbound 25/465 by default (587 is open, so relay was never actually blocked — moot given D-03), and more decisively, **IP reputation is earned by volume and this flow has none**: ~5 sends/year warms nothing, ever. A reset email in spam is a silent total failure nobody reports.
 3. **Resend, free tier, raw HTTP (D-03)** — 3,000/mo · 100/day permanent, ~60x headroom, no account review, HTTPS:443. Brevo and Mailjet are **disqualified** (delete free accounts after 4 months of inactivity — the exact silent-rot failure this flow must avoid); SES's free tier ended for new customers 21 Jul 2026; Mailgun is a churny vendor. **Postmark is the designated fallback** if Resend deliverability ever disappoints (rejected only for its manual new-account review).
-4. **Google-only accounts get the standard reset link (D-04)** — the 44 accounts with an empty `hashed_password` receive the same email and end up with both login methods. No special-casing, no second template. Not a security downgrade: the flow still requires mailbox control.
+4. **D-04 REVERSED 2026-08-08 (operator decision) — eligibility is "has a password", and the predicate is load-bearing.** The seed had Google-only accounts receiving a standard reset link and gaining a password. They do not. An account with an empty `hashed_password` gets **no reset email**; the HTTP response and UI copy stay byte-identical (RESET-02 is unaffected). **The predicate is `hashed_password != ''` — "has a password to reset" — and NOT "has no linked Google account".** Prod measured 2026-08-08 shows why that distinction is the whole ballgame:
+
+   | Group | Password | Google linked | Count | Reset? |
+   |---|---|---|---|---|
+   | Pure email/password | `$argon2id$` | no | 47 | **yes** |
+   | **Both** | `$argon2id$` | yes | **125** | **yes** |
+   | Google-only | `''` | yes | 44 | no |
+   | Guests | `''` | no | 304 | no |
+
+   Gating on "is a Google account" (an `oauth_account` row) would strand **125 of the 172** accounts that need reset — 73% of the target population — all of whom carry real `$argon2id$` hashes and can genuinely forget them. The credential-state predicate also excludes all 304 guests for free, which retires D-07's "no explicit guest guard" concern rather than accepting it.
 5. **No enumeration fix needed** — fastapi-users' `forgot_password` already returns `202` regardless of whether the address exists. Default token TTL 3600s is fine as-is. Don't build either.
 
 **Explicitly OUT of scope (D-07 — decided, not oversights)**:
@@ -285,8 +294,8 @@ Plans:
 2. Submitting an address that does not exist is indistinguishable from one that does (same `202`, same UI copy, no timing tell introduced by the send).
 3. Repeated requests for the same address are rate-limited, and the limit is proven by a test that fails when the cooldown is removed.
 4. A Resend send failure produces a Sentry event with `user_id` in context and **no variable interpolated into the message string** (grouping stays intact).
-5. A Google-only account (empty `hashed_password`) completes the same flow and afterwards can log in by either method.
-6. The frontend forms carry `data-testid` on every interactive element, honor the `text-sm` floor, use `variant="brand-outline"` for secondary actions, are usable at 375px, and render an `isError` branch rather than falling through to an empty state.
+5. **Eligibility is credential state, not account type.** An account with a linked Google account *and* a password (125 in prod, the majority of the target population) receives a reset email and completes the flow normally. An account with an empty `hashed_password` (44 Google-only, 304 guests) receives no email, while its HTTP response and UI copy remain byte-identical to every other submission. Proven by a test that goes red if eligibility is ever derived from `oauth_account` rather than from the presence of a password.
+6. The frontend forms carry `data-testid` on every interactive element, honor the `text-sm` floor, use `variant="brand-outline"` for secondary actions, are usable at 375px, and render an `isError` branch rather than falling through to an empty state. The confirmation is a **single static string with no status-dependent branch**, and it closes the Google-only dead end by naming the alternative: "If an account exists for that address, we've sent a reset link. Signed up with Google? Use the Sign in with Google button instead." (Operator decision 2026-08-08 — chosen over a second email template, which stays a non-goal.)
 7. The existing apex SPF record is **byte-identical** to its pre-phase value (`v=spf1 a mx include:spf.webapps.net ~all`), and Swizzonic mail to flawchess.com still delivers — confirmed by an actual received message. Under the superseded D-05 this was the phase's one real risk; it is now a regression check that the additive-only path was actually followed.
 8. Each production change is mutation-tested (revert it, confirm the test goes red) rather than accepted on symbol presence.
 
