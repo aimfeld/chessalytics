@@ -671,6 +671,87 @@ class TestDeadBandAdmissible:
 
 
 # ---------------------------------------------------------------------------
+# TestSecondBestNotWinningAdmissible (SEED-141) — second_best_not_winning_admissible
+# applied at pool_entry_stmt. `_still_winning_node`'s "b" is fixed at 900 cp
+# (ES ~0.965), large enough that best-vs-second always clears BLUNDER_DROP for
+# every "s" value used below (400 down to -400) — dead_band_admissible stays
+# admissible throughout, isolating the new predicate as the only variable.
+# ---------------------------------------------------------------------------
+
+
+def _still_winning_node(second_cp: int) -> dict[str, Any]:
+    """A missed_pv_lines node-0 dict with a fixed large best-move eval (900 cp,
+    ES ~0.965) and `second_cp` as the runner-up's white-perspective eval — the
+    gap always clears BLUNDER_DROP regardless of `second_cp`'s value in the
+    range this module's tests use, so dead_band_admissible is admissible
+    throughout and second_best_not_winning_admissible is the only variable."""
+    return {"b": 900, "bm": None, "s": second_cp, "sm": None, "su": "e2e4"}
+
+
+class TestSecondBestNotWinningAdmissible:
+    """second_best_not_winning_admissible, applied at pool_entry_stmt."""
+
+    @pytest.mark.asyncio
+    async def test_second_best_clearly_winning_is_absent(self, test_engine) -> None:
+        """White mover, s=400 (>= SECOND_BEST_WINNING_FLOOR_CP): the runner-up
+        still leaves the mover clearly winning, so the puzzle is excluded."""
+        user_id, _ = await _register_and_login(
+            f"train-swin-clear-{uuid.uuid4().hex[:8]}@example.com"
+        )
+        game_id = await _seed_blunder_game(
+            test_engine, user_id, missed_pv_lines=[_still_winning_node(400)]
+        )
+        try:
+            assert await _pool_contains(test_engine, user_id, game_id, 10) is False
+        finally:
+            await _delete_games(test_engine, [game_id])
+
+    @pytest.mark.asyncio
+    async def test_second_best_exactly_at_floor_is_absent(self, test_engine) -> None:
+        """s == SECOND_BEST_WINNING_FLOOR_CP (200): the exclusion boundary is
+        inclusive at the exclusion side."""
+        user_id, _ = await _register_and_login(
+            f"train-swin-floor-{uuid.uuid4().hex[:8]}@example.com"
+        )
+        game_id = await _seed_blunder_game(
+            test_engine, user_id, missed_pv_lines=[_still_winning_node(200)]
+        )
+        try:
+            assert await _pool_contains(test_engine, user_id, game_id, 10) is False
+        finally:
+            await _delete_games(test_engine, [game_id])
+
+    @pytest.mark.asyncio
+    async def test_second_best_one_cp_below_floor_is_present(self, test_engine) -> None:
+        """s == 199 (one cp below the floor): admissible — the boundary is sharp."""
+        user_id, _ = await _register_and_login(
+            f"train-swin-below-{uuid.uuid4().hex[:8]}@example.com"
+        )
+        game_id = await _seed_blunder_game(
+            test_engine, user_id, missed_pv_lines=[_still_winning_node(199)]
+        )
+        try:
+            assert await _pool_contains(test_engine, user_id, game_id, 10) is True
+        finally:
+            await _delete_games(test_engine, [game_id])
+
+    @pytest.mark.asyncio
+    async def test_second_best_leaves_mover_losing_is_present(self, test_engine) -> None:
+        """s = -400 (the runner-up leaves the mover losing, not winning):
+        admissible — this is exactly the case the puzzle should still test."""
+        user_id, _ = await _register_and_login(
+            f"train-swin-losing-{uuid.uuid4().hex[:8]}@example.com"
+        )
+        game_id = await _seed_blunder_game(
+            test_engine, user_id, missed_pv_lines=[_still_winning_node(-400)]
+        )
+        try:
+            assert await _pool_contains(test_engine, user_id, game_id, 10) is True
+        finally:
+            await _delete_games(test_engine, [game_id])
+
+
+# ---------------------------------------------------------------------------
 # herring_stmt tests
 # ---------------------------------------------------------------------------
 
