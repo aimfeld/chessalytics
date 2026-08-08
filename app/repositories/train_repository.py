@@ -55,6 +55,7 @@ from app.services.train_pool import (
     herring_stmt,
     pick_one_per_game,
     pool_entry_stmt,
+    second_best_not_winning_admissible,
 )
 from app.services.train_scheduler import (
     DEFAULT_PUZZLES_PER_SESSION,
@@ -985,12 +986,16 @@ async def get_waiting_puzzle_count(
 
     # Due drill_items — mirrors compose_and_materialize_session's due_stmt
     # eligibility exactly (status/due_date/flaw-row-presence/answer-key/
-    # dead-band, Phase 205), minus the Game join (not needed for a count).
-    # dead_band_admissible derives mover color from ply parity rather than
-    # Game.user_color for exactly this reason — every candidate row here is
-    # already the user's own ply by construction. Leaving this arm unbanded
-    # was considered and rejected: a user whose whole due set is banded
-    # would otherwise see a badge for a session that composes empty (D-05).
+    # dead-band/second-best-still-winning, Phase 205 + SEED-141), minus the
+    # Game join (not needed for a count). dead_band_admissible and
+    # second_best_not_winning_admissible both derive mover color from ply
+    # parity rather than Game.user_color for exactly this reason — every
+    # candidate row here is already the user's own ply by construction.
+    # Leaving this arm unfiltered was considered and rejected: a user whose
+    # whole due set is banded/still-winning would otherwise see a badge for
+    # a session that composes empty (D-05, extended by SEED-141 to the same
+    # standard — the value is read LIVE from the flaw row and is NEVER
+    # snapshotted onto drill_items).
     due_count_stmt = (
         select(func.count())
         .select_from(DrillItem)
@@ -1009,6 +1014,7 @@ async def get_waiting_puzzle_count(
             GameFlaw.ply.isnot(None),
             answer_key_present(GameFlaw.missed_pv_lines),
             dead_band_admissible(GameFlaw.missed_pv_lines, GameFlaw.ply),
+            second_best_not_winning_admissible(GameFlaw.missed_pv_lines, GameFlaw.ply),
         )
     )
     due_count = (await session.execute(due_count_stmt)).scalar_one()
@@ -1502,6 +1508,13 @@ async def _select_candidates(
             # due_date untouched, nothing deleted — so it resurfaces
             # automatically if a re-analysis moves it back out.
             dead_band_admissible(GameFlaw.missed_pv_lines, GameFlaw.ply),
+            # SEED-141: the entry gate and the re-serve scan must enforce the
+            # SAME second-best-still-winning standard, the exact precedent
+            # the dead-band comment above already sets. Read LIVE from the
+            # flaw row, never snapshotted onto drill_items — an excluded item
+            # is skipped for THIS session only (status/due_date untouched)
+            # so it resurfaces automatically if re-analysis moves it back.
+            second_best_not_winning_admissible(GameFlaw.missed_pv_lines, GameFlaw.ply),
         )
         .order_by(DrillItem.due_date.asc(), DrillItem.game_id.asc(), DrillItem.ply.asc())
         # Quick task 260728-pgp: over-fetch (bounded by _DUE_OVERFETCH_FACTOR,

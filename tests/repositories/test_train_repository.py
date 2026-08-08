@@ -98,6 +98,15 @@ _MISSED_PV_LINES = [{"b": 40, "bm": None, "s": 30, "sm": None, "su": "g8f6"}]
 # get_waiting_puzzle_count all exclude it.
 _BANDED_PV_LINES = [{"b": 40, "bm": None, "s": -30, "sm": None, "su": "g8f6"}]
 
+# SEED-141 (Phase 206.1): a node-0 whose best-vs-second gap CLEARS the dead
+# band (900 vs 400 cp, gap ~0.151 >= BLUNDER_DROP=0.15, so dead_band_admissible
+# is NOT what excludes this row) but whose second-best (400 cp) is at or above
+# SECOND_BEST_WINNING_FLOOR_CP (200) from the white mover's POV at
+# `_seed_flaw_game`'s default even ply (2, white mover) -- the runner-up still
+# leaves the mover clearly winning, so second_best_not_winning_admissible is
+# the only clause that can be responsible for excluding it.
+_STILL_WINNING_PV_LINES = [{"b": 900, "bm": None, "s": 400, "sm": None, "su": "g8f6"}]
+
 # A comfortably winnable eval for White (well above WINNABILITY_FLOOR_ES=0.20).
 _WINNABLE_CP = 300
 
@@ -2148,6 +2157,119 @@ async def test_waiting_count_excludes_banded_due_item(db_session: AsyncSession) 
         DrillItem(
             user_id=_USER_ID,
             game_id=banded_game_id,
+            ply=2,
+            status=DrillStatus.ACTIVE,
+            streak=0,
+            due_date=_TODAY,
+            fail_count=0,
+            ever_correct=False,
+        )
+    )
+    await db_session.flush()
+
+    count = await train_repository.get_waiting_puzzle_count(
+        db_session, user_id=_USER_ID, settings_row=settings_row, today=_TODAY
+    )
+    assert count == 1
+
+
+# ---------------------------------------------------------------------------
+# SEED-141 (Phase 206.1) -- the second-best-still-winning re-serve sites.
+# Mirrors the Phase 205 dead-band tests immediately above: the entry gate
+# (pool_entry_stmt) and both re-serve sites (due_stmt, get_waiting_puzzle_count's
+# due_count_stmt) must all apply the SAME second_best_not_winning_admissible
+# standard, read live from the flaw row and never snapshotted onto drill_items.
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_still_winning_item_not_reserved_when_due(db_session: AsyncSession) -> None:
+    """SEED-141: an already-tracked drill_items row whose backing flaw's
+    missed_pv_lines is rewritten so the runner-up still leaves the mover
+    clearly winning is skipped by due_stmt's fresh scan on the next session
+    compose, with the row provably untouched -- it still EXISTS, its status
+    is still ACTIVE, and its due_date is unchanged from the value captured
+    before the rewrite. Modeled on test_banded_item_not_reserved_when_due."""
+    await ensure_test_user(db_session, _USER_ID)
+    game_id = await _seed_flaw_game(db_session, _USER_ID, "still-winning-reserve-1", ply=2)
+
+    first = await train_repository.compose_and_materialize_session(
+        db_session, user_id=_USER_ID, now_utc=_NOW
+    )
+    assert first.puzzle_count == 1
+
+    item_row_before = (
+        await db_session.execute(
+            select(DrillItem).where(
+                DrillItem.user_id == _USER_ID, DrillItem.game_id == game_id, DrillItem.ply == 2
+            )
+        )
+    ).scalar_one()
+    due_date_before = item_row_before.due_date
+
+    # Force the session to expire so the NEXT compose runs a fresh due_stmt
+    # scan rather than resuming.
+    await db_session.execute(
+        update(DrillSession)
+        .where(DrillSession.id == first.session_id)
+        .values(expires_on=datetime.date(2020, 1, 1))
+    )
+    await db_session.flush()
+
+    # Simulate a reclassification that moves the backing blob's runner-up
+    # into "still winning" territory.
+    await db_session.execute(
+        update(GameFlaw)
+        .where(GameFlaw.user_id == _USER_ID, GameFlaw.game_id == game_id, GameFlaw.ply == 2)
+        .values(missed_pv_lines=_STILL_WINNING_PV_LINES)
+    )
+    await db_session.flush()
+
+    second = await train_repository.compose_and_materialize_session(
+        db_session, user_id=_USER_ID, now_utc=_NOW
+    )
+    assert second.puzzle_count == 0
+
+    item_row_after = (
+        await db_session.execute(
+            select(DrillItem).where(
+                DrillItem.user_id == _USER_ID, DrillItem.game_id == game_id, DrillItem.ply == 2
+            )
+        )
+    ).scalar_one()
+    assert item_row_after.status == DrillStatus.ACTIVE  # skipped, never deleted or parked
+    assert item_row_after.due_date == due_date_before  # untouched
+
+
+@pytest.mark.asyncio
+async def test_waiting_count_excludes_still_winning_due_item(db_session: AsyncSession) -> None:
+    """SEED-141: get_waiting_puzzle_count's due-count statement excludes a
+    still-winning due item while still counting an admissible one -- not
+    simply zero, which would pass for the wrong reason. Modeled on
+    test_waiting_count_excludes_banded_due_item."""
+    await ensure_test_user(db_session, _USER_ID)
+    settings_row = await train_repository.get_or_create_settings(db_session, user_id=_USER_ID)
+
+    admissible_game_id = await _seed_flaw_game(db_session, _USER_ID, "waiting-swin-admissible")
+    db_session.add(
+        DrillItem(
+            user_id=_USER_ID,
+            game_id=admissible_game_id,
+            ply=2,
+            status=DrillStatus.ACTIVE,
+            streak=0,
+            due_date=_TODAY,
+            fail_count=0,
+            ever_correct=False,
+        )
+    )
+    still_winning_game_id = await _seed_flaw_game(
+        db_session, _USER_ID, "waiting-swin-stillwinning", missed_pv_lines=_STILL_WINNING_PV_LINES
+    )
+    db_session.add(
+        DrillItem(
+            user_id=_USER_ID,
+            game_id=still_winning_game_id,
             ply=2,
             status=DrillStatus.ACTIVE,
             streak=0,
