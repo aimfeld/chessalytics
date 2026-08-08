@@ -40,28 +40,39 @@ exactly as `dead_band_admissible` already does it. So this is a sibling predicat
 
 **No backfill, no re-analysis, no engine pass.**
 
-## Measurement (dev DB, 2026-08-07)
+## Measurement (prod, 2026-08-08; dev, 2026-08-07)
 
 Against the real admissible pool — `severity = 2`, own ply via `player_only_gate`, non-empty
-`missed_pv_lines`, `dead_band_admissible`, prior-ply ES >= `WINNABILITY_FLOOR_ES` (0.20) —
-**6,070 candidates**, of which 2,033 (33.5%) are sharp and 4,037 soft.
+`missed_pv_lines`, `dead_band_admissible`, prior-ply ES >= `WINNABILITY_FLOOR_ES` (0.20).
 
-| threshold (mover POV) | removed | % of pool | soft removed | sharp removed |
-|---|---|---|---|---|
-| second-best >= +200cp, or mating | 1,452 | 23.9% | 1,304 (89.8% of the cut) | 148 (7.3% of all sharp) |
-| second-best >= +300cp, or mating | 918 | 15.1% | 861 (93.8% of the cut) | 57 (2.8% of all sharp) |
+**Prod: 795,267 candidates across 266 users**, of which 253,334 (31.9%) are sharp.
+Dev: 6,070 candidates across 13 users, 33.5% sharp.
 
-108 candidates have a second-best move that is **outright mating** for the mover — the
+| threshold (mover POV) | removed | % of pool | soft removed | sharp removed | sharp share after |
+|---|---|---|---|---|---|
+| second-best >= +200cp, or mating | 189,705 | **23.9%** | 172,086 (90.7% of the cut) | 17,619 (7.0% of all sharp) | 31.9% -> **38.9%** |
+| second-best >= +300cp, or mating | 129,274 | **16.3%** | 123,141 (95.3% of the cut) | 6,133 (2.4% of all sharp) | 31.9% -> **37.1%** |
+
+14,704 candidates (1.8%) have a second-best move that is **outright mating** for the mover — the
 degenerate case the rule exists to catch, removed at either threshold.
 
-Sharp share of the surviving pool: 33.5% -> **40.8%** at +2, **38.4%** at +3. The filter cuts a
-quarter of the pool and improves its composition, because what it removes is overwhelmingly
-soft.
+**Prod replicates dev almost exactly** despite 131x the candidates and 20x the users: 23.9% vs
+23.9% removed at +2, 16.3% vs 15.1% at +3, and the same 90%+ soft-skew in what gets cut. The
+"dev is dominated by one user" caveat that originally gated this seed is resolved — the effect
+is a property of the rule, not of one playing style.
 
-**No starvation.** Per-user survival at +2 across the 13 dev users with any admissible
-material: every user keeps >= 54 distinct games carrying a surviving candidate (largest user:
-1,694 -> 1,443 games; smallest non-trivial: 64 -> 54). `MAX_ITEMS_PER_GAME_PER_SESSION` is 1,
-so distinct games is the binding supply measure, and it stays far above a session's needs.
+**Starvation is negligible.** Per-user distinct games carrying a surviving candidate
+(`MAX_ITEMS_PER_GAME_PER_SESSION` is 1, so distinct games is the binding supply measure), across
+all 266 prod users:
+
+- median 462 -> **403** games at +2; 25th percentile 71; 5th percentile 1.
+- Users under 5 distinct games: 31 before -> **33** after (+2). The rule pushes exactly 2
+  additional users below that line.
+- **2 users drop to zero** at +2. Both had exactly 1 distinct game before the filter, i.e. their
+  pools were already effectively empty and already covered by the herring / sharp-filler
+  cross-backfill. At +3, one of the two recovers.
+
+No user with a meaningful pool is meaningfully affected.
 
 ## Implementation notes
 
@@ -84,11 +95,11 @@ so distinct games is the binding supply measure, and it stays far above a sessio
 
 ## Open questions
 
-- **+2 or +3?** +2 is the more aggressive read of the GM's advice and gives the better
-  composition; +3 is the conservative one. Both are defensible; the operator picks.
-- **Does the dev measurement generalize?** One user contributes 3,321 of the 6,070 candidates
-  (55%), so the dev numbers are dominated by a single playing style. Re-run against prod (needs
-  `bin/prod_db_tunnel.sh`) before locking a threshold.
+- **+2 or +3?** The only genuinely open call. +2 is the more aggressive read of the GM's advice
+  and gives the better composition (38.9% vs 37.1% sharp) for 7.6 points more pool cut; +3 is
+  the conservative one and spares 11,486 sharp candidates. Both are defensible; the operator
+  picks. (RESOLVED, 2026-08-08: "does the dev measurement generalize?" — prod reproduces it, see
+  Measurement above. No prod re-run needed before locking.)
 - Should the symmetric case also be excluded — the second-best move still leaves the mover
   clearly LOSING (you were lost, the best move is less lost)? The existing
   `WINNABILITY_FLOOR_ES` floor already covers most of this, and the 0.20-0.35 ES band is only
