@@ -167,6 +167,7 @@
 | 204. Push Reminder Delivery Reliability (SEED-135, v2.12) | 3/3 | Complete | 2026-08-03 |
 | 205. Train Grading Oracle Agreement (SEED-137, v2.12) | 2/2 | Complete    | 2026-08-04 |
 | 206. Train Warm-Up Sessions & Sharp Filler Pool (SEED-140, unassigned) | 3/3 | Complete    | 2026-08-07 |
+| 207. Self-Serve Password Reset (SEED-143, unassigned) | 0/? | Not started | - |
 
 ## Active Phases (unassigned milestone)
 
@@ -232,17 +233,71 @@ Plans:
 
 **UI hint**: small — a warm-up label/framing on the Train start and session surfaces, plus the `source`-based rewrite of the your-game predicate in `TrainReveal`. No new pages, no new components expected beyond the label treatment.
 
-## Backlog
+### Phase 207: Self-Serve Password Reset
 
-### Phase 999.1: Password Reset (BACKLOG)
+**Goal**: A user who signed up with email + password and forgot it can recover their account without operator involvement. Today there is **no recovery path at all** — 172 prod accounts with a password have exactly one option, register a fresh address and re-import their entire game history, losing bookmarks and Train state. Ships the first email-sending capability the project has ever had (Resend over raw `httpx`), mounts `fastapi_users.get_reset_password_router()`, and adds the two frontend forms. Backend + frontend, **no migration** (fastapi-users' reset token is stateless and JWT-based; nothing is persisted).
 
-**Goal:** Users can recover account access when they forget their password — request reset link, receive email, set new password
-**Requirements:** TBD
-**Plans:** 5/5 plans complete
+**Depends on**: nothing in the codebase. The one real dependency is **operator work outside the repo** (Step 0 below), which must land before any code is written.
+
+**Requirements**: RESET-01..NN (minted at planning, one per Success Criterion below in order; traceability table in the phase's `-01-PLAN.md` § Requirements — this phase predates its milestone's REQUIREMENTS.md)
+
+**Source**: [SEED-143](../seeds/SEED-143-self-serve-password-reset.md) — planted 2026-08-08 during `/gsd-explore` from "there's currently no way for a user to recover their signed-up accounts if they lost their password". The seed carries a **fully verified current-state audit and seven locked decisions (D-01..D-07)**, including a provider bake-off with three named disqualifications. Do not re-derive the provider choice, the self-hosting rejection, or the current-state facts.
+
+**Supersedes**: backlog Phase 999.1 (Password Reset), promoted here.
+
+**Blocking pre-planning gate — Step 0 is operator work, not executor work**:
+
+1. Create a Resend account; verify **flawchess.com** (apex, per D-05). Add the DKIM records Resend issues (additive, no conflict risk).
+2. **Merge** the Resend SPF include into the *existing* apex TXT record — flawchess.com already sends and receives mail via Swizzonic (`v=spf1 a mx include:spf.webapps.net ~all`, measured 2026-08-08). A domain may have **exactly one** SPF record; publishing a second breaks SPF for *both* senders. Confirm the exact include token in the Resend dashboard at setup time — the seed's `include:_spf.resend.com` is from research, not from a live account.
+3. Verify Swizzonic mail still delivers after the SPF edit. **This is the only step in the whole phase that can break something already working.**
+4. Add `_dmarc.flawchess.com` → `v=DMARC1; p=none; rua=mailto:<addr>` (purely additive).
+5. Put `RESEND_API_KEY` in the local `.prod.env` that `bin/deploy.sh:28-29` scps to `/opt/flawchess/.env`. Never commit it.
+
+**Scope**:
+
+- **Backend** — `app/services/email_service.py` (new): one `httpx.AsyncClient` POST to `https://api.resend.com/emails`, no SDK (D-03: the official `resend` package adds nothing over one POST, and `httpx` is already project-wide). Override `on_after_forgot_password` on `UserManager` (`app/users.py:63`, currently the base no-op — the token secrets at `:64-65` are already configured and consumed by nothing) to build the reset URL from `settings.FRONTEND_URL` and send. Mount `fastapi_users.get_reset_password_router()` under the `/auth` prefix alongside the register router (`app/routers/auth.py:49-53`). Add `RESEND_API_KEY` and `MAIL_FROM` to `Settings`.
+- **Frontend** — `ForgotPasswordForm.tsx` (new), a `/auth/reset-password` route reading `?token=` (register near `App.tsx:845-847`), a "Forgot password?" link on `LoginForm.tsx`. `frontend/src/components/auth/` currently holds exactly two files, so there is no existing pattern to conform to beyond the project's standard rules.
+- **Per-email rate limit (D-06, in scope).** The forgot-password endpoint is unauthenticated. Without a cooldown, flooding it burns the 100/day Resend cap and breaks the flow for *everyone*, and lets a known user be mail-bombed. ~10 lines.
+- **Sentry capture on send failure (D-06, in scope).** Already mandated by CLAUDE.md for `app/services/`. `capture_exception` on the Resend call; pass user_id via `set_context` — never interpolate variables into the message.
+
+**Locked constraints (do not re-open)**:
+
+1. **Fully self-serve (D-01)** — emailed token link, user sets a new password, zero operator involvement. The "email the maintainer" manual path was considered and rejected despite the tiny volume.
+2. **No self-hosted mail server (D-02)** — rejected on deliverability, not on effort. Hetzner blocks outbound 25/465 by default (587 is open, so relay was never actually blocked — moot given D-03), and more decisively, **IP reputation is earned by volume and this flow has none**: ~5 sends/year warms nothing, ever. A reset email in spam is a silent total failure nobody reports.
+3. **Resend, free tier, raw HTTP (D-03)** — 3,000/mo · 100/day permanent, ~60x headroom, no account review, HTTPS:443. Brevo and Mailjet are **disqualified** (delete free accounts after 4 months of inactivity — the exact silent-rot failure this flow must avoid); SES's free tier ended for new customers 21 Jul 2026; Mailgun is a churny vendor. **Postmark is the designated fallback** if Resend deliverability ever disappoints (rejected only for its manual new-account review).
+4. **Google-only accounts get the standard reset link (D-04)** — the 44 accounts with an empty `hashed_password` receive the same email and end up with both login methods. No special-casing, no second template. Not a security downgrade: the flow still requires mailbox control.
+5. **No enumeration fix needed** — fastapi-users' `forgot_password` already returns `202` regardless of whether the address exists. Default token TTL 3600s is fine as-is. Don't build either.
+
+**Explicitly OUT of scope (D-07 — decided, not oversights)**:
+
+- **Periodic canary send.** The only thing that would catch a revoked key or DNS drift *before* a real user hits it. Judged over-engineering at ~5 sends/year. **Accepted consequence: the first person to discover a broken flow is a locked-out user.** If a reset ever fails in the wild, revisit this decision rather than debugging in place.
+- **Explicit guest-account guard.** Guest emails are unguessable uuid4 sentinels (`guest_<uuid4hex>@guest.local`, `app/services/guest_service.py:21,37`), so a `.local` send is not reachable in practice; D-06's Sentry capture covers the residual.
+- **Email verification on registration.** See the follow-up note below — this is a real gap, deliberately not scoped here.
+
+**Success Criteria** (what must be TRUE):
+
+1. A user with a password who submits their address on the forgot-password form receives a working reset link and can set a new password with it — verified end-to-end against a real mailbox, not mocked.
+2. Submitting an address that does not exist is indistinguishable from one that does (same `202`, same UI copy, no timing tell introduced by the send).
+3. Repeated requests for the same address are rate-limited, and the limit is proven by a test that fails when the cooldown is removed.
+4. A Resend send failure produces a Sentry event with `user_id` in context and **no variable interpolated into the message string** (grouping stays intact).
+5. A Google-only account (empty `hashed_password`) completes the same flow and afterwards can log in by either method.
+6. The frontend forms carry `data-testid` on every interactive element, honor the `text-sm` floor, use `variant="brand-outline"` for secondary actions, are usable at 375px, and render an `isError` branch rather than falling through to an empty state.
+7. Swizzonic mail to flawchess.com still delivers after the SPF merge (Step 0.3), confirmed by an actual received message.
+8. Each production change is mutation-tested (revert it, confirm the test goes red) rather than accepted on symbol presence.
+
+**Non-goals**: email verification on registration; a canary/monitoring send; guest-account recovery (ephemeral by design, explicitly out of scope); a templating engine or a second email template; the official `resend` SDK; any database migration.
+
+**Follow-up this phase creates (capture as a seed when it ships, do not scope here)**: **there is no email verification on registration either** — `get_verify_router()` is equally absent and `on_after_register` (`app/users.py:67-77`) only stamps `last_login`, so a user can register with a typo'd address they do not control. Today that is merely untidy. **Once password reset ships it becomes load-bearing**: the reset link goes to a mailbox that isn't theirs, making that account *permanently* unrecoverable — strictly worse than today's "no recovery for anyone", because the user now reasonably expects recovery to work. The infrastructure (Resend client, config, send path) lands with this phase, so the marginal cost afterwards is small.
+
+**Plans**: TBD (not planned yet)
 
 Plans:
 
-- [ ] TBD (promote with /gsd:review-backlog when ready)
+- [ ] TBD — run `/gsd-plan-phase 207`
+
+**UI hint**: small — one new form component, one new route, one link on `LoginForm.tsx`. No new pages beyond the reset-password route, no design-system additions.
+
+## Backlog
 
 ### Phase 999.6: Opening Risk & Drawishness (BACKLOG)
 
@@ -254,6 +309,8 @@ Plans:
 Plans:
 
 - [ ] TBD (promote with /gsd-review-backlog when ready)
+
+*Phase 999.1 (Password Reset) promoted to active Phase 207 on 2026-08-08 via `/gsd-phase 207 @SEED-143`. Its stale "5/5 plans complete" line was bookkeeping noise — no plans ever existed.*
 
 *Phase 999.7 (LLM Endgame-Insights Statistical-Reasoning Rework) promoted to active Phase 102 (v1.23) on 2026-06-01 via `/gsd-explore`; shipped 2026-06-03.*
 
