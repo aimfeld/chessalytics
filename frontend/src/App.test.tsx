@@ -235,6 +235,32 @@ describe.each(NAV_STATES)('nav lock state: $name', ({ setup }) => {
   });
 });
 
+// Phase 208 (PASTE-08, D-10): /analysis is IMPORT_EXEMPT_ROUTES too — reachable
+// and clickable with zero imported games, on every surface it appears on.
+describe.each(NAV_STATES)('nav lock state: $name — /analysis (Phase 208)', ({ setup }) => {
+  it('desktop nav (NavHeader): renders nav-analysis, never aria-disabled or dimmed', () => {
+    setup();
+    renderNavHeader();
+    const link = screen.getByTestId('nav-analysis');
+    expect(link.getAttribute('aria-disabled')).toBeNull();
+    expect(link.className).not.toMatch(/opacity-40/);
+  });
+
+  it('more drawer (MobileMoreDrawer): renders drawer-nav-analysis, never aria-disabled or dimmed', () => {
+    setup();
+    renderMobileMoreDrawer();
+    const link = screen.getByTestId('drawer-nav-analysis');
+    expect(link.getAttribute('aria-disabled')).toBeNull();
+    expect(link.className).not.toMatch(/opacity-40/);
+  });
+
+  it('mobile bottom bar (MobileBottomBar): renders NO analysis entry (D-09)', () => {
+    setup();
+    renderMobileBottomBar();
+    expect(screen.queryByTestId('mobile-nav-analysis')).toBeNull();
+  });
+});
+
 describe('control assertion: existing lock behavior is genuinely exercised', () => {
   it('nav-openings and nav-endgames ARE aria-disabled in the zero-game state', () => {
     profileState = {
@@ -272,7 +298,17 @@ describe('V-04: Bots renders in all three surfaces, second position (D-16)', () 
     const nav = screen.getByRole('navigation', { name: 'Main navigation' });
     const links = within(nav).getAllByTestId(/^nav-/);
     const order = links.map((el) => el.getAttribute('data-testid'));
-    expect(order).toEqual(['nav-library', 'nav-train', 'nav-bots', 'nav-openings', 'nav-endgames']);
+    // Phase 208: /analysis is appended as NAV_ITEMS' last entry (D-09) — it
+    // is absent from BOTTOM_NAV_ITEMS by design, so this desktop-only order
+    // check gains it while the mobile bottom-bar check below does not.
+    expect(order).toEqual([
+      'nav-library',
+      'nav-train',
+      'nav-bots',
+      'nav-openings',
+      'nav-endgames',
+      'nav-analysis',
+    ]);
   });
 
   it('mobile bottom bar: order is Library, Train, Bots, Openings, Endgames', () => {
@@ -313,12 +349,15 @@ describe('V-04: Bots renders in all three surfaces, second position (D-16)', () 
     renderMobileMoreDrawer();
     const links = screen.getAllByTestId(/^drawer-nav-/);
     const order = links.map((el) => el.getAttribute('data-testid'));
+    // Phase 208: the More drawer reads NAV_ITEMS too, so it also gains
+    // drawer-nav-analysis at the end (D-09).
     expect(order).toEqual([
       'drawer-nav-library',
       'drawer-nav-train',
       'drawer-nav-bots',
       'drawer-nav-openings',
       'drawer-nav-endgames',
+      'drawer-nav-analysis',
     ]);
   });
 });
@@ -339,7 +378,15 @@ describe('190-03: Train renders in all three surfaces, correctly placed (NAV-01)
     const nav = screen.getByRole('navigation', { name: 'Main navigation' });
     const links = within(nav).getAllByTestId(/^nav-/);
     const order = links.map((el) => el.getAttribute('data-testid'));
-    expect(order).toEqual(['nav-library', 'nav-train', 'nav-bots', 'nav-openings', 'nav-endgames']);
+    // Phase 208: /analysis is appended last (D-09) — see the V-04 comment above.
+    expect(order).toEqual([
+      'nav-library',
+      'nav-train',
+      'nav-bots',
+      'nav-openings',
+      'nav-endgames',
+      'nav-analysis',
+    ]);
   });
 
   it('mobile bottom bar: nav test-id sequence places Train between Library and Bots', () => {
@@ -380,16 +427,18 @@ describe('190-03: Train renders in all three surfaces, correctly placed (NAV-01)
     renderMobileMoreDrawer();
     const links = screen.getAllByTestId(/^drawer-nav-/);
     const order = links.map((el) => el.getAttribute('data-testid'));
+    // Phase 208: drawer-nav-analysis appended last (D-09) — see the V-04 comment above.
     expect(order).toEqual([
       'drawer-nav-library',
       'drawer-nav-train',
       'drawer-nav-bots',
       'drawer-nav-openings',
       'drawer-nav-endgames',
+      'drawer-nav-analysis',
     ]);
   });
 
-  it('desktop and bottom-bar nav test-id sequences are equal to each other', () => {
+  it('desktop and bottom-bar nav sequences agree everywhere EXCEPT /analysis (Phase 208, D-09)', () => {
     profileState = {
       email: 'zero@example.com',
       is_superuser: false,
@@ -413,7 +462,15 @@ describe('190-03: Train renders in all three surfaces, correctly placed (NAV-01)
       .getAllByTestId(/^mobile-nav-(?!more)/)
       .map((el) => el.getAttribute('data-testid')?.replace(/^mobile-nav-/, ''));
 
-    expect(desktopOrder).toEqual(mobileOrder);
+    // Phase 208 (PASTE-08): NAV_ITEMS (desktop) and BOTTOM_NAV_ITEMS (mobile
+    // bottom bar) are now intentionally different by exactly one entry —
+    // /analysis is on the desktop surface only (D-09). This test used to
+    // assert full equality; the App.tsx comment on both arrays (WR-07)
+    // records this divergence as deliberate, so the fix here is to assert
+    // the divergence precisely rather than drop the test.
+    expect(desktopOrder).toContain('analysis');
+    expect(mobileOrder).not.toContain('analysis');
+    expect(desktopOrder.filter((id) => id !== 'analysis')).toEqual(mobileOrder);
   });
 });
 

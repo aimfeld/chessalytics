@@ -4,8 +4,10 @@ Converts chess.com and lichess game objects into NormalizedGame Pydantic models 
 """
 
 import datetime
+import hashlib
 import io
 import re
+from collections.abc import Mapping, Sequence
 from typing import cast
 
 import chess.pgn
@@ -15,6 +17,7 @@ from app.schemas.normalization import (
     Color,
     GameResult,
     NormalizedGame,
+    Platform,
     Termination,
     TimeControlBucket,
 )
@@ -709,4 +712,269 @@ def normalize_flawchess_game(
         white_accuracy=None,
         black_accuracy=None,
         played_at=datetime.datetime.now(datetime.timezone.utc),
+    )
+
+
+# ---------------------------------------------------------------------------
+# Pasted-PGN normalization (Phase 208, PASTE-05 / D-16)
+# ---------------------------------------------------------------------------
+# Each ply becomes a game_positions row (_flush_batch Stage 5), so this is a
+# named write-amplification ceiling on a pasted game's mainline length — no
+# magic numbers (CLAUDE.md). 1000 plies is roughly twice the longest recorded
+# serious game.
+MAX_PASTED_PGN_PLIES = 1000
+
+# The one value normalize_pasted_game ever writes to games.platform (D-05).
+_PASTE_PLATFORM_VALUE: Platform = "pgn"
+
+# Fallback username when a [White]/[Black] header is absent or the PGN
+# default placeholder "?" — NormalizedGame.white_username/black_username are
+# non-optional columns, unlike platform_url/played_at.
+_PASTE_UNKNOWN_USERNAME = "Unknown"
+
+# PGN's own placeholder for an unset header (chess.pgn.Headers defaults
+# White/Black/Event/Site/Round to this value when absent).
+_PGN_UNSET_HEADER_PLACEHOLDER = "?"
+
+
+def canonical_root_fen(fen: str) -> str:
+    """Return the identity-relevant subset of *fen*: piece placement, side to
+    move, and castling rights only (D-16).
+
+    The halfmove clock and fullmove number are counters, not identity, and
+    the en-passant field is inconsistently produced in the wild — some
+    producers emit the ep square on every pawn double-step, others only when
+    a capture is actually available. Two sources publishing the same
+    [SetUp] position can therefore emit different FEN strings for an
+    identical position, which would otherwise defeat D-16's dedup.
+
+    Accepted consequence: a root where an en-passant capture is genuinely
+    available hashes identically to the same root without it.
+
+    The FULL, unmodified FEN is still what the board and the stored PGN use —
+    only the identity hash sees this canonical form.
+    """
+    fields = fen.split()
+    return " ".join(fields[:3])
+
+
+def pasted_game_identity_hash(root_fen: str, sans: Sequence[str]) -> str:
+    """Return a deterministic SHA-256 hex digest identifying a pasted game (D-16).
+
+    The input is the canonical root FEN, a "|" separator, and the mainline
+    SAN moves joined by single spaces. Headers are deliberately EXCLUDED: the
+    seed's corpus evidence records one player spelled twelve ways, so any
+    header-inclusive hash would mean the same game re-pasted from a
+    different source produces a second row, defeating D-16's whole point.
+    user_color is deliberately excluded too (D-18). Move numbers, annotation
+    glyphs and comments never enter the input because the SAN list is
+    expected to come from python-chess's own node.san(), which is a function
+    of the position alone.
+
+    Accepted residual collision: two genuinely different short games with
+    identical moves from identical roots (e.g. a four-move mate) map to one
+    row — judged acceptable. The 64 hex characters fit
+    games.platform_game_id's String(100), and the unique constraint is
+    per-user, so two users pasting the same game never collide.
+    """
+    input_str = f"{canonical_root_fen(root_fen)}|{' '.join(sans)}"
+    return hashlib.sha256(input_str.encode("utf-8")).hexdigest()
+
+
+# A date/time component containing this marker is PGN's conventional
+# "unknown" placeholder (e.g. "????.??.??", "??:??:??") — never a real value.
+_PGN_UNKNOWN_DATE_MARKER = "?"
+
+
+def parse_pgn_played_at(headers: Mapping[str, str]) -> datetime.datetime | None:
+    """Derive a tz-aware UTC played_at from PGN headers, or None (D-16 support).
+
+    Prefers UTCDate (+ UTCTime when present and parseable), else falls back
+    to Date. Never falls back to the current wall-clock time the way the
+    bot-game normalizer does (datetime.now()) — a pasted historical game
+    must carry its own date; stamping it with today's date would sort it
+    wrongly in the Library and misrepresent the game. Returns None when the
+    header is absent, empty, or carries the conventional unknown marker "?"
+    in any component.
+    """
+    utc_date = headers.get("UTCDate")
+    if utc_date and _PGN_UNKNOWN_DATE_MARKER not in utc_date:
+        utc_time = headers.get("UTCTime")
+        if utc_time and _PGN_UNKNOWN_DATE_MARKER not in utc_time:
+            try:
+                naive = datetime.datetime.strptime(f"{utc_date} {utc_time}", "%Y.%m.%d %H:%M:%S")
+                return naive.replace(tzinfo=datetime.timezone.utc)
+            except ValueError:
+                pass  # fall through to date-only parsing below
+        try:
+            naive = datetime.datetime.strptime(utc_date, "%Y.%m.%d")
+            return naive.replace(tzinfo=datetime.timezone.utc)
+        except ValueError:
+            pass  # fall through to the Date header below
+
+    date_header = headers.get("Date")
+    if date_header and _PGN_UNKNOWN_DATE_MARKER not in date_header:
+        try:
+            naive = datetime.datetime.strptime(date_header, "%Y.%m.%d")
+            return naive.replace(tzinfo=datetime.timezone.utc)
+        except ValueError:
+            return None
+
+    return None
+
+
+def _parse_optional_elo(elo_str: str | None) -> int | None:
+    """Parse a PGN [WhiteElo]/[BlackElo] header value, or None when absent/unparseable."""
+    if not elo_str:
+        return None
+    try:
+        return int(elo_str)
+    except ValueError:
+        return None
+
+
+def _resolve_pasted_username(header_value: str | None) -> str:
+    """Return *header_value*, or the named fallback when absent/PGN-default "?"."""
+    if not header_value or header_value == _PGN_UNSET_HEADER_PLACEHOLDER:
+        return _PASTE_UNKNOWN_USERNAME
+    return header_value
+
+
+def normalize_pasted_game(
+    pgn_text: str,
+    user_id: int,
+    user_color: Color,
+) -> NormalizedGame | None:
+    """Build a NormalizedGame from an arbitrary pasted PGN (Phase 208, D-05/D-07/D-16).
+
+    Derived from normalize_flawchess_game with deliberate divergences: no
+    [%clk]-for-both-colors gate (a pasted PGN is untimed by definition,
+    D-07), every time-control field forced to None, a deterministic
+    D-16 identity hash instead of a caller-supplied UUID, and termination
+    ALWAYS derived from the final board state (never a header string,
+    CR-02's exact bug class — an untrusted pasted PGN is precisely the
+    source that would reproduce it).
+
+    Returns None (never raises past this function) when the PGN is
+    unparseable, has no mainline moves, exceeds MAX_PASTED_PGN_PLIES
+    (T-208-07 write-amplification bound), or has no honest result (no
+    recognized [Result] header AND a non-terminal final board). These are
+    expected validation outcomes, NOT bugs: no Sentry capture for them
+    (only for a genuinely unexpected parse exception), matching
+    normalize_flawchess_game's split.
+
+    Args:
+        pgn_text: The pasted PGN text (already length-bounded by the request
+            schema, T-208-07's outer bound).
+        user_id: Internal user PK.
+        user_color: The side the user is studying (D-06 default White,
+            D-18 updatable in place on a hash hit without affecting the
+            hash itself).
+
+    Returns:
+        A NormalizedGame with platform="pgn", rated=False,
+        is_computer_game=False, or None on any invalid-input case above.
+    """
+    try:
+        game = chess.pgn.read_game(io.StringIO(pgn_text))
+    except Exception:
+        # Genuinely unexpected parse exception (not an expected-None case) —
+        # Sentry per the module's set_context convention (never interpolate
+        # variable data into the message string).
+        sentry_sdk.set_context("pasted_game_normalize", {"user_id": user_id})
+        sentry_sdk.capture_exception()
+        return None
+
+    if game is None:
+        return None  # unparseable PGN — expected case, no Sentry capture
+
+    nodes = list(game.mainline())
+    if not nodes:
+        return None  # no moves — expected case, no Sentry capture
+
+    if len(nodes) > MAX_PASTED_PGN_PLIES:
+        return None  # T-208-07 write-amplification bound — expected case
+
+    # WR-02: derive the root FEN from game.board() (honors [SetUp]/[FEN],
+    # including a Black-to-move root) rather than assuming the standard
+    # start. SANs come from node.san() — a function of the position alone,
+    # never the raw movetext (D-16: no move numbers/glyphs/comments).
+    root_fen = game.board().fen()
+    sans = [node.san() for node in nodes]
+
+    board = game.end().board()
+    result_str = game.headers.get("Result", "")
+    result: GameResult
+    if result_str in _VALID_GAME_RESULTS:
+        result = cast(GameResult, result_str)
+    elif board.is_checkmate():
+        # board.turn is the side TO MOVE at the final position, i.e. the side
+        # that has just been checkmated and therefore lost.
+        result = "0-1" if board.turn else "1-0"
+    elif (
+        board.is_stalemate()
+        or board.is_insufficient_material()
+        or board.is_fifty_moves()
+        or board.is_repetition(3)
+    ):
+        result = "1/2-1/2"
+    else:
+        # No recognized [Result] header and a non-terminal final board — no
+        # honest value exists (games.result is NOT NULL over a 3-value enum,
+        # unlike GameResult which stays unwidened per D-07 elsewhere in this
+        # module). Expected case for an unfinished broadcast game — no
+        # Sentry capture.
+        return None
+
+    # Termination: ALWAYS the board-derived closed-vocabulary value, never a
+    # [Termination] header lookup (CR-02 fix carried forward — an
+    # unrecognized/oversized header string reaching termination_raw crashed
+    # the INSERT with an unhandled Postgres DataError instead of a
+    # validation failure, and arbitrary pasted PGN is exactly the untrusted
+    # source that reproduces it).
+    termination: Termination
+    if board.is_checkmate():
+        termination = "checkmate"
+    elif (
+        board.is_stalemate()
+        or board.is_insufficient_material()
+        or board.is_fifty_moves()
+        or board.is_repetition(3)
+    ):
+        termination = "draw"
+    else:
+        termination = "unknown"
+    termination_raw = termination
+
+    opening_eco, opening_name = find_opening(pgn_text)
+
+    return NormalizedGame(
+        user_id=user_id,
+        platform=_PASTE_PLATFORM_VALUE,
+        platform_game_id=pasted_game_identity_hash(root_fen, sans),
+        platform_url=None,
+        pgn=pgn_text,
+        result=result,
+        user_color=user_color,
+        termination_raw=termination_raw,
+        termination=termination,
+        time_control_str=None,
+        time_control_bucket=None,
+        time_control_seconds=None,
+        base_time_seconds=None,
+        increment_seconds=None,
+        rated=False,
+        is_computer_game=False,
+        white_username=_resolve_pasted_username(game.headers.get("White")),
+        black_username=_resolve_pasted_username(game.headers.get("Black")),
+        white_rating=_parse_optional_elo(game.headers.get("WhiteElo")),
+        black_rating=_parse_optional_elo(game.headers.get("BlackElo")),
+        opening_name=opening_name,
+        opening_eco=opening_eco,
+        white_accuracy=None,
+        black_accuracy=None,
+        # Never fall back to wall-clock time (unlike normalize_flawchess_game)
+        # — a pasted historical game must carry its own date; today's date
+        # would sort it wrongly in the Library and misrepresent the game.
+        played_at=parse_pgn_played_at(game.headers),
     )

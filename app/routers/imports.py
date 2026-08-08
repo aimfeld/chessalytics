@@ -34,6 +34,8 @@ from app.schemas.imports import (
     ImportStartedResponse,
     ImportStatusResponse,
     ReadinessResponse,
+    SavePastedGameRequest,
+    SavePastedGameResponse,
 )
 from app.services import (
     import_service,
@@ -41,6 +43,7 @@ from app.services import (
     user_benchmark_percentiles_service,
 )
 from app.services.eval_queue_service import enqueue_tier1_game
+from app.services.store_paste_game_service import store_pasted_game
 from app.users import current_active_user
 
 router = APIRouter(prefix="/imports", tags=["imports"])
@@ -397,6 +400,35 @@ async def enqueue_tier1(
     inserted = await enqueue_tier1_game(game_id=game_id, user_id=user.id)
     status = "enqueued" if inserted else "already_queued"
     return EnqueueTier1Response(status=status, game_id=game_id)
+
+
+@router.post("/paste", response_model=SavePastedGameResponse)
+async def save_pasted_game(
+    request: SavePastedGameRequest,
+    user: Annotated[User, Depends(current_active_user)],
+    session: Annotated[AsyncSession, Depends(get_async_session)],
+) -> SavePastedGameResponse:
+    """Save a pasted PGN as a platform='pgn' Library game and enqueue tier-1 eval.
+
+    HTTP only — all orchestration lives in store_pasted_game (CLAUDE.md's
+    router-is-thin convention). The principal is server-derived from
+    current_active_user (ASVS V4, T-208-10): user.id is passed to the
+    service, never anything from the request body.
+
+    Available to guests for their own games under the same QUEUE-08 tier-1
+    carve-out enqueue_tier1 documents above (D-08) — this endpoint introduces
+    no new guest boundary.
+
+    Re-posting the same game (by the D-16 identity hash: canonical root FEN
+    + mainline SAN, headers and user_color excluded) reuses the existing row
+    rather than dodging uq_games_user_platform_game_id (D-17); re-posting
+    with the other user_color updates the existing row's orientation in
+    place (D-18) instead of inserting a second row.
+    """
+    result = await store_pasted_game(session, user.id, request)
+    if result is None:
+        raise HTTPException(status_code=422, detail="Could not read that PGN as a complete game")
+    return result
 
 
 @router.get("/{job_id}", response_model=ImportStatusResponse)

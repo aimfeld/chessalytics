@@ -202,6 +202,20 @@ export interface EnqueueTier1Response {
   game_id: number;
 }
 
+// Phase 208 (PASTE-04/06/07): POST /imports/paste request/response. Platform
+// stays 'chess.com' | 'lichess' (D-14) — this is a separate, dedicated
+// request/response pair, not a widening of Platform.
+export interface SavePastedGameRequest {
+  pgn: string;
+  user_color: 'white' | 'black';
+}
+
+export interface SavePastedGameResponse {
+  game_id: number;
+  created: boolean;
+  eval_status: 'enqueued' | 'already_queued' | 'already_analyzed' | 'enqueue_failed';
+}
+
 export interface ReadinessResponse {
   tier1: boolean;
   tier2: boolean;

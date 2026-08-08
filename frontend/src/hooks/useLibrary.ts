@@ -16,6 +16,12 @@ import { LIBRARY_GAMES_POLL_INTERVAL_MS } from '@/hooks/useEvalCoverage';
 // from alt-tabbing or component re-mounts. Data only changes on new imports.
 const LIBRARY_STALE_TIME = 5 * 60 * 1000;
 
+// The wire value of games.platform for a pasted game (backend
+// normalization._PASTE_PLATFORM_VALUE). Not part of the frontend `Platform`
+// union on purpose — it is never a member of FilterState.platforms, only the
+// single-element platform list the 'only' pasted state sends.
+const PASTED_PLATFORM = 'pgn';
+
 // Runaway guard (Quick 260714-rj5, T-RJ5-03) for useLibraryGame's live poll:
 // stop polling an unanalyzed game after this much wall-clock time.
 //
@@ -63,6 +69,18 @@ export function libraryGamePollInterval(
  * 01); every other buildLibraryParams caller (flaw-stats, flaw-comparison,
  * tactic-comparison, flaws) omits them by leaving the params at their false
  * default, which is a no-op for those endpoints' param types.
+ *
+ * include_pasted (Phase 208, D-11/D-12): every Library surface accepts this
+ * param, so it is threaded unconditionally here (unlike hasGem/hasGreat,
+ * which are Games-tab-only args). Omitted when off, matching the
+ * has_gem/has_great convention — this is the ONLY place FilterState.pasted
+ * is read on the wire (D-14 containment).
+ *
+ * The 'only' state (UAT follow-up) does NOT use include_pasted at all: it
+ * sends `platform=['pgn']`, which the backend's resolve_library_platforms
+ * already honors as an explicit caller selection on every Library surface.
+ * `filters.platforms` is deliberately ignored in that state — the chip group
+ * shows no platform as active, so sending one would contradict the UI.
  */
 export function buildLibraryParams(
   filters: FilterState,
@@ -72,9 +90,10 @@ export function buildLibraryParams(
   hasGreat = false,
 ) {
   const dateParams = dateRangeToWireParams(resolveDateRange(filters));
+  const pastedOnly = filters.pasted === 'only';
   return {
     time_control: filters.timeControls,
-    platform: filters.platforms,
+    platform: pastedOnly ? [PASTED_PLATFORM] : filters.platforms,
     ...dateParams,
     rated: filters.rated,
     opponent_type: filters.opponentType,
@@ -84,6 +103,7 @@ export function buildLibraryParams(
     color: filters.playedAs === 'either' ? undefined : filters.playedAs,
     has_gem: hasGem ? true : undefined,
     has_great: hasGreat ? true : undefined,
+    include_pasted: filters.pasted === 'with' ? true : undefined,
   };
 }
 

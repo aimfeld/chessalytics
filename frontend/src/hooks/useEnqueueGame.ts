@@ -15,8 +15,13 @@ async function postTier1Enqueue(gameId: number): Promise<EnqueueTier1Response> {
  * (RESEARCH.md Pitfall 5), and any cached library card (list or single-game)
  * refetches so it picks up the new active_eval_status (prefix match covers
  * every param variant, including a specific ['library-game', gameId] entry).
+ *
+ * Exported (Phase 208) so usePasteGame.useSavePastedGame reuses the exact
+ * same query-key list instead of duplicating it — the paste-save endpoint
+ * performs save + tier-1 enqueue in one call, so it needs this same
+ * invalidation without a second round-trip mutation.
  */
-function invalidateAfterTier1Enqueue(queryClient: QueryClient): void {
+export function invalidateAfterTier1Enqueue(queryClient: QueryClient): void {
   void queryClient.invalidateQueries({ queryKey: ['imports', 'eval-coverage'] });
   void queryClient.invalidateQueries({ queryKey: ['library-games'] });
   void queryClient.invalidateQueries({ queryKey: ['library-game'] });

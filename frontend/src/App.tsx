@@ -10,7 +10,7 @@ import { TooltipProvider } from '@/components/ui/tooltip';
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
 import { cn } from '@/lib/utils';
-import { ArrowLeft, BookOpenIcon, MenuIcon, LogOutIcon, TrophyIcon, DoorOpen, Shield, FolderOpen, Bot, Dumbbell } from 'lucide-react';
+import { ArrowLeft, BookOpenIcon, MenuIcon, LogOutIcon, TrophyIcon, DoorOpen, Shield, FolderOpen, Bot, Dumbbell, Search } from 'lucide-react';
 import {
   Drawer, DrawerContent, DrawerHeader, DrawerTitle, DrawerClose,
 } from '@/components/ui/drawer';
@@ -74,14 +74,26 @@ function ImportJobWatcher({ jobId, onDone }: { jobId: string; onDone: (jobId: st
 
 // ─── Nav items ────────────────────────────────────────────────────────────────
 
+// Phase 208 (PASTE-08): NAV_ITEMS and BOTTOM_NAV_ITEMS are now INTENTIONALLY
+// different — NAV_ITEMS feeds NavHeader (desktop) and MobileMoreDrawer
+// (mobile "More"), while BOTTOM_NAV_ITEMS feeds MobileBottomBar only.
+// /analysis is deliberately absent from BOTTOM_NAV_ITEMS (D-09): it has no
+// bottom-bar slot and reaching it via the More drawer is the intended path.
+// This divergence must NOT be "fixed" into a single shared array — see WR-07
+// below, the shipped bug from nav surfaces silently disagreeing with each
+// other, which is exactly the failure mode a well-meaning unification would
+// reintroduce.
 const NAV_ITEMS = [
   { to: '/library', label: 'Library', Icon: FolderOpen },
   { to: '/train', label: 'Train', Icon: Dumbbell },
   { to: '/bots', label: 'Bots', Icon: Bot },
   { to: '/openings', label: 'Opening', Icon: BookOpenIcon },
   { to: '/endgames', label: 'Endgame', Icon: TrophyIcon },
+  { to: '/analysis', label: 'Analysis', Icon: Search },
 ] as const;
 
+// Phase 208 (PASTE-08): see the comment on NAV_ITEMS above — this array stays
+// at its original 5 entries by design; /analysis is NOT added here.
 const BOTTOM_NAV_ITEMS = [
   { to: '/library', label: 'Library', Icon: FolderOpen },
   { to: '/train', label: 'Train', Icon: Dumbbell },
@@ -113,13 +125,18 @@ const ROUTE_TITLES: Record<string, string> = {
  * - `/library` — where you GO to import, so it can never be import-gated.
  * - `/admin` — superuser-only, gated by SuperuserRoute instead.
  * - `/bots` — D-17: free bot play, whose audience IS guests and zero-game users.
+ * - `/analysis` — Phase 208 D-10: the paste-a-FEN-or-PGN entry point is already
+ *   ungated and guest-friendly (SEED-144 Integration Point 2 — a pasted game
+ *   contributes to neither chess_com_game_count nor lichess_game_count, so it
+ *   cannot accidentally unlock the import-gated nav either). A locked nav
+ *   entry pointing at an open route would be incoherent.
  *
  * WR-07: this gate used to be copy-pasted into all three nav surfaces with
  * DIVERGENT clause lists (MobileBottomBar's copy omitted `/admin`), and Phase
  * 171 had to patch every one of them to add `/bots`. One definition now, so the
  * next exempt route is a one-line edit and the surfaces cannot disagree.
  */
-const IMPORT_EXEMPT_ROUTES: ReadonlySet<string> = new Set(['/library', '/admin', '/bots']);
+const IMPORT_EXEMPT_ROUTES: ReadonlySet<string> = new Set(['/library', '/admin', '/bots', '/analysis']);
 
 function isNavLocked(to: string, navUnlocked: boolean): boolean {
   return !IMPORT_EXEMPT_ROUTES.has(to) && !navUnlocked;
@@ -133,6 +150,7 @@ function isActive(to: string, pathname: string): boolean {
   if (to === '/bots') return pathname.startsWith('/bots');
   if (to === '/openings') return pathname.startsWith('/openings');
   if (to === '/endgames') return pathname.startsWith('/endgames');
+  if (to === '/analysis') return pathname.startsWith('/analysis');
   return pathname === to;
 }
 

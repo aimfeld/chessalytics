@@ -36,12 +36,13 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import type { CSSProperties, ReactNode, RefObject } from 'react';
-import { useSearchParams } from 'react-router';
+import { useSearchParams, useNavigate } from 'react-router';
 import { Chess } from 'chess.js';
 import {
   ArrowLeftRight,
   ChartNoAxesColumn,
   ChessKnight,
+  ClipboardPaste,
   Cpu,
   type LucideIcon,
   User,
@@ -65,7 +66,10 @@ import {
   parseAnalysisLineParam,
   parseAnalysisFenParam,
   parseAnalysisOrientationParam,
+  buildGameAnalysisUrl,
 } from '@/lib/analysisUrl';
+import { PasteModal } from '@/components/analysis/PasteModal';
+import type { PasteParseResult, PastedGameHeaders } from '@/lib/pastedGame';
 import { toDisplayDepthForOrientation } from '@/lib/tacticDepth';
 import { buildPvArrow } from '@/lib/tacticArrows';
 import { EvalBar } from '@/components/analysis/EvalBar';
@@ -73,6 +77,7 @@ import { EngineLines, EngineLinesSkeleton, LINES_MIN_HEIGHT, MAX_LINES as SF_MAX
 import { FlawChessEngineLines, MAX_LINES as FC_MAX_LINES } from '@/components/analysis/FlawChessEngineLines';
 import { FlawChessAgreementVerdict } from '@/components/analysis/FlawChessAgreementVerdict';
 import { Card, CardHeader, CardBody } from '@/components/ui/card';
+import { Button } from '@/components/ui/button';
 import { Switch } from '@/components/ui/switch';
 import { InfoPopover } from '@/components/ui/info-popover';
 import { VariationTree } from '@/components/analysis/VariationTree';
@@ -410,6 +415,17 @@ function flawKey(flaw: { ply: number; orientation: 'missed' | 'allowed' }): stri
 }
 
 /**
+ * Formats an ephemeral pasted PGN's Result/Date headers for PlayerBar's freed
+ * clock slot (Phase 208, UI-SPEC § Interaction Contract 6): "1-0 · 2024-03-15"
+ * when both are present, either alone when only one is, null when neither is
+ * (PlayerBar then renders nothing in that slot, same as a missing clock).
+ */
+function formatPastedResultDate(result: string | null, date: string | null): string | null {
+  if (result !== null && date !== null) return `${result} · ${date}`;
+  return result ?? date;
+}
+
+/**
  * The engine's top-line first move (UCI) converted to SAN at `baseFen` — feeds
  * MovesByRatingChart's `bestSan` emphasis (Plan 06, SURF-01). Returns null for no
  * PV yet or an illegal/malformed replay (never throws).
@@ -519,6 +535,7 @@ function buildFocusedPvLine(
  */
 export default function Analysis() {
   const [searchParams] = useSearchParams();
+  const navigate = useNavigate();
 
   // Free-play entry point: the opening line to seed as the board's main line,
   // carried as a `?line=` param of comma-separated UCI moves from the standard
@@ -605,6 +622,21 @@ export default function Analysis() {
   // Quick 260705-kfg: the moves of the move-quality bar's currently-hovered segment
   // (SAN + severity color), drawn as board arrows. Null when nothing is hovered.
   const [hoveredQualityMoves, setHoveredQualityMoves] = useState<HoveredQualityMove[] | null>(null);
+
+  // Phase 208 (D-19/D-20): the paste-a-FEN-or-PGN modal. Held open in every
+  // mode, including ?game_id= game mode — no gating on isGameMode.
+  const [pasteModalOpen, setPasteModalOpen] = useState(false);
+
+  // Phase 208 (PASTE-02): the ephemeral (unsaved) pasted-PGN headers + the
+  // side the user selected, driving the ephemeral player-info render and the
+  // board's orientation. Cleared whenever the board is reset or a real
+  // ?game_id= game loads (D-15 navigates there after an explicit "Analyze
+  // full game" save — Plan 03 — which is a fresh page load, but this also
+  // covers any future same-session transition). Never persisted (D-03).
+  const [pastedHeaders, setPastedHeaders] = useState<{
+    headers: PastedGameHeaders;
+    userColor: 'white' | 'black';
+  } | null>(null);
 
   // ── All hooks (unconditional, React rules) ────────────────────────────────────
 
@@ -876,8 +908,23 @@ export default function Analysis() {
   });
 
   // Seeding guard refs: prevent re-running effects after the first game load.
-  const hasLoadedMainLine = useRef(false);
-  const hasNavigatedToInitialPly = useRef(false);
+  //
+  // Phase 208 CR-01 fix: these were one-shot booleans, written under the
+  // pre-208 assumption that a mounted page is exactly one of {game, line, fen}
+  // and seeds exactly once, ever. D-20 broke that — the paste trigger stays
+  // visible inside an existing ?game_id= session, so "Analyze full game"
+  // navigates game A -> game B on the SAME mounted page (handlePasteSaved).
+  // With a spent boolean the second seeding never ran: the URL, PlayerBar,
+  // eval chart and flaw panel all showed game B while the board and move list
+  // silently kept showing game A. Keying on the seeded identity instead makes
+  // the guard "seed once per game", which also covers any other same-page
+  // game_id change (e.g. browser back/forward between two games).
+  //
+  // Free play keeps the original once-ever semantics: `line` and `fen` seed
+  // only when nothing has been seeded yet, preserving the documented
+  // game_id > fen > line precedence.
+  const seededKey = useRef<string | null>(null);
+  const navigatedInitialPlyKey = useRef<string | null>(null);
 
   // Quick 260702-fog: the tactic (if any) the board auto-opens to when the entry ply carries
   // a user tactic chip. Drives BOTH the initial navigation effect and the move-list top-align
@@ -913,25 +960,29 @@ export default function Analysis() {
     setBoardFlipped(autoOrientation === 'black');
   }, [autoOrientation]);
 
-  // Game mode: seed the board once when game data arrives (L-1: never call from chip click).
+  // Game mode: seed the board once per game when its data arrives (L-1: never
+  // call from chip click). Keyed on gameId (CR-01) so a same-page game switch
+  // reseeds instead of silently leaving the previous game on the board.
   useEffect(() => {
-    if (!isGameMode || gameData?.moves == null || hasLoadedMainLine.current) return;
-    hasLoadedMainLine.current = true;
+    if (!isGameMode || gameData?.moves == null) return;
+    const key = `game:${gameId}`;
+    if (seededKey.current === key) return;
+    seededKey.current = key;
     loadMainLine(gameData.moves, STARTING_FEN);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [gameData?.moves, isGameMode]);
+  }, [gameData?.moves, isGameMode, gameId]);
 
   // Free play: seed the opening main line from the ?line= param once. The cursor
   // lands at the end of the line (loadMainLine's default), and the user can step
-  // back to move 1 through the variation tree. hasLoadedMainLine is shared with
-  // game mode and the ?fen= effect below — a page is exactly one of the three,
-  // never more. `rootFenSeed === null` makes precedence explicit (game_id > fen >
+  // back to move 1 through the variation tree. seededKey is shared with game
+  // mode and the ?fen= effect below; free play seeds only when nothing has been
+  // seeded yet. `rootFenSeed === null` makes precedence explicit (game_id > fen >
   // line): when both ?fen= and ?line= are present, fen wins (RESEARCH Landmine 8 —
   // without this guard, effect ordering alone would decide the winner).
   useEffect(() => {
-    if (isGameMode || rootFenSeed !== null || lineSans.length === 0 || hasLoadedMainLine.current)
+    if (isGameMode || rootFenSeed !== null || lineSans.length === 0 || seededKey.current !== null)
       return;
-    hasLoadedMainLine.current = true;
+    seededKey.current = 'line';
     loadMainLine(lineSans, STARTING_FEN);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [lineSans, isGameMode, rootFenSeed]);
@@ -939,19 +990,30 @@ export default function Analysis() {
   // Free play: seed an arbitrary mid-game FEN snapshot from the ?fen= param once
   // (SEED-094 / D-06, additive alongside ?line=). Empty sans + the parsed FEN as
   // root seeds a free-play root at that exact position — no new hook method
-  // needed. hasLoadedMainLine is shared with the other seeding effects above.
+  // needed. seededKey is shared with the other seeding effects above.
   useEffect(() => {
-    if (isGameMode || rootFenSeed === null || hasLoadedMainLine.current) return;
-    hasLoadedMainLine.current = true;
+    if (isGameMode || rootFenSeed === null || seededKey.current !== null) return;
+    seededKey.current = 'fen';
     loadMainLine([], rootFenSeed);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [rootFenSeed, isGameMode]);
 
   // Navigate to initialPly AFTER loadMainLine state lands (separate effect — RESEARCH.md Hardest Part 3).
-  // Watches mainLine.length so it fires after the batch-reset from loadMainLine.
+  // Watches `mainLine` identity (not .length) so it also fires when a same-page
+  // game switch seeds a DIFFERENT game that happens to have the same move count
+  // — with .length alone that dep never changes and the new game never navigates
+  // to its entry ply (CR-01). loadMainLine replaces the array, so identity is the
+  // precise "the tree was reseeded" signal; unrelated renders reuse it.
+  //
+  // The `seededKey.current !== key` gate is load-bearing: between navigate() and
+  // the new game's data arriving, gameId is already game B while `mainLine` still
+  // holds game A's nodes. Without it this effect would consume B's guard against
+  // A's tree, then never re-run once B actually seeded.
   useEffect(() => {
-    if (!isGameMode || mainLine.length === 0 || hasNavigatedToInitialPly.current) return;
-    hasNavigatedToInitialPly.current = true;
+    if (!isGameMode || mainLine.length === 0) return;
+    const key = `game:${gameId}`;
+    if (seededKey.current !== key || navigatedInitialPlyKey.current === key) return;
+    navigatedInitialPlyKey.current = key;
     const ply = initialPly ?? 0;
     // Quick 260702-fog: if the opening ply carries a user tactic chip, open its line
     // automatically — same effect as clicking the chip (setPendingFlaw + navigate to the
@@ -975,7 +1037,7 @@ export default function Analysis() {
     // Quick 260805-p37: same URL-seeding rationale as the fork branch above.
     if (nodeId !== undefined) goToNode(nodeId, { silent: true });
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [mainLine.length, isGameMode]);
+  }, [mainLine, isGameMode, gameId]);
 
   // Insert contextual PV sideline when the fetch arrives (L-1: insertPvLine, not loadMainLine).
   // Quick 260703-kyb: records the new line into openLines WITHOUT touching any previously
@@ -2538,11 +2600,52 @@ export default function Analysis() {
           if (endId !== undefined) goToNode(endId);
         } else {
           // Bare free play (no line): wipe back to the empty start position.
+          // Phase 208: also drops the ephemeral pasted headers, if any — this
+          // is the one Reset path that actually clears the loaded game (the
+          // mainLine.length > 0 branch above just returns to its end).
           loadMainLine([], rootFen);
+          setPastedHeaders(null);
         }
       };
 
   const canReset = currentNodeId !== null;
+
+  // Phase 208 (PASTE-01/PASTE-02/PASTE-03): apply a sniffed paste result to
+  // the board. A bare FEN seeds a free-play root through the SAME board API
+  // the ?fen= URL-seeding effect uses (loadMainLine([], fen)) — no
+  // ?fen=/?line= write-back (D-03), no navigation, no network request. A PGN
+  // loads its full mainline at the parsed root, records the ephemeral
+  // headers + chosen side for the player-info render, and orients the board
+  // to that side directly (independent of the one-shot autoOrientation
+  // effect above, since a paste can happen more than once per session).
+  const handlePasteLoad = (result: PasteParseResult, userColor: 'white' | 'black') => {
+    if (result.kind === 'fen') {
+      loadMainLine([], result.fen);
+      setPastedHeaders(null);
+    } else if (result.kind === 'pgn') {
+      loadMainLine(result.sans, result.rootFen);
+      setPastedHeaders({ headers: result.headers, userColor });
+      setBoardFlipped(userColor === 'black');
+    }
+  };
+
+  // Phase 208 (D-15): after "Analyze full game" persists the row, navigate to
+  // the saved game's normal /analysis?game_id=N URL — a same-route
+  // search-param change, so the page re-enters game mode on `game_id` and
+  // renders the real gameData-backed PlayerBar/eval chart/flaw markers. This
+  // does NOT violate D-03 (which bars ?fen=/?line= write-back specifically):
+  // ?game_id= is a separate param on a separate code path. The ephemeral
+  // pastedHeaders state is cleared since the board is about to be replaced by
+  // the real saved-game render.
+  //
+  // No seeding-guard reset is needed here (CR-01): the guards are keyed on
+  // `game:<gameId>`, so changing the param is itself the signal to reseed. A
+  // manual reset would be wrong — it could let the seeding effects fire against
+  // the OUTGOING game's still-resident state before the new game's data lands.
+  const handlePasteSaved = (savedGameId: number) => {
+    setPastedHeaders(null);
+    navigate(buildGameAnalysisUrl(savedGameId));
+  };
 
   // Inline chip click: toggle off (SAME chip only — deleteSubtree removes just that
   // line, others stay open) or open a new line WITHOUT touching any other open line
@@ -2940,17 +3043,42 @@ export default function Analysis() {
     </div>
   );
 
-  // Player info row (desktop, game mode): name + ELO left, remaining clock right.
-  // Rendered above and below the board, ordered by orientation (Quick 260628-pcb).
-  const playerBar = (color: 'white' | 'black') => (
-    <PlayerBar
-      isWhite={color === 'white'}
-      name={(color === 'white' ? gameData?.white_username : gameData?.black_username) ?? null}
-      rating={(color === 'white' ? gameData?.white_rating : gameData?.black_rating) ?? null}
-      clockSeconds={color === 'white' ? playerClocks.white : playerClocks.black}
-      testId={`analysis-player-${color}`}
-    />
-  );
+  // Phase 208 (PASTE-02): true whenever player info should render at all —
+  // either a real fetched game (game mode) OR an ephemeral pasted PGN. A
+  // paste can happen WHILE already in game mode (D-20: the trigger stays
+  // visible there), so pastedHeaders — the more recently loaded source — is
+  // preferred over gameData whenever both are present.
+  const showPlayerBars = (isGameMode && gameData != null) || pastedHeaders != null;
+
+  // Player info row: name + ELO left, remaining clock right (game mode) or,
+  // for an ephemeral pasted PGN, the parsed Result/Date in that same freed
+  // slot on the top row only (rowPosition='top', UI-SPEC § Interaction
+  // Contract 6). Rendered above and below the board, ordered by orientation
+  // (Quick 260628-pcb).
+  const playerBar = (color: 'white' | 'black', rowPosition: 'top' | 'bottom' = 'bottom') => {
+    const headers = pastedHeaders?.headers;
+    const name = headers
+      ? (color === 'white' ? headers.white : headers.black)
+      : ((color === 'white' ? gameData?.white_username : gameData?.black_username) ?? null);
+    const rating = headers
+      ? (color === 'white' ? headers.whiteElo : headers.blackElo)
+      : ((color === 'white' ? gameData?.white_rating : gameData?.black_rating) ?? null);
+    // D-07: a pasted game is always untimed — no clock, ever.
+    const clockSeconds = headers ? null : (color === 'white' ? playerClocks.white : playerClocks.black);
+    const rightSlotContent =
+      headers && rowPosition === 'top' ? formatPastedResultDate(headers.result, headers.date) : null;
+
+    return (
+      <PlayerBar
+        isWhite={color === 'white'}
+        name={name}
+        rating={rating}
+        clockSeconds={clockSeconds}
+        rightSlotContent={rightSlotContent}
+        testId={`analysis-player-${color}`}
+      />
+    );
+  };
 
   // Small source cap centered over an eval bar (151.1 UAT): "FC"/"Maia" (brown/
   // violet) over the left bar per D-04 precedence, "SF" (blue) over the right.
@@ -3174,10 +3302,11 @@ export default function Analysis() {
         className="flex w-full flex-col items-center gap-2"
         style={{ maxWidth: boardWidth ? boardWidth + BOARD_EVAL_BARS_ALLOWANCE_PX : undefined }}
       >
-        {/* Source caps (Maia/SF) over the bars + top player (game mode). */}
+        {/* Source caps (Maia/SF) over the bars + top player (game mode, or an
+            ephemeral pasted PGN — Phase 208). */}
         <div className="w-full">
           {boardHeaderRow(
-            isGameMode && gameData ? playerBar(boardFlipped ? 'white' : 'black') : null,
+            showPlayerBars ? playerBar(boardFlipped ? 'white' : 'black', 'top') : null,
           )}
         </div>
 
@@ -3199,8 +3328,8 @@ export default function Analysis() {
           </div>
         </div>
 
-        {/* Bottom player (game mode only). */}
-        {isGameMode && gameData && (
+        {/* Bottom player (game mode, or an ephemeral pasted PGN). */}
+        {showPlayerBars && (
           <div className="w-full">{boardFooterRow(playerBar(boardFlipped ? 'black' : 'white'))}</div>
         )}
 
@@ -3433,10 +3562,35 @@ export default function Analysis() {
     </TabsContent>
   );
 
-  // The mobile "Moves" tab content — the vertical variation tree in a charcoal
-  // container (no card header), matching the surrounding tab surfaces. Shared across
-  // the mobile tab layouts and the mid-range right column. The charcoal wrapper keeps
-  // the flex/scroll chain (`min-h-0 flex-1`) so the tree's internal scroller resolves.
+  // Move-list header row content (Phase 208, D-19/D-20): shared between the
+  // mobile/mid movesTab header just below and the desktop movesCard
+  // CardHeader further down (movesTab had no header at all before this
+  // phase — added here so the Paste trigger reaches every layout, not just
+  // desktop; SC-9 requires the whole flow to work at 375px). Rendered
+  // unconditionally, including ?game_id= game mode (D-20).
+  const moveListHeaderContent = (
+    <>
+      <ArrowLeftRight className="h-4 w-4" aria-hidden />
+      Moves
+      <Button
+        variant="ghost"
+        size="default"
+        className="ml-auto gap-1"
+        data-testid="analysis-btn-paste"
+        onClick={() => setPasteModalOpen(true)}
+      >
+        <ClipboardPaste className="h-4 w-4" aria-hidden="true" />
+        PGN/FEN
+      </Button>
+    </>
+  );
+
+  // The mobile "Moves" tab content — a CardHeader (Phase 208: now carrying the
+  // Paste trigger, previously icon+"Moves" text only) over the vertical
+  // variation tree in a charcoal container, matching the surrounding tab
+  // surfaces. Shared across the mobile tab layouts and the mid-range right
+  // column. The charcoal wrapper keeps the flex/scroll chain (`min-h-0
+  // flex-1`) so the tree's internal scroller resolves.
   //
   // Bug fix (bot-game live analysis): when the live poll lands analysis on a game the
   // user is viewing on the Moves tab, the move-quality icons (blunder/mistake, gem/
@@ -3456,6 +3610,9 @@ export default function Analysis() {
         key={moveListKey}
         className="charcoal-texture flex min-h-0 flex-1 flex-col rounded-md"
       >
+        <CardHeader size="compact" data-testid="analysis-movelist-header" className="rounded-t-md">
+          {moveListHeaderContent}
+        </CardHeader>
         {variationTree('vertical')}
       </div>
     </TabsContent>
@@ -3605,8 +3762,7 @@ export default function Analysis() {
       className="relative flex min-h-0 flex-1 flex-col"
     >
       <CardHeader size="compact" data-testid="analysis-movelist-header">
-        <ArrowLeftRight className="h-4 w-4" aria-hidden />
-        Moves
+        {moveListHeaderContent}
       </CardHeader>
       {variationTree('responsive')}
     </Card>
@@ -3630,6 +3786,21 @@ export default function Analysis() {
       onPlayMove={playProseMove}
       enabled={maiaEnabled}
       onToggleEnabled={setMaiaEnabled}
+    />
+  );
+
+  // Phase 208 (D-19/D-20): the paste modal — rendered into all three layout
+  // branches below (mid/mobile/desktop return at different points), mirroring
+  // the "analysis-page" testid pattern already used the same way. Only one
+  // branch mounts per render, and Dialog itself portals its content, so
+  // duplicating the render site across branches is safe and matches the
+  // existing per-branch pattern in this file rather than introducing a new one.
+  const pasteModalNode = (
+    <PasteModal
+      open={pasteModalOpen}
+      onOpenChange={setPasteModalOpen}
+      onLoad={handlePasteLoad}
+      onSaved={handlePasteSaved}
     />
   );
 
@@ -3660,6 +3831,7 @@ export default function Analysis() {
         : undefined;
     return (
       <div data-testid="analysis-page" className="flex min-h-0 flex-1 flex-col bg-background">
+        {pasteModalNode}
         <main
           className="mx-auto w-full px-4 py-4 pb-20 md:px-6"
           style={{ maxWidth: DESKTOP_GRID_MAX_WIDTH_PX }}
@@ -3701,6 +3873,7 @@ export default function Analysis() {
         data-testid="analysis-page"
         className="flex min-h-0 flex-1 flex-col bg-background"
       >
+        {pasteModalNode}
         {/* Board + eval bar. */}
         {/* Board block: source caps + top player, board, bottom player. max-w-[92vw]
             shrinks the board a touch so the name/clock strips top and bottom stay on
@@ -3714,10 +3887,10 @@ export default function Analysis() {
           style={{ maxWidth: `min(92vw, ${MOBILE_BOARD_BLOCK_MAX_PX}px)` }}
         >
           {boardHeaderRow(
-            isGameMode && gameData ? playerBar(boardFlipped ? 'white' : 'black') : null,
+            showPlayerBars ? playerBar(boardFlipped ? 'white' : 'black', 'top') : null,
           )}
           {boardRow}
-          {isGameMode && gameData && boardFooterRow(playerBar(boardFlipped ? 'black' : 'white'))}
+          {showPlayerBars && boardFooterRow(playerBar(boardFlipped ? 'black' : 'white'))}
         </div>
 
         {/* Game load error (CLAUDE.md isError branch). */}
@@ -3754,6 +3927,7 @@ export default function Analysis() {
 
   return (
     <div data-testid="analysis-page" className="flex min-h-0 flex-1 flex-col bg-background">
+      {pasteModalNode}
       {/* Phase 161 D-03: max-w-7xl removed at desk3col+ to reclaim horizontal space
           for the fluid grid; min-h-0/flex/h-full complete the min-h-0 chain from the
           App shell (D-01) down into the grid row below. */}
@@ -3783,7 +3957,7 @@ export default function Analysis() {
                 Human card top aligns with the board top (not the player-bar top) —
                 same trick as the engine column. Desktop only; -mb-2 trims this
                 column's gap-4 to the board column's gap-2. (Quick 260705-bm3) */}
-            {isGameMode && gameData && (
+            {showPlayerBars && (
               <div aria-hidden="true" className="hidden desk3col:block desk3col:invisible desk3col:-mb-2">
                 {playerBar(boardFlipped ? 'white' : 'black')}
               </div>
@@ -3815,7 +3989,7 @@ export default function Analysis() {
                 (desk3col) where the columns sit side by side; invisible keeps its
                 height. -mb-2 trims this column's gap-4 down to the board column's
                 gap-2 so the spacer→card gap equals the bar→board gap. (Quick 260628-pcb) */}
-            {isGameMode && gameData && (
+            {showPlayerBars && (
               <div aria-hidden="true" className="hidden desk3col:block desk3col:invisible desk3col:-mb-2">
                 {playerBar(boardFlipped ? 'white' : 'black')}
               </div>

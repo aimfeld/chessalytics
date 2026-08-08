@@ -112,7 +112,7 @@ Accent reserved for: **the "Load" button fill only.** Never apply `bg-brand-brow
 
 | Element | Copy |
 |---------|------|
-| Trigger button (movelist header) | "Paste" — icon `ClipboardPaste` + label. Full context ("a FEN or PGN") lives in the modal title, not the trigger, to fit the compact header at 375px |
+| Trigger button (movelist header) | "PGN/FEN" — icon `ClipboardPaste` + label. **Revised post-execution by user decision** (was "Paste"): naming the formats on the trigger itself says what the button accepts, which the generic verb did not. The modal title still carries the full sentence. Note this is 8 characters against the original 5, so the 375px fit recorded in E1 below is the binding constraint |
 | Modal title | "Paste a FEN or PGN" |
 | Modal description | "Paste a position (FEN) or a full game (PGN). We'll figure out which." |
 | Textarea placeholder | "Paste a FEN string or a PGN game here" |
@@ -366,7 +366,7 @@ trigger button classified into all 8 categories on the words "icon", "label", "c
 
 | Category | Element | Truth |
 |----------|---------|-------|
-| long-text | E1 | The trigger label is the fixed literal "Paste"; at 375px the compact movelist `CardHeader` renders icon + label alongside the "Moves" title without wrapping or truncating either |
+| long-text | E1 | The trigger label is the fixed literal "PGN/FEN"; at 375px the compact movelist `CardHeader` renders icon + label alongside the "Moves" title without wrapping or truncating either |
 | empty | E2 | An empty (whitespace-only) textarea leaves "Load" `disabled`, renders no error, and hides the side selector — no copy narrates the state |
 | loading | E2 | While "Analyze full game" is in flight both footer buttons are `disabled` and the secondary label reads "Analyzing…" |
 | error | E2 | A client parse failure renders the locked D-22 copy inline at `data-testid="paste-error"` with `role="alert"`; a server save failure renders the generic project-voice copy at `data-testid="paste-save-error"` |

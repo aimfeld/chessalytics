@@ -23,6 +23,7 @@ import {
 import type { SquareMarker } from '@/components/board/boardMarkers';
 import { uciToSquares } from '@/lib/sanToSquares';
 import { Card, CardHeader } from '@/components/ui/card';
+import { Badge } from '@/components/ui/badge';
 import { Tooltip } from '@/components/ui/tooltip';
 import { PlatformIcon } from '@/components/icons/PlatformIcon';
 import { LazyMiniBoard } from '@/components/board/LazyMiniBoard';
@@ -832,6 +833,25 @@ export function LibraryGameCard({
           </a>
         </Tooltip>
       ) : null}
+      {/* Phase 208 (D-13): a pasted game has no registered PlatformIcon and no
+          gameUrl, so this slot renders empty today — the badge drops straight
+          in with no layout change. A text badge (not an icon-only glyph)
+          because it must read as "this is not a game you played". The explicit
+          text-sm override is mandatory: Badge's base class is text-xs (below
+          the CLAUDE.md 14px floor), and cn() (tailwind-merge) resolves the
+          conflict correctly because className is passed last. variant="outline"
+          — a neutral label, not a status/severity signal, and specifically not
+          brand-brown (UI-SPEC reserves that for the paste modal's one accent
+          slot elsewhere in this phase). */}
+      {game.platform === 'pgn' && (
+        <Badge
+          variant="outline"
+          className="text-sm"
+          data-testid={`library-pasted-badge-${game.game_id}`}
+        >
+          Pasted
+        </Badge>
+      )}
     </span>
   );
 

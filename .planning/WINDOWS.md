@@ -1,10 +1,10 @@
 ---
 schema_version: 1
-open_count: 3
+open_count: 4
 waived_count: 0
 fixed_count: 1
-total_count: 4
-last_updated: 2026-08-08T13:27:04.997Z
+total_count: 5
+last_updated: 2026-08-08T17:58:51.847Z
 ---
 
 # Broken Windows Ledger
@@ -19,6 +19,7 @@ last_updated: 2026-08-08T13:27:04.997Z
 | 2 | 190 | deviation | frontend/src/components/train/TrainReveal.tsx |  | D-11 miss-reveal sentence omits the illustrative {consequence} clause (e.g. 'losing a rook') since no backend field (SolveResponse/PuzzleRevealResponse) supplies a material-loss description | open |  | 2026-07-25T20:27:06.894Z |  |
 | 3 | 200 | unrun-verify | frontend/src/components/train/TrainReveal.tsx |  | Phase 200 end-of-phase Human Verification Required browser pass (375px mobile + desktop, 15 steps) not yet run — non-blocking for execution per plan 200-04, but a mandatory pre-squash-merge item covering EXPLORE-07/LEGEND-06's pixel half that jsdom cannot verify | fixed |  | 2026-08-01T13:26:38.534Z | 2026-08-02T15:21:00.103Z |
 | 4 | 207 | unrun-verify | .planning/phases/207-self-serve-password-reset/207-03-SUMMARY.md |  | RESET-05 real-mailbox eligibility observation (plan step 9: no-password account produces zero sends with identical confirmation copy) was NOT PERFORMED at the Task 2 checkpoint; automated coverage (TestPasswordResetEligibility) stands in its place | open |  | 2026-08-08T13:27:04.997Z |  |
+| 5 | 208 | stub | frontend/src/components/analysis/PasteModal.tsx |  | Analyze full game button is a no-op click handler; wiring to POST /imports/paste + tier-1 enqueue is intentionally deferred to Plan 03 per this plan's own action text | open |  | 2026-08-08T17:58:51.847Z |  |
 
 ````json
 [
@@ -68,6 +69,18 @@ last_updated: 2026-08-08T13:27:04.997Z
     "status": "open",
     "reason": "",
     "recorded_at": "2026-08-08T13:27:04.997Z",
+    "resolved_at": null
+  },
+  {
+    "id": 5,
+    "kind": "stub",
+    "phase": "208",
+    "file": "frontend/src/components/analysis/PasteModal.tsx",
+    "line": null,
+    "description": "Analyze full game button is a no-op click handler; wiring to POST /imports/paste + tier-1 enqueue is intentionally deferred to Plan 03 per this plan's own action text",
+    "status": "open",
+    "reason": "",
+    "recorded_at": "2026-08-08T17:58:51.847Z",
     "resolved_at": null
   }
 ]

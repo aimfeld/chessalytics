@@ -17,7 +17,7 @@
 
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
-import { MemoryRouter } from 'react-router';
+import { MemoryRouter, useNavigate } from 'react-router';
 import { BEST_MOVE_ARROW, MAIA_ACCENT, GREAT_ACCENT } from '@/lib/theme';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { TooltipProvider } from '@/components/ui/tooltip';
@@ -269,9 +269,17 @@ vi.mock('@/hooks/useUserProfile', () => ({
 // tags-relocation test opts into game mode by setting libraryGameState.data before
 // rendering with a `?game_id=` param.
 const libraryGameState: { data: GameFlawCard | undefined } = { data: undefined };
+// Phase 208 CR-01: per-gameId fixtures, so a test can drive a SAME-PAGE game
+// switch (?game_id=1 -> ?game_id=2) the way "Analyze full game" does. Empty by
+// default — when a gameId has no entry the hook falls back to
+// libraryGameState.data, which is exactly the previous single-fixture behavior.
+const libraryGameById = new Map<number, GameFlawCard>();
 vi.mock('@/hooks/useLibrary', () => ({
   useTacticLines: () => ({ data: undefined, isFetching: false, isError: false }),
-  useLibraryGame: () => ({ data: libraryGameState.data, isError: false }),
+  useLibraryGame: (gameId: number | null) => ({
+    data: (gameId != null ? libraryGameById.get(gameId) : undefined) ?? libraryGameState.data,
+    isError: false,
+  }),
 }));
 
 // Mock useFlawFilterStore: Analysis.tsx calls this unconditionally for tactic
@@ -359,6 +367,7 @@ afterEach(() => {
   maiaCalls.length = 0;
   flawChessCalls.length = 0;
   libraryGameState.data = undefined;
+  libraryGameById.clear();
 });
 
 // Late import after vi.mock calls — Analysis.tsx is a default export (required by React.lazy).
@@ -2352,5 +2361,87 @@ describe('Analysis-board Stockfish root injection (Phase 196, INJECT-03/04/06)',
     fireEvent.focus(screen.getByTestId('flawchess-verdict-move-Nf3'));
     const tooltip = screen.getByTestId('flawchess-verdict-tooltip-Nf3').textContent ?? '';
     expect(tooltip).toMatch(/FlawChess \(practical\)/);
+  });
+});
+
+// ── Phase 208 CR-01 regression: same-page game switch reseeds the board ────────
+//
+// D-20 keeps the Paste trigger visible while viewing an existing ?game_id= game,
+// and the paste modal's "Analyze full game" persists the pasted game then
+// navigates to the NEW game's ?game_id= URL (D-15) on the SAME mounted page.
+//
+// The seeding effects used to be guarded by one-shot booleans
+// (`hasLoadedMainLine` / `hasNavigatedToInitialPly`), written when a mounted
+// Analysis page was assumed to be exactly one of {game, line, fen} forever. With
+// the guard already spent by game A, the game-mode seeding effect early-returned
+// on arrival of game B: the URL, PlayerBar, eval chart and flaw panel all showed
+// game B while the board and move list silently kept showing game A — the
+// "silently wrong position" failure class D-21/SC-3 forbid elsewhere in this
+// phase. The guards are now keyed on `game:<gameId>`.
+//
+// These tests drive the navigation directly rather than through PasteModal: the
+// defect is in Analysis.tsx's seeding guards, and any same-page game_id change
+// (including browser back/forward between two games) reproduces it.
+describe('Analysis same-page game switch (Phase 208 CR-01)', () => {
+  function NavigateButton({ to }: { to: string }) {
+    const navigate = useNavigate();
+    return (
+      <button data-testid="test-navigate" onClick={() => navigate(to)}>
+        go
+      </button>
+    );
+  }
+
+  function renderWithNavigation(initialPath: string, to: string) {
+    const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    return render(
+      <QueryClientProvider client={queryClient}>
+        <MemoryRouter initialEntries={[initialPath]}>
+          <TooltipProvider>
+            <NavigateButton to={to} />
+            <AnalysisPage />
+          </TooltipProvider>
+        </MemoryRouter>
+      </QueryClientProvider>,
+    );
+  }
+
+  function moveListText(): string {
+    return screen.getByTestId('analysis-variation-tree').textContent ?? '';
+  }
+
+  it('reseeds the board when navigating from one game to another (CR-01)', async () => {
+    libraryGameById.set(1, buildGame({ game_id: 1, moves: ['e4'], ply_count: 1 }));
+    libraryGameById.set(2, buildGame({ game_id: 2, moves: ['d4', 'd5'], ply_count: 2 }));
+
+    renderWithNavigation('/analysis?game_id=1', '/analysis?game_id=2');
+
+    // Game A is on the board.
+    await waitFor(() => expect(moveListText()).toContain('e4'));
+
+    fireEvent.click(screen.getByTestId('test-navigate'));
+
+    // Game B's moves replace game A's — the regression is the board keeping 'e4'.
+    await waitFor(() => expect(moveListText()).toContain('d4'));
+    expect(moveListText()).toContain('d5');
+    expect(moveListText()).not.toContain('e4');
+  });
+
+  it('reseeds even when the two games have the same move count (CR-01)', async () => {
+    // Same ply_count on both sides: the pre-fix initial-ply effect keyed its
+    // dependency on `mainLine.length`, which does not change between two
+    // equal-length games, so nothing downstream of the seed re-ran. Guards the
+    // `mainLine`-identity dependency that replaced it.
+    libraryGameById.set(1, buildGame({ game_id: 1, moves: ['e4'], ply_count: 1 }));
+    libraryGameById.set(2, buildGame({ game_id: 2, moves: ['d4'], ply_count: 1 }));
+
+    renderWithNavigation('/analysis?game_id=1', '/analysis?game_id=2');
+
+    await waitFor(() => expect(moveListText()).toContain('e4'));
+
+    fireEvent.click(screen.getByTestId('test-navigate'));
+
+    await waitFor(() => expect(moveListText()).toContain('d4'));
+    expect(moveListText()).not.toContain('e4');
   });
 });

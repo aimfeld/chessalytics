@@ -115,6 +115,10 @@ export function buildFilterParams(params: {
   opponent_strength?: OpponentStrengthRange;
   window?: number;
   color?: string | null;
+  // Phase 208 (D-11/D-12, PASTE-05/09): Library-only "Pasted" opt-in. Omitted
+  // when false/absent so a default (unfiltered) call sends nothing, matching
+  // the has_gem/has_great conditional-inclusion pattern above.
+  include_pasted?: boolean;
 }): Record<string, string | string[] | number | boolean> {
   const result: Record<string, string | string[] | number | boolean> = {};
   if (params.time_control) result.time_control = params.time_control;
@@ -130,6 +134,7 @@ export function buildFilterParams(params: {
   }
   if (params.window) result.window = params.window;
   if (params.color) result.color = params.color;
+  if (params.include_pasted) result.include_pasted = true;
   return result;
 }
 
@@ -333,6 +338,8 @@ export const libraryApi = {
     // independent (union at the backend when both are true); omitted when false.
     has_gem?: boolean;
     has_great?: boolean;
+    // Phase 208 (D-11/D-12): Library "Pasted" opt-in, off by default.
+    include_pasted?: boolean;
     offset?: number;
     limit?: number;
   }) =>
@@ -366,6 +373,8 @@ export const libraryApi = {
     opponent_strength?: OpponentStrengthRange;
     color?: string | null;
     severity?: ('blunder' | 'mistake')[];
+    // Phase 208 (D-11/D-12): Library "Pasted" opt-in, off by default.
+    include_pasted?: boolean;
   }) =>
     apiClient.get<FlawStatsResponse>('/library/flaw-stats', {
       params: {
@@ -384,6 +393,8 @@ export const libraryApi = {
     opponent_strength?: OpponentStrengthRange;
     color?: string | null;
     severity?: ('blunder' | 'mistake')[];
+    // Phase 208 (D-11/D-12): Library "Pasted" opt-in, off by default.
+    include_pasted?: boolean;
   }) =>
     apiClient.get<FlawComparisonResponse>('/library/flaw-comparison', {
       params: {
@@ -403,6 +414,8 @@ export const libraryApi = {
     color?: string | null;
     severity?: ('blunder' | 'mistake')[];
     tactic_families?: string[];
+    // Phase 208 (D-11/D-12): Library "Pasted" opt-in, off by default.
+    include_pasted?: boolean;
   }) =>
     apiClient.get<TacticComparisonResponse>('/library/tactic-comparison', {
       params: {
@@ -434,6 +447,8 @@ export const libraryApi = {
     // Quick 260620-l5k: inclusive tactic-depth range bounds (0-based ply, 0..11).
     min_tactic_depth?: number;
     max_tactic_depth?: number;
+    // Phase 208 (D-11/D-12): Library "Pasted" opt-in, off by default.
+    include_pasted?: boolean;
     offset?: number;
     limit?: number;
   }) =>

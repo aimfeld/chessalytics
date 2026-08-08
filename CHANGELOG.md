@@ -18,6 +18,8 @@ in `YYYY-MM-DD` (Europe/Zurich).
 
 - Forgot your password? You can now reset it yourself — request a link by email, follow it, and set a new one, with no need to contact support. (Phase 207)
 
+- You can now paste a FEN or a full PGN on the analysis board to load any position or game from outside FlawChess, look at it without saving anything, and optionally run a full analysis on it. Pasted games never count toward your openings, endgames, or insights stats, and stay hidden in the Library until you turn on the Pasted filter. (Phase 208)
+
 ### Changed
 
 - Train no longer serves a blunder whose second-best move still leaves the player clearly winning (+2 pawns or a forced mate), so the puzzle pool is ~24% smaller and a larger share of what remains has exactly one right move. (SEED-141)

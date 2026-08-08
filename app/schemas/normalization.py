@@ -9,7 +9,10 @@ from typing import Literal
 from pydantic import BaseModel
 
 # Literal types for fields with fixed value sets (per CLAUDE.md)
-Platform = Literal["chess.com", "lichess", "flawchess"]
+# "flawchess" and "pgn" are analytics-excluded values — see
+# app.repositories.query_utils.DEFAULT_EXCLUDED_PLATFORMS, the single seam
+# that decides analytics eligibility for every Platform member (Phase 208 D-05).
+Platform = Literal["chess.com", "lichess", "flawchess", "pgn"]
 GameResult = Literal["1-0", "0-1", "1/2-1/2"]
 Color = Literal["white", "black"]
 Termination = Literal["checkmate", "resignation", "timeout", "draw", "abandoned", "unknown"]

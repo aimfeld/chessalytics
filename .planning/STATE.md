@@ -3,9 +3,10 @@ gsd_state_version: 1.0
 milestone: v2.12
 milestone_name: Train Reliability & Grading Agreement
 current_phase: 208
-status: not_started
+current_phase_name: analysis-fen-pgn-paste
+status: executing
 stopped_at: Phase 208 UI-SPEC approved
-last_updated: "2026-08-08T16:41:52.991Z"
+last_updated: "2026-08-08T17:13:09.189Z"
 last_activity: 2026-08-08
 last_activity_desc: Phase 208 added (SEED-144, paste a FEN or PGN on /analysis) — not planned yet
 progress:
@@ -13,17 +14,16 @@ progress:
   completed_phases: 2
   total_plans: 10
   completed_plans: 6
-current_phase_name: analysis-fen-pgn-paste
 ---
 
 # Project State: FlawChess
 
 ## Current Position
 
-Phase: 208
-Plan: Not started
-Status: Phase 208 (Paste a FEN or PGN on /analysis, SEED-144) added to the roadmap, not planned yet. Phase 207 complete (self-serve password reset, released #303).
-Last activity: 2026-08-08 — Phase 208 added via `/gsd-phase 208 @SEED-144`. Frontend + backend, no migration, no new eval infrastructure; two open questions (Library visibility, `platform_game_id` synthesis) carried to `/gsd-discuss-phase`.
+Phase: 208 (analysis-fen-pgn-paste) — EXECUTING
+Plan: 1 of 4
+Status: Executing Phase 208
+Last activity: 2026-08-08 — Phase 208 execution started
 
 **v2.12 closed 2026-08-05** retroactively over two already-shipped, already-deployed phases (lightweight close, no `/gsd-new-milestone` requirements cycle — same pattern as v2.6 and v2.8):
 

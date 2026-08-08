@@ -41,7 +41,7 @@ from app.repositories.library_repository import (
     is_decided_lost,
     tactic_slot_visible,
 )
-from app.repositories.query_utils import mover_is_white_at_ply
+from app.repositories.query_utils import ANALYTICS_INCLUDED_PLATFORMS, mover_is_white_at_ply
 from app.services.tactic_detector import _INT_TO_MOTIF as _TACTIC_INT_TO_MOTIF
 from app.schemas.library import (
     FlawBullet,
@@ -817,6 +817,60 @@ async def get_library_game(
     )
 
 
+# ---------------------------------------------------------------------------
+# Phase 208 (D-11/D-12, PASTE-05/09) — Library-scoped "Pasted" opt-in
+# ---------------------------------------------------------------------------
+
+# The Games tab's default platform population (LIBG-08 substitution below).
+# `flawchess` is in this list because Phase 167 D-03 opted bot games back INTO
+# the Library (the opposite of the default-exclusion the rest of the app
+# applies to them). `"pgn"` is deliberately NOT in it: D-11 makes pasted games
+# opt-in, the OPPOSITE of how bot games were handled — a user pastes games
+# that are frequently NOT their own, so they must stay hidden until the
+# Library's explicit "Pasted" chip asks for them. This list must NEVER gain
+# "pgn".
+LIBRARY_GAMES_BASE_PLATFORMS: tuple[str, ...] = ("chess.com", "lichess", "flawchess")
+
+
+def resolve_library_platforms(
+    platform: Sequence[str] | None,
+    *,
+    include_pasted: bool,
+    surface: Literal["games", "analytics"],
+) -> list[str]:
+    """Resolve the platform list a Library surface should query (D-11/D-12).
+
+    Each Library surface has its own correct default population, so a single
+    shared base would silently change one of them:
+    - surface="games" (GET /library/games): the Games tab shows flawchess
+      bot-practice games by Phase 167 D-03, so its base is
+      LIBRARY_GAMES_BASE_PLATFORMS (chess.com/lichess/flawchess).
+    - surface="analytics" (flaw-stats/flaws/flaw-comparison/tactic-comparison):
+      these surfaces do NOT show bot games — their base is
+      ANALYTICS_INCLUDED_PLATFORMS (chess.com/lichess), the explicit-list
+      equivalent of the `platform=None` default through apply_game_filters
+      (Plan 02's test_analytics_included_platforms_list_equals_default keeps
+      the two readings equal).
+
+    When `platform` is already explicit (caller passed a list), that list is
+    the starting point instead of either base — an explicit caller selection
+    is preserved, only extended.
+
+    `include_pasted` is purely additive: when True and "pgn" is not already
+    present, it is appended. It never removes or replaces anything, and it
+    never mutates the input list.
+    """
+    if platform is not None:
+        base = list(platform)
+    elif surface == "games":
+        base = list(LIBRARY_GAMES_BASE_PLATFORMS)
+    else:
+        base = list(ANALYTICS_INCLUDED_PLATFORMS)
+    if include_pasted and "pgn" not in base:
+        base.append("pgn")
+    return base
+
+
 async def get_library_games(
     session: AsyncSession,
     user_id: int,
@@ -840,6 +894,7 @@ async def get_library_games(
     color: str | None = None,
     has_gem: bool | None = None,
     has_great: bool | None = None,
+    include_pasted: bool = False,
 ) -> LibraryGamesResponse:
     """Return the flaw-filtered paginated games archive (LIBG-08).
 
@@ -861,11 +916,19 @@ async def get_library_games(
     excludes is_computer_game=True rows; wiring that default/filter-chip is
     Phase 171's job, out of scope here.
 
+    Phase 208 (D-11/D-12, PASTE-05/09): `include_pasted` is the Library-only
+    opt-in that reveals `platform='pgn'` games, off by default, additive to
+    whatever population this tab already shows — resolved through
+    resolve_library_platforms (surface="games") so pasted games join the
+    existing chess.com/lichess/flawchess default rather than replacing it.
+
     has_gem / has_great (FILT-01, D-04/D-05): threaded straight through to
     query_filtered_games -> apply_game_filters -> best_move_exists_from_table,
     no transformation at this layer.
     """
-    library_platform = platform if platform is not None else ["chess.com", "lichess", "flawchess"]
+    library_platform = resolve_library_platforms(
+        platform, include_pasted=include_pasted, surface="games"
+    )
     try:
         games, matched_count = await library_repository.query_filtered_games(
             session,
@@ -1170,6 +1233,7 @@ async def get_flaw_stats(
     opponent_gap_min: int | None = None,
     opponent_gap_max: int | None = None,
     color: str | None = None,
+    include_pasted: bool = False,
 ) -> FlawStatsResponse:
     """Stats-panel aggregate over the filtered analyzed-only set (LIBG-09).
 
@@ -1185,7 +1249,14 @@ async def get_flaw_stats(
     analyzed_n / total_n derive from the eval-coverage subquery — NOT from game_flaws
     row counts (Pitfall 6). An analyzed game with zero M+B flaws counts toward
     analyzed_n. An empty analyzed set returns zeros + empty trend, never raises.
+
+    Phase 208 (D-11/D-12, PASTE-05/09): `include_pasted` opts pasted games into
+    this analytics surface's own default population (resolve_library_platforms,
+    surface="analytics" — chess.com/lichess, NOT flawchess), off by default.
     """
+    platform = resolve_library_platforms(
+        platform, include_pasted=include_pasted, surface="analytics"
+    )
     try:
         # Coverage badge: omit flaw_severity so total_n spans the WHOLE filtered
         # game set and analyzed_n <= total_n (a flaw EXISTS would collapse them).
@@ -1315,6 +1386,7 @@ async def get_library_flaws(
     max_tactic_depth: int | None = None,
     offset: int,
     limit: int,
+    include_pasted: bool = False,
 ) -> LibraryFlawsResponse:
     """Paginated per-flaw list for the Flaws subtab (Plan 108-05, D-07/D-08).
 
@@ -1336,8 +1408,16 @@ async def get_library_flaws(
           color: Game-metadata filters.
         offset: Pagination offset (>= 0).
         limit: Page size (1..100, default 20 per D-08).
+        include_pasted: Phase 208 (D-11/D-12, PASTE-05/09) — the Library-only
+          opt-in that reveals `platform='pgn'` games on the Flaws tab, off by
+          default, resolved through resolve_library_platforms(surface="analytics")
+          so it never admits flawchess bot games (this surface's own default
+          population excludes them, unlike the Games tab).
     """
     effective_severity = severity if severity else _DEFAULT_SEVERITY
+    platform = resolve_library_platforms(
+        platform, include_pasted=include_pasted, surface="analytics"
+    )
     try:
         flaws, matched_count = await library_repository.query_flaws(
             session,
@@ -1520,6 +1600,7 @@ async def get_flaw_comparison(
     opponent_gap_min: int | None = None,
     opponent_gap_max: int | None = None,
     color: str | None = None,
+    include_pasted: bool = False,
 ) -> FlawComparisonResponse:
     """You-vs-opponent 15-bullet flaw comparison over the filtered analyzed set (Phase 115).
 
@@ -1530,7 +1611,14 @@ async def get_flaw_comparison(
     3. _compute_bullets — mean + Wald-z CI per metric, zone bounds from FLAW_DELTA_ZONES.
 
     IDOR guard (T-115-01): user_id is from current_active_user, never a request param.
+
+    Phase 208 (D-11/D-12, PASTE-05/09): `include_pasted` opts pasted games into
+    this analytics surface's own default population (resolve_library_platforms,
+    surface="analytics"), off by default.
     """
+    platform = resolve_library_platforms(
+        platform, include_pasted=include_pasted, surface="analytics"
+    )
     try:
         _filter_kwargs: dict = dict(
             time_control=time_control,
@@ -1711,6 +1799,7 @@ async def get_tactic_comparison(
     opponent_gap_max: int | None = None,
     color: str | None = None,
     tactic_families: Sequence[str] | None = None,
+    include_pasted: bool = False,
 ) -> TacticComparisonResponse:
     """Per-family tactic motif you-vs-opponent comparison (Phase 126/129).
 
@@ -1731,7 +1820,14 @@ async def get_tactic_comparison(
     4. Top-6 family selection by Missed you_rate desc; both bullets per family emitted.
 
     IDOR guard (T-126-01): user_id is from current_active_user, never a request param.
+
+    Phase 208 (D-11/D-12, PASTE-05/09): `include_pasted` opts pasted games into
+    this analytics surface's own default population (resolve_library_platforms,
+    surface="analytics"), off by default.
     """
+    platform = resolve_library_platforms(
+        platform, include_pasted=include_pasted, surface="analytics"
+    )
     try:
         _filter_kwargs: dict[str, Any] = dict(
             time_control=time_control,
