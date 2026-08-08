@@ -237,3 +237,6 @@ reports/benchmark/benchmarks-generated.*
 reports/data/sweep-*/
 reports/data/persona-sweep-*/
 reports/data/persona-recal-*/
+
+# GSD runtime sentinels (dispatch isolation markers)
+.gsd/

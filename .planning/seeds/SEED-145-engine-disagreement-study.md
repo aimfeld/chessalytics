@@ -58,10 +58,11 @@ worth having, and one that falls out of this design at no extra cost.
 | D-02 | **Hunt for the corpus, use the cheap arm for the base rate** | Q2 ("in disagreement positions, which predicts better") is *already conditional* on disagreement, so hunting is not a bias there. Q1 ("is it more common at low ELO") is a rate and needs a denominator — get it from the SF-vs-Maia sweep over the full frame, which is cheap enough to run exhaustively |
 | D-03 | **SF-vs-Maia disagreement is the proxy for SF-vs-FlawChess disagreement**, and the proxy's strength is measured, not assumed | FlawChess sits structurally between the two (Maia priors over SF leaves), so the proxy should hold. Gate 0 measures it. A weak proxy is itself a finding: the search sees something the value head cannot |
 | D-04 | **Hard-filter to `abs(white_rating - black_rating) <= 50`** rather than statistically controlling for rating gap | FlawChess is ELO-conditioned on both colors (`types.ts` D-07); Stockfish is not. A rating gap leaks that asymmetry straight into the comparison. ~290k games survive the filter (see Measured Facts) — there is no reason to model a confound you can afford to delete |
-| D-05 | **100-node budget, screened at 50** with hysteresis: screen loose (≥15% gap), include tight (≥30% gap) | The app default is `FLAWCHESS_ENGINE_MAX_NODES = 400` (`useFlawChessEngine.ts:39`), which is unaffordable at corpus scale. Screening and including at the *same* threshold would systematically drop positions that drift *into* disagreement between node 50 and node 100 |
+| D-05 | **100-node budget, screened at 50** with hysteresis: screen loose, include tight. The 15%/30% gaps are **placeholders — final thresholds are set budget-first, biased low**: after the cheap sweep yields the gap distribution and Gate 0 yields FC-arm cost, pick the *loosest* include threshold whose corpus fits the budget. "Extreme disagreement" subsets are cut at analysis time from the recorded continuous deltas, never baked into corpus membership | The app default is `FLAWCHESS_ENGINE_MAX_NODES = 400` (`useFlawChessEngine.ts:39`), which is unaffordable at corpus scale. Screening and including at the *same* threshold would systematically drop positions that drift *into* disagreement between node 50 and node 100. A tight include threshold is a one-way door (re-scanning is the expensive thing, per D-07), and a corpus spanning moderate disagreements enables dose-response analyses (does the move-prediction edge grow with disagreement magnitude?) that an extremes-only corpus cannot support |
 | D-06 | Benchmark DB is the **primary frame**; prod DB is a replication check only | Benchmark carries the stratified ELO×TC design (`benchmark_selected_users`) that Q1 requires. Prod has deeper evals and PVs but a self-selected user population and no stratification |
 | D-07 | **Record, don't re-run**: per scanned position store all three expected scores, all three top moves, the top-two SF grade margin, and the human's actual move | Every question in this seed is answerable from that row. Changing what is recorded is free; re-running the scan is not |
-| D-08 | The two **derived question designs** (signed asymmetry, move prediction) are in scope from the start, not follow-ups | They need no additional scans — only D-07's extra columns. Retrofitting them means re-running the corpus |
+| D-08 | The two **derived question designs** (signed asymmetry, move prediction) are in scope from the start, not follow-ups | Move prediction needs no additional scans — only D-07's extra columns. The asymmetry design additionally needs D-09's random sidecar: it is a population-level claim and cannot be estimated on the hunted corpus. Retrofitting either means re-running the corpus |
+| D-09 | **Two corpora: the hunted corpus plus an unconditioned random sidecar** (one ply per game, no disagreement screen, full FlawChess scan, ~20–50k positions sized by Gate 0's cost measurement). Per-question assignment: **sidecar** → signed asymmetry (Q2), dead-weight (Q4), D-03 proxy validation at scale, and a direct unproxied base rate for Q5; **hunted** → move prediction (Q1), the only-move mechanism split, outcome prediction (Q3), and the bug hunt | Hunting selects on `\|s_Maia − s_SF\|`, and at score extremes that selection is one-sided (near `s_SF = 1` a large gap can only point downward), so any population-level statistic computed on the hunted corpus carries a bias of unknown sign — and the Maia-null arm is the selection variable itself, so subtracting it distorts rather than controls. Conditional questions are unaffected (D-02). The sidecar is *efficient* for the asymmetry curve, not wasteful: every position contributes to the binned means, agreement positions included |
 
 ## Measured Facts (verified 2026-08-08, do not re-derive)
 
@@ -134,6 +135,12 @@ Cheap, and any one of these failing rescopes everything downstream. Run this fir
       to inverse-probability-weighted hunting, and the weakness itself becomes a headline.
 - [ ] **Full-frame SF-vs-Maia sweep feasibility**: batched ONNX over a large slice, measured
       throughput, extrapolated to 47.7M. Establishes whether "exhaustive" is literal or a sample.
+- [ ] **FlawChess-arm cost**: measured seconds-per-position for a full `practicalScore@100`
+      scan (~100 Maia nodes + depth-14 SF grading). This sizes D-09's random sidecar (20k vs
+      50k positions; overnight vs multi-day) and sets the hunted-corpus budget. The seed
+      currently has no target N for the expensive arm — this measurement is where it comes from.
+      Combined with the cheap sweep's gap distribution, it also fixes D-05's final screen/include
+      thresholds (loosest include the budget affords).
 
 ## Questions, ranked by power
 
@@ -153,7 +160,8 @@ top-ranked move; compare hit rates against `move_san`.
 > then botch the follow-up at the rate Maia predicted?* That last one is a direct falsifiable
 > test of the Qxh2+ mechanism, and `move_san` on subsequent plies is right there.
 
-**2. Is FlawChess systematically pessimistic in one direction?** The self-execution note
+**2. Is FlawChess systematically pessimistic in one direction?** **Corpus: the D-09 random
+sidecar, never the hunted corpus** (see the selection-bias trap). The self-execution note
 predicts a *signed* asymmetry: the engine undervalues objectively-winning lines that require
 precise follow-up, because the history-less Maia-3 export cannot condition on "you just
 sacked intending this". Estimator, all in root-side-to-move frame:
@@ -185,10 +193,12 @@ Note that the corpus is clustered if multiple plies come from one game — eithe
 per game or use clustered standard errors, and say which.
 
 **4. Is the 400-node search dead weight?** Does FlawChess@100 beat Maia's raw value head at
-anything? Falls out of arms 2 and 3 for free.
+anything? Falls out of arms 2 and 3 for free — but scored on the **D-09 sidecar**: the hunted
+corpus is selected on the Maia arm, so an FC-vs-Maia comparison there is rigged.
 
 **5. Does disagreement happen more at low ELO?** (original Q1) — needs D-02/D-03's base rate.
-See the confound below before interpreting any answer.
+The D-09 sidecar additionally yields a direct, unproxied base rate on the real FC-vs-SF metric,
+cross-checking the proxy. See the confound below before interpreting any answer.
 
 **6. Where does disagreement concentrate?** By `phase` and `endgame_class` (both columns exist
 on `game_positions`). Endgames are where Maia priors are sharpest and Stockfish is most
@@ -215,6 +225,13 @@ without stating which mechanism was controlled.**
 
 Each of these manufactures a convincing fake result. Write them into the plan.
 
+- **Population-level statistics on the hunted corpus.** Hunting selects on `|s_Maia − s_SF|`,
+  and at score extremes the selection is one-sided (near `s_SF = 1` a large gap can only point
+  down, near `s_SF = 0` only up) — so the hunted sample mechanically reproduces the shrinkage
+  null curve, and any second-order statistic (the asymmetry number above all) carries a bias of
+  unknown sign. The Maia-null subtraction does not rescue it: the Maia arm is the selection
+  variable itself, so it is distorted *more* than the FC arm. Conditional questions (D-02) are
+  safe; every unconditional claim runs on the D-09 sidecar.
 - **Three sign conventions.** Lichess `eval_cp` is white-POV. `practicalScore` is
   root-side-to-move (`types.ts` D-06 — "never a per-node/per-ply-relative value"). Maia's WDL
   is side-to-move after mirror-on-black. This is *exactly* the shape of bug that gets reported
@@ -252,10 +269,14 @@ Each of these manufactures a convincing fake result. Write them into the plan.
 - **Scan every ply of fewer games — REJECTED.** Richer per-game narrative, but plies from one
   game share one outcome, so ~30 plies is ~1 effective observation. Effective N collapses exactly
   where the outcome tests are already weakest.
-- **Random ply, one per game, screened exhaustively — REJECTED as the primary design** (D-02).
-  Statistically the cleanest and it gives the base rate directly, but it spends the expensive arm
-  on positions that are overwhelmingly *not* disagreements. D-03's cheap proxy buys the same
-  denominator without the waste. Keep this in reserve if the proxy fails Gate 0.
+- **Random ply, one per game, scanned exhaustively — REJECTED as the primary design, ADOPTED
+  as a small sidecar** (D-02, D-09). As the *primary* it spends the expensive arm on positions
+  that are overwhelmingly *not* disagreements, and D-03's cheap proxy buys the base-rate
+  denominator without that waste. But the population-level questions (signed asymmetry,
+  dead-weight) cannot run on a hunted sample at all, and there the random design is efficient,
+  not wasteful — every position feeds the binned calibration curve. D-09 keeps it at ~20–50k
+  positions alongside the hunt rather than instead of it. If the proxy fails Gate 0, this
+  design scales up and becomes the fallback for Q1/Q5 as well.
 - **Statistically controlling for rating gap instead of filtering — REJECTED** (D-04). 290k games
   survive a hard ±50 filter. Modelling a confound you can afford to delete is strictly worse.
 - **Prod DB as the primary frame — REJECTED** (D-06). More evals, real PVs, and 521,906 games
