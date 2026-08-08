@@ -1,6 +1,9 @@
 ---
 id: SEED-141
-status: planted
+status: closed
+closed: 2026-08-08
+closed_by: quick task 260808-ec4 (commits 82e2a081f / 0d4e0fee1 / 77b6716ad) — implemented at
+  the +2 threshold; the open question below is resolved in favour of +2 by the operator.
 planted: 2026-08-07
 planted_during: /gsd-explore — "should we filter out blunders committed under time pressure
   (low-clock tag)? Other ideas to improve blunder selection for puzzles?"
@@ -95,7 +98,9 @@ No user with a meaningful pool is meaningfully affected.
 
 ## Open questions
 
-- **+2 or +3?** The only genuinely open call. +2 is the more aggressive read of the GM's advice
+- **+2 or +3?** (RESOLVED, 2026-08-08: the operator chose **+2**. Implemented as
+  `SECOND_BEST_WINNING_FLOOR_CP = 200` in `app/services/train_pool.py`.) The only genuinely
+  open call was: +2 is the more aggressive read of the GM's advice
   and gives the better composition (38.9% vs 37.1% sharp) for 7.6 points more pool cut; +3 is
   the conservative one and spares 11,486 sharp candidates. Both are defensible; the operator
   picks. (RESOLVED, 2026-08-08: "does the dev measurement generalize?" — prod reproduces it, see
