@@ -168,6 +168,7 @@
 | 205. Train Grading Oracle Agreement (SEED-137, v2.12) | 2/2 | Complete    | 2026-08-04 |
 | 206. Train Warm-Up Sessions & Sharp Filler Pool (SEED-140, unassigned) | 3/3 | Complete    | 2026-08-07 |
 | 207. Self-Serve Password Reset (SEED-143, unassigned) | 3/3 | Complete    | 2026-08-08 |
+| 208. Paste a FEN or PGN on /analysis (SEED-144, unassigned) | 0/0 | Not planned | — |
 
 ## Active Phases (unassigned milestone)
 
@@ -330,6 +331,57 @@ Plans:
 - **Assumption-delta decision: `no-change` on the data model, semantics pinned by an invariant instead.** The D-04 reversal makes this phase the **first production read of `hashed_password` as a predicate**, so the two meanings fused in that value must be pulled apart explicitly. A `has_password` column would be derived state, would need a forbidden migration, and would create a second source of truth that drifts on every password write. Instead the empty-hash comparison is permitted at exactly one site (the eligibility gate), documented there as credential state, and `tests/test_users_account_type_invariant.py` fails if a future change re-fuses the account-type reading onto it or derives eligibility from `oauth_account`. The 125-account dual case (password + Google linked) is the executable form of that invariant and is the plan's highest-value test — it is the regression a plausible "skip Google accounts" gate causes, affecting 73% of the target population.
 - **Both guards in `on_after_forgot_password` share one silent-no-op shape.** The eligibility gate and the per-email rate limit each return without raising, logging, or emitting a Sentry event. Neither can introduce a timing tell, and the reason is load-bearing rather than incidental: T-207-02 already moved the only network I/O off the request path, so "gated" and "sent" differ by an in-memory branch either way (threats T-207-24, T-207-25).
 - **`COVERAGE.md`** records the Resend API capability matrix: 2 `INTEGRATE`, 24 reasoned `OPT-OUT`, 0 unreasoned.
+
+### Phase 208: Paste a FEN or PGN on /analysis
+
+**Goal**: `/analysis` can only be reached with a position someone else constructed (`?line=` from the Openings explorer, `?fen=` from the calibration harness, `?game_id=` from the Library). A user can bring an arbitrary position or game in from outside — a puzzle FEN from a book, a game from a broadcast, a PGN a friend sent — via one button, one modal, one textarea whose format is sniffed. Paste-and-look persists nothing; an explicit "Analyze full game" saves the game as `platform='pgn'` (always excluded from analytics) and enqueues it through the existing tier-1 eval path. `/analysis` also gains the main nav item it has never had, without which the modal is unreachable. Frontend + backend, **no migration**, no new eval infrastructure.
+
+**Depends on**: nothing blocking. Builds on Phase 167 (`platform='flawchess'` store-on-finish precedent and the `DEFAULT_EXCLUDED_PLATFORMS` seam, D-02), Phase 171 (the three nav surfaces and the WR-07 lock-gate lesson), Phase 118/121 (`POST /imports/eval/tier1` explicit enqueue), and `useAnalysisBoard.loadMainLine` as it stands after v2.10.
+
+**Requirements**: PASTE-01..PASTE-09 (minted at planning, one per Success Criterion below in order; traceability table in the phase's `-01-PLAN.md` § Requirements — this phase predates its milestone's REQUIREMENTS.md)
+
+**Source**: [SEED-144](../seeds/SEED-144-analysis-fen-pgn-paste.md) — planted 2026-08-08 during `/gsd-explore` from "implement PGN and FEN import". The seed carries **ten locked decisions (D-01..D-10)**, a measured chess.js 1.4 `loadPgn()` capability matrix, a seven-row reuse-anchor table with file:line, and a fully reasoned rejection of bulk multi-game PGN import. Do not re-derive the bulk-import rejection, the ephemeral-vs-persist split, or the nav-array analysis.
+
+**Scope**:
+
+- **Frontend — paste modal** (D-01/D-02/D-03): a trigger button on `/analysis` opening a `<form>` modal with one textarea. Format is sniffed, not toggled: a bare FEN handed to `loadPgn()` throws a distinguishable parse error. A FEN routes through `parseAnalysisFenParam` (`frontend/src/lib/analysisUrl.ts`); a PGN routes through `useAnalysisBoard.loadMainLine(sans, newRootFen)` (`frontend/src/hooks/useAnalysisBoard.ts:85`). Mainline + headers only — comments and RAVs are dropped (chess.js drops RAVs silently anyway). No `?fen=`/`?line=` write-back, so the documented `fen > line` precedence in `analysisUrl.ts` is untouched.
+- **Frontend — side selector** (D-06): sets `user_color` for the save path (parsed White/Black header names, defaults to White), driving board orientation and which side's flaws read as "yours".
+- **Frontend — navigation** (D-09/D-10): append `/analysis` to `NAV_ITEMS` (`App.tsx:77`) **only**, not `BOTTOM_NAV_ITEMS` (`:85`) — that yields desktop header + mobile More drawer with the bottom bar untouched, and makes the two byte-identical arrays diverge for the first time. Comment both arrays saying so (WR-07 at `App.tsx:113-119` records this codebase already shipping a bug from nav surfaces silently disagreeing). Add `'/analysis'` to `IMPORT_EXEMPT_ROUTES` (`:120`) and an `isActive` clause (`:130`); `ROUTE_TITLES` already carries the entry.
+- **Backend — save path** (D-04/D-05/D-07): a normalization variant of `normalize_flawchess_game()` (`app/services/normalization.py:590`) with the `[%clk]`-for-both-colors gate (STORE-02/D-15) dropped, writing `platform='pgn'` with a deterministic synthesized `platform_game_id` so re-pasting is idempotent under `uq_games_user_platform_game_id`. Untimed: no clocks, no TC bucket. `_flush_batch` Stage 5 already computes `ply_count`, `result_fen` and the Zobrist `game_positions` rows.
+- **Backend — analytics exclusion** (D-05): add `'pgn'` to `DEFAULT_EXCLUDED_PLATFORMS` (`app/repositories/query_utils.py:30`) — the one central seam, no per-router platform checks.
+- **Backend — analysis enqueue** (D-08): the existing `POST /imports/eval/tier1` (`app/routers/imports.py:380`, IDOR-guarded), not the background lottery. Tier-1 is already open to guests for their own games (QUEUE-08 opened for tier-1 only), so guests get this too.
+
+**Locked constraints (do not re-open)**:
+
+1. **Button + modal, one textarea, format sniffed (D-01)** — no format toggle, no separate FEN and PGN entry points.
+2. **Mainline + headers only (D-02)** — variations grafted as sidelines was considered and rejected: `insertPvLine` supports it, but chess.js provides no RAV parser and writing one is expensive relative to the rest of the phase.
+3. **Ephemeral by default (D-03/D-04)** — a refresh returns to the start position; nothing is written until the user explicitly asks for "Analyze full game". A bare FEN is *always* ephemeral (no moves means no game), so D-04/D-05/D-06/D-08 do not apply to it.
+4. **`platform='pgn'` is always excluded from analytics (D-05)** — no per-game opt-in. **Accepted consequence: a pasted game of your own does not count toward your Openings WDL / Endgames / Insights.** Import it from the platform you played it on if you want it in your stats.
+5. **A separate guest account as the "scouting library"** was rejected — guests are excluded from the whole eval pipeline by QUEUE-08, and the guest JWT *replaces* `localStorage.auth_token`, making it an account switch rather than a side collection.
+6. **Bulk multi-game PGN upload on the Import page is out (rejected in the seed)** — the blocker is subject-player identification against a `NOT NULL user_color`, where getting it wrong silently *inverts* W/D/L. Corpus evidence: 0 of 2,869 sample games carried `[%clk]`, and one file spelled a single player twelve ways.
+
+**Open questions to resolve at `/gsd-discuss-phase` (both from the seed, neither a blocker)**:
+
+1. **Do pasted games appear in the Library list?** Without it there is no route back to a game you analyzed once you navigate away. `library_service.py:868` builds `library_platform = platform if platform is not None else ["chess.com", "lichess", "flawchess"]`, so adding `"pgn"` is a one-token change — this is a product call, not a cost question. If yes, decide whether they need a visual marker.
+2. **How exactly is `platform_game_id` synthesized?** A deterministic hash of movetext + date + players buys idempotent re-pasting for free; the exact input set and hash are open.
+
+**Success Criteria** (what must be TRUE):
+
+1. Pasting a bare FEN loads that position on `/analysis` as a free-play root, writes nothing to the DB, and does not touch the URL.
+2. Pasting a PGN loads its mainline and headers (names, ratings, result, date reach the PlayerBar); a `[SetUp]`/`[FEN]`-rooted PGN adopts the header FEN, headerless movetext parses, and ChessBase-style RAVs/NAGs/comments are dropped without an error.
+3. One textarea handles both formats with no toggle, and malformed input produces an inline error rather than a blank board, a crash, or a silently wrong position.
+4. "Analyze full game" persists exactly one `platform='pgn'` game with `user_color` taken from the modal's side selector, and enqueues it via `POST /imports/eval/tier1` — for guests as well as authenticated users. Paste-and-look and bare-FEN paste persist nothing.
+5. Pasted games never appear in Openings WDL, Endgames, Insights, or any other `apply_game_filters()` consumer, proven by a test that goes red if `'pgn'` is removed from `DEFAULT_EXCLUDED_PLATFORMS`.
+6. Re-pasting and re-analyzing the same game reuses the existing row instead of violating or dodging `uq_games_user_platform_game_id`.
+7. A pasted game that is saved and then never analyzed is marked eval-ineligible rather than left pending — `ix_games_user_evals_pending` stays near-zero at steady state and the `users_with_zero_pending` gate is unaffected.
+8. `/analysis` is reachable from the desktop header and the mobile More drawer, is clickable with zero imported games, highlights when active, and the **mobile bottom bar is unchanged** — with a comment on both nav arrays recording that the divergence is intentional.
+9. Every interactive element in the modal carries a `data-testid`, the modal is a `<form>` with its own container testid, no type is below `text-sm`, and the whole flow works at 375px — including landing on `/analysis` from the More drawer and getting sanely back out (the analysis route takes over the mobile shell at `App.tsx:331`, `:537-540`).
+
+**Non-goals**: bulk multi-game PGN upload on the Import page; variations/RAVs as sidelines; comments and NAGs; URL write-back or shareable pasted-game links; a per-game "count this in my stats" opt-in; prompting for a time control on paste; a separate guest scouting account; any database migration.
+
+**Plans**: TBD (created at `/gsd-plan-phase 208`)
+
+**UI hint**: small-to-medium — one new modal component on an existing page, one nav item across two existing surfaces, no new pages and no design-system additions.
 
 ## Backlog
 
