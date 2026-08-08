@@ -167,7 +167,7 @@
 | 204. Push Reminder Delivery Reliability (SEED-135, v2.12) | 3/3 | Complete | 2026-08-03 |
 | 205. Train Grading Oracle Agreement (SEED-137, v2.12) | 2/2 | Complete    | 2026-08-04 |
 | 206. Train Warm-Up Sessions & Sharp Filler Pool (SEED-140, unassigned) | 3/3 | Complete    | 2026-08-07 |
-| 207. Self-Serve Password Reset (SEED-143, unassigned) | 0/? | Not started | - |
+| 207. Self-Serve Password Reset (SEED-143, unassigned) | 0/3 | Planned | - |
 
 ## Active Phases (unassigned milestone)
 
@@ -294,13 +294,29 @@ Plans:
 
 **Follow-up this phase creates (capture as a seed when it ships, do not scope here)**: **there is no email verification on registration either** — `get_verify_router()` is equally absent and `on_after_register` (`app/users.py:67-77`) only stamps `last_login`, so a user can register with a typo'd address they do not control. Today that is merely untidy. **Once password reset ships it becomes load-bearing**: the reset link goes to a mailbox that isn't theirs, making that account *permanently* unrecoverable — strictly worse than today's "no recovery for anyone", because the user now reasonably expects recovery to work. The infrastructure (Resend client, config, send path) lands with this phase, so the marginal cost afterwards is small.
 
-**Plans**: TBD (not planned yet)
+**Plans**: 3 plans
 
 Plans:
+**Wave 1**
 
-- [ ] TBD — run `/gsd-plan-phase 207`
+- [ ] 207-01-PLAN.md — Backend spine: a `type="tracer"` end-to-end slice (config → per-email limiter → email service → `on_after_forgot_password` → mounted reset router → HTTP test proving forgot → token → reset → login), then the rate-limit/non-blocking-dispatch/Sentry contract and the Google-only + empty-hash-sentinel audit, all mutation-tested
+
+**Wave 2** *(blocked on Wave 1 — consumes the HTTP contract recorded in 207-01-SUMMARY.md)*
+
+- [ ] 207-02-PLAN.md — Frontend: `ForgotPasswordForm` + `ResetPasswordForm`, their two public routes, the sign-in entry link, Vitest suites, and a 375px human-verify checkpoint
+
+**Wave 3** *(blocked on Waves 1–2)*
+
+- [ ] 207-03-PLAN.md — Operator handoff: `.env.example` entries, `docs/email-resend-runbook.md`, CHANGELOG bullet, and the two Step-0-gated HUMAN-UAT verdicts (RESET-01 real mailbox, RESET-07 apex-SPF regression)
 
 **UI hint**: small — one new form component, one new route, one link on `LoginForm.tsx`. No new pages beyond the reset-password route, no design-system additions.
+
+**Planning notes (2026-08-08)**:
+
+- **Step 0 is still outstanding.** RESET-01 (real mailbox) and RESET-07 (apex SPF + Swizzonic delivery) are planned as HUMAN-UAT in Plan 03, not executor tasks, and `deferred` is a first-class answer at that checkpoint. No task in any plan requires a live `RESEND_API_KEY` to pass — `MAIL_FROM` is a `Settings` field with a default and an empty key makes every send a no-op.
+- **One threat was upgraded to `high` during planning: T-207-02, a timing enumeration oracle.** Awaiting the Resend POST inside the request handler makes a registered address cost a network round-trip that an unregistered one never pays, contradicting Success Criterion 2's "no timing tell introduced by the send". Plan 01 Task 2 dispatches the send without awaiting it. The residual library-internal Argon2 differential is recorded as accepted threat T-207-03 rather than silently ignored.
+- **Assumption-delta decision: `no-change`.** After D-04 an empty `hashed_password` stops meaning "Google-SSO account" and means only "no password set yet". The planning-time audit found zero production readers of it as a predicate (`is_guest` is the real discriminator; `frontend/src/` has zero hits), so nothing is promoted — but Plan 01 Task 3 re-runs the audit and adds an invariant test so a future phase cannot reintroduce the fused meaning.
+- **`COVERAGE.md`** records the Resend API capability matrix: 2 `INTEGRATE`, 24 reasoned `OPT-OUT`, 0 unreasoned.
 
 ## Backlog
 
