@@ -74,6 +74,29 @@ WINNABILITY_FLOOR_ES: float = 0.20
 # number. See app/services/best_move_candidates.py's MISTAKE_DROP reuse.
 SHARP_GAP_ES: float = MISTAKE_DROP
 
+# SEED-141: a Train drill puzzle is only fair when failing to find the best
+# move actually costs something. `dead_band_admissible` notices the best-vs-
+# second GAP but not whether the runner-up STILL leaves the mover clearly
+# winning ("you were +6, best is +9, runner-up is +4" — a puzzle asking the
+# user to distinguish two winning moves, not to avoid a real mistake). This
+# constant is the GM's framing verbatim: "+2" pawns, expressed in centipawns
+# because the blob stores cp.
+#
+# MEASURED against prod (2026-08-08, 795,267 candidates / 266 users): the +2
+# rule removes 23.9% of the pool, 90.7% of the cut is soft (avoid-the-blunder)
+# material, and the sharp share rises 31.9% -> 38.9%. 14,704 of the removed
+# candidates have a runner-up that is outright mating for the mover.
+# Starvation is negligible (median distinct games 462 -> 403; 2 users drop to
+# zero, both already effectively empty and covered by the herring / sharp-
+# filler cross-backfill). The seed's one open question — +2 vs +3 — is
+# RESOLVED by the operator in favour of +2.
+#
+# `forcing_line_gate.STILL_WINNING_FLOOR_CP` is numerically identical (also
+# 200) but is a DIFFERENT, independently retunable knob (a PV line-extension
+# cutoff, not a selection predicate) — do NOT import or reuse it here; the
+# coincidence is noted so a future reader does not "deduplicate" them.
+SECOND_BEST_WINNING_FLOOR_CP: int = 200
+
 # game_flaws.severity: 1=mistake, 2=blunder (game_flaws is M+B only, D-03 of
 # an earlier phase — see app/models/game_flaw.py). Train's pool is
 # blunders-only (POOL-01).
@@ -401,6 +424,107 @@ def dead_band_admissible(missed_pv_lines_col: Any, ply_col: Any) -> ColumnElemen
     )
 
 
+def second_best_not_winning_admissible(
+    missed_pv_lines_col: Any, ply_col: Any
+) -> ColumnElement[bool]:
+    """True when `missed_pv_lines_col`'s node-0 runner-up move does NOT leave
+    the mover still clearly winning (SEED-141).
+
+    Investigation findings (derived from the code, not assumed — see the
+    plan's `<investigation>` block):
+
+    1. SIGN / COLOR. `s`/`sm` are WHITE-perspective (confirmed via
+       `app/models/game_flaw.py`'s D-05 blob-shape comment: "s — second_cp
+       (int | null): second-best-move eval in centipawns, WHITE-perspective"
+       and `app/services/forcing_line_gate.py`'s `PvNode` TypedDict restating
+       the same convention). Mover POV is derived from ply parity via
+       `mover_color_expr(ply_col)`, exactly as `dead_band_admissible` does it
+       — never `Game.user_color` — so this predicate can serve the
+       Game-join-free `get_waiting_puzzle_count` COUNT statement too.
+    2. PLY OFFSET. `app/services/eval_apply.py`'s `_build_line_blobs` sets
+       `node0_ply = flaw_ply` for the "missed" line (`node0_ply = flaw_ply if
+       line == "missed" else flaw_ply + 1`) and reads `pos_eval[node0_ply]` /
+       `second_best_map[node0_ply]` directly — `pos_eval` is a
+       POSITION-keyed map (the eval OF that ply's position). `_post_move_eval`
+       (the SINGLE site of the eval-pipeline's +1 post-move storage shift,
+       per its own docstring) is used only when writing `game_positions`
+       rows, never when assembling `missed_pv_lines`/`allowed_pv_lines`
+       blobs. So node 0 of `missed_pv_lines` is decision-ply-keyed: `b`/`s`
+       are the MultiPV-1/MultiPV-2 scores AT the flaw's own decision
+       position — exactly "if the mover plays the runner-up instead of the
+       best move" — and NO offset correction is needed here.
+    3. MATE. `sm` is white-perspective mate distance (positive = white is
+       mating), matching `bm`'s convention. Mover-POV mate is the
+       ply-parity-sign-flipped value, computed the same way `expected_score_sql`
+       flips cp. A mate FOR the mover (mover-POV mate > 0) is the degenerate
+       "still winning" case this predicate exists to catch and is EXCLUDED;
+       a mate AGAINST the mover (mover-POV mate < 0) is KEPT. Mate takes
+       priority over cp — checked as an independent OR branch, matching
+       `expected_score_sql`'s branch order, so a node carrying both `sm` and
+       `s` (mate takes priority even when `s` also happens to be populated)
+       resolves on the mate branch regardless of `s`'s value.
+    4. NULL. See the predicate contract below.
+
+    Predicate contract — written in POSITIVE (admissible) form with explicit
+    `IS NULL` guards, never a bare `NOT` over a NULL-yielding comparison (the
+    seed's warning: a bare `s_mover_cp >= threshold` under a `NOT` yields NULL
+    for the sentinel/unreadable rows and silently drops every one of them).
+    Admissible is TRUE when:
+    - `su` is the empty-string sentinel (no legal second move -> nothing can
+      "still be winning" -> unconditionally admissible), OR
+    - mover-POV mate is present AND is a mate AGAINST the mover, OR
+    - mover-POV mate is absent AND (mover-POV `s` is NULL, i.e. unreadable
+      and therefore unprovable, OR mover-POV `s` is strictly below
+      `SECOND_BEST_WINNING_FLOOR_CP`).
+
+    An unreadable node-0 (`s`/`sm` both NULL) is KEPT here, not dropped: this
+    predicate is an EXCLUSION rule and cannot prove "still winning" from a
+    NULL. Unreadable node-0 blobs are already excluded by
+    `dead_band_admissible` running in the same WHERE (it requires
+    `best_es.isnot(None)`/`second_es.isnot(None)`), so nothing leaks through
+    this predicate alone — do not tighten this into a NULL-drops form.
+
+    Callers MUST also apply `answer_key_present(missed_pv_lines_col)` (and,
+    in practice, `dead_band_admissible`) in the same WHERE — this predicate
+    assumes an already-validated non-NULL, non-empty JSON array, mirroring
+    `dead_band_admissible`'s own cross-reference to `answer_key_present`.
+
+    `s` is cast to Float, not Integer — same reasoning as
+    `dead_band_admissible`'s `b`/`s` cast: an integer cast of a non-integer
+    text value raises in Postgres. `sm` stays Integer-cast (a whole number,
+    only null-checked and sign-compared).
+
+    Args:
+        missed_pv_lines_col: A JSONB column/expression, typically
+            `GameFlaw.missed_pv_lines` — already validated non-NULL/non-empty
+            by `answer_key_present` in the same WHERE.
+        ply_col: A column/expression resolving to the ply integer, typically
+            `GameFlaw.ply`.
+
+    Returns:
+        A SQLAlchemy ColumnElement[bool]: True when the node-0 runner-up does
+        NOT leave the mover clearly winning (>= SECOND_BEST_WINNING_FLOOR_CP
+        cp, or an outright mate for the mover).
+    """
+    node0 = missed_pv_lines_col[0]
+    second_uci = node0["su"].astext
+    mover_color = mover_color_expr(ply_col)
+    second_cp = cast(node0["s"].astext, Float)
+    second_mate = cast(node0["sm"].astext, Integer)
+    cp_sign = case((mover_color == "white", 1.0), else_=-1.0)
+    mate_sign = case((mover_color == "white", 1), else_=-1)
+    second_cp_mover = cp_sign * second_cp
+    second_mate_mover = mate_sign * second_mate
+    return or_(
+        second_uci == "",
+        and_(second_mate.isnot(None), second_mate_mover < 0),
+        and_(
+            second_mate.is_(None),
+            or_(second_cp.is_(None), second_cp_mover < SECOND_BEST_WINNING_FLOOR_CP),
+        ),
+    )
+
+
 def answer_key_pending(col: Any) -> ColumnElement[bool]:
     """True when `col` (a `missed_pv_lines`-shaped JSONB column) has not yet
     been processed by the eval pipeline — i.e. true SQL NULL (189-06 D-GAP-01).
@@ -526,6 +650,7 @@ def pool_entry_stmt(user_id: int) -> Select[tuple[GameFlaw, Game]]:
             player_only_gate(GameFlaw.ply, Game.user_color),
             answer_key_present(GameFlaw.missed_pv_lines),
             dead_band_admissible(GameFlaw.missed_pv_lines, GameFlaw.ply),
+            second_best_not_winning_admissible(GameFlaw.missed_pv_lines, GameFlaw.ply),
             expected_score >= WINNABILITY_FLOOR_ES,
         )
     )
@@ -951,6 +1076,7 @@ def full_fen_at_ply(pgn: str, ply: int) -> str | None:
 __all__ = [
     "HERRING_SHARE",
     "MAX_ITEMS_PER_GAME_PER_SESSION",
+    "SECOND_BEST_WINNING_FLOOR_CP",
     "SHARP_GAP_ES",
     "WINNABILITY_FLOOR_ES",
     "PuzzleType",
@@ -967,4 +1093,5 @@ __all__ = [
     "herring_stmt",
     "pick_one_per_game",
     "pool_entry_stmt",
+    "second_best_not_winning_admissible",
 ]

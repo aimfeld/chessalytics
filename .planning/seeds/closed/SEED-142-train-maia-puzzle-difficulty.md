@@ -1,19 +1,23 @@
 ---
 id: SEED-142
-status: planted
+status: rejected
+closed: 2026-08-08
+closed_during: /gsd-explore — "puzzles come from the user's own recent games where they
+  blundered, so the position is already relevant at their level. Do we need this?"
 planted: 2026-08-07
 planted_during: /gsd-explore — "should we filter out blunders committed under time pressure
   (low-clock tag)? Other ideas to improve blunder selection for puzzles?"
-trigger_when: a milestone willing to fund a `game_flaws` backfill for Train quality. Depends on
-  nothing else shipping first, but is strictly larger than
-  [[SEED-141-train-second-best-still-winning-filter]] — do that one first and see whether the
-  pool still needs help.
+trigger_when: n/a — rejected. See "Why this was rejected" before re-proposing.
 scope: medium (two nullable REAL columns on `game_flaws`, a policy-returning variant of
   `maia_engine.score_move`, a backfill script with PGN replay, and whatever selection/ordering
   logic consumes the scores; no new model, no new inference infrastructure)
 ---
 
 # SEED-142: score puzzle difficulty and blunder typicality with Maia
+
+> **REJECTED 2026-08-08.** Both halves fail, for different reasons — see
+> "Why this was rejected" at the bottom. The idea below is preserved as written on 2026-08-07;
+> the analysis that killed it is appended, not merged in.
 
 ## The Idea
 
@@ -108,10 +112,67 @@ difficulty label on the reveal.
   group absent from lean/worker images. Any Train dependency must degrade to "unscored", never
   to an empty pool.
 
+## Why this was rejected (2026-08-08)
+
+The seed's two numbers were treated as one idea. They are not, and they fail separately.
+
+### Half 1 — P(best move | your elo) as a difficulty score: redundant
+
+Train draws own-blunder puzzles from positions the user *personally reached and got wrong*.
+That is already a per-user difficulty measurement, and a more relevant one than a population
+average over strangers at the same rating: n=1, but the 1 is the user.
+
+The best remaining argument for a difficulty score was rating drift — "a blunder from when I
+was 1200 is trivial now at 1600". That is bounded by the existing ordering:
+`pool_entry_stmt` carries no recency window, but the caller in
+`app/repositories/train_repository.py:1540` orders new items `Game.played_at DESC`, so the
+newest blunders are served first. A Maia difficulty ordering would not augment that ordering,
+it would *compete with* it, and recency is the deliberate choice.
+
+The one place a difficulty score genuinely applies is the SEED-140 red-herring filler pool,
+since those positions are not from the user's games. But the committed CC0 set already carries
+a lichess `rating` column — a free rating match, no model, no backfill. Maia is not the answer
+there either.
+
+### Half 2 — P(the move you played | your elo) as typicality: measures the wrong population
+
+"The position is relevant" and "this mistake is systematic" are genuinely different claims, so
+the relevance argument above does not refute typicality. It fails on its own terms instead.
+
+Maia's P(played move | elo) is how popular that move is among *players at your rating in
+general*. It is population typicality, not personal typicality, and for a personalized trainer
+the sign is backwards:
+
+- A move many 1600s play, that this user played once and never again → scores **high**, gets
+  prioritized as a "systematic gap".
+- The user's own repeated pet blunder → scores **low** precisely because it is idiosyncratic.
+
+Combined with the seed's own unresolved open question ("Is typicality even predictive?"), this
+means funding a per-flaw PGN replay, two columns, a backfill, and `is_maia_available()`
+degradation handling on every Train path in order to test a hypothesis with an instrument
+pointed at the wrong population.
+
+### The question underneath is real, and the data is already there
+
+"Does this user repeat this pattern?" is worth answering. `game_flaws` already carries
+`missed_tactic_motif` / `allowed_tactic_motif` (24-motif enum), `phase`, and `tempo`, populated
+per flaw. Recurrence is a `GROUP BY` over the user's own flaw history — *individual* typicality,
+which is what was actually wanted, at the cost of a query rather than an inference pipeline.
+Nothing here is scheduled; noted so a future exploration starts from the cheap signal rather
+than re-proposing Maia.
+
+### Conditions that would justify reopening
+
+- A measured complaint that Train puzzles are too easy or too samey that the recency ordering
+  and SEED-141's filter do not fix.
+- Evidence from solve data that low-population-typicality blunders are solved at materially
+  higher rates (SEED-142's own proposed check) — but run it against the cheap motif-recurrence
+  signal first, not Maia.
+
 ## Related
 
 - [[SEED-141-train-second-best-still-winning-filter]] — the near-term, no-backfill half of the
-  same exploration. Do it first.
-- [[SEED-140-train-first-session-warmup]] — Phase 206's sharp-filler pool; a difficulty score
-  would eventually also let filler puzzles be rating-matched (the committed CC0 set carries a
-  lichess `rating` column already, unused for selection).
+  same exploration. Shipped instead of this.
+- [[SEED-140-train-first-session-warmup]] — Phase 206's sharp-filler pool. Rating-matching
+  filler is still worthwhile, but via the CC0 set's existing lichess `rating` column, not via
+  a Maia score.

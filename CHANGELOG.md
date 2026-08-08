@@ -16,6 +16,10 @@ in `YYYY-MM-DD` (Europe/Zurich).
 
 - The analysis board and the puzzle solution board's free moves now play a move sound (check/capture/plain), matching the sound the Train reveal's line stepper already plays. Honors the existing mute toggle; loading a position from a link and dragging the eval-chart scrubber stay silent.
 
+### Changed
+
+- Train no longer serves a blunder whose second-best move still leaves the player clearly winning (+2 pawns or a forced mate), so the puzzle pool is ~24% smaller and a larger share of what remains has exactly one right move. (SEED-141)
+
 ### Fixed
 
 - Games no longer silently keep gaps in their move-by-move evaluation. A volunteer machine that runs out of time on a position now retries it once before giving up, so a merely slow or overloaded computer no longer leaves a hole behind. Re-analysis attempts are no longer spent on duplicate submissions when two machines happen to race on the same game, and the retry budget itself is larger. Any game that still ends up with gaps is now repaired automatically every day instead of waiting for someone to notice and run a script by hand. (SEED-139)

@@ -35,7 +35,7 @@ from typing import Any, Literal
 
 import httpx
 import pytest
-from sqlalchemy import delete
+from sqlalchemy import delete, select
 from sqlalchemy.ext.asyncio import async_sessionmaker
 
 from app.main import app
@@ -55,6 +55,7 @@ from app.services.train_pool import (
     HERRING_PREFERRED_QUALIFYING_MOVES,
     MAX_ITEMS_PER_GAME_PER_SESSION,
     SHARP_GAP_ES,
+    answer_key_present,
     blob_pending_stmt,
     classify_puzzle_type,
     expected_score_for,
@@ -63,6 +64,7 @@ from app.services.train_pool import (
     herring_stmt,
     pick_one_per_game,
     pool_entry_stmt,
+    second_best_not_winning_admissible,
 )
 
 # A real, legal Ruy Lopez opening PGN, long enough (14 half-moves) to cover
@@ -668,6 +670,224 @@ class TestDeadBandAdmissible:
             assert await _pool_contains(test_engine, user_id, black_game_id, 11) is True
         finally:
             await _delete_games(test_engine, [white_game_id, black_game_id])
+
+
+# ---------------------------------------------------------------------------
+# TestSecondBestNotWinningAdmissible (SEED-141) — second_best_not_winning_admissible
+# applied at pool_entry_stmt. `_still_winning_node`'s "b" is fixed at 900 cp
+# (ES ~0.965), large enough that best-vs-second always clears BLUNDER_DROP for
+# every "s" value used below (400 down to -400) — dead_band_admissible stays
+# admissible throughout, isolating the new predicate as the only variable.
+# ---------------------------------------------------------------------------
+
+
+def _still_winning_node(second_cp: int) -> dict[str, Any]:
+    """A missed_pv_lines node-0 dict with a fixed large best-move eval (900 cp,
+    ES ~0.965) and `second_cp` as the runner-up's white-perspective eval — the
+    gap always clears BLUNDER_DROP regardless of `second_cp`'s value in the
+    range this module's tests use, so dead_band_admissible is admissible
+    throughout and second_best_not_winning_admissible is the only variable."""
+    return {"b": 900, "bm": None, "s": second_cp, "sm": None, "su": "e2e4"}
+
+
+class TestSecondBestNotWinningAdmissible:
+    """second_best_not_winning_admissible, applied at pool_entry_stmt."""
+
+    @pytest.mark.asyncio
+    async def test_second_best_clearly_winning_is_absent(self, test_engine) -> None:
+        """White mover, s=400 (>= SECOND_BEST_WINNING_FLOOR_CP): the runner-up
+        still leaves the mover clearly winning, so the puzzle is excluded."""
+        user_id, _ = await _register_and_login(
+            f"train-swin-clear-{uuid.uuid4().hex[:8]}@example.com"
+        )
+        game_id = await _seed_blunder_game(
+            test_engine, user_id, missed_pv_lines=[_still_winning_node(400)]
+        )
+        try:
+            assert await _pool_contains(test_engine, user_id, game_id, 10) is False
+        finally:
+            await _delete_games(test_engine, [game_id])
+
+    @pytest.mark.asyncio
+    async def test_second_best_exactly_at_floor_is_absent(self, test_engine) -> None:
+        """s == SECOND_BEST_WINNING_FLOOR_CP (200): the exclusion boundary is
+        inclusive at the exclusion side."""
+        user_id, _ = await _register_and_login(
+            f"train-swin-floor-{uuid.uuid4().hex[:8]}@example.com"
+        )
+        game_id = await _seed_blunder_game(
+            test_engine, user_id, missed_pv_lines=[_still_winning_node(200)]
+        )
+        try:
+            assert await _pool_contains(test_engine, user_id, game_id, 10) is False
+        finally:
+            await _delete_games(test_engine, [game_id])
+
+    @pytest.mark.asyncio
+    async def test_second_best_one_cp_below_floor_is_present(self, test_engine) -> None:
+        """s == 199 (one cp below the floor): admissible — the boundary is sharp."""
+        user_id, _ = await _register_and_login(
+            f"train-swin-below-{uuid.uuid4().hex[:8]}@example.com"
+        )
+        game_id = await _seed_blunder_game(
+            test_engine, user_id, missed_pv_lines=[_still_winning_node(199)]
+        )
+        try:
+            assert await _pool_contains(test_engine, user_id, game_id, 10) is True
+        finally:
+            await _delete_games(test_engine, [game_id])
+
+    @pytest.mark.asyncio
+    async def test_second_best_leaves_mover_losing_is_present(self, test_engine) -> None:
+        """s = -400 (the runner-up leaves the mover losing, not winning):
+        admissible — this is exactly the case the puzzle should still test."""
+        user_id, _ = await _register_and_login(
+            f"train-swin-losing-{uuid.uuid4().hex[:8]}@example.com"
+        )
+        game_id = await _seed_blunder_game(
+            test_engine, user_id, missed_pv_lines=[_still_winning_node(-400)]
+        )
+        try:
+            assert await _pool_contains(test_engine, user_id, game_id, 10) is True
+        finally:
+            await _delete_games(test_engine, [game_id])
+
+    @pytest.mark.asyncio
+    async def test_black_mover_sign_flip(self, test_engine) -> None:
+        """The SAME raw node (b=-900, s=-400, both white-perspective) flips
+        admissibility depending purely on ply parity: at a black-mover ply the
+        runner-up (mover-POV +400) is still clearly winning for black and is
+        excluded; at a white-mover ply the identical raw blob has a
+        mover-POV runner-up of -400 (losing for white) and is admissible. A
+        predicate that ignores color cannot satisfy both halves in one run."""
+        node = {"b": -900, "bm": None, "s": -400, "sm": None, "su": "g8f6"}
+        user_id, _ = await _register_and_login(
+            f"train-swin-flip-{uuid.uuid4().hex[:8]}@example.com"
+        )
+        black_game_id = await _seed_blunder_game(
+            test_engine,
+            user_id,
+            ply=11,
+            missed_pv_lines=[dict(node)],
+            prior_eval_cp=-300,  # winnable for black (mirrors dead-band's parity test)
+            user_color="black",
+        )
+        white_game_id = await _seed_blunder_game(
+            test_engine,
+            user_id,
+            ply=10,
+            missed_pv_lines=[dict(node)],
+            prior_eval_cp=300,
+            user_color="white",
+        )
+        try:
+            assert await _pool_contains(test_engine, user_id, black_game_id, 11) is False
+            assert await _pool_contains(test_engine, user_id, white_game_id, 10) is True
+        finally:
+            await _delete_games(test_engine, [black_game_id, white_game_id])
+
+    @pytest.mark.asyncio
+    async def test_mate_for_the_mover_is_absent(self, test_engine) -> None:
+        """A forced mate FOR the mover is the degenerate 'still winning' case
+        this predicate exists to catch: excluded for both colors."""
+        user_id, _ = await _register_and_login(
+            f"train-swin-matefor-{uuid.uuid4().hex[:8]}@example.com"
+        )
+        white_node = {"b": 50, "bm": None, "s": None, "sm": 3, "su": "e2e4"}  # white mating
+        white_game_id = await _seed_blunder_game(
+            test_engine, user_id, ply=10, missed_pv_lines=[white_node], user_color="white"
+        )
+        black_node = {"b": -50, "bm": None, "s": None, "sm": -3, "su": "e2e4"}  # black mating
+        black_game_id = await _seed_blunder_game(
+            test_engine,
+            user_id,
+            ply=11,
+            missed_pv_lines=[black_node],
+            prior_eval_cp=-300,
+            user_color="black",
+        )
+        try:
+            assert await _pool_contains(test_engine, user_id, white_game_id, 10) is False
+            assert await _pool_contains(test_engine, user_id, black_game_id, 11) is False
+        finally:
+            await _delete_games(test_engine, [white_game_id, black_game_id])
+
+    @pytest.mark.asyncio
+    async def test_mate_against_the_mover_is_present(self, test_engine) -> None:
+        """A forced mate AGAINST the mover is exactly the case the puzzle
+        should still test: admissible for both colors."""
+        user_id, _ = await _register_and_login(
+            f"train-swin-mateagainst-{uuid.uuid4().hex[:8]}@example.com"
+        )
+        white_node = {"b": 50, "bm": None, "s": None, "sm": -3, "su": "e2e4"}  # black mating
+        white_game_id = await _seed_blunder_game(
+            test_engine, user_id, ply=10, missed_pv_lines=[white_node], user_color="white"
+        )
+        black_node = {"b": -50, "bm": None, "s": None, "sm": 3, "su": "e2e4"}  # white mating
+        black_game_id = await _seed_blunder_game(
+            test_engine,
+            user_id,
+            ply=11,
+            missed_pv_lines=[black_node],
+            prior_eval_cp=-300,
+            user_color="black",
+        )
+        try:
+            assert await _pool_contains(test_engine, user_id, white_game_id, 10) is True
+            assert await _pool_contains(test_engine, user_id, black_game_id, 11) is True
+        finally:
+            await _delete_games(test_engine, [white_game_id, black_game_id])
+
+    @pytest.mark.asyncio
+    async def test_mate_takes_priority_over_cp(self, test_engine) -> None:
+        """sm=-3 (mate against the mover) together with s=900 (a clearly
+        winning cp value) is still PRESENT — mate outranks cp exactly as
+        expected_score_sql's branch order does."""
+        user_id, _ = await _register_and_login(
+            f"train-swin-matepriority-{uuid.uuid4().hex[:8]}@example.com"
+        )
+        node = {"b": 50, "bm": None, "s": 900, "sm": -3, "su": "e2e4"}
+        game_id = await _seed_blunder_game(test_engine, user_id, missed_pv_lines=[node])
+        try:
+            assert await _pool_contains(test_engine, user_id, game_id, 10) is True
+        finally:
+            await _delete_games(test_engine, [game_id])
+
+    @pytest.mark.asyncio
+    async def test_no_second_move_sentinel_survives_in_isolation(self, test_engine) -> None:
+        """The su == "" sentinel must survive second_best_not_winning_admissible
+        on its own -- NOT via a pool_entry_stmt round-trip, because
+        dead_band_admissible already excludes su == "" through its own
+        `second_uci != ""` clause, so a pool_entry_stmt test here would pass
+        for the wrong reason even under a bare-NOT NULL-dropping bug. Pairing
+        just answer_key_present with the new predicate isolates it: this is
+        the test that catches the NULL-under-NOT bug the seed warns about
+        (a bare `s_mover_cp >= threshold` under `NOT` yields NULL for this
+        row and silently drops it). Do NOT "simplify" this to `_pool_contains`
+        -- that would silently gut the regression this test exists to catch.
+        """
+        user_id, _ = await _register_and_login(
+            f"train-swin-sentinel-{uuid.uuid4().hex[:8]}@example.com"
+        )
+        node = {"b": 50, "bm": None, "s": None, "sm": None, "su": ""}
+        game_id = await _seed_blunder_game(test_engine, user_id, missed_pv_lines=[node])
+        try:
+            session_maker = async_sessionmaker(test_engine, expire_on_commit=False)
+            async with session_maker() as session:
+                rows = (
+                    await session.execute(
+                        select(GameFlaw.game_id, GameFlaw.ply).where(
+                            GameFlaw.user_id == user_id,
+                            answer_key_present(GameFlaw.missed_pv_lines),
+                            second_best_not_winning_admissible(
+                                GameFlaw.missed_pv_lines, GameFlaw.ply
+                            ),
+                        )
+                    )
+                ).all()
+            assert any(row.game_id == game_id and row.ply == 10 for row in rows)
+        finally:
+            await _delete_games(test_engine, [game_id])
 
 
 # ---------------------------------------------------------------------------
