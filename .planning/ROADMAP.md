@@ -379,7 +379,14 @@ Plans:
 
 **Non-goals**: bulk multi-game PGN upload on the Import page; variations/RAVs as sidelines; comments and NAGs; URL write-back or shareable pasted-game links; a per-game "count this in my stats" opt-in; prompting for a time control on paste; a separate guest scouting account; any database migration.
 
-**Plans**: TBD (created at `/gsd-plan-phase 208`)
+**Plans**: 4 plans in 2 waves
+
+Plans:
+
+- [ ] 208-01-PLAN.md — Tracer: `/analysis` nav item, paste trigger, modal, sniffed FEN/PGN ephemeral load (wave 1)
+- [ ] 208-02-PLAN.md — `platform='pgn'` exclusion seam, D-16 identity hash, `normalize_pasted_game` (wave 1)
+- [ ] 208-03-PLAN.md — `POST /imports/paste`: save, reuse-on-re-paste, tier-1 enqueue, and the "Analyze full game" wiring (wave 2)
+- [ ] 208-04-PLAN.md — Library opt-in: `include_pasted` resolution, Library-scoped "Pasted" chip, card badge (wave 2)
 
 **UI hint**: small-to-medium — one new modal component on an existing page, one nav item across two existing surfaces, no new pages and no design-system additions.
 
