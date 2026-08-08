@@ -447,20 +447,23 @@ def seed_openings_for_tests(test_engine: object) -> None:  # noqa: ARG001
 def reset_in_process_rate_limiters() -> None:
     """Clear the in-process sliding-window limiters before every test.
 
-    Both `guest_create_limiter` (per-IP) and `feedback_limiter` (per-user) are
-    module-level singletons that persist for the whole process. Under serial
-    execution (CI, D-02) every test shares one process and one ASGI test-client
-    IP, so guest-create / feedback calls accumulate across unrelated tests until
-    the limit trips and an endpoint returns 429 instead of its success body
-    (e.g. KeyError: 'access_token'). Under xdist each worker is a separate
-    process so the bleed stays under the cap, which is why this only flaked in
-    CI. Resetting per-test makes both modes deterministic.
+    `guest_create_limiter` (per-IP), `feedback_limiter` (per-user), and
+    `reset_password_limiter` (per-email, Phase 207) are all module-level
+    singletons that persist for the whole process. Under serial execution
+    (CI, D-02) every test shares one process and one ASGI test-client IP, so
+    guest-create / feedback / reset-password calls accumulate across unrelated
+    tests until the limit trips and an endpoint returns 429 instead of its
+    success body (e.g. KeyError: 'access_token'). Under xdist each worker is a
+    separate process so the bleed stays under the cap, which is why this only
+    flaked in CI. Resetting per-test makes both modes deterministic.
     """
     from app.core.feedback_rate_limiter import feedback_limiter
     from app.core.ip_rate_limiter import guest_create_limiter
+    from app.core.reset_password_rate_limiter import reset_password_limiter
 
     guest_create_limiter._timestamps.clear()
     feedback_limiter._timestamps.clear()
+    reset_password_limiter._timestamps.clear()
 
 
 @pytest.fixture

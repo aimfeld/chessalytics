@@ -120,6 +120,13 @@ class Settings(BaseSettings):
     VAPID_PRIVATE_KEY: str = ""
     VAPID_SUBJECT: str = "push@flawchess.com"
 
+    # Resend transactional email (Phase 207, D-03). Empty string = unconfigured:
+    # email_service.is_email_configured() returns False and every send is a
+    # no-op, mirroring the VAPID_PUBLIC_KEY/VAPID_PRIVATE_KEY "empty = disabled"
+    # contract above. Every dev/test/CI run works with zero setup.
+    RESEND_API_KEY: str = ""
+    MAIL_FROM: str = "noreply@flawchess.com"
+
     model_config = SettingsConfigDict(env_file=".env", extra="ignore")
 
 

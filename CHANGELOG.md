@@ -16,6 +16,8 @@ in `YYYY-MM-DD` (Europe/Zurich).
 
 - The analysis board and the puzzle solution board's free moves now play a move sound (check/capture/plain), matching the sound the Train reveal's line stepper already plays. Honors the existing mute toggle; loading a position from a link and dragging the eval-chart scrubber stay silent.
 
+- Forgot your password? You can now reset it yourself — request a link by email, follow it, and set a new one, with no need to contact support. (Phase 207)
+
 ### Changed
 
 - Train no longer serves a blunder whose second-best move still leaves the player clearly winning (+2 pawns or a forced mate), so the puzzle pool is ~24% smaller and a larger share of what remains has exactly one right move. (SEED-141)

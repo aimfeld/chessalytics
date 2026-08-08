@@ -167,6 +167,7 @@
 | 204. Push Reminder Delivery Reliability (SEED-135, v2.12) | 3/3 | Complete | 2026-08-03 |
 | 205. Train Grading Oracle Agreement (SEED-137, v2.12) | 2/2 | Complete    | 2026-08-04 |
 | 206. Train Warm-Up Sessions & Sharp Filler Pool (SEED-140, unassigned) | 3/3 | Complete    | 2026-08-07 |
+| 207. Self-Serve Password Reset (SEED-143, unassigned) | 3/3 | Complete    | 2026-08-08 |
 
 ## Active Phases (unassigned milestone)
 
@@ -232,17 +233,105 @@ Plans:
 
 **UI hint**: small — a warm-up label/framing on the Train start and session surfaces, plus the `source`-based rewrite of the your-game predicate in `TrainReveal`. No new pages, no new components expected beyond the label treatment.
 
-## Backlog
+### Phase 207: Self-Serve Password Reset
 
-### Phase 999.1: Password Reset (BACKLOG)
+**Goal**: A user who signed up with email + password and forgot it can recover their account without operator involvement. Today there is **no recovery path at all** — 172 prod accounts with a password have exactly one option, register a fresh address and re-import their entire game history, losing bookmarks and Train state. Ships the first email-sending capability the project has ever had (Resend over raw `httpx`), mounts `fastapi_users.get_reset_password_router()`, and adds the two frontend forms. Backend + frontend, **no migration** (fastapi-users' reset token is stateless and JWT-based; nothing is persisted).
 
-**Goal:** Users can recover account access when they forget their password — request reset link, receive email, set new password
-**Requirements:** TBD
-**Plans:** 5/5 plans complete
+**Depends on**: nothing in the codebase. The one real dependency is **operator work outside the repo** (Step 0 below), which must land before any code is written. Since the D-05 supersession that work is additive-only DNS plus an API key — no longer a step that can break live mail.
+
+**Requirements**: RESET-01, RESET-02, RESET-03, RESET-04, RESET-05, RESET-06, RESET-07, RESET-08 (one per Success Criterion below, in order; traceability table in the phase's `-01-PLAN.md` § Requirements — this phase predates its milestone's REQUIREMENTS.md)
+
+**Source**: [SEED-143](../seeds/SEED-143-self-serve-password-reset.md) — planted 2026-08-08 during `/gsd-explore` from "there's currently no way for a user to recover their signed-up accounts if they lost their password". The seed carries a **fully verified current-state audit and seven locked decisions (D-01..D-07)**, including a provider bake-off with three named disqualifications. Do not re-derive the provider choice, the self-hosting rejection, or the current-state facts.
+
+**Supersedes**: backlog Phase 999.1 (Password Reset), promoted here.
+
+**Blocking pre-planning gate — Step 0 is operator work, not executor work**:
+
+> **D-05 SUPERSEDED 2026-08-08 (operator challenge, verified against Resend's docs).** The seed's premise — that an apex `From` requires merging an include into the existing apex SPF record — is **false**, and the apex-merge-vs-`send.`-subdomain tradeoff it agonized over is a false dilemma. Resend runs on SES and sets the Return-Path to `bounces@send.flawchess.com`; **SPF is evaluated against the envelope-from, not the visible `From` header**, so SPF lives on the `send.` subdomain while DKIM signs with `d=flawchess.com` at the apex. `From: noreply@flawchess.com` then passes DMARC on **strict DKIM alignment** (and SPF aligns too, relaxed, same org domain) while the existing `v=spf1 a mx include:spf.webapps.net ~all` is never read or modified. **All records below are purely additive. Do not edit the apex SPF record.** The seed's `include:_spf.resend.com` was wrong on two counts: the token is `include:amazonses.com`, and adding any Resend include to the apex is actively counterproductive (redundant, and it consumes one of SPF's 10-lookup budget).
+
+1. Create a Resend account; add **flawchess.com** (the apex) as the domain. **Read the exact records off the dashboard before publishing anything** — expect three additive records, named relative to the verified domain:
+   - `MX` on `send` → `feedback-smtp.<region>.amazonses.com`, priority 10
+   - `TXT` on `send` → `v=spf1 include:amazonses.com ~all`
+   - `TXT` on `resend._domainkey` → the DKIM public key
+2. Confirm the DKIM record lands at **`resend._domainkey.flawchess.com` (apex level)**, not under `send.`. This is the one load-bearing detail: apex-level DKIM is what makes `noreply@flawchess.com` align. Resend's own KB verifies with `dig resend._domainkey.example.com`, but one third-party guide claims Resend scopes DKIM to the sending subdomain — the dashboard settles it at zero cost. **If it does scope DKIM to `send.`, the original tradeoff reappears: take `noreply@send.flawchess.com` rather than merging the apex SPF.**
+3. Confirm `send.flawchess.com` has no pre-existing MX (the Swizzonic `MX 10 mx.swizzonic.email` is on the apex, so no conflict is expected — Resend requires its bounce MX to be the only MX on the sending subdomain).
+4. Add `_dmarc.flawchess.com` → `v=DMARC1; p=none; rua=mailto:<addr>` (purely additive; none exists today).
+5. Put `RESEND_API_KEY` in the local `.prod.env` that `bin/deploy.sh:28-29` scps to `/opt/flawchess/.env`. Never commit it.
+
+**Scope**:
+
+- **Backend** — `app/services/email_service.py` (new): one `httpx.AsyncClient` POST to `https://api.resend.com/emails`, no SDK (D-03: the official `resend` package adds nothing over one POST, and `httpx` is already project-wide). Override `on_after_forgot_password` on `UserManager` (`app/users.py:63`, currently the base no-op — the token secrets at `:64-65` are already configured and consumed by nothing) to build the reset URL from `settings.FRONTEND_URL` and send. Mount `fastapi_users.get_reset_password_router()` under the `/auth` prefix alongside the register router (`app/routers/auth.py:49-53`). Add `RESEND_API_KEY` and `MAIL_FROM` to `Settings`.
+- **Frontend** — `ForgotPasswordForm.tsx` (new), a `/auth/reset-password` route reading `?token=` (register near `App.tsx:845-847`), a "Forgot password?" link on `LoginForm.tsx`. `frontend/src/components/auth/` currently holds exactly two files, so there is no existing pattern to conform to beyond the project's standard rules.
+- **Per-email rate limit (D-06, in scope).** The forgot-password endpoint is unauthenticated. Without a cooldown, flooding it burns the 100/day Resend cap and breaks the flow for *everyone*, and lets a known user be mail-bombed. ~10 lines.
+- **Sentry capture on send failure (D-06, in scope).** Already mandated by CLAUDE.md for `app/services/`. `capture_exception` on the Resend call; pass user_id via `set_context` — never interpolate variables into the message.
+
+**Locked constraints (do not re-open)**:
+
+1. **Fully self-serve (D-01)** — emailed token link, user sets a new password, zero operator involvement. The "email the maintainer" manual path was considered and rejected despite the tiny volume.
+2. **No self-hosted mail server (D-02)** — rejected on deliverability, not on effort. Hetzner blocks outbound 25/465 by default (587 is open, so relay was never actually blocked — moot given D-03), and more decisively, **IP reputation is earned by volume and this flow has none**: ~5 sends/year warms nothing, ever. A reset email in spam is a silent total failure nobody reports.
+3. **Resend, free tier, raw HTTP (D-03)** — 3,000/mo · 100/day permanent, ~60x headroom, no account review, HTTPS:443. Brevo and Mailjet are **disqualified** (delete free accounts after 4 months of inactivity — the exact silent-rot failure this flow must avoid); SES's free tier ended for new customers 21 Jul 2026; Mailgun is a churny vendor. **Postmark is the designated fallback** if Resend deliverability ever disappoints (rejected only for its manual new-account review).
+4. **D-04 REVERSED 2026-08-08 (operator decision) — eligibility is "has a password", and the predicate is load-bearing.** The seed had Google-only accounts receiving a standard reset link and gaining a password. They do not. An account with an empty `hashed_password` gets **no reset email**; the HTTP response and UI copy stay byte-identical (RESET-02 is unaffected). **The predicate is `hashed_password != ''` — "has a password to reset" — and NOT "has no linked Google account".** Prod measured 2026-08-08 shows why that distinction is the whole ballgame:
+
+   | Group | Password | Google linked | Count | Reset? |
+   |---|---|---|---|---|
+   | Pure email/password | `$argon2id$` | no | 47 | **yes** |
+   | **Both** | `$argon2id$` | yes | **125** | **yes** |
+   | Google-only | `''` | yes | 44 | no |
+   | Guests | `''` | no | 304 | no |
+
+   Gating on "is a Google account" (an `oauth_account` row) would strand **125 of the 172** accounts that need reset — 73% of the target population — all of whom carry real `$argon2id$` hashes and can genuinely forget them.
+
+   (Guests share the empty hash and are therefore also excluded, so no separate `is_guest` check is needed. This is a note on the predicate's shape, not a reason for it — D-07 already established the guest path is unreachable, since a guest's `guest_<uuid4hex>@guest.local` address cannot be typed into the form without guessing a uuid4.)
+
+5. **No enumeration fix needed** — fastapi-users' `forgot_password` already returns `202` regardless of whether the address exists. Default token TTL 3600s is fine as-is. Don't build either.
+
+**Explicitly OUT of scope (D-07 — decided, not oversights)**:
+
+- **Periodic canary send.** The only thing that would catch a revoked key or DNS drift *before* a real user hits it. Judged over-engineering at ~5 sends/year. **Accepted consequence: the first person to discover a broken flow is a locked-out user.** If a reset ever fails in the wild, revisit this decision rather than debugging in place.
+- **Explicit guest-account guard.** Guest emails are unguessable uuid4 sentinels (`guest_<uuid4hex>@guest.local`, `app/services/guest_service.py:21,37`), so a `.local` send is not reachable in practice; D-06's Sentry capture covers the residual.
+- **Email verification on registration.** See the follow-up note below — this is a real gap, deliberately not scoped here.
+
+**Success Criteria** (what must be TRUE):
+
+1. A user with a password who submits their address on the forgot-password form receives a working reset link and can set a new password with it — verified end-to-end against a real mailbox, not mocked.
+2. Submitting an address that does not exist is indistinguishable from one that does (same `202`, same UI copy, no timing tell introduced by the send).
+3. Repeated requests for the same address are rate-limited, and the limit is proven by a test that fails when the cooldown is removed.
+4. A Resend send failure produces a Sentry event with `user_id` in context and **no variable interpolated into the message string** (grouping stays intact).
+5. **Eligibility is credential state, not account type.** An account with a linked Google account *and* a password (125 in prod, the majority of the target population) receives a reset email and completes the flow normally. An account with an empty `hashed_password` (44 Google-only, 304 guests) receives no email, while its HTTP response and UI copy remain byte-identical to every other submission. Proven by a test that goes red if eligibility is ever derived from `oauth_account` rather than from the presence of a password.
+6. The frontend forms carry `data-testid` on every interactive element, honor the `text-sm` floor, use `variant="brand-outline"` for secondary actions, are usable at 375px, and render an `isError` branch rather than falling through to an empty state. The confirmation is a **single static string with no status-dependent branch**, and it closes the Google-only dead end by naming the alternative: "If an account exists for that address, we've sent a reset link. Signed up with Google? Use the Sign in with Google button instead." (Operator decision 2026-08-08 — chosen over a second email template, which stays a non-goal.)
+7. The existing apex SPF record is **byte-identical** to its pre-phase value (`v=spf1 a mx include:spf.webapps.net ~all`), and Swizzonic mail to flawchess.com still delivers — confirmed by an actual received message. Under the superseded D-05 this was the phase's one real risk; it is now a regression check that the additive-only path was actually followed.
+8. Each production change is mutation-tested (revert it, confirm the test goes red) rather than accepted on symbol presence.
+
+**Non-goals**: email verification on registration; a canary/monitoring send; guest-account recovery (ephemeral by design, explicitly out of scope); a templating engine or a second email template; the official `resend` SDK; any database migration.
+
+**Follow-up this phase creates (capture as a seed when it ships, do not scope here)**: **there is no email verification on registration either** — `get_verify_router()` is equally absent and `on_after_register` (`app/users.py:67-77`) only stamps `last_login`, so a user can register with a typo'd address they do not control. Today that is merely untidy. **Once password reset ships it becomes load-bearing**: the reset link goes to a mailbox that isn't theirs, making that account *permanently* unrecoverable — strictly worse than today's "no recovery for anyone", because the user now reasonably expects recovery to work. The infrastructure (Resend client, config, send path) lands with this phase, so the marginal cost afterwards is small.
+
+**Plans**: 3 plans
 
 Plans:
+**Wave 1**
 
-- [ ] TBD (promote with /gsd:review-backlog when ready)
+- [x] 207-01-PLAN.md — Backend spine: a `type="tracer"` end-to-end slice (config → eligibility gate + per-email limiter → email service → `on_after_forgot_password` → mounted reset router → HTTP test proving forgot → token → reset → login), then the rate-limit/non-blocking-dispatch/Sentry contract and the credential-state eligibility tests, all mutation-tested
+
+**Wave 2** *(blocked on Wave 1 — consumes the HTTP contract recorded in 207-01-SUMMARY.md)*
+
+- [x] 207-02-PLAN.md — Frontend: `ForgotPasswordForm` + `ResetPasswordForm`, their two public routes, the sign-in entry link, Vitest suites, and a 375px human-verify checkpoint
+
+**Wave 3** *(blocked on Waves 1–2)*
+
+- [x] 207-03-PLAN.md — Operator handoff: `.env.example` entries, `docs/email-resend-runbook.md`, CHANGELOG bullet, and the two Step-0-gated HUMAN-UAT verdicts (RESET-01 real mailbox, RESET-07 apex-SPF regression)
+
+**UI hint**: small — one new form component, one new route, one link on `LoginForm.tsx`. No new pages beyond the reset-password route, no design-system additions.
+
+**Planning notes (2026-08-08)**:
+
+- **Step 0 is still outstanding.** RESET-01 (real mailbox) and RESET-07 (apex SPF + Swizzonic delivery) are planned as HUMAN-UAT in Plan 03, not executor tasks, and `deferred` is a first-class answer at that checkpoint. No task in any plan requires a live `RESEND_API_KEY` to pass — `MAIL_FROM` is a `Settings` field with a default and an empty key makes every send a no-op.
+- **One threat was upgraded to `high` during planning: T-207-02, a timing enumeration oracle.** Awaiting the Resend POST inside the request handler makes a registered address cost a network round-trip that an unregistered one never pays, contradicting Success Criterion 2's "no timing tell introduced by the send". Plan 01 Task 2 dispatches the send without awaiting it. The residual library-internal Argon2 differential is recorded as accepted threat T-207-03 rather than silently ignored.
+- **Assumption-delta decision: `no-change` on the data model, semantics pinned by an invariant instead.** The D-04 reversal makes this phase the **first production read of `hashed_password` as a predicate**, so the two meanings fused in that value must be pulled apart explicitly. A `has_password` column would be derived state, would need a forbidden migration, and would create a second source of truth that drifts on every password write. Instead the empty-hash comparison is permitted at exactly one site (the eligibility gate), documented there as credential state, and `tests/test_users_account_type_invariant.py` fails if a future change re-fuses the account-type reading onto it or derives eligibility from `oauth_account`. The 125-account dual case (password + Google linked) is the executable form of that invariant and is the plan's highest-value test — it is the regression a plausible "skip Google accounts" gate causes, affecting 73% of the target population.
+- **Both guards in `on_after_forgot_password` share one silent-no-op shape.** The eligibility gate and the per-email rate limit each return without raising, logging, or emitting a Sentry event. Neither can introduce a timing tell, and the reason is load-bearing rather than incidental: T-207-02 already moved the only network I/O off the request path, so "gated" and "sent" differ by an in-memory branch either way (threats T-207-24, T-207-25).
+- **`COVERAGE.md`** records the Resend API capability matrix: 2 `INTEGRATE`, 24 reasoned `OPT-OUT`, 0 unreasoned.
+
+## Backlog
 
 ### Phase 999.6: Opening Risk & Drawishness (BACKLOG)
 
@@ -254,6 +343,8 @@ Plans:
 Plans:
 
 - [ ] TBD (promote with /gsd-review-backlog when ready)
+
+*Phase 999.1 (Password Reset) promoted to active Phase 207 on 2026-08-08 via `/gsd-phase 207 @SEED-143`. Its stale "5/5 plans complete" line was bookkeeping noise — no plans ever existed.*
 
 *Phase 999.7 (LLM Endgame-Insights Statistical-Reasoning Rework) promoted to active Phase 102 (v1.23) on 2026-06-01 via `/gsd-explore`; shipped 2026-06-03.*
 

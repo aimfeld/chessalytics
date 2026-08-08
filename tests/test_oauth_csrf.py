@@ -61,6 +61,19 @@ class TestResolveOAuthBases:
         monkeypatch.setattr(settings, "OAUTH_TUNNEL_ORIGINS", f"{tunnel},https://other.ts.net")
         assert _resolve_oauth_bases(tunnel) == (tunnel, tunnel)
 
+    def test_allowlist_wins_when_tunnel_is_also_frontend_url(self, monkeypatch):
+        """Tunnel origin that is ALSO FRONTEND_URL must stay same-origin.
+
+        Regression (2026-08-08): the FRONTEND_URL branch ran first, so setting
+        FRONTEND_URL to the tunnel (for password-reset links) sent Google's
+        redirect_uri to BACKEND_URL while the CSRF cookie sat on the tunnel host —
+        the callback died with "Invalid CSRF token".
+        """
+        tunnel = "https://ai-slim.tailb91388.ts.net"
+        monkeypatch.setattr(settings, "FRONTEND_URL", tunnel)
+        monkeypatch.setattr(settings, "OAUTH_TUNNEL_ORIGINS", tunnel)
+        assert _resolve_oauth_bases(tunnel) == (tunnel, tunnel)
+
     def test_unknown_origin_is_rejected(self, monkeypatch):
         """A non-allowlisted origin raises 400 (OAuth open-redirect guard)."""
         monkeypatch.setattr(settings, "OAUTH_TUNNEL_ORIGINS", "")

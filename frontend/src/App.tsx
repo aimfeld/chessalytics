@@ -23,6 +23,8 @@ import { FeedbackButton } from '@/components/feedback/FeedbackButton';
 import { ImpersonationPill } from '@/components/admin/ImpersonationPill';
 import { useUserProfile } from '@/hooks/useUserProfile';
 import { AuthPage } from '@/pages/Auth';
+import { ForgotPasswordPage } from '@/pages/ForgotPasswordPage';
+import { ResetPasswordPage } from '@/pages/ResetPasswordPage';
 import { HomePage } from '@/pages/Home';
 import { LibraryPage } from '@/pages/library/LibraryPage';
 import { OAuthCallbackPage } from '@/pages/OAuthCallbackPage';
@@ -843,6 +845,10 @@ function AppRoutes() {
         <Route path="/" element={<HomePage />} />
         <Route path="/privacy" element={<PrivacyPage />} />
         <Route path="/login" element={<AuthPage />} />
+        {/* Self-serve password reset (Phase 207) — public, a user is by
+            definition logged out (or resetting from a second device). */}
+        <Route path="/auth/forgot-password" element={<ForgotPasswordPage />} />
+        <Route path="/auth/reset-password" element={<ResetPasswordPage />} />
         {/* Google OAuth callback — reads token from URL fragment */}
         <Route path="/auth/callback" element={<OAuthCallbackPage />} />
         {/* Protected layout wraps all authenticated pages */}
