@@ -272,7 +272,12 @@ Test class shape mirrors `TestRegistration`/`TestLogin` (`:49-110`): `@pytest.ma
 
 **RESET-03 (rate limit) mutation-test shape**, mirroring `test_push_send.py`'s status-branch-table discipline: call `forgot_password()` N+1 times for the same email inside the window, assert the mocked send function's call count is capped at N (the `_RESET_PASSWORD_MAX_REQUESTS` constant), then literally comment out/remove the `if not reset_password_limiter.is_allowed(...)` guard and confirm the test goes red (RESET-08's mutation-test discipline, matching `feedback_mutation_test_gap_closures` project convention already in MEMORY.md).
 
-**RESET-05 (Google-only account) setup:** construct a user with `hashed_password=""` directly rather than simulating a real Google OAuth round-trip — grep `app/services/guest_service.py` around `:156` (cited in RESEARCH) for the exact in-repo idiom for creating an empty-hash user row before building this test.
+**RESET-05 (eligibility) setup — REVISED 2026-08-08, D-04 reversed.** This previously described a Google-only account completing forgot→reset→login. **That is now the opposite of the requirement:** an empty-`hashed_password` account must receive **zero** sends. Two fixtures are needed, and the first is the important one:
+
+1. **Dual account (the 125-account prod majority): a real `$argon2id$` hash AND an `oauth_account` row.** Must reset normally. This is the regression a naive "skip Google accounts" implementation causes — gating on an `oauth_account` row would strand 125 of the 172 eligible accounts.
+2. **Ineligible account: `hashed_password=""`.** Zero sends, response byte-identical to an eligible one (capture and compare; never hard-code the status).
+
+For fixture 2's field set, `app/services/guest_service.py:156` remains the right in-repo idiom for an empty-hash row. For fixture 1, add an `oauth_account` row using the construction at `guest_service.py:166-175`. Eligibility must be read from the password's presence only — never from `oauth_account`, `is_guest`, or a hash prefix.
 
 ---
 
