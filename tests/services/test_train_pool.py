@@ -761,7 +761,9 @@ class TestSecondBestNotWinningAdmissible:
         mover-POV runner-up of -400 (losing for white) and is admissible. A
         predicate that ignores color cannot satisfy both halves in one run."""
         node = {"b": -900, "bm": None, "s": -400, "sm": None, "su": "g8f6"}
-        user_id, _ = await _register_and_login(f"train-swin-flip-{uuid.uuid4().hex[:8]}@example.com")
+        user_id, _ = await _register_and_login(
+            f"train-swin-flip-{uuid.uuid4().hex[:8]}@example.com"
+        )
         black_game_id = await _seed_blunder_game(
             test_engine,
             user_id,
@@ -788,7 +790,9 @@ class TestSecondBestNotWinningAdmissible:
     async def test_mate_for_the_mover_is_absent(self, test_engine) -> None:
         """A forced mate FOR the mover is the degenerate 'still winning' case
         this predicate exists to catch: excluded for both colors."""
-        user_id, _ = await _register_and_login(f"train-swin-matefor-{uuid.uuid4().hex[:8]}@example.com")
+        user_id, _ = await _register_and_login(
+            f"train-swin-matefor-{uuid.uuid4().hex[:8]}@example.com"
+        )
         white_node = {"b": 50, "bm": None, "s": None, "sm": 3, "su": "e2e4"}  # white mating
         white_game_id = await _seed_blunder_game(
             test_engine, user_id, ply=10, missed_pv_lines=[white_node], user_color="white"

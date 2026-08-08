@@ -424,7 +424,9 @@ def dead_band_admissible(missed_pv_lines_col: Any, ply_col: Any) -> ColumnElemen
     )
 
 
-def second_best_not_winning_admissible(missed_pv_lines_col: Any, ply_col: Any) -> ColumnElement[bool]:
+def second_best_not_winning_admissible(
+    missed_pv_lines_col: Any, ply_col: Any
+) -> ColumnElement[bool]:
     """True when `missed_pv_lines_col`'s node-0 runner-up move does NOT leave
     the mover still clearly winning (SEED-141).
 
