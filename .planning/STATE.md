@@ -4,14 +4,14 @@ milestone: v2.12
 milestone_name: Train Reliability & Grading Agreement
 current_phase: 208
 status: not_started
-stopped_at: Phase 208 context gathered
-last_updated: "2026-08-08T14:51:22.299Z"
+stopped_at: Phase 208 UI-SPEC approved
+last_updated: "2026-08-08T16:41:52.991Z"
 last_activity: 2026-08-08
 last_activity_desc: Phase 208 added (SEED-144, paste a FEN or PGN on /analysis) — not planned yet
 progress:
   total_phases: 3
   completed_phases: 2
-  total_plans: 6
+  total_plans: 10
   completed_plans: 6
 current_phase_name: analysis-fen-pgn-paste
 ---
@@ -769,13 +769,13 @@ Items acknowledged and deferred at **v1.29 milestone close on 2026-06-29** (user
 
 ## Session Continuity
 
-**Stopped at:** Phase 208 context gathered
+**Stopped at:** Phase 208 UI-SPEC approved
 
-**Last session:** 2026-08-08T14:51:22.252Z
+**Last session:** 2026-08-08T15:53:17.395Z
 
 **Resume file:**
 
-.planning/phases/208-analysis-fen-pgn-paste/208-CONTEXT.md
+.planning/phases/208-analysis-fen-pgn-paste/208-UI-SPEC.md
 
 ## Performance Metrics
 

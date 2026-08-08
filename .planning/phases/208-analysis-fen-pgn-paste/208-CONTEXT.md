@@ -34,8 +34,7 @@ below are numbered D-11 onward to avoid collision, and resolve what the seed lef
 
 ### Library visibility (resolves ROADMAP.md Open Question 1)
 
-- **D-11: Pasted games are hidden from BOTH Library tabs by default, and visible only
-  when an explicit "Pasted" platform filter chip is set.** This is opt-in, not opt-out.
+- **D-11: Pasted games are hidden from BOTH Library tabs by default, and visible only when an explicit "Pasted" platform filter chip is set.** This is opt-in, not opt-out.
   Rationale (user, verbatim intent): users paste games that are **not theirs** — a
   broadcast game, a friend's PGN, an opponent they are scouting. Those must not pollute
   their stats or their game history. This makes the Library consistent with D-05 rather
@@ -116,8 +115,7 @@ below are numbered D-11 onward to avoid collision, and resolve what the seed lef
   re-enqueue of tier-1. Combined with D-15, a re-paste simply lands the user on their
   existing analysis, which reads as the feature working rather than as a special case.
 
-- **D-18: `user_color` is NOT part of the hash. Re-pasting the same game with the other
-  side selected updates `user_color` on the existing row in place.** It is the user's row
+- **D-18: `user_color` is NOT part of the hash. Re-pasting the same game with the other side selected updates `user_color` on the existing row in place.** It is the user's row
   and their call which side they are studying. `game_flaws` stores both players' flaws
   regardless, so nothing is lost and nothing needs recomputation — only board orientation
   and which side reads as "yours" change. Rejected: making `user_color` part of the hash,

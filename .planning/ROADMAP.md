@@ -382,9 +382,13 @@ Plans:
 **Plans**: 4 plans in 2 waves
 
 Plans:
+**Wave 1**
 
 - [ ] 208-01-PLAN.md — Tracer: `/analysis` nav item, paste trigger, modal, sniffed FEN/PGN ephemeral load (wave 1)
 - [ ] 208-02-PLAN.md — `platform='pgn'` exclusion seam, D-16 identity hash, `normalize_pasted_game` (wave 1)
+
+**Wave 2** *(blocked on Wave 1 completion)*
+
 - [ ] 208-03-PLAN.md — `POST /imports/paste`: save, reuse-on-re-paste, tier-1 enqueue, and the "Analyze full game" wiring (wave 2)
 - [ ] 208-04-PLAN.md — Library opt-in: `include_pasted` resolution, Library-scoped "Pasted" chip, card badge (wave 2)
 
