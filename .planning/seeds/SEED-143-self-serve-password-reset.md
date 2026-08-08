@@ -118,7 +118,7 @@ survival either** — see the Known Risks section.
 > | **Both** | `$argon2id$` | yes | **125** |
 > | Google-only | `''` | yes | 44 |
 >
-> So the eligibility predicate is `hashed_password != ''` ("has a password to reset"), **not** "has no linked Google account". The latter would strand the 125 dual accounts — 73% of the target population, all holding real `$argon2id$` hashes. The credential-state predicate also excludes all 304 guests for free, which retires D-07's guest-guard item instead of accepting it as residual risk.
+> So the eligibility predicate is `hashed_password != ''` ("has a password to reset"), **not** "has no linked Google account". The latter would strand the 125 dual accounts — 73% of the target population, all holding real `$argon2id$` hashes. (Guests share the empty hash and are excluded by the same predicate, so no separate `is_guest` check is needed — but that is incidental. D-07's assessment stands unchanged: the guest path was already unreachable, since those addresses cannot be typed without guessing a uuid4.)
 
 The 44 accounts with an empty `hashed_password` (Google SSO) receive the standard reset email.
 They end up with both login methods on one account. No special-casing, no second template.

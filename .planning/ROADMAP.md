@@ -279,7 +279,9 @@ Plans:
    | Google-only | `''` | yes | 44 | no |
    | Guests | `''` | no | 304 | no |
 
-   Gating on "is a Google account" (an `oauth_account` row) would strand **125 of the 172** accounts that need reset — 73% of the target population — all of whom carry real `$argon2id$` hashes and can genuinely forget them. The credential-state predicate also excludes all 304 guests for free, which retires D-07's "no explicit guest guard" concern rather than accepting it.
+   Gating on "is a Google account" (an `oauth_account` row) would strand **125 of the 172** accounts that need reset — 73% of the target population — all of whom carry real `$argon2id$` hashes and can genuinely forget them.
+
+   (Guests share the empty hash and are therefore also excluded, so no separate `is_guest` check is needed. This is a note on the predicate's shape, not a reason for it — D-07 already established the guest path is unreachable, since a guest's `guest_<uuid4hex>@guest.local` address cannot be typed into the form without guessing a uuid4.)
 5. **No enumeration fix needed** — fastapi-users' `forgot_password` already returns `202` regardless of whether the address exists. Default token TTL 3600s is fine as-is. Don't build either.
 
 **Explicitly OUT of scope (D-07 — decided, not oversights)**:
