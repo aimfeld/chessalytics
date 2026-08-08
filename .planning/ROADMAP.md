@@ -239,7 +239,7 @@ Plans:
 
 **Depends on**: nothing in the codebase. The one real dependency is **operator work outside the repo** (Step 0 below), which must land before any code is written. Since the D-05 supersession that work is additive-only DNS plus an API key — no longer a step that can break live mail.
 
-**Requirements**: RESET-01..NN (minted at planning, one per Success Criterion below in order; traceability table in the phase's `-01-PLAN.md` § Requirements — this phase predates its milestone's REQUIREMENTS.md)
+**Requirements**: RESET-01, RESET-02, RESET-03, RESET-04, RESET-05, RESET-06, RESET-07, RESET-08 (one per Success Criterion below, in order; traceability table in the phase's `-01-PLAN.md` § Requirements — this phase predates its milestone's REQUIREMENTS.md)
 
 **Source**: [SEED-143](../seeds/SEED-143-self-serve-password-reset.md) — planted 2026-08-08 during `/gsd-explore` from "there's currently no way for a user to recover their signed-up accounts if they lost their password". The seed carries a **fully verified current-state audit and seven locked decisions (D-01..D-07)**, including a provider bake-off with three named disqualifications. Do not re-derive the provider choice, the self-hosting rejection, or the current-state facts.
 
