@@ -310,7 +310,7 @@ Plans:
 Plans:
 **Wave 1**
 
-- [ ] 207-01-PLAN.md — Backend spine: a `type="tracer"` end-to-end slice (config → per-email limiter → email service → `on_after_forgot_password` → mounted reset router → HTTP test proving forgot → token → reset → login), then the rate-limit/non-blocking-dispatch/Sentry contract and the Google-only + empty-hash-sentinel audit, all mutation-tested
+- [ ] 207-01-PLAN.md — Backend spine: a `type="tracer"` end-to-end slice (config → eligibility gate + per-email limiter → email service → `on_after_forgot_password` → mounted reset router → HTTP test proving forgot → token → reset → login), then the rate-limit/non-blocking-dispatch/Sentry contract and the credential-state eligibility tests, all mutation-tested
 
 **Wave 2** *(blocked on Wave 1 — consumes the HTTP contract recorded in 207-01-SUMMARY.md)*
 
@@ -326,7 +326,8 @@ Plans:
 
 - **Step 0 is still outstanding.** RESET-01 (real mailbox) and RESET-07 (apex SPF + Swizzonic delivery) are planned as HUMAN-UAT in Plan 03, not executor tasks, and `deferred` is a first-class answer at that checkpoint. No task in any plan requires a live `RESEND_API_KEY` to pass — `MAIL_FROM` is a `Settings` field with a default and an empty key makes every send a no-op.
 - **One threat was upgraded to `high` during planning: T-207-02, a timing enumeration oracle.** Awaiting the Resend POST inside the request handler makes a registered address cost a network round-trip that an unregistered one never pays, contradicting Success Criterion 2's "no timing tell introduced by the send". Plan 01 Task 2 dispatches the send without awaiting it. The residual library-internal Argon2 differential is recorded as accepted threat T-207-03 rather than silently ignored.
-- **Assumption-delta decision: `no-change`.** After D-04 an empty `hashed_password` stops meaning "Google-SSO account" and means only "no password set yet". The planning-time audit found zero production readers of it as a predicate (`is_guest` is the real discriminator; `frontend/src/` has zero hits), so nothing is promoted — but Plan 01 Task 3 re-runs the audit and adds an invariant test so a future phase cannot reintroduce the fused meaning.
+- **Assumption-delta decision: `no-change` on the data model, semantics pinned by an invariant instead.** The D-04 reversal makes this phase the **first production read of `hashed_password` as a predicate**, so the two meanings fused in that value must be pulled apart explicitly. A `has_password` column would be derived state, would need a forbidden migration, and would create a second source of truth that drifts on every password write. Instead the empty-hash comparison is permitted at exactly one site (the eligibility gate), documented there as credential state, and `tests/test_users_account_type_invariant.py` fails if a future change re-fuses the account-type reading onto it or derives eligibility from `oauth_account`. The 125-account dual case (password + Google linked) is the executable form of that invariant and is the plan's highest-value test — it is the regression a plausible "skip Google accounts" gate causes, affecting 73% of the target population.
+- **Both guards in `on_after_forgot_password` share one silent-no-op shape.** The eligibility gate and the per-email rate limit each return without raising, logging, or emitting a Sentry event. Neither can introduce a timing tell, and the reason is load-bearing rather than incidental: T-207-02 already moved the only network I/O off the request path, so "gated" and "sent" differ by an in-memory branch either way (threats T-207-24, T-207-25).
 - **`COVERAGE.md`** records the Resend API capability matrix: 2 `INTEGRATE`, 24 reasoned `OPT-OUT`, 0 unreasoned.
 
 ## Backlog
