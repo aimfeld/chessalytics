@@ -6,7 +6,8 @@ planted_during: /gsd-explore — "implement PGN and FEN import"
 trigger_when: next milestone that touches the /analysis surface, or any time a small
   self-contained frontend+backend slice is wanted
 scope: small-to-medium (one modal, one parse helper, one normalization variant, one
-  platform value added to an existing exclusion tuple — no migration, no new eval infra)
+  platform value added to an existing exclusion tuple, one nav item — no migration,
+  no new eval infra)
 ---
 
 # SEED-144: Paste a FEN or PGN on /analysis to load a position or a game
@@ -35,6 +36,8 @@ half that gets used.
 | D-06 | **Side selector in the modal** sets `user_color` (parsed White/Black header names, defaults to White) | `games.user_color` is `NOT NULL` but in a pasted game neither player need be the user. Drives board orientation and which side's flaws read as "yours". `game_flaws` stores both players regardless, so no data is lost either way |
 | D-07 | Untimed: no clocks, no TC bucket | Pasted PGNs rarely carry `[%clk]` or `TimeControl`. They drop out of TC-filtered views and time-management stats. Accept the holes rather than prompting for a per-paste time control |
 | D-08 | Analysis via the existing `POST /imports/eval/tier1` explicit enqueue | Not the background lottery. Tier-1 is already open to guests for their own games (QUEUE-08 gate opened for tier-1 only), so guests get this too, with no new eval infrastructure |
+| D-09 | **`/analysis` gets a main nav item** — added to `NAV_ITEMS` only, NOT to `BOTTOM_NAV_ITEMS` | Desktop header + mobile More drawer, mobile bottom bar untouched. Without this the paste modal is unreachable: `/analysis` is deep-link-only today. See "Navigation" below for why touching one array achieves both surfaces |
+| D-10 | **`/analysis` added to `IMPORT_EXEMPT_ROUTES`** — clickable with zero games | The route is already ungated and guest-friendly by design; a locked nav entry pointing at an open route is incoherent, and it would lock out exactly the audience paste serves. Same rationale as `/bots` (D-17: "free bot play, whose audience IS guests and zero-game users"). Accepted cost: a brand-new user now sees two unlocked items competing with the Library import CTA that onboarding funnels toward |
 
 A bare **FEN** paste is always ephemeral — no moves means no game to analyze, so D-04/D-05/D-06/D-08
 simply do not apply to it. It seeds a free-play root, exactly as `?fen=` does today.
@@ -52,6 +55,45 @@ Almost all of this exists. The work is wiring, not building.
 | Keep the games out of default analytics | `DEFAULT_EXCLUDED_PLATFORMS` — `app/repositories/query_utils.py:30`. Phase 167 D-02 built this exact seam for bot games; the comment there explicitly says it is the ONE central seam and not to scatter per-router platform checks |
 | Explicit per-game analysis | `POST /imports/eval/tier1` — `app/routers/imports.py:380` (IDOR-guarded, 404-never-403) |
 | Precedent for a non-API platform value | `store_bot_game_service.py:29` — `platform='flawchess'` bot games |
+
+## Navigation (D-09 / D-10)
+
+`/analysis` is currently reachable only by deep link — from the Openings explorer (`?line=`),
+the Library (`?game_id=`), a finished bot game, or the calibration harness (`?fen=`). There is
+no nav entry, which is why a paste modal alone would not be discoverable. Notably
+`ROUTE_TITLES` at `frontend/src/App.tsx:106` *already* carries `'/analysis': 'Analysis'`, so the
+mobile header title exists; only the nav item is missing.
+
+**The one-array trick.** `NAV_ITEMS` (`App.tsx:77`) and `BOTTOM_NAV_ITEMS` (`App.tsx:85`) are
+byte-identical duplicate arrays today, but they feed different surfaces:
+
+| Array | Consumed by | Surface |
+|-------|-------------|---------|
+| `NAV_ITEMS` | `NavHeader` (`:174`), `MobileMoreDrawer` (`:467`) | desktop header + mobile More drawer |
+| `BOTTOM_NAV_ITEMS` | `MobileBottomBar` (`:383`) | mobile bottom bar |
+
+So adding Analysis to `NAV_ITEMS` **only** yields exactly the requested placement — desktop nav
+item, mobile inside More, bottom bar unchanged — and makes the two arrays diverge for the first
+time. That is what the split is for, but add a comment saying so: WR-07 (`App.tsx:113-119`)
+records this codebase already shipping a bug from nav surfaces silently disagreeing
+(`MobileBottomBar`'s copy of the lock gate omitted `/admin`, and Phase 171 then had to patch
+all three surfaces to add `/bots`). A reader who assumes the arrays are meant to stay in sync
+will "fix" the divergence.
+
+Checklist for whoever implements it:
+
+- [ ] Append `{ to: '/analysis', label: 'Analysis', Icon: … }` to `NAV_ITEMS` (`App.tsx:77`) — **not** `BOTTOM_NAV_ITEMS`
+- [ ] Add a comment on both arrays explaining the intentional divergence (WR-07 lesson)
+- [ ] Add `'/analysis'` to `IMPORT_EXEMPT_ROUTES` (`App.tsx:120`) — D-10
+- [ ] Add an `isActive` clause (`App.tsx:130`): the helper is an explicit `if (to === '/x') return pathname.startsWith('/x')` chain, so a missing line means the item never highlights
+- [ ] `ROUTE_TITLES` already has the entry — no change needed
+- [ ] `data-testid`: the drawer link derives its testid as `drawer-nav-${to.slice(1)}` → `drawer-nav-analysis`, automatic. Verify the desktop header does the same
+- [ ] `App.test.tsx:576` already asserts on `mobile-nav-more`; check whether existing nav tests enumerate the item lists and need updating
+
+**Watch for:** the analysis page takes over the mobile shell (`App.tsx:331`, `:537-540`) — a
+back-button header replaces the normal chrome and `isAnalysisRoute` suppresses the bottom bar.
+Confirm that navigating *to* `/analysis` from the More drawer lands correctly and that the
+back button behaves sanely when the user arrived from the drawer rather than from a deep link.
 
 ## chess.js 1.4 `loadPgn()` capability matrix (measured, not assumed)
 
