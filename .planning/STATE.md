@@ -3,17 +3,17 @@ gsd_state_version: 1.0
 milestone: v2.12
 milestone_name: Train Reliability & Grading Agreement
 current_phase: 207
-status: not_started
-stopped_at: Phase 207 added to ROADMAP.md, awaiting /gsd-plan-phase 207
+status: planned
+stopped_at: Phase 207 planned (3 plans, verification passed) — awaiting /gsd-execute-phase 207
 last_updated: "2026-08-08T00:00:00.000Z"
 last_activity: 2026-08-08
 progress:
   total_phases: 2
   completed_phases: 1
-  total_plans: 3
+  total_plans: 6
   completed_plans: 3
 current_phase_name: self-serve-password-reset
-last_activity_desc: Phase 207 added (SEED-143, self-serve password reset) — not planned yet
+last_activity_desc: Phase 207 planned — 3 plans, plan-checker PASSED, blocked on operator Step 0 for RESET-01/07 UAT
 ---
 
 # Project State: FlawChess
@@ -21,9 +21,9 @@ last_activity_desc: Phase 207 added (SEED-143, self-serve password reset) — no
 ## Current Position
 
 Phase: 207
-Plan: Not started
-Status: Phase 207 (Self-Serve Password Reset, SEED-143) added to the roadmap, not planned yet. Phase 206 shipped (squash-merged to main, 560e99371).
-Last activity: 2026-08-08 — Phase 207 added via `/gsd-phase 207 @SEED-143`; promotes backlog Phase 999.1. **Blocked on operator Step 0** (Resend account + apex SPF merge) before any code.
+Plan: 207-01-PLAN.md (not started)
+Status: Phase 207 (Self-Serve Password Reset, SEED-143) PLANNED — 3 plans across 3 waves, plan-checker VERIFICATION PASSED. Phase 206 shipped (squash-merged to main, 560e99371).
+Last activity: 2026-08-08 — Phase 207 planned via `/gsd-plan-phase 207`. Plans 01 (backend spine, tracer-first) and 02 (frontend forms) are fully executable now; Plan 03 (RESET-01/RESET-07 UAT) is **gated on operator Step 0** (Resend account + additive DNS) and accepts "deferred" as a first-class answer. No task requires a live RESEND_API_KEY.
 
 **v2.12 closed 2026-08-05** retroactively over two already-shipped, already-deployed phases (lightweight close, no `/gsd-new-milestone` requirements cycle — same pattern as v2.6 and v2.8):
 

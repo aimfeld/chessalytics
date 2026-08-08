@@ -445,7 +445,13 @@ Not applicable in the "old vs. new library version" sense — this is a first-ti
 | A3 | `reset_password_rate_limiter` should live in a new `app/core/reset_password_rate_limiter.py` file (mirroring `feedback_rate_limiter.py`'s one-purpose-per-file convention) rather than being added inline to `ip_rate_limiter.py`. | Architecture Patterns / Recommended Project Structure | Purely a file-organization call; either way works functionally. Low risk — easy to move later. |
 | A4 | The reset-password frontend route is a full page (`ResetPasswordPage.tsx`) rather than a tab within the existing `AuthPage.tsx` Tabs component. | Recommended Project Structure | The ROADMAP text says "a `/auth/reset-password` route reading `?token=`" (singular new route), which reads as a standalone page, not a third tab — `AuthPage`'s tab logic is specifically login-vs-register and redirects already-authenticated users away, which reset-password should NOT do (a user could be resetting a password while still logged in on another device/tab, though rare). Recommend a separate page component. If wrong, minor refactor, no data-model impact. |
 
-## Open Questions
+## Open Questions (RESOLVED at planning, 2026-08-08)
+
+> All three were resolved in the Phase 207 plans. Resolutions recorded inline below; the plans are authoritative.
+>
+> 1. **RESOLVED — match precedent: 5 requests / 3600s**, as named constants `_RESET_PASSWORD_MAX_REQUESTS` / `_RESET_PASSWORD_WINDOW_SECONDS` (207-01-PLAN.md Task 2). Not tightened: the flow's realistic volume is single-digit per year, so a stricter limit buys nothing and risks locking out a legitimate retry.
+> 2. **RESOLVED — plain-text-forward HTML**, no logo, no CDN dependency, no templating engine (207-01-PLAN.md Task 1).
+> 3. **RESOLVED — copy `push_send.py`'s context-not-message convention verbatim** (207-01-PLAN.md Task 2, threat T-207-10). Status code and user_id go in `sentry_sdk.set_context`; the exception message is a constant so Sentry grouping stays intact.
 
 1. **Exact rate-limit threshold/window for D-06.**
    - What we know: D-06 says "~10 lines," implying reuse of the existing `_SlidingWindowRateLimiter` shape (which takes `max_requests, window_seconds`); `feedback_limiter` uses 5/3600s, `guest_create_limiter` uses 5/3600s.
