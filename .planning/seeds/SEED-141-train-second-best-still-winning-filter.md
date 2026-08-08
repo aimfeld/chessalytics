@@ -114,8 +114,11 @@ No user with a meaningful pool is meaningfully affected.
   time-pressure classes are **more** likely to be sharp than unrushed blunders (hasty 40.2%,
   low-clock 37.3%, unrushed 29.7%). Filtering them cuts ~25% of the pool while removing scarce
   sharp material disproportionately — the same size cut as this seed's rule, with the opposite
-  quality effect. See [[SEED-142-train-maia-puzzle-difficulty]] for the measure that actually
-  captures the "was this move representative of me" intuition.
+  quality effect. The "was this move representative of me" intuition survives the tempo
+  rejection, but [[SEED-142-train-maia-puzzle-difficulty]] was the wrong instrument for it and
+  is now rejected — Maia scores *population* typicality, not this user's. The cheap version, if
+  it is ever wanted, is motif recurrence over `game_flaws.missed_tactic_motif` in the user's own
+  history; see SEED-142's "Why this was rejected" section.
 - **An upper bound on `WINNABILITY_FLOOR_ES`** ("you were already winning, so it doesn't
   count"). Actively harmful: the 0.80-0.90 ES band is the *sharpest* in the pool (50.4% sharp)
   because when you are winning exactly one move converts and the rest throw it away. This
@@ -125,7 +128,7 @@ No user with a meaningful pool is meaningfully affected.
 ## Related
 
 - [[SEED-142-train-maia-puzzle-difficulty]] — the larger, backfill-requiring idea from the same
-  exploration; this seed is the near-term half.
+  exploration. **Rejected 2026-08-08**; this seed is the half that ships.
 - [[SEED-140-train-first-session-warmup]] — Phase 206, the sharp-filler pool. This seed shrinks
   the own-blunder pool by ~15-24%, which marginally raises how often filler is drawn; worth
   noting when both are in flight.
