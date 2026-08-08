@@ -95,16 +95,22 @@ def _resolve_oauth_bases(origin: str | None) -> tuple[str, str]:
     user actually came from, so plain ``http://localhost:5173`` and an HTTPS dev tunnel
     (Tailscale) both work without a single static BACKEND_URL serving two hosts.
 
-    - Default / localhost dev / prod (origin omitted or == FRONTEND_URL): keep the proven
-      split — API on BACKEND_URL, SPA on FRONTEND_URL.
     - Same-origin tunnels (allowlisted): SPA and /api share one HTTPS host, so both bases
       are the origin itself.
+    - Default / localhost dev / prod (origin omitted or == FRONTEND_URL): keep the proven
+      split — API on BACKEND_URL, SPA on FRONTEND_URL.
     - Anything else: 400, to prevent an OAuth open-redirect via a forged origin.
+
+    The allowlist is checked FIRST on purpose. When FRONTEND_URL itself points at the
+    tunnel (e.g. so password-reset links resolve over it), the FRONTEND_URL branch used to
+    win and sent Google's redirect_uri to BACKEND_URL (localhost:8000) while the CSRF
+    cookie stayed host-only on the tunnel — the callback then failed with
+    "Invalid CSRF token" (2026-08-08).
     """
+    if origin and origin in _oauth_tunnel_origins():
+        return origin, origin
     if not origin or origin == settings.FRONTEND_URL:
         return settings.BACKEND_URL, settings.FRONTEND_URL
-    if origin in _oauth_tunnel_origins():
-        return origin, origin
     raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="OAuth origin not allowed")
 
 
