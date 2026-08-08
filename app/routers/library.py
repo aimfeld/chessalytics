@@ -88,6 +88,7 @@ async def get_library_games(
     color: str | None = Query(default=None),
     has_gem: bool | None = Query(default=None),
     has_great: bool | None = Query(default=None),
+    include_pasted: bool = Query(default=False),
 ) -> LibraryGamesResponse:
     """Return a paginated, flaw-filterable game archive (LIBG-08).
 
@@ -105,7 +106,9 @@ async def get_library_games(
     "black"), only games played as that color are returned. When `has_gem` /
     `has_great` is True, only games with >=1 of the user's OWN plies (D-04)
     classifying as a gem/great best move are returned (FILT-01); both True is a
-    union (gem OR great).
+    union (gem OR great). `include_pasted` (Phase 208, D-11) is the Library-only
+    opt-in that reveals `platform='pgn'` games, off by default, additive to
+    whatever population this tab already shows.
     """
     if from_date is not None and to_date is not None and from_date > to_date:
         raise HTTPException(status_code=422, detail="from_date must be <= to_date")
@@ -131,6 +134,7 @@ async def get_library_games(
         color=color,
         has_gem=has_gem,
         has_great=has_great,
+        include_pasted=include_pasted,
     )
 
 
@@ -178,6 +182,7 @@ async def get_flaw_stats(
     opponent_gap_min: int | None = Query(default=None),
     opponent_gap_max: int | None = Query(default=None),
     color: str | None = Query(default=None),
+    include_pasted: bool = Query(default=False),
 ) -> FlawStatsResponse:
     """Return the stats-panel aggregate over the filtered analyzed-only set (LIBG-09).
 
@@ -187,7 +192,9 @@ async def get_flaw_stats(
     (analyzed_pct / analyzed_n / total_n). Same filter set as /games (no
     pagination). An empty analyzed set returns zeros, never an error. When
     `color` is supplied ("white" or "black"), stats are computed over only games
-    played as that color.
+    played as that color. `include_pasted` (Phase 208, D-11) is the Library-only
+    opt-in that reveals `platform='pgn'` games, off by default, additive to
+    whatever population this surface already shows.
     """
     if from_date is not None and to_date is not None and from_date > to_date:
         raise HTTPException(status_code=422, detail="from_date must be <= to_date")
@@ -204,6 +211,7 @@ async def get_flaw_stats(
         opponent_gap_min=opponent_gap_min,
         opponent_gap_max=opponent_gap_max,
         color=color,
+        include_pasted=include_pasted,
     )
 
 
@@ -221,12 +229,16 @@ async def get_flaw_comparison(
     opponent_gap_min: int | None = Query(default=None),
     opponent_gap_max: int | None = Query(default=None),
     color: str | None = Query(default=None),
+    include_pasted: bool = Query(default=False),
 ) -> FlawComparisonResponse:
     """Return the 15-bullet you-vs-opponent comparison for the filtered analyzed set (Phase 115).
 
     user_id is taken exclusively from the authenticated user — never from a
     request parameter (IDOR prevention, T-115-01 / T-108-10 pattern).
     Returns below_gate=True with empty bullets when analyzed_n < 20 (FLAWCMP-05, D-09).
+    `include_pasted` (Phase 208, D-11) is the Library-only opt-in that reveals
+    `platform='pgn'` games, off by default, additive to whatever population
+    this surface already shows.
     """
     if from_date is not None and to_date is not None and from_date > to_date:
         raise HTTPException(status_code=422, detail="from_date must be <= to_date")
@@ -243,6 +255,7 @@ async def get_flaw_comparison(
         opponent_gap_min=opponent_gap_min,
         opponent_gap_max=opponent_gap_max,
         color=color,
+        include_pasted=include_pasted,
     )
 
 
@@ -261,6 +274,7 @@ async def get_tactic_comparison(
     opponent_gap_max: int | None = Query(default=None),
     color: str | None = Query(default=None),
     tactic_families: list[str] | None = Query(default=None),
+    include_pasted: bool = Query(default=False),
 ) -> TacticComparisonResponse:
     """Per-family tactic motif you-vs-opponent comparison (Phase 126/129).
 
@@ -274,6 +288,9 @@ async def get_tactic_comparison(
     tactic_families: optional multi-select to narrow to specific motif families
     (e.g. "fork", "skewer"); unknown/dropped keys are silently ignored (T-126-02).
     Backend is NOT beta-gated per D-01a — frontend gating enforces beta rollout.
+    `include_pasted` (Phase 208, D-11) is the Library-only opt-in that reveals
+    `platform='pgn'` games, off by default, additive to whatever population
+    this surface already shows.
     """
     if from_date is not None and to_date is not None and from_date > to_date:
         raise HTTPException(status_code=422, detail="from_date must be <= to_date")
@@ -291,6 +308,7 @@ async def get_tactic_comparison(
         opponent_gap_max=opponent_gap_max,
         color=color,
         tactic_families=tactic_families,
+        include_pasted=include_pasted,
     )
 
 
@@ -313,6 +331,7 @@ async def get_library_flaws(
     max_tactic_depth: int | None = Query(default=None, ge=0, le=11),
     offset: int = Query(default=0, ge=0),
     limit: int = Query(default=20, ge=1, le=100),
+    include_pasted: bool = Query(default=False),
 ) -> LibraryFlawsResponse:
     """Return a paginated flat list of individual flawed positions (Plan 108-05).
 
@@ -328,7 +347,11 @@ async def get_library_flaws(
     game_flaws.phase column (OR within the phase family, Quick 260612-fow).
 
     user_id is taken exclusively from the authenticated user (never from a
-    request parameter) to prevent IDOR (T-108-10).
+    request parameter) to prevent IDOR (T-108-10). `include_pasted` (Phase 208,
+    D-11) is the Library-only opt-in that reveals `platform='pgn'` games, off
+    by default, additive to whatever population this tab already shows — and,
+    per D-11/D-12, computed from this surface's own default (chess.com/lichess),
+    so it never newly admits flawchess bot games.
     """
     if from_date is not None and to_date is not None and from_date > to_date:
         raise HTTPException(status_code=422, detail="from_date must be <= to_date")
@@ -350,6 +373,7 @@ async def get_library_flaws(
         max_tactic_depth=max_tactic_depth,
         offset=offset,
         limit=limit,
+        include_pasted=include_pasted,
     )
 
 

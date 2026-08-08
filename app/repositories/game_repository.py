@@ -10,6 +10,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.game import Game
 from app.models.game_position import GamePosition
+from app.schemas.normalization import Color
 
 # Explicit column list for asyncpg copy_records_to_table. Must be set-equal to
 # {c.name for c in GamePosition.__table__.columns if c.name != "id"} — enforced
@@ -100,6 +101,64 @@ async def get_game_id_by_platform_game_id(
         )
     )
     return result.scalar_one_or_none()
+
+
+async def get_pasted_game_by_identity(
+    session: AsyncSession,
+    *,
+    user_id: int,
+    platform_game_id: str,
+) -> Game | None:
+    """Return the caller's existing pasted-game row for a D-16 identity hash, or None.
+
+    Phase 208 (D-17): the pre-insert identity lookup that makes a re-paste of
+    the same game reuse its existing row instead of colliding on
+    uq_games_user_platform_game_id. Scoped by BOTH user_id and platform_game_id
+    (the hash) so ownership is enforced at the query level — two users pasting
+    the same game never see each other's row.
+
+    Args:
+        session: AsyncSession to use.
+        user_id: Internal user PK (scopes the lookup — never cross-user).
+        platform_game_id: The D-16 SHA-256 identity hash.
+
+    Returns:
+        The matching Game row, or None if no pasted row exists for this
+        (user_id, platform_game_id).
+    """
+    result = await session.execute(
+        select(Game).where(
+            Game.user_id == user_id,
+            Game.platform == "pgn",
+            Game.platform_game_id == platform_game_id,
+        )
+    )
+    return result.scalar_one_or_none()
+
+
+async def update_game_user_color(
+    session: AsyncSession, *, game_id: int, user_id: int, user_color: Color
+) -> None:
+    """Update a game's user_color in place (Phase 208, D-18).
+
+    Filtered on BOTH id and user_id so a caller can never repoint another
+    user's row's orientation. Does NOT commit — the caller owns the
+    transaction. Re-pasting the same game with the other side selected
+    updates the existing row rather than inserting a second one; game_flaws
+    stores both players' flaws regardless, so nothing needs recomputation —
+    only which side reads as "yours" changes.
+
+    Args:
+        session: AsyncSession to use.
+        game_id: The row's internal id.
+        user_id: Internal user PK — the row must belong to this user.
+        user_color: The new "white" | "black" value.
+    """
+    await session.execute(
+        update(Game)
+        .where(Game.id == game_id, Game.user_id == user_id)
+        .values(user_color=user_color)
+    )
 
 
 async def update_bot_game_pgn_and_url(

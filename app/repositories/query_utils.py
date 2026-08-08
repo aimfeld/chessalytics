@@ -20,14 +20,34 @@ from app.models.game import Game
 _PLY_EVEN_MOVER_WHITE = 0  # ply % 2 == 0 means white moved
 
 # ---------------------------------------------------------------------------
-# Default platform exclusion (single source — CONTEXT D-02, Phase 167)
+# Default platform exclusion (single source — CONTEXT D-02, Phase 167; extended
+# Phase 208 D-05/D-11)
 # ---------------------------------------------------------------------------
 # Flawchess bot-practice games must stay invisible to every default analytics
 # population (STORE-07) while remaining reachable by any caller that passes an
 # explicit platform list including "flawchess" (e.g. library_service's
 # get_library_games opt-in, D-03). This is the ONE central seam — do not
 # scatter per-router platform checks.
-DEFAULT_EXCLUDED_PLATFORMS = ("flawchess",)
+#
+# Phase 208 (PASTE-05): a pasted PGN (platform="pgn") is excluded for the same
+# reason and the same way. Pasted games are frequently NOT the user's own — a
+# broadcast game, a friend's PGN, a scouted opponent — so they must never
+# reach an analytics population. A pasted game that genuinely IS the user's
+# own doesn't count either: import it from the platform it was actually
+# played on. Unlike "flawchess", "pgn" has no default opt-in anywhere
+# (D-11/D-12) — the Library's "Pasted" filter chip opts back in by passing an
+# explicit `platform=["pgn"]` list, which the existing `platform is not None`
+# branch below already honors with no new plumbing.
+DEFAULT_EXCLUDED_PLATFORMS = ("flawchess", "pgn")
+
+# Every value of the Platform Literal (app/schemas/normalization.py) must
+# appear in EXACTLY ONE of DEFAULT_EXCLUDED_PLATFORMS or
+# ANALYTICS_INCLUDED_PLATFORMS — a future platform value that is added to one
+# without a decision for the other is a silent analytics-eligibility bug.
+# tests/repositories/test_query_utils.py::test_every_platform_has_an_analytics_disposition
+# enforces this invariant by comparing typing.get_args(Platform) against the
+# union of the two tuples.
+ANALYTICS_INCLUDED_PLATFORMS: tuple[str, ...] = ("chess.com", "lichess")
 
 
 def mover_is_white_at_ply(ply: int) -> bool:
@@ -155,8 +175,20 @@ def apply_game_filters(
         time_control: Filter by time control buckets (bullet, blitz, rapid, classical).
         platform: Filter by platform (chess.com, lichess). None = default
                  population, which excludes DEFAULT_EXCLUDED_PLATFORMS
-                 ("flawchess") — D-02 (Phase 167, STORE-07). Pass an explicit
-                 list including "flawchess" to opt in (D-03).
+                 ("flawchess", "pgn") — D-02 (Phase 167, STORE-07) and D-05
+                 (Phase 208, PASTE-05). Pass an explicit list including
+                 "flawchess" or "pgn" to opt in (D-03 / D-11/D-12).
+                 ANALYTICS_INCLUDED_PLATFORMS is the explicit-list equivalent
+                 of the `platform is None` default: passing
+                 `platform=list(ANALYTICS_INCLUDED_PLATFORMS)` returns the
+                 same rows as `platform=None`. The
+                 test_every_platform_has_an_analytics_disposition invariant
+                 test is what keeps the two readings equal — the `notin_`
+                 default admits any future platform value by omission, while
+                 an explicit `in_` list excludes it, so the two only agree
+                 while every Platform member has a declared disposition in
+                 exactly one of DEFAULT_EXCLUDED_PLATFORMS /
+                 ANALYTICS_INCLUDED_PLATFORMS.
         rated: Filter by rated/unrated. None = no filter.
         opponent_type: "human", "bot", or "all".
         from_date: Include games played on or after this date (inclusive). None = no lower bound.

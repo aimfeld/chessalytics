@@ -13,17 +13,21 @@ rows leak between tests.
 
 from __future__ import annotations
 
+import typing
+
 import pytest
 from sqlalchemy import literal, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.game import Game
 from app.repositories.query_utils import (
+    ANALYTICS_INCLUDED_PLATFORMS,
     DEFAULT_EXCLUDED_PLATFORMS,
     apply_game_filters,
     mover_color_expr,
     mover_is_white_at_ply,
 )
+from app.schemas.normalization import Platform
 from tests.conftest import ensure_test_user
 
 _TEST_USER_ID = 92401  # unique ID for this test module
@@ -55,6 +59,33 @@ class TestDefaultExcludedPlatformsConstant:
     def test_contains_flawchess(self) -> None:
         assert "flawchess" in DEFAULT_EXCLUDED_PLATFORMS
         assert isinstance(DEFAULT_EXCLUDED_PLATFORMS, tuple)
+
+    def test_contains_pgn(self) -> None:
+        """Phase 208 (PASTE-05): pasted PGN games are excluded by the same seam."""
+        assert "pgn" in DEFAULT_EXCLUDED_PLATFORMS
+
+
+def test_every_platform_has_an_analytics_disposition() -> None:
+    """Every Platform Literal member must have an explicit analytics disposition.
+
+    Goes red when a new platform value is added to the Platform Literal
+    without also assigning it to exactly one of DEFAULT_EXCLUDED_PLATFORMS or
+    ANALYTICS_INCLUDED_PLATFORMS — the eligibility invariant recorded in this
+    plan's assumption_delta_decision (208-02-PLAN.md). Prevents a future
+    platform value from silently inheriting analytics eligibility by omission
+    (T-208-06).
+    """
+    platform_members = set(typing.get_args(Platform))
+    excluded = set(DEFAULT_EXCLUDED_PLATFORMS)
+    included = set(ANALYTICS_INCLUDED_PLATFORMS)
+
+    assert excluded.isdisjoint(included), (
+        "DEFAULT_EXCLUDED_PLATFORMS and ANALYTICS_INCLUDED_PLATFORMS must be disjoint"
+    )
+    assert excluded | included == platform_members, (
+        "every Platform member must be in exactly one of DEFAULT_EXCLUDED_PLATFORMS "
+        "or ANALYTICS_INCLUDED_PLATFORMS"
+    )
 
 
 class TestApplyGameFiltersFlawchessExclusion:

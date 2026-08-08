@@ -1,4 +1,5 @@
 import { useState, useEffect, useRef } from 'react';
+import { ClipboardPaste } from 'lucide-react';
 import { ToggleGroup, ToggleGroupItem } from '@/components/ui/toggle-group';
 import { ToggleChipButton } from '@/components/ui/toggle-chip-button';
 import {
@@ -54,7 +55,34 @@ export interface FilterState {
   color: Color;
   /** Tri-state color filter for Library surfaces (Either/White/Black). Default 'either' = no filter. */
   playedAs: 'either' | 'white' | 'black';
+  /**
+   * Phase 208 (D-11/D-14, PASTE-05/09): Library-only opt-in that reveals
+   * `platform='pgn'` (pasted) games. Deliberately a SEPARATE field, not a
+   * third value folded into `platforms` — `platforms` is module-level state
+   * (useFilterStore.ts) that survives SPA navigation and is read by the
+   * Openings, Endgames, GlobalStats and Insights queries, where pasted games
+   * must never appear (D-14, ROADMAP locked constraint 4). This field is read
+   * on the wire ONLY by `buildLibraryParams` (useLibrary.ts) and by nothing
+   * else — see `showPastedChip` below for the render-side half of the same
+   * containment guarantee.
+   *
+   * UAT (Phase 208): was a boolean, which made the chip purely additive — a
+   * pasted game sorts by its own historical PGN date, so "with" buries it at
+   * the end of a multi-thousand-game archive and there was no way to see
+   * pasted games alone. 'only' is what deselecting both platform chips while
+   * the Pasted chip is on now means, and it keeps `platforms` itself free of
+   * a 'pgn' member (the containment guarantee above).
+   */
+  pasted: PastedFilter;
 }
+
+/**
+ * Tri-state for the Library's Pasted chip (UAT follow-up to D-11):
+ * 'off'  — pasted games hidden (the default everywhere)
+ * 'with' — pasted games added to the selected platforms
+ * 'only' — pasted games exclusively; no platform chip is active
+ */
+export type PastedFilter = 'off' | 'with' | 'only';
 
 export const DEFAULT_FILTERS: FilterState = {
   matchSide: 'both',
@@ -67,6 +95,7 @@ export const DEFAULT_FILTERS: FilterState = {
   customRange: null,
   color: 'white',
   playedAs: 'either',
+  pasted: 'off',
 };
 
 /**
@@ -97,6 +126,19 @@ export const FILTER_DOT_FIELDS: ReadonlyArray<keyof FilterState> = [
   'recency',
   'customRange',
   'playedAs',
+] as const;
+
+/**
+ * FILTER_DOT_FIELDS plus the Library-only `pasted` field. Only the Library
+ * tabs may use this: `pasted` is shared module state but ONLY the Library
+ * applies it (D-14), so lighting the Openings/Endgames/GlobalStats dot for it
+ * would flag a filter those pages don't honor. Conversely the Library must
+ * light its dot — a 'only' selection can hide thousands of games, and a view
+ * that small with no modified-dot reads as a broken archive.
+ */
+export const LIBRARY_FILTER_DOT_FIELDS: ReadonlyArray<keyof FilterState> = [
+  ...FILTER_DOT_FIELDS,
+  'pasted',
 ] as const;
 
 /**
@@ -166,6 +208,13 @@ interface FilterPanelProps {
    * also clear non-FilterState fields (e.g. severityFilter).
    */
   hideReset?: boolean;
+  /**
+   * Phase 208 (D-14): when true AND the 'platform' section is visible, renders
+   * one additional "Pasted" chip after the two platform chips. Default false.
+   * LibraryFilterPanel is the ONLY caller that sets this — Openings, Endgames
+   * and GlobalStats must never render it (D-14, ROADMAP locked constraint 4).
+   */
+  showPastedChip?: boolean;
 }
 
 const ALL_FILTERS: FilterField[] = ['timeControl', 'platform', 'opponent', 'opponentStrength', 'rated', 'recency', 'playedAs'];
@@ -190,6 +239,7 @@ export function FilterPanel({
   visibleFilters = ALL_FILTERS,
   onApply,
   hideReset = false,
+  showPastedChip = false,
 }: FilterPanelProps) {
   const update = (partial: Partial<FilterState>) => {
     onChange({ ...filters, ...partial });
@@ -250,19 +300,45 @@ export function FilterPanel({
   };
 
   const togglePlatform = (p: Platform) => {
+    // In 'only' mode no platform chip is active, so a click can only mean
+    // "bring this platform back" — which drops out of only-mode.
+    if (filters.pasted === 'only') {
+      update({ platforms: [p], pasted: 'with' });
+      return;
+    }
     const current = filters.platforms ?? PLATFORMS;
-    if (current.includes(p)) {
-      const next = current.filter((x) => x !== p);
-      update({ platforms: next.length === PLATFORMS.length ? null : next.length === 0 ? [p] : next });
-    } else {
+    if (!current.includes(p)) {
       const next = [...current, p];
       update({ platforms: next.length === PLATFORMS.length ? null : next });
+      return;
     }
+    const next = current.filter((x) => x !== p);
+    if (next.length > 0) {
+      update({ platforms: next });
+      return;
+    }
+    // Deselecting the last platform is only meaningful when the Pasted chip is
+    // on — it means "pasted games only" (UAT: previously impossible, the chip
+    // was additive and this branch bounced the selection back to [p]).
+    // `platforms` stays null so the shared state other pages read never
+    // becomes an empty (match-nothing) list.
+    if (filters.pasted === 'with') {
+      update({ platforms: null, pasted: 'only' });
+      return;
+    }
+    update({ platforms: [p] });
   };
 
   const isPlatformActive = (p: Platform) => {
+    if (filters.pasted === 'only') return false;
     if (filters.platforms === null) return true;
     return filters.platforms.includes(p);
+  };
+
+  // 'only' → 'off' leaves `platforms` at its (untouched) value, so turning the
+  // chip off from only-mode restores the platform population it hid.
+  const togglePasted = () => {
+    update({ pasted: filters.pasted === 'off' ? 'with' : 'off' });
   };
 
   const show = (field: FilterField) => visibleFilters.includes(field);
@@ -428,7 +504,11 @@ export function FilterPanel({
       {show('platform') && (
         <div>
           <p className="mb-1 text-sm text-muted-foreground">Platform</p>
-          <div className="grid grid-cols-2 gap-1">
+          {/* Phase 208 (D-14/UI-SPEC §7): a third chip (Pasted, Library-only) joins
+              the grid when showPastedChip is set — grid-cols-3 keeps all three
+              chips evenly sized instead of orphaning a third chip in a half-width
+              row of a 2-col grid. */}
+          <div className={`grid gap-1 ${showPastedChip ? 'grid-cols-3' : 'grid-cols-2'}`}>
             {PLATFORMS.map((p) => (
               <ToggleChipButton
                 key={p}
@@ -441,6 +521,17 @@ export function FilterPanel({
                 {PLATFORM_LABELS[p]}
               </ToggleChipButton>
             ))}
+            {showPastedChip && (
+              <ToggleChipButton
+                onClick={togglePasted}
+                testId="filter-platform-pasted"
+                ariaLabel="Pasted games"
+                active={filters.pasted !== 'off'}
+              >
+                <ClipboardPaste className="h-3.5 w-3.5" />
+                Pasted
+              </ToggleChipButton>
+            )}
           </div>
         </div>
       )}

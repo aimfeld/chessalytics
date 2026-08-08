@@ -103,12 +103,18 @@ export function LibraryFilterPanel({
       {flawControl}
 
       {/* Standard metadata filters (time control, platform, recency, more).
-          hideReset=true: LibraryFilterPanel owns the Reset+Apply footer below. */}
+          hideReset=true: LibraryFilterPanel owns the Reset+Apply footer below.
+          showPastedChip: Phase 208 (D-14). LibraryFilterPanel is the ONLY caller
+          that sets this true — it renders the same component instance for both
+          the desktop sidebar and the mobile drawer, so setting it here covers
+          both surfaces with no separate mobile copy to patch. Openings, Endgames
+          and GlobalStats never set this prop, so they never render the chip. */}
       <FilterPanel
         filters={filters}
         onChange={onChange}
         visibleFilters={LIBRARY_GAMES_FILTERS}
         hideReset
+        showPastedChip
       />
 
       {/* Reset + Apply footer — Reset clears game-metadata FilterState only (D-01).

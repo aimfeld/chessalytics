@@ -4,6 +4,8 @@ from typing import Literal
 
 from pydantic import BaseModel, Field
 
+from app.schemas.normalization import Color
+
 
 class ImportRequest(BaseModel):
     platform: Literal["chess.com", "lichess"]
@@ -70,6 +72,42 @@ class EvalCoverageResponse(BaseModel):
     total_count: int
     pct_complete: int  # 0-100, rounded
     analyzed_count: int  # white_blunders IS NOT NULL (is_analyzed — flaw-surface denominator)
+
+
+# Phase 208 (T-208-12): bounds the DoS surface of a client-POSTed pasted PGN —
+# mirrors MAX_BOT_PGN_LENGTH's convention (app/schemas/bots.py). Rejected at
+# schema validation, before any chess.pgn parse.
+MAX_PASTED_PGN_LENGTH = 100_000
+
+
+class SavePastedGameRequest(BaseModel):
+    """Request body for POST /imports/paste (Phase 208, PASTE-04).
+
+    No owner field of any kind — the principal is server-derived from
+    current_active_user (ASVS V4, T-208-10); a body carrying a foreign
+    user_id-shaped field is simply ignored by the schema.
+    """
+
+    pgn: str = Field(min_length=1, max_length=MAX_PASTED_PGN_LENGTH)
+    user_color: Color
+
+
+class SavePastedGameResponse(BaseModel):
+    """Response for POST /imports/paste.
+
+    eval_status distinguishes four post-save outcomes: "enqueued" (a fresh
+    tier-1 job was inserted), "already_queued" (an active job already
+    existed, D-17 no-op), "already_analyzed" (the reused row was already
+    fully analyzed, D-17 no re-enqueue), and "enqueue_failed" (the game row
+    IS durably saved, but the post-commit enqueue_tier1_game call raised —
+    the SC-7 post-commit failure window; see 208-03-PLAN.md's dedicated
+    section). "enqueue_failed" is still a 200 — the save genuinely
+    succeeded.
+    """
+
+    game_id: int
+    created: bool
+    eval_status: Literal["enqueued", "already_queued", "already_analyzed", "enqueue_failed"]
 
 
 class ReadinessResponse(BaseModel):

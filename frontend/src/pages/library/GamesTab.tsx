@@ -10,7 +10,7 @@ import { MobileFilterDrawer } from '@/components/filters/MobileFilterDrawer';
 import {
   DEFAULT_FILTERS,
   areFiltersEqual,
-  FILTER_DOT_FIELDS,
+  LIBRARY_FILTER_DOT_FIELDS,
   resetFilterState,
 } from '@/components/filters/FilterPanel';
 import { LibraryFilterPanel } from '@/components/filters/LibraryFilterPanel';
@@ -101,7 +101,7 @@ export function GamesTab() {
 
   // ── Modified-filters indicators (one per panel) ───────────────────────────────
   const isGameModified = useMemo(
-    () => !areFiltersEqual(appliedFilters, DEFAULT_FILTERS, FILTER_DOT_FIELDS),
+    () => !areFiltersEqual(appliedFilters, DEFAULT_FILTERS, LIBRARY_FILTER_DOT_FIELDS),
     [appliedFilters],
   );
   const isFlawModified = useMemo(() => isFlawFilterNonDefault(flawFilter), [flawFilter]);

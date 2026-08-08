@@ -4,6 +4,7 @@ import type { Platform, TimeControl, OpponentType, OpponentStrengthRange } from 
 import { ANY_RANGE } from '@/lib/opponentStrength';
 import { rangeToQueryParams } from '@/lib/opponentStrength';
 import { resolveDateRange, dateRangeToWireParams } from '@/lib/recency';
+import { DEFAULT_FILTERS } from '@/components/filters/FilterPanel';
 import type { FilterState } from '@/components/filters/FilterPanel';
 import type { BookmarkPhaseEntryQuery, BookmarkPhaseEntryResponse } from '@/types/stats';
 
@@ -47,10 +48,12 @@ export function useMostPlayedOpenings(filters?: {
   opponentType: OpponentType;
   opponentStrength?: OpponentStrengthRange;
 }) {
+  // Spread DEFAULT_FILTERS as the base (rather than listing every FilterState key
+  // by hand) so this construction can never drift from FilterState's shape as new
+  // fields are added — the Library-only Pasted-chip field (D-14) stays at its
+  // default without being named here; this hook never surfaces that chip.
   const resolvedFilters: FilterState = {
-    matchSide: 'both',
-    color: 'white',
-    playedAs: 'either',
+    ...DEFAULT_FILTERS,
     recency: filters?.recency ?? null,
     customRange: filters?.customRange ?? null,
     timeControls: filters?.timeControls ?? null,
@@ -92,11 +95,12 @@ export function useBookmarkPhaseEntryMetrics(
     opponentStrength: OpponentStrengthRange;
   },
 ) {
-  // Resolve from the full FilterState shape needed by resolveDateRange.
+  // Resolve from the full FilterState shape needed by resolveDateRange. Spread
+  // DEFAULT_FILTERS as the base (see useMostPlayedOpenings above) so the
+  // Library-only Pasted-chip field (D-14) stays at its default without being
+  // named here.
   const resolvedFilters: FilterState = {
-    matchSide: 'both',
-    color: 'white',
-    playedAs: 'either',
+    ...DEFAULT_FILTERS,
     recency: filters.recency,
     customRange: filters.customRange,
     timeControls: filters.timeControls,
