@@ -114,7 +114,23 @@ They end up with both login methods on one account. No special-casing, no second
 Not a security downgrade: the flow still requires control of the mailbox. Arguably a feature —
 it gives SSO users a password fallback.
 
-### D-05 — Merge into the apex SPF record; From = `noreply@flawchess.com`
+### D-05 — ~~Merge into the apex SPF record~~ **SUPERSEDED 2026-08-08**; From = `noreply@flawchess.com`
+
+> **This decision's premise is false and the whole apex-vs-subdomain tradeoff below is a false dilemma.** Verified against Resend's own DNS docs after the operator challenged it during `/gsd-phase 207`. Resend runs on SES and sets the Return-Path to `bounces@send.flawchess.com`. **SPF is evaluated against the envelope-from, not the visible `From` header** — so Resend puts SPF on a `send.` subdomain and DKIM at `resend._domainkey.<verified-domain>`. Verifying the **apex** therefore yields three purely additive records:
+>
+> | Type | Name | Value |
+> |---|---|---|
+> | MX | `send` | `feedback-smtp.<region>.amazonses.com` pri 10 |
+> | TXT | `send` | `v=spf1 include:amazonses.com ~all` |
+> | TXT | `resend._domainkey` | DKIM key |
+>
+> `From: noreply@flawchess.com` passes DMARC on **strict DKIM alignment** (`d=flawchess.com` matches the From domain); SPF also aligns in relaxed mode since `send.flawchess.com` shares the org domain. **The existing apex SPF record is never read or modified.** So the apex `From` is kept at zero risk — no merge, no `noreply@send.flawchess.com` compromise.
+>
+> Two further corrections: the include token below is wrong (`include:amazonses.com`, not `include:_spf.resend.com`), and adding **any** Resend include to the apex SPF is actively counterproductive — redundant, and it consumes one of SPF's 10-lookup budget.
+>
+> Residual check, resolved in the dashboard before publishing anything: confirm DKIM lands at `resend._domainkey.flawchess.com` (apex) rather than under `send.`. One third-party guide claims the latter; Resend's own KB verifies with `dig resend._domainkey.example.com`. If it really is scoped to `send.`, take `noreply@send.flawchess.com` — still do not merge the apex SPF.
+>
+> Everything below is retained for the record only. See `ROADMAP.md` Phase 207 § Step 0 for the operative version.
 
 **flawchess.com already sends and receives mail.** Measured 2026-08-08:
 
@@ -199,8 +215,11 @@ exists, so there is no enumeration leak to fix. Default token TTL is 3600s — f
 - **Silent rot.** With no canary (D-07), a revoked API key, an expired Resend account, or DNS
   drift stays invisible until a locked-out user hits it. This is a consciously accepted trade.
   If a reset ever fails in the wild, revisit the canary decision rather than debugging in place.
-- **The SPF merge (D-05, Step 0.3)** is the only step that can break something currently working.
-  Verify Swizzonic delivery immediately after editing.
+- ~~**The SPF merge (D-05, Step 0.3)** is the only step that can break something currently working.
+  Verify Swizzonic delivery immediately after editing.~~ **Retired 2026-08-08** — the D-05 supersession
+  above removes the merge entirely; Step 0 is now additive-only DNS. Confirming the apex SPF record is
+  unchanged and Swizzonic still delivers survives as a regression check (Phase 207 Success Criterion 7),
+  not as a risk to manage.
 
 ## Adjacent Gap (captured, not scoped here)
 

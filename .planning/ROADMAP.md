@@ -237,7 +237,7 @@ Plans:
 
 **Goal**: A user who signed up with email + password and forgot it can recover their account without operator involvement. Today there is **no recovery path at all** — 172 prod accounts with a password have exactly one option, register a fresh address and re-import their entire game history, losing bookmarks and Train state. Ships the first email-sending capability the project has ever had (Resend over raw `httpx`), mounts `fastapi_users.get_reset_password_router()`, and adds the two frontend forms. Backend + frontend, **no migration** (fastapi-users' reset token is stateless and JWT-based; nothing is persisted).
 
-**Depends on**: nothing in the codebase. The one real dependency is **operator work outside the repo** (Step 0 below), which must land before any code is written.
+**Depends on**: nothing in the codebase. The one real dependency is **operator work outside the repo** (Step 0 below), which must land before any code is written. Since the D-05 supersession that work is additive-only DNS plus an API key — no longer a step that can break live mail.
 
 **Requirements**: RESET-01..NN (minted at planning, one per Success Criterion below in order; traceability table in the phase's `-01-PLAN.md` § Requirements — this phase predates its milestone's REQUIREMENTS.md)
 
@@ -247,10 +247,15 @@ Plans:
 
 **Blocking pre-planning gate — Step 0 is operator work, not executor work**:
 
-1. Create a Resend account; verify **flawchess.com** (apex, per D-05). Add the DKIM records Resend issues (additive, no conflict risk).
-2. **Merge** the Resend SPF include into the *existing* apex TXT record — flawchess.com already sends and receives mail via Swizzonic (`v=spf1 a mx include:spf.webapps.net ~all`, measured 2026-08-08). A domain may have **exactly one** SPF record; publishing a second breaks SPF for *both* senders. Confirm the exact include token in the Resend dashboard at setup time — the seed's `include:_spf.resend.com` is from research, not from a live account.
-3. Verify Swizzonic mail still delivers after the SPF edit. **This is the only step in the whole phase that can break something already working.**
-4. Add `_dmarc.flawchess.com` → `v=DMARC1; p=none; rua=mailto:<addr>` (purely additive).
+> **D-05 SUPERSEDED 2026-08-08 (operator challenge, verified against Resend's docs).** The seed's premise — that an apex `From` requires merging an include into the existing apex SPF record — is **false**, and the apex-merge-vs-`send.`-subdomain tradeoff it agonized over is a false dilemma. Resend runs on SES and sets the Return-Path to `bounces@send.flawchess.com`; **SPF is evaluated against the envelope-from, not the visible `From` header**, so SPF lives on the `send.` subdomain while DKIM signs with `d=flawchess.com` at the apex. `From: noreply@flawchess.com` then passes DMARC on **strict DKIM alignment** (and SPF aligns too, relaxed, same org domain) while the existing `v=spf1 a mx include:spf.webapps.net ~all` is never read or modified. **All records below are purely additive. Do not edit the apex SPF record.** The seed's `include:_spf.resend.com` was wrong on two counts: the token is `include:amazonses.com`, and adding any Resend include to the apex is actively counterproductive (redundant, and it consumes one of SPF's 10-lookup budget).
+
+1. Create a Resend account; add **flawchess.com** (the apex) as the domain. **Read the exact records off the dashboard before publishing anything** — expect three additive records, named relative to the verified domain:
+   - `MX` on `send` → `feedback-smtp.<region>.amazonses.com`, priority 10
+   - `TXT` on `send` → `v=spf1 include:amazonses.com ~all`
+   - `TXT` on `resend._domainkey` → the DKIM public key
+2. Confirm the DKIM record lands at **`resend._domainkey.flawchess.com` (apex level)**, not under `send.`. This is the one load-bearing detail: apex-level DKIM is what makes `noreply@flawchess.com` align. Resend's own KB verifies with `dig resend._domainkey.example.com`, but one third-party guide claims Resend scopes DKIM to the sending subdomain — the dashboard settles it at zero cost. **If it does scope DKIM to `send.`, the original tradeoff reappears: take `noreply@send.flawchess.com` rather than merging the apex SPF.**
+3. Confirm `send.flawchess.com` has no pre-existing MX (the Swizzonic `MX 10 mx.swizzonic.email` is on the apex, so no conflict is expected — Resend requires its bounce MX to be the only MX on the sending subdomain).
+4. Add `_dmarc.flawchess.com` → `v=DMARC1; p=none; rua=mailto:<addr>` (purely additive; none exists today).
 5. Put `RESEND_API_KEY` in the local `.prod.env` that `bin/deploy.sh:28-29` scps to `/opt/flawchess/.env`. Never commit it.
 
 **Scope**:
@@ -282,7 +287,7 @@ Plans:
 4. A Resend send failure produces a Sentry event with `user_id` in context and **no variable interpolated into the message string** (grouping stays intact).
 5. A Google-only account (empty `hashed_password`) completes the same flow and afterwards can log in by either method.
 6. The frontend forms carry `data-testid` on every interactive element, honor the `text-sm` floor, use `variant="brand-outline"` for secondary actions, are usable at 375px, and render an `isError` branch rather than falling through to an empty state.
-7. Swizzonic mail to flawchess.com still delivers after the SPF merge (Step 0.3), confirmed by an actual received message.
+7. The existing apex SPF record is **byte-identical** to its pre-phase value (`v=spf1 a mx include:spf.webapps.net ~all`), and Swizzonic mail to flawchess.com still delivers — confirmed by an actual received message. Under the superseded D-05 this was the phase's one real risk; it is now a regression check that the additive-only path was actually followed.
 8. Each production change is mutation-tested (revert it, confirm the test goes red) rather than accepted on symbol presence.
 
 **Non-goals**: email verification on registration; a canary/monitoring send; guest-account recovery (ephemeral by design, explicitly out of scope); a templating engine or a second email template; the official `resend` SDK; any database migration.
