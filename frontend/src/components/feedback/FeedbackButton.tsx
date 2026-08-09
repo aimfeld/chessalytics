@@ -6,13 +6,13 @@ import { useOverlayOpen } from '@/hooks/useOverlayOpen';
 import { FeedbackModal } from './FeedbackModal';
 
 /**
- * Global floating feedback trigger button.
+ * Global floating feedback trigger button. Desktop only (sm and up): mobile
+ * feedback submissions were zero over months, and the floating button competed
+ * with the MobileBottomBar and board controls for bottom-edge space.
  *
  * Positioning / z-index per UI-SPEC ladder:
- * - z-20: below MobileBottomBar (z-40), install banner (z-30), overlays (z-50)
- * - bottom-[4.5rem] on mobile (<sm) to clear the 4rem MobileBottomBar
- * - bottom-4 on sm and up
- * - Safe-area inset via tailwindcss-safe-area pb-safe so it clears the iOS home indicator
+ * - z-20: below install banner (z-30), overlays (z-50)
+ * - Safe-area inset via tailwindcss-safe-area pb-safe for iPad PWA home indicator
  *
  * Visibility: hidden (opacity-0, pointer-events-none) when:
  * 1. Scrolling down (useScrollDirection returns 'down')
@@ -31,10 +31,10 @@ export function FeedbackButton() {
     <>
       <div
         className={[
-          // Position: fixed bottom-right; clears MobileBottomBar on mobile
-          'fixed right-4 z-20',
-          // Mobile: bottom-[4.5rem] to clear the 4rem MobileBottomBar; sm and up: bottom-4
-          'bottom-[4.5rem] sm:bottom-4',
+          // Desktop only: mobile (<sm) never used feedback and the button
+          // crowded the MobileBottomBar / board controls
+          'hidden sm:block',
+          'fixed bottom-4 right-4 z-20',
           // Safe-area: compose with bottom offset for iOS home indicator in PWA mode
           'pb-safe',
           // Visibility transition (≤200ms)
