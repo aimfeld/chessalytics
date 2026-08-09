@@ -418,6 +418,10 @@ export function MobileBottomBar({ onMoreClick }: { onMoreClick: () => void }) {
           canGoForward={boardControls.canGoForward}
           canReset={boardControls.canReset}
           flat
+          // The bar root is a flex row, so without a width the controls shrink-wrap
+          // and hug the left edge; flex-1 spreads them across the bar like the
+          // analysis footer (whose wrapper is a plain block div).
+          className="flex-1"
         />
       </div>
     );
