@@ -5,10 +5,10 @@ milestone_name: Train Reliability & Grading Agreement
 current_phase: 208
 current_phase_name: analysis-fen-pgn-paste
 status: shipped
-stopped_at: Phase 208 squash-merged to main (not deployed)
-last_updated: "2026-08-08T20:10:00.000Z"
-last_activity: 2026-08-08
-last_activity_desc: Phase 208 shipped — squash-merged to main as 432075a03
+stopped_at: Completed 260809-iq1-01-PLAN.md
+last_updated: "2026-08-09T11:39:52.170Z"
+last_activity: 2026-08-09
+last_activity_desc: "Completed quick task 260809-iep: hide the floating feedback button on mobile (<sm), desktop unchanged"
 progress:
   total_phases: 3
   completed_phases: 3
@@ -23,7 +23,7 @@ progress:
 Phase: 208 (analysis-fen-pgn-paste) — SHIPPED
 Plan: 4 of 4
 Status: Phase 208 squash-merged to main (432075a03) — not yet deployed
-Last activity: 2026-08-09 — Completed quick task 260809-iep: hide the floating feedback button on mobile (<sm), desktop unchanged
+Last activity: 2026-08-09 — Completed quick task 260809-iq1: Import page accepts pasted chess.com/lichess profile URLs (frontend extraction + backend validators)
 
 Phase 208 shipped with the full pre-merge gate green (backend 4252 passed, frontend
 3411 passed, ruff/ty/eslint/tsc/knip clean). Verification is `human_needed`: 5 UAT
@@ -654,6 +654,7 @@ v1.29 Live-Engine Analysis Page shipped 2026-06-29 — 5 phases (136–140), 14 
 - [Phase ?]: 207-02: client-side password checks (length, equality) are advisory only — the server's 400 reason is always what's rendered
 - [Phase ?]: 207-02 checkpoint: operator additionally verified a real end-to-end send via a live Resend account to a real mailbox over a Tailscale tunnel, exceeding this plan's scope; formal RESET-01/RESET-07 verdict remains Plan 03's, pending apex-domain DKIM/DMARC (not the resend.dev sandbox sender used here)
 - [Phase ?]: Phase 207 Step 0 complete 2026-08-08: DKIM landed at apex, RESET-01/RESET-07 PASSED with live Resend evidence against the verified flawchess.com apex domain; RESET-05 real-mailbox observation logged NOT PERFORMED to WINDOWS.md, automated coverage stands in its place
+- [Phase ?]: 260809-iq1: D-01/D-02/D-03 — shared frontend/backend regex normalizer strips chess.com/lichess profile URLs to bare username on paste/blur/submit and API validation
 
 ### Pending Todos
 
@@ -725,6 +726,7 @@ None active.
 | 260809-g0n | Mobile Train free-move mode: board controls (reset/back/forward/flip) replace the main nav buttons in the fixed bottom bar while exploring, like the analysis board. New `lib/mobileBoardControls.ts` cross-tree publish/read store (clone of `playActive.ts`'s `useSyncExternalStore` shape — `MobileBottomBar` lives above the router `Outlet`, so props can't flow up); `TrainSolveScreen` publishes while `freePlay.isExploring`, `MobileBottomBar` swaps nav for a `flat`-mode `BoardControls` when a payload is present. In-card control strip in `TrainReveal` now `hidden sm:block` (bottom bar is `sm:hidden`, so no gap and no double controls). Frontend gate green: lint, knip, build, 3424 tests | 2026-08-09 | 05e08a2e | [260809-g0n-on-mobile-in-train-free-move-mode-board-](./quick/260809-g0n-on-mobile-in-train-free-move-mode-board-/) |
 | 260808-ec4 | SEED-141: a Train blunder whose SECOND-BEST move still leaves the mover clearly winning is no longer served as a puzzle. Rationale is a GM's, relayed by the operator: if the runner-up still wins, "find the best move" is an arbitrary ask, not a lesson — you were +6, best is +9, runner-up is +4, and the puzzle asks the user to tell two winning moves apart. `pool_entry_stmt` previously admitted on the best-vs-second GAP (`dead_band_admissible`) plus a winnability floor on the position BEFORE the move; neither notices the absolute level the runner-up lands on. New `SECOND_BEST_WINNING_FLOOR_CP: int = 200` + `second_best_not_winning_admissible(missed_pv_lines_col, ply_col)` sit directly beside `WINNABILITY_FLOOR_ES`/`dead_band_admissible` in `train_pool.py`. No schema change, no migration, no backfill, no engine work, no frontend change — a WHERE clause over data already in the answer-key blob. Threshold is the operator's call of **+2 over +3** (prod: 23.9% of the pool removed vs 16.3%, sharp share 31.9% → 38.9% vs 37.1%; +2 costs 11,486 more sharp candidates). Prod measurement replicated dev almost exactly across 795,267 candidates / 266 users (23.9% vs 23.9%), so the effect is a property of the rule, not one playing style; starvation negligible (median distinct games per user 462 → 403, exactly 2 additional users pushed under 5 games, and the 2 who drop to zero already had 1 and are covered by the herring / sharp-filler cross-backfill). Three things were load-bearing and each was verified from the code rather than assumed. (a) SIGN: `s`/`sm` are WHITE-perspective (`game_flaw.py` D-05 blob comment, `forcing_line_gate.PvNode`), so mover POV comes from ply parity via `mover_color_expr(ply_col)` — never `Game.user_color`, which is what lets the SAME predicate serve the Game-join-free COUNT. (b) PLY OFFSET: verified against `eval_apply._build_line_blobs`, which sets `node0_ply = flaw_ply` for the "missed" line and reads the POSITION-keyed `pos_eval`/`second_best_map` directly; `_post_move_eval` (the single site of the pipeline's +1 shift, per its own docstring) is only used writing `game_positions` rows and is never called on this path — so node 0 is decision-ply-keyed and NO offset correction was needed. (c) NULL: the predicate is written in POSITIVE (admissible) form with explicit `IS NULL` guards, because a bare `s_mover_cp >= threshold` under a `NOT` yields NULL for the `su == ""` no-legal-second-move sentinel and silently drops every one of those rows — the bug that gave the seed's own exploration query 0 survivors for every user. An unreadable node is KEPT here (an exclusion rule cannot prove "still winning" from a NULL); `dead_band_admissible` in the same WHERE already drops those. Mate is an independent OR branch so it outranks cp, matching `expected_score_sql`'s branch order. Applied at all THREE SR read sites, not the two the brief named: `pool_entry_stmt`, `compose_and_materialize_session`'s `due_stmt` re-serve scan, and — decided during planning — `get_waiting_puzzle_count`'s `due_count_stmt`, which pairs the same two predicates for the same Phase 205 D-05 reason (an excluded item must not inflate the nav badge for a session that composes without it). Read LIVE from the flaw row, never snapshotted onto `drill_items`: an excluded item is skipped for that session only with status ACTIVE and `due_date` untouched, so it returns automatically if re-analysis moves it back (test-pinned). `forcing_line_gate.STILL_WINNING_FLOOR_CP` is coincidentally also 200 and was deliberately NOT imported — different purpose, independently retunable, noted in a comment so nobody "deduplicates" them. 11 new tests (9 pool + 2 repository). Orchestrator re-verified both guards independently by literal mutation of the final committed source: forcing `cp_sign` color-blind failed exactly `test_black_mover_sign_flip` (`assert True is False`), and swapping the positive form for the naive bare-`NOT` failed 6 of 9 including the isolated sentinel test — which is deliberately NOT a `pool_entry_stmt` round-trip, since `dead_band_admissible` already excludes `su == ""` through its own clause and a round-trip test would therefore pass for the wrong reason. No fixture repairs were needed. Backend 4164 passed / 19 skipped, ruff + `ty` clean; frontend untouched. Prod effect on real pool composition is HUMAN-UAT after deploy | 2026-08-08 | 77b6716ad | [260808-ec4-implement-seed-141-exclude-train-blunder](./quick/260808-ec4-implement-seed-141-exclude-train-blunder/) |
 | 260809-iep | Hide the global floating feedback button on mobile (<sm) — zero mobile submissions in months and it crowded the MobileBottomBar / board controls; `hidden sm:block` on the wrapper, mobile `bottom-[4.5rem]` offset simplified to `bottom-4`, desktop (sm+) behavior unchanged | 2026-08-09 | 96f2835d | [260809-iep-disable-the-feedback-button-on-mobile-en](./quick/260809-iep-disable-the-feedback-button-on-mobile-en/) |
+| 260809-iq1 | Import page accepts pasted chess.com/lichess profile URLs: new `frontend/src/lib/platformUsername.ts` extracts the bare username from `chess.com/member/<name>` / `lichess.org/@/<name>` (protocol/www optional, tolerates trailing slash/query/fragment/extra path segments), wired into both username fields via `onPaste`/`onBlur` (field visibly replaced, no error state) and the submit path. Mirrored server-side in `app/core/platform_usernames.py` with `mode="before"` validators on `ImportRequest.username` (platform-aware via `info.data`) and both `UserProfileUpdate` username fields, so long URLs normalize before `max_length=100` rejects them. Cross-platform paste passes through unchanged. Frontend util+interaction tests, 23 backend validator tests; lint/build/ty clean | 2026-08-09 | a13815dd | [260809-iq1-extract-username-from-pasted-chess-com-l](./quick/260809-iq1-extract-username-from-pasted-chess-com-l/) |
 
 ## Deferred Items
 
@@ -777,13 +779,13 @@ Items acknowledged and deferred at **v1.29 milestone close on 2026-06-29** (user
 
 ## Session Continuity
 
-**Stopped at:** Phase 208 UI-SPEC approved
+**Stopped at:** Completed 260809-iq1-01-PLAN.md
 
-**Last session:** 2026-08-08T15:53:17.395Z
+**Last session:** 2026-08-09T11:39:52.116Z
 
 **Resume file:**
 
-.planning/phases/208-analysis-fen-pgn-paste/208-UI-SPEC.md
+None
 
 ## Performance Metrics
 
@@ -920,6 +922,7 @@ Items acknowledged and deferred at **v1.29 milestone close on 2026-06-29** (user
 | Phase 207 P01 | 65min | 3 tasks | 9 files |
 | Phase 207 P02 | 25min | 3 tasks | 8 files |
 | Phase 207 P03 | 15min | 2 tasks | 4 files |
+| Phase 260809-iq1 P01 | 25min | 2 tasks | 8 files |
 
 ## Performance Metrics
 
