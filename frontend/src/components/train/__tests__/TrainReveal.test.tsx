@@ -1758,6 +1758,17 @@ describe('TrainReveal', () => {
     expect(screen.getByTestId('analysis-variation-tree')).not.toBeNull();
   });
 
+  // Quick 260809-g0n: below `sm` the fixed bottom bar carries these controls
+  // instead (MobileBottomBar swap, published by TrainSolveScreen) — the
+  // in-card strip stays in the DOM (so its wiring is still exercised by the
+  // tests above) but is hidden below `sm` and only visible from `sm` up.
+  it('the exploration control strip renders while exploring, hidden below sm and shown at sm and up', () => {
+    renderReveal({ isExploring: true, freePlay: makeFreePlayState() });
+    const strip = screen.getByTestId('train-exploration-board-controls');
+    expect(strip.className).toMatch(/\bhidden\b/);
+    expect(strip.className).toMatch(/\bsm:block\b/);
+  });
+
   // Phase 200 UAT item 6: the × in the Stockfish header is a second, always-
   // in-reach route back to the solution (the Solution button lives below the
   // board, which can be scrolled away on mobile).

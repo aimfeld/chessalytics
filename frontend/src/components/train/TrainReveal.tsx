@@ -484,8 +484,16 @@ function TrainExplorationPanel({
             position WITHOUT leaving free play or dropping the tree (that is
             Solution's / the header ×'s job) — hence the explicit `canReset`,
             which would otherwise default to `canGoBack` and read as the same
-            control twice. */}
-        <div className="border-t border-border px-1 py-1">
+            control twice.
+            Quick 260809-g0n: below `sm` the fixed bottom bar carries these
+            same controls instead (TrainSolveScreen publishes them via
+            usePublishMobileBoardControls while MobileBottomBar swaps the main
+            nav buttons out) — so this strip is hidden there and only renders
+            from `sm` up. */}
+        <div
+          className="hidden sm:block border-t border-border px-1 py-1"
+          data-testid="train-exploration-board-controls"
+        >
           <BoardControls
             onReset={freePlay.goToRoot}
             onBack={freePlay.goBack}

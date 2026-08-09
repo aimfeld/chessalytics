@@ -21,6 +21,7 @@ import { useEffect, useState } from 'react';
 import type { ReactElement } from 'react';
 import { Chess } from 'chess.js';
 import { TrainSolveScreen } from '@/components/train/TrainSolveScreen';
+import { useMobileBoardControls } from '@/lib/mobileBoardControls';
 import { TooltipProvider } from '@/components/ui/tooltip';
 import { TRAIN_STEP_HIGHLIGHT } from '@/lib/trainArrows';
 import { TRAIN_BEST_MOVE_ARROW } from '@/lib/theme';
@@ -423,6 +424,54 @@ async function renderScreen(
       <QueryClientProvider client={queryClient}>
         <TooltipProvider>
           <Harness puzzle={puzzle} restoredSolve={restoredSolve} />
+        </TooltipProvider>
+      </QueryClientProvider>
+    </MemoryRouter>,
+  );
+  await waitFor(() => expect(screen.getByTestId('chessboard')).not.toBeNull());
+  return result;
+}
+
+// Quick 260809-g0n: reads the published mobileBoardControls payload (or its
+// absence) via testids/buttons, so a test can assert on the store the same
+// way MobileBottomBar itself would consume it.
+function MobileBoardControlsProbe(): ReactElement {
+  const controls = useMobileBoardControls();
+  return (
+    <div data-testid="mbc-probe" data-published={controls ? 'true' : 'false'}>
+      {controls && (
+        <>
+          <span data-testid="mbc-can-go-back">{String(controls.canGoBack)}</span>
+          <span data-testid="mbc-can-go-forward">{String(controls.canGoForward)}</span>
+          <span data-testid="mbc-can-reset">{String(controls.canReset)}</span>
+          <button data-testid="mbc-btn-back" onClick={controls.onBack}>back</button>
+          <button data-testid="mbc-btn-forward" onClick={controls.onForward}>forward</button>
+          <button data-testid="mbc-btn-reset" onClick={controls.onReset}>reset</button>
+          <button data-testid="mbc-btn-flip" onClick={controls.onFlip}>flip</button>
+        </>
+      )}
+    </div>
+  );
+}
+
+// Same MemoryRouter/QueryClientProvider/TooltipProvider/Harness harness as
+// `renderScreen`, with the probe mounted alongside — proves the store is
+// truly cross-tree (Harness and the probe are siblings, exactly like
+// TrainSolveScreen and MobileBottomBar are in the real App tree).
+async function renderScreenWithProbe(
+  puzzle: TrainPuzzle,
+  session: TrainSessionResponse = makeSession(),
+) {
+  composeOrResumeSession.mockResolvedValue(session);
+  const queryClient = new QueryClient({
+    defaultOptions: { queries: { retry: false }, mutations: { retry: false } },
+  });
+  const result = render(
+    <MemoryRouter>
+      <QueryClientProvider client={queryClient}>
+        <TooltipProvider>
+          <MobileBoardControlsProbe />
+          <Harness puzzle={puzzle} />
         </TooltipProvider>
       </QueryClientProvider>
     </MemoryRouter>,
@@ -1884,6 +1933,126 @@ describe('TrainSolveScreen — progress, last move, grading state, engine failur
       await waitFor(() => expect(stubbedWorkerInstances[1]!.terminated).toBe(true));
       // The bar keeps rendering, fed by the free-play engine's top line.
       expect(screen.getByTestId('train-eval-bar')).not.toBeNull();
+    });
+  });
+
+  // ─── Quick 260809-g0n: publishes mobileBoardControls while free-move mode
+  // is active, for MobileBottomBar's mobile-footer swap ─────────────────────
+  describe('mobileBoardControls publishing', () => {
+    it('publishes nothing before a verdict lands', async () => {
+      await renderScreenWithProbe(makePuzzle());
+      expect(screen.getByTestId('mbc-probe').getAttribute('data-published')).toBe('false');
+    });
+
+    it('publishes nothing after a verdict lands while NOT exploring', async () => {
+      await renderScreenWithProbe(makePuzzle());
+      fireEvent.click(screen.getByTestId('btn-train-guess-critical'));
+      await act(async () => {
+        fireEvent.click(screen.getByTestId('drop-e2e4'));
+      });
+      await waitFor(() => expect(screen.getByTestId('train-verdict-guess')).not.toBeNull());
+      expect(screen.getByTestId('mbc-probe').getAttribute('data-published')).toBe('false');
+    });
+
+    it('starting free-move mode publishes a payload mirroring freePlay.canGoBack/canGoForward, canReset === canGoBack', async () => {
+      await renderScreenWithProbe(makePuzzle());
+      fireEvent.click(screen.getByTestId('btn-train-guess-critical'));
+      await act(async () => {
+        fireEvent.click(screen.getByTestId('drop-e2e4')); // the graded attempt
+      });
+      await waitFor(() => expect(screen.getByTestId('train-verdict-guess')).not.toBeNull());
+
+      fireEvent.click(screen.getByTestId('drop-e2e4')); // starts free play
+      await waitFor(() => expect(screen.getByTestId('train-reveal-exploration')).not.toBeNull());
+
+      await waitFor(() =>
+        expect(screen.getByTestId('mbc-probe').getAttribute('data-published')).toBe('true'),
+      );
+      // One move in: at the tip (nothing to advance into) but back/reset are
+      // live — same state the in-card strip's own "Reset and Back are
+      // disabled..." test pins for board-btn-forward/back.
+      expect(screen.getByTestId('mbc-can-go-back').textContent).toBe('true');
+      expect(screen.getByTestId('mbc-can-go-forward').textContent).toBe('false');
+      expect(screen.getByTestId('mbc-can-reset').textContent).toBe('true');
+    });
+
+    it('pressing Solution (exiting free-move mode) clears the published payload', async () => {
+      await renderScreenWithProbe(makePuzzle());
+      fireEvent.click(screen.getByTestId('btn-train-guess-critical'));
+      await act(async () => {
+        fireEvent.click(screen.getByTestId('drop-e2e4'));
+      });
+      await waitFor(() => expect(screen.getByTestId('train-verdict-guess')).not.toBeNull());
+      fireEvent.click(screen.getByTestId('drop-e2e4')); // starts free play
+      await waitFor(() =>
+        expect(screen.getByTestId('mbc-probe').getAttribute('data-published')).toBe('true'),
+      );
+
+      fireEvent.click(screen.getByTestId('btn-train-solution'));
+      await waitFor(() =>
+        expect(screen.getByTestId('mbc-probe').getAttribute('data-published')).toBe('false'),
+      );
+    });
+
+    it('unmounting the solve screen clears the published payload', async () => {
+      const { unmount } = await renderScreenWithProbe(makePuzzle());
+      fireEvent.click(screen.getByTestId('btn-train-guess-critical'));
+      await act(async () => {
+        fireEvent.click(screen.getByTestId('drop-e2e4'));
+      });
+      await waitFor(() => expect(screen.getByTestId('train-verdict-guess')).not.toBeNull());
+      fireEvent.click(screen.getByTestId('drop-e2e4')); // starts free play
+      await waitFor(() =>
+        expect(screen.getByTestId('mbc-probe').getAttribute('data-published')).toBe('true'),
+      );
+
+      unmount();
+      // The probe unmounted too (same tree), so re-render a fresh one to read
+      // the store's post-unmount state.
+      render(
+        <MemoryRouter>
+          <TooltipProvider>
+            <MobileBoardControlsProbe />
+          </TooltipProvider>
+        </MemoryRouter>,
+      );
+      expect(screen.getByTestId('mbc-probe').getAttribute('data-published')).toBe('false');
+    });
+
+    it('invoking the published onReset returns the board to the puzzle position while free-move mode stays active', async () => {
+      await renderScreenWithProbe(makePuzzle());
+      fireEvent.click(screen.getByTestId('btn-train-guess-critical'));
+      await act(async () => {
+        fireEvent.click(screen.getByTestId('drop-e2e4'));
+      });
+      await waitFor(() => expect(screen.getByTestId('train-verdict-guess')).not.toBeNull());
+      fireEvent.click(screen.getByTestId('drop-e2e4')); // starts free play
+      await waitFor(() =>
+        expect(screen.getByTestId('mbc-probe').getAttribute('data-published')).toBe('true'),
+      );
+
+      const board = () => screen.getByTestId('chessboard');
+      fireEvent.click(screen.getByTestId('mbc-btn-reset'));
+      await waitFor(() => expect(board().getAttribute('data-position')).toBe(START_FEN));
+      expect(screen.getByTestId('train-reveal-exploration')).not.toBeNull();
+    });
+
+    it('invoking the published onFlip flips the shared board', async () => {
+      await renderScreenWithProbe(makePuzzle());
+      fireEvent.click(screen.getByTestId('btn-train-guess-critical'));
+      await act(async () => {
+        fireEvent.click(screen.getByTestId('drop-e2e4'));
+      });
+      await waitFor(() => expect(screen.getByTestId('train-verdict-guess')).not.toBeNull());
+      fireEvent.click(screen.getByTestId('drop-e2e4')); // starts free play
+      await waitFor(() =>
+        expect(screen.getByTestId('mbc-probe').getAttribute('data-published')).toBe('true'),
+      );
+
+      const board = () => screen.getByTestId('chessboard');
+      expect(board().getAttribute('data-flipped')).toBe('false'); // white to move
+      fireEvent.click(screen.getByTestId('mbc-btn-flip'));
+      await waitFor(() => expect(board().getAttribute('data-flipped')).toBe('true'));
     });
   });
 });
