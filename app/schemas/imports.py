@@ -1,15 +1,28 @@
 """Pydantic v2 schemas for the import API endpoints."""
 
-from typing import Literal
+from typing import Any, Literal
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, ValidationInfo, field_validator
 
+from app.core.platform_usernames import extract_platform_username
 from app.schemas.normalization import Color
 
 
 class ImportRequest(BaseModel):
     platform: Literal["chess.com", "lichess"]
     username: str = Field(min_length=1, max_length=100)
+
+    @field_validator("username", mode="before")
+    @classmethod
+    def _extract_username(cls, value: Any, info: ValidationInfo) -> Any:
+        # mode="before" is load-bearing (D-03/T-IQ1-02): it must run ahead of
+        # max_length=100 so a long pasted profile URL is shortened to the bare
+        # username instead of rejected. `platform` is declared before
+        # `username`, so it is already validated and present here -- except
+        # when `platform` itself failed validation, in which case we fall
+        # back to accepting either platform's URL form.
+        platform = info.data.get("platform")
+        return extract_platform_username(value, platform)
 
 
 class ImportStartedResponse(BaseModel):
