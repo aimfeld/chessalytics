@@ -25,6 +25,7 @@ import { useUserProfile } from '@/hooks/useUserProfile';
 import { useAuth } from '@/hooks/useAuth';
 import { useQueryClient } from '@tanstack/react-query';
 import { apiClient } from '@/api/client';
+import { extractPlatformUsername } from '@/lib/platformUsername';
 
 
 // Refresh cadence for the eval-coverage ("Quick Scan") banner and readiness
@@ -289,7 +290,12 @@ export function ImportPage({ onImportStarted, activeJobIds, onJobDismissed }: Im
   // ── Sync handler ────────────────────────────────────────────────────────────
 
   const handleSync = async (platform: 'chess.com' | 'lichess') => {
-    const username = platform === 'chess.com' ? chessComUsername.trim() : lichessUsername.trim();
+    // D-02: normalize a typed-then-Enter'd profile URL too, since Enter fires
+    // before blur.
+    const username =
+      platform === 'chess.com'
+        ? extractPlatformUsername(chessComUsername, 'chess.com')
+        : extractPlatformUsername(lichessUsername, 'lichess');
     if (!username) return;
 
     // Clear previous error for this platform
@@ -424,6 +430,16 @@ export function ImportPage({ onImportStarted, activeJobIds, onJobDismissed }: Im
                     value={chessComUsername}
                     onChange={(e) => { setChessComUsername(e.target.value); setChessComError(null); }}
                     onKeyDown={(e) => e.key === 'Enter' && handleSync('chess.com')}
+                    onPaste={(e) => {
+                      const pasted = e.clipboardData.getData('text');
+                      const extracted = extractPlatformUsername(pasted, 'chess.com');
+                      if (extracted !== pasted.trim()) {
+                        e.preventDefault();
+                        setChessComUsername(extracted);
+                        setChessComError(null);
+                      }
+                    }}
+                    onBlur={(e) => setChessComUsername(extractPlatformUsername(e.target.value, 'chess.com'))}
                     autoComplete="off"
                     className="h-8 text-sm"
                     data-testid="import-username-chess-com"
@@ -474,6 +490,16 @@ export function ImportPage({ onImportStarted, activeJobIds, onJobDismissed }: Im
                     value={lichessUsername}
                     onChange={(e) => { setLichessUsername(e.target.value); setLichessError(null); }}
                     onKeyDown={(e) => e.key === 'Enter' && handleSync('lichess')}
+                    onPaste={(e) => {
+                      const pasted = e.clipboardData.getData('text');
+                      const extracted = extractPlatformUsername(pasted, 'lichess');
+                      if (extracted !== pasted.trim()) {
+                        e.preventDefault();
+                        setLichessUsername(extracted);
+                        setLichessError(null);
+                      }
+                    }}
+                    onBlur={(e) => setLichessUsername(extractPlatformUsername(e.target.value, 'lichess'))}
                     autoComplete="off"
                     className="h-8 text-sm"
                     data-testid="import-username-lichess"
