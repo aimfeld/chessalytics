@@ -2054,5 +2054,27 @@ describe('TrainSolveScreen — progress, last move, grading state, engine failur
       fireEvent.click(screen.getByTestId('mbc-btn-flip'));
       await waitFor(() => expect(board().getAttribute('data-flipped')).toBe('true'));
     });
+
+    it('pressing Solution after a flip restores the puzzle\'s initial orientation', async () => {
+      await renderScreenWithProbe(makePuzzle());
+      fireEvent.click(screen.getByTestId('btn-train-guess-critical'));
+      await act(async () => {
+        fireEvent.click(screen.getByTestId('drop-e2e4'));
+      });
+      await waitFor(() => expect(screen.getByTestId('train-verdict-guess')).not.toBeNull());
+      fireEvent.click(screen.getByTestId('drop-e2e4')); // starts free play
+      await waitFor(() =>
+        expect(screen.getByTestId('mbc-probe').getAttribute('data-published')).toBe('true'),
+      );
+
+      const board = () => screen.getByTestId('chessboard');
+      fireEvent.click(screen.getByTestId('mbc-btn-flip'));
+      await waitFor(() => expect(board().getAttribute('data-flipped')).toBe('true'));
+
+      // Solution exits free play AND snaps orientation back to the puzzle's
+      // initial state (white to move -> not flipped).
+      fireEvent.click(screen.getByTestId('btn-train-solution'));
+      await waitFor(() => expect(board().getAttribute('data-flipped')).toBe('false'));
+    });
   });
 });

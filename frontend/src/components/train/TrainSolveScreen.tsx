@@ -864,6 +864,10 @@ export function TrainSolveScreen({
     // the existing stepper reset, so the board always snaps to the pristine
     // reveal in a single tap regardless of which departed state it was in.
     freePlay.reset();
+    // Flipping is only offered while exploring, so leaving exploration also
+    // restores the puzzle's initial orientation — otherwise the pristine
+    // reveal comes back upside down after a flip.
+    setFlipped(puzzle.side_to_move === 'black');
   }
 
   function handleShowSolution(): void {
