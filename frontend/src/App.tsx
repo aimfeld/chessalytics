@@ -17,6 +17,8 @@ import {
 
 import { apiClient } from '@/api/client';
 import { usePlayActive } from '@/lib/playActive';
+import { useMobileBoardControls } from '@/lib/mobileBoardControls';
+import { BoardControls } from '@/components/board/BoardControls';
 import { AuthProvider, useAuth } from '@/hooks/useAuth';
 import { InstallPromptBanner } from '@/components/install/InstallPromptBanner';
 import { FeedbackButton } from '@/components/feedback/FeedbackButton';
@@ -374,7 +376,16 @@ function AnalysisMobileHeader() {
 
 // ─── Mobile bottom bar ────────────────────────────────────────────────────────
 
+// Shared by both MobileBottomBar branches (main nav / board controls) so the
+// fixed positioning, breakpoint, and border/background stay byte-identical.
+const MOBILE_BOTTOM_BAR_CLASSES =
+  'fixed bottom-0 inset-x-0 flex sm:hidden z-40 bg-background border-t border-border pb-safe';
+
 export function MobileBottomBar({ onMoreClick }: { onMoreClick: () => void }) {
+  // Quick 260809-g0n: a Train puzzle in free-move mode takes over the bar the
+  // way the /analysis route takes over the whole mobile shell — while a
+  // payload is published, board controls replace the main nav buttons.
+  const boardControls = useMobileBoardControls();
   const location = useLocation();
   const { data: profile } = useUserProfile();
   const totalGames = profile != null ? profile.chess_com_game_count + profile.lichess_game_count : 0;
@@ -392,11 +403,35 @@ export function MobileBottomBar({ onMoreClick }: { onMoreClick: () => void }) {
   // Phase 193 D-09/D-10 — see NavHeader for the fail-closed badge_visible rationale.
   const trainBadgeVisible = trainProgressQuery.data?.badge_visible ?? false;
 
+  if (boardControls != null) {
+    return (
+      <div
+        data-testid="mobile-board-controls-bar"
+        className={cn(MOBILE_BOTTOM_BAR_CLASSES, 'items-center px-2 py-2')}
+      >
+        <BoardControls
+          onBack={boardControls.onBack}
+          onForward={boardControls.onForward}
+          onReset={boardControls.onReset}
+          onFlip={boardControls.onFlip}
+          canGoBack={boardControls.canGoBack}
+          canGoForward={boardControls.canGoForward}
+          canReset={boardControls.canReset}
+          flat
+          // The bar root is a flex row, so without a width the controls shrink-wrap
+          // and hug the left edge; flex-1 spreads them across the bar like the
+          // analysis footer (whose wrapper is a plain block div).
+          className="flex-1"
+        />
+      </div>
+    );
+  }
+
   return (
     <nav
       aria-label="Mobile navigation"
       data-testid="mobile-bottom-bar"
-      className="fixed bottom-0 inset-x-0 flex sm:hidden z-40 bg-background border-t border-border pb-safe"
+      className={MOBILE_BOTTOM_BAR_CLASSES}
     >
       {BOTTOM_NAV_ITEMS.map(({ to, label, Icon }) => {
         const locked = isNavLocked(to, navUnlocked);

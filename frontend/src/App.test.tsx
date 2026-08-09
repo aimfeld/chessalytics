@@ -22,7 +22,7 @@
  */
 
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { cleanup, render, screen, within } from '@testing-library/react';
+import { cleanup, fireEvent, render, screen, within } from '@testing-library/react';
 import { MemoryRouter } from 'react-router';
 import { TooltipProvider } from '@/components/ui/tooltip';
 import type { UserProfile } from '@/types/users';
@@ -107,6 +107,7 @@ afterEach(() => {
 });
 
 import { NavHeader, MobileBottomBar, MobileMoreDrawer, MobileHeader } from './App';
+import { usePublishMobileBoardControls } from '@/lib/mobileBoardControls';
 
 // ── Render helpers ──────────────────────────────────────────────────────────────
 
@@ -120,10 +121,11 @@ function renderNavHeader(initialPath = '/library') {
   );
 }
 
-function renderMobileBottomBar(initialPath = '/library') {
+function renderMobileBottomBar(initialPath = '/library', extra?: React.ReactNode) {
   return render(
     <MemoryRouter initialEntries={[initialPath]}>
       <TooltipProvider>
+        {extra}
         <MobileBottomBar onMoreClick={() => {}} />
       </TooltipProvider>
     </MemoryRouter>,
@@ -138,6 +140,22 @@ function renderMobileMoreDrawer(initialPath = '/library') {
       </TooltipProvider>
     </MemoryRouter>,
   );
+}
+
+// Quick 260809-g0n: a tiny probe that publishes a fixture board-controls
+// payload for the duration it is mounted, so MobileBottomBar's swap can be
+// tested without wiring a real Train solve screen.
+function MobileBoardControlsProbe(props: {
+  onBack: () => void;
+  onForward: () => void;
+  onReset: () => void;
+  onFlip: () => void;
+  canGoBack: boolean;
+  canGoForward: boolean;
+  canReset: boolean;
+}) {
+  usePublishMobileBoardControls(props);
+  return null;
 }
 
 function renderMobileHeader(initialPath = '/bots') {
@@ -859,5 +877,136 @@ describe('V-06: /bots active state + mobile header title', () => {
 
     renderMobileHeader('/bots');
     expect(screen.getByTestId('mobile-header-page-title').textContent).toBe('Bots');
+  });
+});
+
+describe('Quick 260809-g0n: MobileBottomBar swaps main nav for board controls', () => {
+  const FULL_PROFILE = {
+    email: 'full@example.com',
+    is_superuser: false,
+    is_guest: false,
+    chess_com_game_count: 50,
+    lichess_game_count: 0,
+    impersonation: null,
+  } as Partial<UserProfile>;
+
+  it('with nothing published, renders the unchanged main-nav bar', () => {
+    profileState = FULL_PROFILE;
+    tier1State = true;
+
+    renderMobileBottomBar();
+    expect(screen.getByTestId('mobile-bottom-bar')).toBeTruthy();
+    expect(screen.getByTestId('mobile-nav-bots')).toBeTruthy();
+    expect(screen.queryByTestId('mobile-board-controls-bar')).toBeNull();
+  });
+
+  it('while a payload is published, renders the board-controls bar and no nav links', () => {
+    profileState = FULL_PROFILE;
+    tier1State = true;
+
+    renderMobileBottomBar(
+      '/library',
+      <MobileBoardControlsProbe
+        onBack={vi.fn()}
+        onForward={vi.fn()}
+        onReset={vi.fn()}
+        onFlip={vi.fn()}
+        canGoBack
+        canGoForward
+        canReset
+      />,
+    );
+
+    expect(screen.getByTestId('mobile-board-controls-bar')).toBeTruthy();
+    expect(screen.queryByTestId('mobile-bottom-bar')).toBeNull();
+    expect(screen.queryByTestId('mobile-nav-bots')).toBeNull();
+    expect(screen.queryByTestId('mobile-nav-more')).toBeNull();
+    expect(screen.getByTestId('board-btn-reset')).toBeTruthy();
+    expect(screen.getByTestId('board-btn-back')).toBeTruthy();
+    expect(screen.getByTestId('board-btn-forward')).toBeTruthy();
+    expect(screen.getByTestId('board-btn-flip')).toBeTruthy();
+  });
+
+  it('clicking each footer control invokes its matching published callback exactly once', () => {
+    profileState = FULL_PROFILE;
+    tier1State = true;
+    const onBack = vi.fn();
+    const onForward = vi.fn();
+    const onReset = vi.fn();
+    const onFlip = vi.fn();
+
+    renderMobileBottomBar(
+      '/library',
+      <MobileBoardControlsProbe
+        onBack={onBack}
+        onForward={onForward}
+        onReset={onReset}
+        onFlip={onFlip}
+        canGoBack
+        canGoForward
+        canReset
+      />,
+    );
+
+    fireEvent.click(screen.getByTestId('board-btn-reset'));
+    fireEvent.click(screen.getByTestId('board-btn-back'));
+    fireEvent.click(screen.getByTestId('board-btn-forward'));
+    fireEvent.click(screen.getByTestId('board-btn-flip'));
+
+    expect(onReset).toHaveBeenCalledTimes(1);
+    expect(onBack).toHaveBeenCalledTimes(1);
+    expect(onForward).toHaveBeenCalledTimes(1);
+    expect(onFlip).toHaveBeenCalledTimes(1);
+  });
+
+  it('canGoBack: false disables back and reset; canGoForward: false disables forward; flip stays enabled', () => {
+    profileState = FULL_PROFILE;
+    tier1State = true;
+
+    renderMobileBottomBar(
+      '/library',
+      <MobileBoardControlsProbe
+        onBack={vi.fn()}
+        onForward={vi.fn()}
+        onReset={vi.fn()}
+        onFlip={vi.fn()}
+        canGoBack={false}
+        canGoForward={false}
+        canReset={false}
+      />,
+    );
+
+    expect(screen.getByTestId('board-btn-back')).toHaveProperty('disabled', true);
+    expect(screen.getByTestId('board-btn-reset')).toHaveProperty('disabled', true);
+    expect(screen.getByTestId('board-btn-forward')).toHaveProperty('disabled', true);
+    expect(screen.getByTestId('board-btn-flip')).toHaveProperty('disabled', false);
+  });
+
+  it('unmounting the publisher restores the main-nav bar', () => {
+    profileState = FULL_PROFILE;
+    tier1State = true;
+
+    const { unmount } = render(
+      <MemoryRouter initialEntries={['/library']}>
+        <TooltipProvider>
+          <MobileBoardControlsProbe
+            onBack={vi.fn()}
+            onForward={vi.fn()}
+            onReset={vi.fn()}
+            onFlip={vi.fn()}
+            canGoBack
+            canGoForward
+            canReset
+          />
+          <MobileBottomBar onMoreClick={() => {}} />
+        </TooltipProvider>
+      </MemoryRouter>,
+    );
+    expect(screen.getByTestId('mobile-board-controls-bar')).toBeTruthy();
+
+    unmount();
+
+    renderMobileBottomBar();
+    expect(screen.getByTestId('mobile-bottom-bar')).toBeTruthy();
   });
 });

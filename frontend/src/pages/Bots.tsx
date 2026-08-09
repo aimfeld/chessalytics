@@ -421,6 +421,12 @@ function BotsGame({
       remainingMs={botColor === 'white' ? game.whiteClockMs : game.blackClockMs}
       isActive={game.activeColor === botColor}
       isThinking={game.isBotThinking}
+      // Quick 260809-jzz (D-02): game.position is the viewed-ply FEN — the
+      // same value handed to ChessBoard below — so material tracks the
+      // board when the user steps back through the game, not just the live
+      // ply.
+      fen={game.position}
+      side={botColor}
       testId="clock-bot"
     />
   );
@@ -430,6 +436,8 @@ function BotsGame({
       remainingMs={settings.userColor === 'white' ? game.whiteClockMs : game.blackClockMs}
       isActive={game.activeColor === settings.userColor}
       isThinking={false}
+      fen={game.position}
+      side={settings.userColor}
       testId="clock-user"
     />
   );

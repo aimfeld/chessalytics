@@ -13,7 +13,7 @@
 import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { cleanup, render, screen } from '@testing-library/react';
+import { cleanup, fireEvent, render, screen } from '@testing-library/react';
 import { MemoryRouter } from 'react-router';
 import { TooltipProvider } from '@/components/ui/tooltip';
 
@@ -194,5 +194,37 @@ describe('Import page render contract', () => {
     renderImport();
 
     expect(screen.queryByTestId('import-analyzing-endgames')).toBeNull();
+  });
+});
+
+// Quick 260809-iq1: pasting a chess.com/lichess profile URL into either
+// username field extracts the bare username (D-02).
+describe('Import page profile-URL extraction', () => {
+  it('extracts the bare username on paste into the chess.com field', () => {
+    renderImport();
+
+    const input = screen.getByTestId('import-username-chess-com') as HTMLInputElement;
+    fireEvent.paste(input, { clipboardData: { getData: () => 'https://www.chess.com/member/hikaru' } });
+
+    expect(input.value).toBe('hikaru');
+  });
+
+  it('extracts the bare username on paste into the lichess field', () => {
+    renderImport();
+
+    const input = screen.getByTestId('import-username-lichess') as HTMLInputElement;
+    fireEvent.paste(input, { clipboardData: { getData: () => 'https://lichess.org/@/DrNykterstein' } });
+
+    expect(input.value).toBe('DrNykterstein');
+  });
+
+  it('extracts the bare username on blur after typing a profile URL', () => {
+    renderImport();
+
+    const input = screen.getByTestId('import-username-chess-com') as HTMLInputElement;
+    fireEvent.change(input, { target: { value: 'https://www.chess.com/member/hikaru' } });
+    fireEvent.blur(input);
+
+    expect(input.value).toBe('hikaru');
   });
 });

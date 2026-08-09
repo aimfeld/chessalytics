@@ -3,6 +3,9 @@ import { describe, it, expect, afterEach } from 'vitest';
 import { render, screen, cleanup } from '@testing-library/react';
 import { PlayerBar } from '../PlayerBar';
 
+// Black's queen removed — White up a queen (9 points). Quick 260809-jzz (D-05).
+const WHITE_UP_QUEEN_FEN = 'rnb1kbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1';
+
 describe('PlayerBar', () => {
   afterEach(() => {
     cleanup();
@@ -50,5 +53,24 @@ describe('PlayerBar', () => {
     render(<PlayerBar isWhite name="A" rating={1500} clockSeconds={null} testId="pb" />);
     // m:ss has a colon; with no clock there should be no time string rendered
     expect(screen.getByTestId('pb').textContent).not.toMatch(/\d:\d\d/);
+  });
+
+  it('shows the material surplus when a fen is provided (Quick 260809-jzz, D-05)', () => {
+    render(
+      <PlayerBar
+        isWhite
+        name="A"
+        rating={1500}
+        clockSeconds={30}
+        fen={WHITE_UP_QUEEN_FEN}
+        testId="pb"
+      />,
+    );
+    expect(screen.getByTestId('pb').textContent).toContain('+9');
+  });
+
+  it('renders no material text when fen is omitted', () => {
+    render(<PlayerBar isWhite name="A" rating={1500} clockSeconds={30} testId="pb" />);
+    expect(screen.getByTestId('pb').textContent).not.toMatch(/\+\d/);
   });
 });

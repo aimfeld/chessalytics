@@ -4,6 +4,7 @@ import { formatClockLabel, isLowTime } from '@/lib/chessClock';
 import { CLOCK_LOW_TIME_URGENT } from '@/lib/theme';
 import type { Persona } from '@/lib/personas/personaRegistry';
 import { placeholderAvatarFor, resolveAvatarSrc } from '@/lib/personas/personaAvatars';
+import { MaterialDisplay } from '@/components/board/MaterialDisplay';
 
 /** Avatar-circle size (px) for the persona portrait. Sized so the persona
  * card lands at ~60px tall (avatar + py-1.5), a deliberate +50% over the
@@ -27,6 +28,13 @@ interface ClockDisplayProps {
   isActive: boolean;
   /** True while the bot's move selection is in flight (D-06). */
   isThinking: boolean;
+  /**
+   * Quick 260809-jzz (D-02/D-05): the FEN currently on the board (the viewed
+   * ply, not necessarily the live one) and which color this card represents.
+   * Material renders only when BOTH are supplied.
+   */
+  fen?: string;
+  side?: 'white' | 'black';
   testId?: string;
 }
 
@@ -70,6 +78,8 @@ export function ClockDisplay({
   remainingMs,
   isActive,
   isThinking,
+  fen,
+  side,
   testId,
 }: ClockDisplayProps): ReactElement {
   const lowTime = isLowTime(remainingMs);
@@ -95,25 +105,34 @@ export function ClockDisplay({
         lowTime && 'ring-2 ring-destructive/40',
       )}
     >
-      <span className="flex items-center gap-2 text-sm font-medium">
-        {persona ? (
-          <>
-            <PersonaAvatar persona={persona} />
-            <span className="flex flex-col">
-              <span className="flex items-center gap-2">
-                {sideLabel}
-                {thinkingIndicator}
+      {/* Quick 260809-jzz (D-05): name/persona + material share a left group so
+          material sits right after the name instead of being spread to the
+          middle by the outer justify-between. min-w-0 lets the name shrink;
+          the material itself is shrink-0 so it never gets squeezed. */}
+      <span className="flex min-w-0 items-center gap-2">
+        <span className="flex min-w-0 items-center gap-2 text-sm font-medium">
+          {persona ? (
+            <>
+              <PersonaAvatar persona={persona} />
+              <span className="flex flex-col">
+                <span className="flex items-center gap-2">
+                  {sideLabel}
+                  {thinkingIndicator}
+                </span>
+                <span className="font-normal text-muted-foreground">
+                  {`${persona.style} · ${persona.calibratedLabel}`}
+                </span>
               </span>
-              <span className="font-normal text-muted-foreground">
-                {`${persona.style} · ${persona.calibratedLabel}`}
-              </span>
-            </span>
-          </>
-        ) : (
-          <>
-            {sideLabel}
-            {thinkingIndicator}
-          </>
+            </>
+          ) : (
+            <>
+              {sideLabel}
+              {thinkingIndicator}
+            </>
+          )}
+        </span>
+        {fen !== undefined && side !== undefined && (
+          <MaterialDisplay fen={fen} side={side} className="shrink-0" />
         )}
       </span>
       <span

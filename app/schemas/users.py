@@ -3,8 +3,9 @@
 from datetime import datetime
 from typing import Literal
 
-from pydantic import BaseModel
+from pydantic import BaseModel, field_validator
 
+from app.core.platform_usernames import extract_platform_username
 from app.schemas.admin import ImpersonationContext
 
 
@@ -45,6 +46,24 @@ class UserProfileUpdate(BaseModel):
 
     chess_com_username: str | None = None
     lichess_username: str | None = None
+
+    # D-03: per-field validators pinned to that field's own platform, so a
+    # chess.com URL pasted into lichess_username (or vice versa) is not
+    # silently rewritten -- it is left unchanged and rejected downstream by
+    # the platform API instead.
+    @field_validator("chess_com_username", mode="before")
+    @classmethod
+    def _extract_chess_com_username(cls, value: str | None) -> str | None:
+        if value is None:
+            return None
+        return extract_platform_username(value, "chess.com")
+
+    @field_validator("lichess_username", mode="before")
+    @classmethod
+    def _extract_lichess_username(cls, value: str | None) -> str | None:
+        if value is None:
+            return None
+        return extract_platform_username(value, "lichess")
 
 
 class GameCountResponse(BaseModel):

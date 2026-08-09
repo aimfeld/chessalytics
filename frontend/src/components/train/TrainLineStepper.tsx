@@ -244,15 +244,19 @@ export function TrainLineStepper({
   return (
     <div className="flex flex-col gap-2" data-testid="train-line-stepper">
       <div className="flex items-center gap-2">
+        {/* Mobile: 44px tap target (Apple HIG minimum) — the 32px icon button
+            sits right next to the token row and taps kept landing on a move
+            instead. Desktop (lg+) keeps the compact size. */}
         <Button
           variant="ghost"
           size="icon"
           aria-label="Previous move"
           data-testid="btn-train-step-prev"
+          className="size-11 shrink-0 lg:size-8"
           disabled={!canGoBack}
           onClick={() => goTo(Math.max(0, index - 1))}
         >
-          <ChevronLeft className="h-4 w-4" />
+          <ChevronLeft className="h-5 w-5 lg:h-4 lg:w-4" />
         </Button>
         {/* 190.1 UAT round 5: mobile shows ONE text line (~5 plies fit) that
             scrolls horizontally; desktop (lg+) keeps the wrapping block with
@@ -296,10 +300,11 @@ export function TrainLineStepper({
           size="icon"
           aria-label="Next move"
           data-testid="btn-train-step-next"
+          className="size-11 shrink-0 lg:size-8"
           disabled={!canGoForward}
           onClick={() => goTo(Math.min(lastIndex, index + 1))}
         >
-          <ChevronRight className="h-4 w-4" />
+          <ChevronRight className="h-5 w-5 lg:h-4 lg:w-4" />
         </Button>
       </div>
     </div>

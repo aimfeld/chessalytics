@@ -56,6 +56,7 @@ import { useWakeLock } from '@/hooks/useWakeLock';
 import type { GradeResult, TrainEngineLine, TrainGradingEngine } from '@/hooks/useTrainGradingEngine';
 import { evalToExpectedScore, sideToMoveFromFen, terminalPositionEval } from '@/lib/liveFlaw';
 import { useMarkPlayActive } from '@/lib/playActive';
+import { usePublishMobileBoardControls } from '@/lib/mobileBoardControls';
 import { playSound, useMuted, setMuted } from '@/lib/sounds';
 import { saveTrainRevealCache } from '@/lib/trainRevealCache';
 import type { CachedTrainReveal } from '@/lib/trainRevealCache';
@@ -314,6 +315,36 @@ export function TrainSolveScreen({
   // orientation is a per-position affordance, not a session preference.
   const [flipped, setFlipped] = useState(puzzle.side_to_move === 'black');
   const handleFlipBoard = useCallback(() => setFlipped((prev) => !prev), []);
+  // Quick 260809-g0n: on phones, while free-move mode is active this replaces
+  // the main nav buttons in the fixed bottom bar (the /analysis board's
+  // mobile-footer treatment) — see MobileBottomBar in App.tsx. The wiring
+  // mirrors TrainExplorationPanel's own in-card control strip exactly (same
+  // canReset-mirrors-canGoBack semantic) so the two surfaces can never
+  // disagree; the in-card strip itself covers `sm` and up.
+  const mobileBoardControls = useMemo(
+    () =>
+      freePlay.isExploring
+        ? {
+            onBack: freePlay.goBack,
+            onForward: freePlay.goForward,
+            onReset: freePlay.goToRoot,
+            onFlip: handleFlipBoard,
+            canGoBack: freePlay.canGoBack,
+            canGoForward: freePlay.canGoForward,
+            canReset: freePlay.canGoBack,
+          }
+        : null,
+    [
+      freePlay.isExploring,
+      freePlay.goBack,
+      freePlay.goForward,
+      freePlay.goToRoot,
+      freePlay.canGoBack,
+      freePlay.canGoForward,
+      handleFlipBoard,
+    ],
+  );
+  usePublishMobileBoardControls(mobileBoardControls);
   // 191 UAT: the board column shrinks to whatever vertical room the viewport
   // actually leaves (see useFitBoardToViewport) — measured, not a hard-coded
   // chrome estimate, so the button row below the board always keeps its
@@ -833,6 +864,10 @@ export function TrainSolveScreen({
     // the existing stepper reset, so the board always snaps to the pristine
     // reveal in a single tap regardless of which departed state it was in.
     freePlay.reset();
+    // Flipping is only offered while exploring, so leaving exploration also
+    // restores the puzzle's initial orientation — otherwise the pristine
+    // reveal comes back upside down after a flip.
+    setFlipped(puzzle.side_to_move === 'black');
   }
 
   function handleShowSolution(): void {
