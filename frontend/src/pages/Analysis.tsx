@@ -3075,6 +3075,11 @@ export default function Analysis() {
         rating={rating}
         clockSeconds={clockSeconds}
         rightSlotContent={rightSlotContent}
+        // Quick 260809-jzz (D-02/D-05): the same FEN ChessBoard renders, so
+        // material always matches the board. Every call site of the helper
+        // below already sits behind showPlayerBars — the existing "game mode
+        // or pasted PGN" gate — so no new mode condition is needed here.
+        fen={position}
         testId={`analysis-player-${color}`}
       />
     );

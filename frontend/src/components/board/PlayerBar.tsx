@@ -1,5 +1,6 @@
 import type { ReactElement, ReactNode } from 'react';
 import { Clock } from 'lucide-react';
+import { MaterialDisplay } from './MaterialDisplay';
 
 /**
  * Remaining clock as m:ss (floored), e.g. 179.4 → "2:59".
@@ -28,6 +29,12 @@ interface PlayerBarProps {
    * player row only.
    */
   rightSlotContent?: ReactNode;
+  /**
+   * Quick 260809-jzz (D-05): the FEN of the position currently on the board.
+   * Omitted means no material display — Analysis free play stays unchanged,
+   * since every call site already sits behind the `showPlayerBars` gate.
+   */
+  fen?: string;
   testId?: string;
 }
 
@@ -44,6 +51,7 @@ export function PlayerBar({
   rating,
   clockSeconds,
   rightSlotContent,
+  fen,
   testId,
 }: PlayerBarProps): ReactElement {
   return (
@@ -51,9 +59,14 @@ export function PlayerBar({
       data-testid={testId}
       className="flex items-center justify-between gap-2 px-1 text-sm text-foreground"
     >
-      <span className="truncate min-w-0">
-        {isWhite ? '■' : '□'} {name ?? '?'}
-        {rating !== null && <span className="text-muted-foreground"> ({rating})</span>}
+      <span className="flex min-w-0 items-center gap-2">
+        <span className="truncate min-w-0">
+          {isWhite ? '■' : '□'} {name ?? '?'}
+          {rating !== null && <span className="text-muted-foreground"> ({rating})</span>}
+        </span>
+        {fen !== undefined && (
+          <MaterialDisplay fen={fen} side={isWhite ? 'white' : 'black'} className="shrink-0" />
+        )}
       </span>
       {clockSeconds !== null ? (
         <span className="flex shrink-0 items-center gap-1 font-medium tabular-nums">
