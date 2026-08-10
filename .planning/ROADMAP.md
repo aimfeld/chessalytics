@@ -394,6 +394,49 @@ Plans:
 
 **UI hint**: small-to-medium — one new modal component on an existing page, one nav item across two existing surfaces, no new pages and no design-system additions.
 
+### Phase 209: Traffic-Surge Quick Wins
+
+**Goal**: A sudden traffic spike (YouTube mention, Show HN, press) can no longer take the *whole site* down through any of the cheap-to-fix bottlenecks: the readiness poll stops being unbounded standing load per open tab, guest creation stops freezing the single event loop 66 ms per click on the exact funnel a spike lands on, the 82 MB vendored ML runtime moves off the origin NIC to a CDN, post-import percentile computes are concurrency-gated, and imports beyond a global cap wait in a visible "queued" state instead of exhausting the connection pool and 500ing users who aren't importing. This is deliberately the **quick-win cut of SEED-146** — survival, not throughput; the medium/large items stay unimplemented by explicit user decision (2026-08-10).
+
+**Depends on**: nothing in the codebase. Item 3 (CDN) is **operator work** (DNS provider + CDN account access), not executor work — it can proceed in parallel with the code items and must not block them.
+
+**Requirements**: SURGE-01..SURGE-07 (minted at planning, one per Success Criterion below in order; traceability table in the phase's `-01-PLAN.md` § Requirements — this phase predates its milestone's REQUIREMENTS.md)
+
+**Source**: [SEED-146](../seeds/SEED-146-traffic-surge-readiness.md) — planted 2026-08-10 during `/gsd-explore` ("what happens if 100 users import simultaneously"). The seed carries **measured facts verified 2026-08-10 (do not re-derive)**: 65.9 ms Argon2id hash, 5.80 ms/game PGN processing, prod/dev core parity, the 1,111.7 ms `compute_stage_a` query, per-file asset sizes, and estimated ceilings. It also carries the ranked fix list, traps, and rejected alternatives (Web Push readiness signal, staging/load-test rig, vertical scaling) — all binding here.
+
+**Scope** (the quick-win cut, decided with the user 2026-08-10):
+
+- **Seed item 1 — `useReadiness` poll (highest impact).** Frontend-first: keep 3 s cadence while `tier1` is false (import phase, seconds-to-minutes), back off hard once only `tier2` is outstanding, and cap total poll duration so an 8-hour tab goes quiet. Cheapen `GET /imports/readiness` only if it turns out trivial while in there; the poll fix must not depend on it.
+- **Seed item 2, guest half ONLY — Argon2id off the event loop.** `asyncio.to_thread(...)` around `_password_helper.hash` in `app/services/guest_service.py:94`. The register/login half (`UserManager` override, M-sized) is explicitly deferred.
+- **Seed item 3 — CDN for `/maia/*` and `/engine/*`.** DNS + cache config, no code. Must respect existing per-path headers: `@vendored_runtime` 30-day caching stays, `@maiaworker` (`/maia/maia-worker.js`) stays `no-cache`.
+- **Seed item 4, THIN slice — global import semaphore + bare "queued" status.** A global concurrency cap on import execution and a visible "queued" job state (NO position number, NO ETA math — that UX is the deferred medium feature). The periodic reaper must not mark a queued-but-alive job failed while it waits out `IMPORT_TIMEOUT_SECONDS`.
+- **Seed item 5 — gate `compute_stage_a`/`compute_stage_b`.** A `Semaphore(2–3)` around the per-import-completion percentile computes so burst completions can't hold N of 20 pooled connections for seconds.
+
+**Locked constraints (do not re-open)**:
+
+1. **Deferred by user decision 2026-08-10, do not scope-creep back in**: register/login async hashing (M), queue position + ETA UX (S–M), and all of seed item 6 (`to_thread` PGN parse, `uvicorn --workers`, API rate limiting). Pick these up only when a spike becomes concretely plausible.
+2. **Poll fix in place, not Web Push** — rejected in the seed; do not reintroduce.
+3. **Do not remove or loosen the outbound rate-limiter semaphores** (`CHESSCOM_SEMAPHORE_LIMIT` / `LICHESS_SEMAPHORE_LIMIT` = 3) — they are load-bearing for the 4 GB backend memory limit.
+4. **No Postgres tuning** (0.012 avg busy backends; `shared_buffers` stays 2 GB) and **no staging/load-test rig** — every fix is verifiable locally or by inspection.
+5. **Analysis backpressure is out of scope** — days-long eval drain is fine by design; this phase must not grow an eval-throughput track.
+6. **Tuning Argon2 cost parameters downward is not the plan** — it's a security trade reserved as fallback only.
+
+**Success Criteria** (what must be TRUE):
+
+1. With `tier1` true and `tier2` still outstanding, the readiness poll's **emitted interval sequence** backs off and polling stops entirely after a total-duration cap; while `tier1` is false the cadence stays at 3 s. The test asserts the interval sequence itself and goes red when the backoff is reverted (per `feedback_mutation_test_gap_closures` — "backoff constant exists" proves nothing).
+2. `POST /auth/guest/create` hashes the password off the event loop; a test goes red when the `to_thread` wrapper is removed. Register/login paths are untouched.
+3. `/maia/*` and `/engine/*` are served from CDN cache (cache-hit response headers on a second fetch of `maia3_simplified.onnx`), and `/maia/maia-worker.js` still returns `no-cache`.
+4. No more than the configured cap of imports executes concurrently; the cap+1th import job is visibly "queued" (not failed, not silently stalled), starts when a slot frees, and is never reaped as an orphan while waiting.
+5. A burst of simultaneous import completions never runs more than the semaphore's worth of concurrent `compute_stage_a`/`b` computations.
+6. The outbound chess.com/lichess rate-limiter semaphores are byte-identical to before the phase.
+7. Each production change is mutation-tested (revert it, confirm the test goes red) rather than accepted on symbol presence.
+
+**Non-goals**: register/login async hashing; queue position numbers or ETA display; `to_thread` PGN parsing; multi-worker uvicorn; API rate limiting; Web Push as the readiness signal; a staging environment or load tests; Postgres/`shared_buffers` tuning; anything touching eval/analysis throughput.
+
+**Plans**: TBD at `/gsd-plan-phase`
+
+**UI hint**: minimal — a "queued" state on the existing import progress surface and whatever the poll backoff needs (likely nothing visible). No new pages or components.
+
 ## Backlog
 
 ### Phase 999.6: Opening Risk & Drawishness (BACKLOG)

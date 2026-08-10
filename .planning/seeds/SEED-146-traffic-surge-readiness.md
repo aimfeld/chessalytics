@@ -10,6 +10,10 @@ trigger_when: before any planned or plausible traffic event (YouTube/streamer me
 scope: small-to-medium — four self-contained fixes (one frontend hook, one `to_thread`, one DNS
   change, one semaphore) plus one medium feature (import queue + position UI). No migration.
   Item 6 is explicitly deferred and sized here only so it is not mistaken for cheap.
+promoted: Phase 209 (2026-08-10) — quick-win cut only (items 1, 2-guest, 3, 5, and a thin
+  item 4 of global semaphore + bare "queued" status). Register/login hashing, queue
+  position/ETA UX, and item 6 remain unimplemented by user decision; seed stays active
+  until they are done or explicitly abandoned.
 ---
 
 # SEED-146: Traffic-surge readiness — survive a YouTube mention without falling over

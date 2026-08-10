@@ -2,13 +2,13 @@
 gsd_state_version: 1.0
 milestone: v2.12
 milestone_name: Train Reliability & Grading Agreement
-current_phase: 208
-current_phase_name: analysis-fen-pgn-paste
-status: shipped
-stopped_at: Completed 260809-iq1-01-PLAN.md
-last_updated: "2026-08-09T11:39:52.170Z"
-last_activity: 2026-08-09
-last_activity_desc: "Completed quick task 260809-iep: hide the floating feedback button on mobile (<sm), desktop unchanged"
+current_phase: 209
+current_phase_name: traffic-surge-quick-wins
+status: not_started
+stopped_at: Phase 209 added to ROADMAP.md — next /gsd-plan-phase 209
+last_updated: "2026-08-10T00:00:00.000Z"
+last_activity: 2026-08-10
+last_activity_desc: "Added Phase 209 (Traffic-Surge Quick Wins, SEED-146 quick-win cut) to ROADMAP.md"
 progress:
   total_phases: 3
   completed_phases: 3
@@ -20,10 +20,12 @@ progress:
 
 ## Current Position
 
-Phase: 208 (analysis-fen-pgn-paste) — SHIPPED
-Plan: 4 of 4
-Status: Phase 208 squash-merged to main (432075a03) — not yet deployed
-Last activity: 2026-08-09 — Completed quick task 260809-jzz: material display (net material difference) on Bots play page and Analysis board
+Phase: 209 (traffic-surge-quick-wins) — NOT STARTED (added to ROADMAP.md 2026-08-10)
+Plan: none yet — next `/gsd-plan-phase 209`
+Status: Phase 209 is the quick-win cut of SEED-146 (traffic-surge readiness): readiness-poll backoff+cap, guest-Argon2 `to_thread`, CDN for `/maia/*`+`/engine/*` (operator DNS work), global import semaphore with a bare "queued" status (no position/ETA), and a `Semaphore(2–3)` on `compute_stage_a/b`. Register/login hashing, the full queue UX, and seed item 6 are explicitly deferred by user decision 2026-08-10. Seed stays active until the deferred items are done or abandoned.
+
+Previous phase: 208 (analysis-fen-pgn-paste) — SHIPPED, squash-merged to main (432075a03), not yet deployed
+Last activity: 2026-08-10 — Added Phase 209 to ROADMAP.md
 
 Phase 208 shipped with the full pre-merge gate green (backend 4252 passed, frontend
 3411 passed, ruff/ty/eslint/tsc/knip clean). Verification is `human_needed`: 5 UAT
