@@ -28,6 +28,16 @@ that supersedes its item-2 funnel claim; see D-02.
 <decisions>
 ## Implementation Decisions
 
+Decision index (details in the sections below):
+
+- **D-01:** Quick-win cut only — register/login hashing, queue position/ETA UX, and all of seed item 6 are deferred by operator decision 2026-08-10.
+- **D-02:** Argon2 correction — guest creation never hashes; `to_thread` wraps only `promote_guest_with_password` (`guest_service.py:94`).
+- **D-03:** Item 4 thin slice — global import semaphore + bare "queued" state + reaper exemption; no position/ETA; outbound rate limiters untouched.
+- **D-04:** CDN via Cloudflare free in front of the existing domain — operator-only DNS work, planned as checkpoint/runbook; mail records survive DNS-only.
+- **D-05:** Readiness poll — frontend-first backoff + total-duration cap; the emitted interval sequence is the tested artifact.
+- **D-06:** Percentile compute gate — `Semaphore(2–3)` covering `compute_stage_a`/`compute_stage_b`.
+- **D-07:** Mutation-test discipline — every production change proven by revert-goes-red.
+
 ### D-01: Quick-win cut only (operator decision 2026-08-10, do not re-open)
 
 Scope is seed items 1, 2 (our-code half), 3, 5, plus a THIN slice of item 4. Explicitly
