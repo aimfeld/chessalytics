@@ -152,14 +152,27 @@ Fix (locked: in place, not Web Push):
 
 ### 2. Argon2id on the event loop — 66 ms per hash
 
+> **CORRECTION (2026-08-10, verified in code during Phase 209 scoping):** the funnel claim
+> below is wrong. `POST /auth/guest/create` calls `create_guest_user`
+> (`app/routers/auth.py:319` → `guest_service.py:26`), which writes `hashed_password=""` and
+> **never hashes anything** — the "Use as Guest" button costs zero hashing. The call at
+> `guest_service.py:94` is in `promote_guest_with_password`, reached from
+> **`POST /auth/guest/promote/email`** (`auth.py:511`) — the later guest→account upgrade.
+> So the "100 clicks ≈ 6.6 s frozen loop" scenario does not exist; hashing load is
+> proportional to register/login/promotion volume, which is far below guest-click volume
+> during a spike. This demotes item 2 from "funnel-critical" to "cheap hygiene": the XS
+> `to_thread` at `:94` is still worth its one line, and the register/login (M) half is even
+> more comfortably deferrable than argued below.
+
 `app/services/guest_service.py:94` calls `_password_helper.hash(password)` synchronously
 (`PasswordHelper()` at `:23`). `fastapi-users` 15.x uses pwdlib/Argon2id, measured at **65.9 ms**.
 One uvicorn process, one event loop: that is 66 ms during which **nothing else is served**, for
 anyone.
 
-It fires on register, on login, and on **`POST /auth/guest/create`** — reached from the "Use as
+~~It fires on register, on login, and on **`POST /auth/guest/create`** — reached from the "Use as
 Guest" button on `pages/Home.tsx:282,287` via `hooks/useAuth.ts:146`. That button is the funnel a
-video points at. 100 people clicking it ≈ **6.6 s of fully frozen event loop**.
+video points at. 100 people clicking it ≈ **6.6 s of fully frozen event loop**.~~ *(struck per
+the correction above — guest creation does not hash)*
 
 Split the fix — the two halves are not the same size:
 

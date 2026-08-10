@@ -396,7 +396,7 @@ Plans:
 
 ### Phase 209: Traffic-Surge Quick Wins
 
-**Goal**: A sudden traffic spike (YouTube mention, Show HN, press) can no longer take the *whole site* down through any of the cheap-to-fix bottlenecks: the readiness poll stops being unbounded standing load per open tab, guest creation stops freezing the single event loop 66 ms per click on the exact funnel a spike lands on, the 82 MB vendored ML runtime moves off the origin NIC to a CDN, post-import percentile computes are concurrency-gated, and imports beyond a global cap wait in a visible "queued" state instead of exhausting the connection pool and 500ing users who aren't importing. This is deliberately the **quick-win cut of SEED-146** — survival, not throughput; the medium/large items stay unimplemented by explicit user decision (2026-08-10).
+**Goal**: A sudden traffic spike (YouTube mention, Show HN, press) can no longer take the *whole site* down through any of the cheap-to-fix bottlenecks: the readiness poll stops being unbounded standing load per open tab, the one password-hash call in our own code moves off the single event loop, the 82 MB vendored ML runtime moves off the origin NIC to a CDN, post-import percentile computes are concurrency-gated, and imports beyond a global cap wait in a visible "queued" state instead of exhausting the connection pool and 500ing users who aren't importing. This is deliberately the **quick-win cut of SEED-146** — survival, not throughput; the medium/large items stay unimplemented by explicit user decision (2026-08-10).
 
 **Depends on**: nothing in the codebase. Item 3 (CDN) is **operator work** (DNS provider + CDN account access), not executor work — it can proceed in parallel with the code items and must not block them.
 
@@ -407,7 +407,7 @@ Plans:
 **Scope** (the quick-win cut, decided with the user 2026-08-10):
 
 - **Seed item 1 — `useReadiness` poll (highest impact).** Frontend-first: keep 3 s cadence while `tier1` is false (import phase, seconds-to-minutes), back off hard once only `tier2` is outstanding, and cap total poll duration so an 8-hour tab goes quiet. Cheapen `GET /imports/readiness` only if it turns out trivial while in there; the poll fix must not depend on it.
-- **Seed item 2, guest half ONLY — Argon2id off the event loop.** `asyncio.to_thread(...)` around `_password_helper.hash` in `app/services/guest_service.py:94`. The register/login half (`UserManager` override, M-sized) is explicitly deferred.
+- **Seed item 2, our-code half ONLY — Argon2id off the event loop.** `asyncio.to_thread(...)` around `_password_helper.hash` in `promote_guest_with_password` (`app/services/guest_service.py:94`, reached from `POST /auth/guest/promote/email`). **Seed correction 2026-08-10:** `POST /auth/guest/create` never hashes (`hashed_password=""`), so the "Use as Guest" funnel carries zero hashing cost and the seed's "6.6 s frozen loop" scenario does not exist. Hashing load is proportional to register/login/promotion volume only, which further justifies deferring the register/login half (`UserManager` override, M-sized).
 - **Seed item 3 — CDN for `/maia/*` and `/engine/*`.** DNS + cache config, no code. Must respect existing per-path headers: `@vendored_runtime` 30-day caching stays, `@maiaworker` (`/maia/maia-worker.js`) stays `no-cache`.
 - **Seed item 4, THIN slice — global import semaphore + bare "queued" status.** A global concurrency cap on import execution and a visible "queued" job state (NO position number, NO ETA math — that UX is the deferred medium feature). The periodic reaper must not mark a queued-but-alive job failed while it waits out `IMPORT_TIMEOUT_SECONDS`.
 - **Seed item 5 — gate `compute_stage_a`/`compute_stage_b`.** A `Semaphore(2–3)` around the per-import-completion percentile computes so burst completions can't hold N of 20 pooled connections for seconds.
@@ -424,7 +424,7 @@ Plans:
 **Success Criteria** (what must be TRUE):
 
 1. With `tier1` true and `tier2` still outstanding, the readiness poll's **emitted interval sequence** backs off and polling stops entirely after a total-duration cap; while `tier1` is false the cadence stays at 3 s. The test asserts the interval sequence itself and goes red when the backoff is reverted (per `feedback_mutation_test_gap_closures` — "backoff constant exists" proves nothing).
-2. `POST /auth/guest/create` hashes the password off the event loop; a test goes red when the `to_thread` wrapper is removed. Register/login paths are untouched.
+2. `POST /auth/guest/promote/email` hashes the password off the event loop; a test goes red when the `to_thread` wrapper is removed. Register/login paths and `POST /auth/guest/create` (which never hashes) are untouched.
 3. `/maia/*` and `/engine/*` are served from CDN cache (cache-hit response headers on a second fetch of `maia3_simplified.onnx`), and `/maia/maia-worker.js` still returns `no-cache`.
 4. No more than the configured cap of imports executes concurrently; the cap+1th import job is visibly "queued" (not failed, not silently stalled), starts when a slot frees, and is never reaped as an orphan while waiting.
 5. A burst of simultaneous import completions never runs more than the semaphore's worth of concurrent `compute_stage_a`/`b` computations.
