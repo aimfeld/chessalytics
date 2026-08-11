@@ -3,6 +3,7 @@
 HTTP layer only — all DB access via user_repository and game_repository.
 """
 
+import datetime
 from typing import Annotated
 
 from fastapi import APIRouter, Depends, HTTPException, Request
@@ -11,8 +12,8 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.config import settings
 from app.core.database import get_async_session
+from app.core.dev_clock import dev_now_utc
 from app.models.user import User
-from app.models.user_rating_anchors import TimeControlBucket
 from app.repositories import (
     game_repository,
     import_job_repository,
@@ -21,7 +22,6 @@ from app.repositories import (
     user_repository,
 )
 from app.repositories.user_import_settings_repository import _import_scope_expanded
-from app.repositories.user_rating_anchors_repository import RatingAnchorRow
 from app.schemas.admin import ImpersonationContext
 from app.schemas.users import (
     GameCountResponse,
@@ -30,32 +30,13 @@ from app.schemas.users import (
     UserProfileResponse,
     UserProfileUpdate,
 )
+from app.services.current_strength_service import resolve_current_strength_for_user
 from app.users import current_active_user
 
 router = APIRouter(prefix="/users", tags=["users"])
 
 # Matches the audience baked into JWTStrategy (FastAPI-Users default).
 _JWT_AUDIENCE = ["fastapi-users:auth"]
-
-
-def _lichess_blitz_equivalent_rating(
-    anchors: dict[TimeControlBucket, RatingAnchorRow],
-) -> int | None:
-    """Return the caller's blitz-bucket anchor rating (Phase 171 D-07), or None.
-
-    ``anchors`` is keyed by TC bucket (bullet/blitz/rapid/classical); only the
-    "blitz" entry is read here -- the D-07 semantic is specifically the blitz
-    bucket's blended lichess-equivalent median (the same anchor Phase 167's
-    store_bot_game_service already trusts for stamping a finished bot game's
-    player rating). A user with anchors ONLY in rapid/classical correctly gets
-    None here -- that's the deliberate blitz-bucket-only semantic, not a bug.
-
-    UI DEFAULT ONLY -- never fed into bot move selection (BOT-03). This value
-    seeds the analysis board's free-play ELO default and the bot setup screen's
-    ELO default; it must never reach the bot's move-selection budget.
-    """
-    row = anchors.get("blitz")
-    return row.anchor_rating if row is not None else None
 
 
 async def _get_impersonation_context(
@@ -93,6 +74,7 @@ async def get_profile(
     session: Annotated[AsyncSession, Depends(get_async_session)],
     user: Annotated[User, Depends(current_active_user)],
     impersonation: Annotated[ImpersonationContext | None, Depends(_get_impersonation_context)],
+    now_utc: Annotated[datetime.datetime, Depends(dev_now_utc)],
 ) -> UserProfileResponse:
     """Return the authenticated user's platform usernames and game counts.
 
@@ -104,6 +86,9 @@ async def get_profile(
     counts = await game_repository.count_games_by_platform(session, user.id)
     last_syncs = await import_job_repository.get_last_completed_at_by_platform(session, user.id)
     anchors = await user_rating_anchors_repository.fetch_anchors_for_user(session, user_id=user.id)
+    current_strength = await resolve_current_strength_for_user(
+        session, user_id=user.id, now_utc=now_utc, anchors=anchors
+    )
     return UserProfileResponse(
         email=user.email,
         is_superuser=user.is_superuser,
@@ -118,7 +103,7 @@ async def get_profile(
         lichess_last_sync_at=last_syncs.get("lichess"),
         impersonation=impersonation,
         beta_enabled=user.beta_enabled,
-        lichess_blitz_equivalent_rating=_lichess_blitz_equivalent_rating(anchors),
+        current_strength=current_strength,
     )
 
 
@@ -127,12 +112,16 @@ async def update_profile(
     body: UserProfileUpdate,
     session: Annotated[AsyncSession, Depends(get_async_session)],
     user: Annotated[User, Depends(current_active_user)],
+    now_utc: Annotated[datetime.datetime, Depends(dev_now_utc)],
 ) -> UserProfileResponse:
     """Update the authenticated user's platform usernames."""
     updated = await user_repository.update_profile(session, user.id, body.model_dump())
     counts = await game_repository.count_games_by_platform(session, user.id)
     last_syncs = await import_job_repository.get_last_completed_at_by_platform(session, user.id)
     anchors = await user_rating_anchors_repository.fetch_anchors_for_user(session, user_id=user.id)
+    current_strength = await resolve_current_strength_for_user(
+        session, user_id=user.id, now_utc=now_utc, anchors=anchors
+    )
     return UserProfileResponse(
         email=user.email,
         is_superuser=user.is_superuser,
@@ -147,7 +136,7 @@ async def update_profile(
         lichess_last_sync_at=last_syncs.get("lichess"),
         impersonation=None,
         beta_enabled=updated.beta_enabled,
-        lichess_blitz_equivalent_rating=_lichess_blitz_equivalent_rating(anchors),
+        current_strength=current_strength,
     )
 
 
