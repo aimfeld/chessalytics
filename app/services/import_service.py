@@ -114,6 +114,7 @@ def get_import_semaphore() -> asyncio.Semaphore:
         _import_semaphore = asyncio.Semaphore(IMPORT_CONCURRENCY_LIMIT)
     return _import_semaphore
 
+
 # Phase 186 Plan 02 (IMPORT-03): how many games to request per backward-walk
 # lichess chunk. Lichess bounds by (until, max), not by TC bucket, so a chunk
 # may contain a mix of enabled/disabled buckets; TC-filtering happens
@@ -346,7 +347,9 @@ def find_active_jobs_for_user(user_id: int) -> list[JobState]:
         List of active JobState entries (may be empty).
     """
     return [
-        job for job in _jobs.values() if job.user_id == user_id and job.status in _ACTIVE_JOB_STATUSES
+        job
+        for job in _jobs.values()
+        if job.user_id == user_id and job.status in _ACTIVE_JOB_STATUSES
     ]
 
 
