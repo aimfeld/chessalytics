@@ -30,6 +30,8 @@ in `YYYY-MM-DD` (Europe/Zurich).
 
 - Creating an account from a guest session and computing your percentile ranking no longer momentarily stall other users' requests under heavy load. (Phase 209)
 
+- The Bots page, the custom-bot ELO default, and the free-play ELO default now estimate your strength from your recent games on whichever platform and time control you have actually been playing, instead of an all-time average that could lag an improving player by a couple of hundred points. The number now explains which games it came from, and players without enough recent games keep the previous value. (SEED-147)
+
 ### Fixed
 
 - Games no longer silently keep gaps in their move-by-move evaluation. A volunteer machine that runs out of time on a position now retries it once before giving up, so a merely slow or overloaded computer no longer leaves a hole behind. Re-analysis attempts are no longer spent on duplicate submissions when two machines happen to race on the same game, and the retry budget itself is larger. Any game that still ends up with gaps is now repaired automatically every day instead of waiting for someone to notice and run a script by hand. (SEED-139)
