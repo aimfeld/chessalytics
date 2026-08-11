@@ -27,7 +27,7 @@ function normalizeColor(value: string): string {
 
 describe('PersonaGrid', () => {
   it('renders exactly 24 persona cards, in rung-major DOM order (rung 800 top -> 1800 bottom, 4 styles per row)', () => {
-    render(<PersonaGrid onSelectPersona={vi.fn()} onSelectCustom={vi.fn()} playerRating={null} />);
+    render(<PersonaGrid onSelectPersona={vi.fn()} onSelectCustom={vi.fn()} currentStrength={null} />);
 
     const container = screen.getByTestId('bots-persona-grid');
     const cards = container.querySelectorAll('[data-testid^="bots-persona-card-"]');
@@ -42,7 +42,7 @@ describe('PersonaGrid', () => {
   });
 
   it('renders one header row of 4 style-name cells with the STYLE_ACCENT colors', () => {
-    render(<PersonaGrid onSelectPersona={vi.fn()} onSelectCustom={vi.fn()} playerRating={null} />);
+    render(<PersonaGrid onSelectPersona={vi.fn()} onSelectCustom={vi.fn()} currentStrength={null} />);
 
     const expectedAccent: Record<string, string> = {
       Attacker: ATTACKER_ACCENT,
@@ -60,7 +60,7 @@ describe('PersonaGrid', () => {
   });
 
   it('each card shows a non-empty name, a tilde-formatted ELO label, and an avatar', () => {
-    render(<PersonaGrid onSelectPersona={vi.fn()} onSelectCustom={vi.fn()} playerRating={null} />);
+    render(<PersonaGrid onSelectPersona={vi.fn()} onSelectCustom={vi.fn()} currentStrength={null} />);
 
     const attackerPersonas = personasForSection('Attacker');
     for (const persona of attackerPersonas) {
@@ -75,7 +75,7 @@ describe('PersonaGrid', () => {
 
   it('renders a Custom entry that invokes onSelectCustom on click', () => {
     const onSelectCustom = vi.fn();
-    render(<PersonaGrid onSelectPersona={vi.fn()} onSelectCustom={onSelectCustom} playerRating={null} />);
+    render(<PersonaGrid onSelectPersona={vi.fn()} onSelectCustom={onSelectCustom} currentStrength={null} />);
 
     const customEntry = screen.getByTestId('bots-persona-custom');
     expect(customEntry).toBeTruthy();
@@ -86,7 +86,7 @@ describe('PersonaGrid', () => {
 
   it('a persona card tap fires onSelectPersona with the tapped persona', () => {
     const onSelectPersona = vi.fn();
-    render(<PersonaGrid onSelectPersona={onSelectPersona} onSelectCustom={vi.fn()} playerRating={null} />);
+    render(<PersonaGrid onSelectPersona={onSelectPersona} onSelectCustom={vi.fn()} currentStrength={null} />);
 
     const firstAttacker = personasForSection('Attacker')[0];
     if (firstAttacker === undefined) throw new Error('expected at least one Attacker persona');
@@ -96,23 +96,53 @@ describe('PersonaGrid', () => {
     expect(onSelectPersona).toHaveBeenCalledWith(firstAttacker);
   });
 
-  it('shows the player rating reference line when an anchor is available', () => {
-    render(<PersonaGrid onSelectPersona={vi.fn()} onSelectCustom={vi.fn()} playerRating={1642} />);
+  it('shows the player rating reference line for a rung-sourced estimate', () => {
+    render(
+      <PersonaGrid
+        onSelectPersona={vi.fn()}
+        onSelectCustom={vi.fn()}
+        currentStrength={{
+          rating: 1642,
+          source: 'recent_games',
+          rung: {
+            platform: 'lichess',
+            time_control_bucket: 'blitz',
+            n_games: 40,
+            window_days: 90,
+            converted: false,
+          },
+        }}
+      />,
+    );
 
     const line = screen.getByTestId('bots-player-rating');
     expect(line.textContent).toContain('~1642');
     expect(screen.getByTestId('bots-player-rating-info')).toBeTruthy();
   });
 
+  it('shows the player rating reference line for an anchor-sourced estimate too (a null rung must not suppress it)', () => {
+    render(
+      <PersonaGrid
+        onSelectPersona={vi.fn()}
+        onSelectCustom={vi.fn()}
+        currentStrength={{ rating: 1370, source: 'rating_anchor', rung: null }}
+      />,
+    );
+
+    const line = screen.getByTestId('bots-player-rating');
+    expect(line.textContent).toContain('~1370');
+    expect(screen.getByTestId('bots-player-rating-info')).toBeTruthy();
+  });
+
   it('omits the player rating reference line entirely when there is no anchor', () => {
-    render(<PersonaGrid onSelectPersona={vi.fn()} onSelectCustom={vi.fn()} playerRating={null} />);
+    render(<PersonaGrid onSelectPersona={vi.fn()} onSelectCustom={vi.fn()} currentStrength={null} />);
 
     expect(screen.queryByTestId('bots-player-rating')).toBeNull();
     expect(screen.queryByTestId('bots-player-rating-info')).toBeNull();
   });
 
   it('never uses sub-text-sm font-size utilities anywhere in the grid', () => {
-    render(<PersonaGrid onSelectPersona={vi.fn()} onSelectCustom={vi.fn()} playerRating={null} />);
+    render(<PersonaGrid onSelectPersona={vi.fn()} onSelectCustom={vi.fn()} currentStrength={null} />);
 
     const container = screen.getByTestId('bots-persona-grid');
     expect(container.innerHTML).not.toContain('text-xs');

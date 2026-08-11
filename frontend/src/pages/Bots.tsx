@@ -584,7 +584,7 @@ export default function BotsPage(): ReactElement {
   // Phase 185: ONE useBotPersonaWins() call here, prop-drilled into
   // PersonaGrid -> PersonaCard as winsByPersona/winsForPersona (Pattern 3 —
   // single-fetch-then-prop-drill, mirrors this file's existing single
-  // useUserProfile() -> playerRating prop). Loading/error both resolve to
+  // useUserProfile() -> currentStrength prop). Loading/error both resolve to
   // `undefined` data, which PersonaCard's stars row already renders as its
   // all-outline zero-state — no isError branch needed here, this is a small
   // decorative stat row degrading gracefully, not a page-blocking query.
@@ -738,7 +738,7 @@ export default function BotsPage(): ReactElement {
           </div>
           <SetupScreen
             ownerKey={ownerKey}
-            normalizedRating={profile?.lichess_blitz_equivalent_rating ?? null}
+            normalizedRating={profile?.current_strength?.rating ?? null}
             onStart={handleStart}
           />
         </>
@@ -754,7 +754,7 @@ export default function BotsPage(): ReactElement {
         <PersonaGrid
           onSelectPersona={setDetailPersona}
           onSelectCustom={() => setShowCustomSetup(true)}
-          playerRating={profile?.lichess_blitz_equivalent_rating ?? null}
+          currentStrength={profile?.current_strength ?? null}
           winsByPersona={winsByPersona}
         />
         <PersonaDetailSurface

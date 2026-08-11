@@ -11,12 +11,14 @@
  *     defaults to the opponent's (normalized) rating, matching who is actually choosing
  *     the move (quick 260705-m3z). `sideToMove` omitted → falls back to `gameData.user_color`.
  *     Never the frozen current-rating snapshot.
- *   - Free play (Phase 171 D-08): the user's normalized `profile.lichess_blitz_equivalent_rating`
- *     (the blitz-bucket anchor, Phase 171 D-07), else the FREE_PLAY_DEFAULT_ELO (1500)
- *     midpoint fallback. Deliberately NOT a raw platform rating from the user's most
- *     recent game — that is inflated for chess.com users relative to the
- *     Maia/Lichess-blitz scale this slider is on. (The `current_rating` wire field that
- *     once carried it was deleted outright; see the `MaiaEloProfile` docblock below.)
+ *   - Free play (Quick 260811-u11, SEED-147, replacing Phase 171 D-08): the user's
+ *     `profile.current_strength.rating` — a current-strength estimate read through
+ *     `apply_game_filters`, with the blitz-bucket anchor as its own server-side
+ *     fallback — else the FREE_PLAY_DEFAULT_ELO (1500) midpoint fallback. Deliberately
+ *     NOT a raw platform rating from the user's most recent game — that is inflated for
+ *     chess.com users relative to the Maia/Lichess-blitz scale this slider is on. (The
+ *     `current_rating` wire field that once carried an unfiltered version of this was
+ *     deleted outright; see the `MaiaEloProfile` docblock below.)
  *   - The resolved default is clamped to the MAIA_ELO_LADDER's [min, max] bounds
  *     (NOT snapped to its 100-ELO steps — a rating like 1720 stays 1720; only the
  *     ladder's outer bounds are enforced. useMaiaEngine's own `nearestByElo` picks
@@ -60,16 +62,23 @@ export interface MaiaEloGameData {
  * structurally irreversible-by-accident: the raw (chess.com-inflated) rating was no
  * longer visible to this hook, so a future edit could not silently read it back.
  *
- * WR-04 left the field on the wire as a deferred contract change; it has since been
- * deleted from `UserProfile` / `app/schemas/users.py` entirely (SEED-147). Its backing
- * query `get_current_rating_by_platform` was the one rating path that bypassed
- * `apply_game_filters`, so it returned FlawChess's OWN bot-game rating stamps — for
- * prod user 3 it reported 1340, an echo of a stale rapid anchor. Do not reintroduce a
- * "rating from the most recent game" field without that filtering.
+ * WR-04 left the field on the wire as a deferred contract change; `current_rating`
+ * was deleted from `UserProfile` / `app/schemas/users.py` entirely, and
+ * `lichess_blitz_equivalent_rating` itself was later replaced by `current_strength`
+ * (Quick 260811-u11, SEED-147) for the same reason: once all three opponent-matching
+ * surfaces repointed here, the plain anchor field had zero readers left, and the
+ * anchor fallback now happens SERVER-SIDE inside `current_strength`'s resolution.
+ * `current_strength.rating` is a value derived through `apply_game_filters`
+ * (rated=True, opponent_type="human", platform=None) — the filtering that excludes
+ * FlawChess's OWN bot-game rating stamps and unrated/pasted games. The deleted
+ * `get_current_rating_by_platform` bypassed that filter and, for prod user 3,
+ * reported 1340 — an echo of a stale rapid anchor read back as the user's own
+ * rating. Do not reintroduce a "rating from the most recent game" field without
+ * that filtering.
  */
 export interface MaiaEloProfile {
-  // Phase 171 D-08: the normalized rating the free-play branch actually reads.
-  lichess_blitz_equivalent_rating: number | null;
+  // Quick 260811-u11 (SEED-147): the rating the free-play branch actually reads.
+  current_strength: { rating: number } | null;
 }
 
 export interface UseMaiaEloDefaultOptions {
@@ -134,7 +143,7 @@ export function deriveRawDefault(
     }
     return gameData.black_rating_lichess_blitz ?? gameData.black_rating;
   }
-  return profile?.lichess_blitz_equivalent_rating ?? FREE_PLAY_DEFAULT_ELO;
+  return profile?.current_strength?.rating ?? FREE_PLAY_DEFAULT_ELO;
 }
 
 export function useMaiaEloDefault({

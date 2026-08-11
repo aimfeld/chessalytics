@@ -88,7 +88,7 @@ function makeProfile(overrides: Partial<UserProfile>): UserProfile {
     lichess_last_sync_at: null,
     impersonation: null,
     beta_enabled: false,
-    lichess_blitz_equivalent_rating: null,
+    current_strength: null,
     ...overrides,
   };
 }

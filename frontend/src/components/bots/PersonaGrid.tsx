@@ -13,6 +13,7 @@ import type { ReactElement } from 'react';
 import { PersonaCard } from '@/components/bots/PersonaCard';
 import { Button } from '@/components/ui/button';
 import { InfoPopover } from '@/components/ui/info-popover';
+import { currentStrengthCopy } from '@/lib/currentStrengthCopy';
 import {
   STYLE_SECTION_ORDER,
   RUNGS,
@@ -21,6 +22,7 @@ import {
 } from '@/lib/personas/personaRegistry';
 import type { Style } from '@/lib/engine/styleOpeningLines';
 import { ATTACKER_ACCENT, TRICKSTER_ACCENT, GRINDER_ACCENT, WALL_ACCENT } from '@/lib/theme';
+import type { CurrentStrength } from '@/types/users';
 
 /** Per-style section-heading accent (D-14: the heading text is the style's
  * own display name — "Wall", never "Solid Wall"/"Great Wall"). Mirrors
@@ -35,11 +37,12 @@ const STYLE_ACCENT: Record<Style, string> = {
 export interface PersonaGridProps {
   onSelectPersona: (persona: Persona) => void;
   onSelectCustom: () => void;
-  /** Quick 260722-nlm: the player's lichess-blitz-equivalent rating (Phase 171
-   * D-07 anchor), resolved by `Bots.tsx` from its single `useUserProfile()`
-   * call. `null` for guests / users with no anchor — the reference line is
-   * then omitted entirely rather than showing a placeholder. */
-  playerRating: number | null;
+  /** Quick 260811-u11 (SEED-147): the player's current-strength estimate,
+   * resolved by `Bots.tsx` from its single `useUserProfile()` call. `null`
+   * for guests / users with neither a qualifying recent-games rung nor an
+   * anchor — the reference line is then omitted entirely rather than
+   * showing a placeholder. */
+  currentStrength: CurrentStrength | null;
   /** Phase 185: per-persona-id raw win counts, fetched ONCE by `Bots.tsx`
    * (`useBotPersonaWins`) and prop-drilled here — this component never calls
    * `useQuery` itself (Pattern 3, single-fetch-then-prop-drill), which would
@@ -52,7 +55,7 @@ export interface PersonaGridProps {
 export function PersonaGrid({
   onSelectPersona,
   onSelectCustom,
-  playerRating,
+  currentStrength,
   winsByPersona,
 }: PersonaGridProps): ReactElement {
   return (
@@ -64,21 +67,20 @@ export function PersonaGrid({
     >
       {/* Strength reference for picking an opponent: the persona cards all
           carry a `~ELO` label, but without the player's own number those
-          labels have nothing to be "similar" to. */}
-      {playerRating !== null && (
+          labels have nothing to be "similar" to. A null `rung` (anchor
+          fallback) does NOT suppress this line — only currentStrength ===
+          null does. */}
+      {currentStrength !== null && (
         <div className="-mb-3 flex items-center gap-1" data-testid="bots-player-rating">
           <p className="text-sm text-muted-foreground">
             Your estimated blitz rating:{' '}
-            <span className="font-semibold text-foreground">{`~${Math.round(playerRating)}`}</span>
+            <span className="font-semibold text-foreground">{`~${Math.round(currentStrength.rating)}`}</span>
           </p>
           <InfoPopover
             ariaLabel="About your estimated blitz rating"
             testId="bots-player-rating-info"
           >
-            <p>
-              Estimated from your imported games and converted to an approximate
-              Lichess blitz scale. Pick a bot near this number for an even game.
-            </p>
+            <p>{currentStrengthCopy(currentStrength)}</p>
           </InfoPopover>
         </div>
       )}

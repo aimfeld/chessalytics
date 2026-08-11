@@ -5,8 +5,8 @@
  * Behaviors verified:
  * 1. Game mode, white user, white_rating=1720 -> resolved default 1720 (clamped to ladder bounds).
  * 2. Game mode, black user -> resolves from black_rating.
- * 3. Free play (D-08), profile.lichess_blitz_equivalent_rating=1650 -> resolved default 1650.
- * 4. Free play, lichess_blitz_equivalent_rating null -> FREE_PLAY_DEFAULT_ELO (1500).
+ * 3. Free play, profile.current_strength.rating=1650 -> resolved default 1650.
+ * 4. Free play, current_strength null -> FREE_PLAY_DEFAULT_ELO (1500).
  * 5. User-override precedence: a later gameData/profile load does not clobber a user pick.
  * 6. Re-derivation happens when gameData/profile FIRST load (not on every re-render).
  */
@@ -34,16 +34,16 @@ function gameData(overrides: Partial<MaiaEloGameData>): MaiaEloGameData {
 }
 
 /**
- * WR-04: the blitz anchor is the ONLY rating `MaiaEloProfile` exposes, so D-08's
- * repoint is enforced by the TYPE rather than by an assertion — the hook cannot
- * see a raw platform rating even if `UserProfile` grows one again. (It carried a
- * `current_rating` field until SEED-147 deleted it; earlier revisions of this file
- * passed one at runtime as a decoy. If a current-strength field is reintroduced,
- * widen this factory and restore that decoy rather than adding it to
- * `MaiaEloProfile`.)
+ * WR-04: `current_strength.rating` is the ONLY rating `MaiaEloProfile` exposes, so
+ * the free-play repoint is enforced by the TYPE rather than by an assertion — the
+ * hook cannot see a raw platform rating even if `UserProfile` grows one again. (It
+ * carried a `current_rating` field until SEED-147 deleted it, then a plain
+ * `lichess_blitz_equivalent_rating` field until this same quick task replaced it
+ * with `current_strength`. If a raw rating field is reintroduced, widen this
+ * factory rather than adding it to `MaiaEloProfile`.)
  */
-function profile(lichessBlitzEquivalentRating: number | null): MaiaEloProfile {
-  return { lichess_blitz_equivalent_rating: lichessBlitzEquivalentRating };
+function profile(currentStrengthRating: number | null): MaiaEloProfile {
+  return { current_strength: currentStrengthRating === null ? null : { rating: currentStrengthRating } };
 }
 
 describe('useMaiaEloDefault', () => {
@@ -158,7 +158,7 @@ describe('useMaiaEloDefault', () => {
     expect(black.result.current.selectedElo).toBe(1350);
   });
 
-  it('free play: resolves from profile.lichess_blitz_equivalent_rating (D-08)', () => {
+  it('free play: resolves from profile.current_strength.rating', () => {
     // The normalized blitz anchor is the only rating the hook may read; a raw
     // platform rating would be chess.com-inflated relative to the Maia scale.
     const { result } = renderHook(() =>
@@ -171,7 +171,7 @@ describe('useMaiaEloDefault', () => {
     expect(result.current.selectedElo).toBe(1650);
   });
 
-  it('free play: lichess_blitz_equivalent_rating null falls back to FREE_PLAY_DEFAULT_ELO', () => {
+  it('free play: current_strength null falls back to FREE_PLAY_DEFAULT_ELO', () => {
     const { result } = renderHook(() =>
       useMaiaEloDefault({
         isGameMode: false,
@@ -196,7 +196,7 @@ describe('useMaiaEloDefault', () => {
     expect(result.current.selectedElo).toBe(FREE_PLAY_DEFAULT_ELO);
   });
 
-  it('free play: a raw lichess_blitz_equivalent_rating outside the ladder still clamps to ladder bounds', () => {
+  it('free play: a raw current_strength.rating outside the ladder still clamps to ladder bounds', () => {
     const { result } = renderHook(() =>
       useMaiaEloDefault({
         isGameMode: false,
