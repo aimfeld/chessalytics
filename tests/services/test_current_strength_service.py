@@ -54,14 +54,26 @@ class TestFloorBoundary:
     """D-01: exactly the 20th game flips a rung from ignored to selected."""
 
     def test_19_games_is_ignored(self) -> None:
-        rung = _rung("lichess", "blitz", MIN_QUALIFYING_GAMES - 1, 1500, datetime.datetime(2026, 8, 1, tzinfo=_UTC))
+        rung = _rung(
+            "lichess",
+            "blitz",
+            MIN_QUALIFYING_GAMES - 1,
+            1500,
+            datetime.datetime(2026, 8, 1, tzinfo=_UTC),
+        )
 
         result = resolve_current_strength([rung], anchors={})
 
         assert result is None
 
     def test_20_games_is_selected(self) -> None:
-        rung = _rung("lichess", "blitz", MIN_QUALIFYING_GAMES, 1500, datetime.datetime(2026, 8, 1, tzinfo=_UTC))
+        rung = _rung(
+            "lichess",
+            "blitz",
+            MIN_QUALIFYING_GAMES,
+            1500,
+            datetime.datetime(2026, 8, 1, tzinfo=_UTC),
+        )
 
         result = resolve_current_strength([rung], anchors={})
 
@@ -95,7 +107,9 @@ class TestNativeBlitzTiebreak:
 
     def test_positive_tiebreak_prefers_native_blitz(self) -> None:
         # chess.com blitz, native 1118 -> ~1493; most recent (2026-08-11).
-        cc_blitz = _rung("chess.com", "blitz", 317, 1118, datetime.datetime(2026, 8, 11, tzinfo=_UTC))
+        cc_blitz = _rung(
+            "chess.com", "blitz", 317, 1118, datetime.datetime(2026, 8, 11, tzinfo=_UTC)
+        )
         # lichess blitz, native/identity 1532; one day behind, within the
         # 7-day lag bound, and within 50 points of 1493.
         li_blitz = _rung("lichess", "blitz", 152, 1532, datetime.datetime(2026, 8, 10, tzinfo=_UTC))
@@ -112,9 +126,13 @@ class TestNativeBlitzTiebreak:
     def test_negative_on_point_gap_more_recent_rung_wins(self) -> None:
         # Same one-day lag as the positive case, but cc's native rating (700)
         # normalizes far enough from li's (1532) to fail the 50-point bound.
-        cc_blitz = _rung("chess.com", "blitz", 317, 700, datetime.datetime(2026, 8, 11, tzinfo=_UTC))
+        cc_blitz = _rung(
+            "chess.com", "blitz", 317, 700, datetime.datetime(2026, 8, 11, tzinfo=_UTC)
+        )
         li_blitz = _rung("lichess", "blitz", 152, 1532, datetime.datetime(2026, 8, 10, tzinfo=_UTC))
-        cc_normalized = normalize_to_lichess_blitz(700, "chess.com", "blitz", is_correspondence=False)
+        cc_normalized = normalize_to_lichess_blitz(
+            700, "chess.com", "blitz", is_correspondence=False
+        )
         assert cc_normalized is not None
         assert abs(cc_normalized - 1532) > 50
 
@@ -129,7 +147,9 @@ class TestNativeBlitzTiebreak:
     def test_negative_on_lag_top_rung_wins(self) -> None:
         # Within the 50-point agreement bound, but li's latest game is 10
         # days behind cc's -- past the 7-day lag bound.
-        cc_blitz = _rung("chess.com", "blitz", 317, 1118, datetime.datetime(2026, 8, 11, tzinfo=_UTC))
+        cc_blitz = _rung(
+            "chess.com", "blitz", 317, 1118, datetime.datetime(2026, 8, 11, tzinfo=_UTC)
+        )
         li_blitz = _rung("lichess", "blitz", 152, 1532, datetime.datetime(2026, 8, 1, tzinfo=_UTC))
 
         result = resolve_current_strength([cc_blitz, li_blitz], anchors={})
@@ -145,7 +165,13 @@ class TestFallback:
     """D-07: falls back to the blitz-bucket anchor when no rung survives."""
 
     def test_no_qualifying_rung_falls_back_to_blitz_anchor(self) -> None:
-        below_floor = _rung("lichess", "blitz", MIN_QUALIFYING_GAMES - 1, 1500, datetime.datetime(2026, 8, 1, tzinfo=_UTC))
+        below_floor = _rung(
+            "lichess",
+            "blitz",
+            MIN_QUALIFYING_GAMES - 1,
+            1500,
+            datetime.datetime(2026, 8, 1, tzinfo=_UTC),
+        )
 
         result = resolve_current_strength([below_floor], anchors={"blitz": _anchor(1370)})
 
@@ -162,7 +188,11 @@ class TestFallback:
             normalize_to_lichess_blitz(100, "chess.com", "blitz", is_correspondence=False) is None
         )
         unconvertible = _rung(
-            "chess.com", "blitz", MIN_QUALIFYING_GAMES, 100, datetime.datetime(2026, 8, 1, tzinfo=_UTC)
+            "chess.com",
+            "blitz",
+            MIN_QUALIFYING_GAMES,
+            100,
+            datetime.datetime(2026, 8, 1, tzinfo=_UTC),
         )
 
         result = resolve_current_strength([unconvertible], anchors={"blitz": _anchor(1370)})

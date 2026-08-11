@@ -100,7 +100,9 @@ def _anchor_fallback(
     blitz_anchor = anchors.get("blitz")
     if blitz_anchor is None:
         return None
-    return CurrentStrengthResponse(rating=blitz_anchor.anchor_rating, source="rating_anchor", rung=None)
+    return CurrentStrengthResponse(
+        rating=blitz_anchor.anchor_rating, source="rating_anchor", rung=None
+    )
 
 
 def resolve_current_strength(
