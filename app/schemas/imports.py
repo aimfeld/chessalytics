@@ -7,6 +7,15 @@ from pydantic import BaseModel, Field, ValidationInfo, field_validator
 from app.core.platform_usernames import extract_platform_username
 from app.schemas.normalization import Color
 
+# SURGE-04/D-03 (Phase 209): the five exhaustive values import_jobs.status can
+# take. "queued" is in-memory only (import_service.JobStatus.QUEUED) -- never
+# written to the DB row -- but flows through the same response fields as the
+# other four, so it belongs in the same wire type. The only writers of
+# import_jobs.status are the create path ("pending"), the first batch flush
+# ("in_progress"), completion ("completed"), and the two failure paths plus
+# the reaper ("failed").
+ImportJobStatusLiteral = Literal["pending", "queued", "in_progress", "completed", "failed"]
+
 
 class ImportRequest(BaseModel):
     platform: Literal["chess.com", "lichess"]
@@ -27,14 +36,14 @@ class ImportRequest(BaseModel):
 
 class ImportStartedResponse(BaseModel):
     job_id: str
-    status: str
+    status: ImportJobStatusLiteral
 
 
 class ImportStatusResponse(BaseModel):
     job_id: str
     platform: str
     username: str
-    status: str
+    status: ImportJobStatusLiteral
     games_fetched: int
     games_imported: int
     error: str | None = None

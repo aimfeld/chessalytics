@@ -1893,6 +1893,215 @@ class TestFailOrphanedJobsAgeThreshold:
         assert rows[0].status == "failed"
 
 
+class _NoCloseSessionCtx:
+    """Async context manager yielding an already-open session without closing it.
+
+    `_stamp_started_at` does `async with async_session_maker() as session: ...`.
+    The real `db_session` fixture is a raw AsyncSession bound to a rollback-scoped
+    connection that the fixture itself closes at teardown -- if we patched
+    `async_session_maker` to a bare `lambda: db_session` and let AsyncSession's
+    own `__aexit__` run, it would call `session.close()` mid-test and invalidate
+    the fixture for every assertion after it. This wrapper's `__aexit__` is a
+    deliberate no-op so the same rollback-scoped session survives for the rest
+    of the test (mirrors the existing pattern of tests calling `db_session.commit()`
+    directly without ever closing it themselves).
+    """
+
+    def __init__(self, session) -> None:
+        self._session = session
+
+    async def __aenter__(self):
+        return self._session
+
+    async def __aexit__(self, *_exc) -> bool:
+        return False
+
+
+class TestQueuedJobReaperExemption:
+    """DB-backed tests for the SURGE-04/D-03 started_at re-stamp (Phase 209 Plan 02).
+
+    Proves both directions of the reaper contract: a job that waited a long
+    time in the QUEUED state and then got its semaphore slot must survive the
+    orphan reaper (the re-stamp resets started_at at acquisition time), but a
+    job that genuinely runs past IMPORT_TIMEOUT_SECONDS AFTER acquisition must
+    still be reaped -- the exemption protects queue-wait time only, never
+    execution time (T-209-02-03 in the threat model).
+
+    Reuses TestFailOrphanedJobsAgeThreshold's _seed_job helper shape.
+    """
+
+    async def _seed_job(
+        self,
+        session,
+        user_id: int,
+        job_id: str,
+        status: str,
+        started_at: datetime,
+        platform: str = "lichess",
+    ) -> None:
+        """Insert an ImportJob with a controlled started_at (mirrors
+        TestFailOrphanedJobsAgeThreshold._seed_job -- see that class for the
+        platform-parameter rationale).
+        """
+        from sqlalchemy import text
+
+        from app.models.import_job import ImportJob
+        from tests.conftest import ensure_test_user
+
+        await ensure_test_user(session, user_id)
+        job = ImportJob(
+            id=job_id,
+            user_id=user_id,
+            platform=platform,
+            username="test_user",
+            status=status,
+            games_fetched=0,
+            games_imported=0,
+        )
+        session.add(job)
+        await session.flush()
+        await session.execute(
+            text("UPDATE import_jobs SET started_at = :ts WHERE id = :id"),
+            {"ts": started_at, "id": job_id},
+        )
+        await session.flush()
+
+    async def _stamp(self, db_session, job_id: str) -> None:
+        """Call the real `_stamp_started_at` against the rollback-scoped fixture session."""
+        from app.services.import_service import _stamp_started_at
+
+        with patch(
+            "app.services.import_service.async_session_maker",
+            lambda: _NoCloseSessionCtx(db_session),
+        ):
+            await _stamp_started_at(job_id)
+
+    @pytest.mark.asyncio
+    async def test_restamped_job_survives_the_orphan_reaper(self, db_session):
+        """A job re-stamped at slot acquisition survives the reaper even though
+        its DB row was created (and its started_at server_default fired) 4h ago
+        -- the shape a job that waited a long time in the queue leaves behind.
+
+        Companion assertion (test_a_non_restamped_job_is_reaped below) proves a
+        NON-re-stamped 4h-old row IS reaped, so together these two tests
+        measure the re-stamp itself rather than the threshold value.
+        """
+        import uuid
+
+        from app.repositories.import_job_repository import fail_orphaned_jobs
+
+        now = datetime.now(timezone.utc)
+        job_id = str(uuid.uuid4())
+        await self._seed_job(db_session, 9101, job_id, "pending", now - timedelta(hours=4))
+        await db_session.commit()
+
+        await self._stamp(db_session, job_id)
+
+        count = await fail_orphaned_jobs(
+            db_session, orphan_age_threshold=timedelta(seconds=IMPORT_TIMEOUT_SECONDS)
+        )
+        await db_session.commit()
+
+        assert count == 0, "A job re-stamped at acquisition must NOT be reaped"
+
+        from sqlalchemy import select
+
+        from app.models.import_job import ImportJob
+
+        row = (
+            await db_session.execute(select(ImportJob).where(ImportJob.id == job_id))
+        ).scalar_one()
+        assert row.status == "pending", (
+            f"Re-stamped job must survive the reaper, got status={row.status!r}"
+        )
+
+    @pytest.mark.asyncio
+    async def test_a_non_restamped_job_is_reaped(self, db_session):
+        """Control for the above: a 4h-old row that was NEVER re-stamped IS
+        reaped. Isolates that the survival above is caused by the re-stamp,
+        not by some other property of the threshold check.
+        """
+        import uuid
+
+        from app.repositories.import_job_repository import fail_orphaned_jobs
+
+        now = datetime.now(timezone.utc)
+        job_id = str(uuid.uuid4())
+        await self._seed_job(db_session, 9102, job_id, "pending", now - timedelta(hours=4))
+        await db_session.commit()
+
+        count = await fail_orphaned_jobs(
+            db_session, orphan_age_threshold=timedelta(seconds=IMPORT_TIMEOUT_SECONDS)
+        )
+        await db_session.commit()
+
+        assert count == 1, "A non-re-stamped 4h-old job must be reaped"
+
+    @pytest.mark.asyncio
+    async def test_execution_overrun_after_acquisition_is_still_reaped(self, db_session):
+        """The exemption protects queue-wait time only. A job re-stamped at
+        acquisition and THEN backdated to 4h ago again (simulating a job that
+        genuinely ran past IMPORT_TIMEOUT_SECONDS after acquiring its slot)
+        MUST still be reaped -- guards against the immortal-job failure mode
+        (T-209-02-03).
+        """
+        import uuid
+
+        from app.repositories.import_job_repository import fail_orphaned_jobs
+
+        now = datetime.now(timezone.utc)
+        job_id = str(uuid.uuid4())
+        await self._seed_job(db_session, 9103, job_id, "pending", now - timedelta(hours=4))
+        await db_session.commit()
+
+        await self._stamp(db_session, job_id)
+
+        # Simulate the job genuinely running past the timeout AFTER acquisition:
+        # backdate started_at to 4h ago again, past IMPORT_TIMEOUT_SECONDS (3h).
+        from sqlalchemy import text
+
+        await db_session.execute(
+            text("UPDATE import_jobs SET started_at = :ts WHERE id = :id"),
+            {"ts": now - timedelta(hours=4), "id": job_id},
+        )
+        await db_session.commit()
+
+        count = await fail_orphaned_jobs(
+            db_session, orphan_age_threshold=timedelta(seconds=IMPORT_TIMEOUT_SECONDS)
+        )
+        await db_session.commit()
+
+        assert count == 1, (
+            "A job that genuinely overran its execution budget AFTER acquisition "
+            "must still be reaped -- the exemption is not immortality"
+        )
+
+    @pytest.mark.asyncio
+    async def test_started_at_is_stamped_once_per_acquisition(self, db_session):
+        """_stamp_started_at moves started_at forward to a timezone-aware UTC value."""
+        import uuid
+
+        from sqlalchemy import select
+
+        from app.models.import_job import ImportJob
+
+        old_started_at = datetime.now(timezone.utc) - timedelta(hours=1)
+        job_id = str(uuid.uuid4())
+        await self._seed_job(db_session, 9104, job_id, "pending", old_started_at)
+        await db_session.commit()
+
+        await self._stamp(db_session, job_id)
+
+        row = (
+            await db_session.execute(select(ImportJob).where(ImportJob.id == job_id))
+        ).scalar_one()
+
+        assert row.started_at > old_started_at, "_stamp_started_at must move started_at forward"
+        assert row.started_at.tzinfo is not None, (
+            "_stamp_started_at must write a timezone-aware UTC value"
+        )
+
+
 class TestImportJobsPartialUniqueIndex:
     """DB-backed tests for the uq_import_jobs_user_platform_active partial
     unique index (Phase 149 PRUNE-05).
@@ -2493,18 +2702,22 @@ class TestRunImportSessionPerBatch:
 
     @pytest.mark.asyncio
     async def test_one_session_per_batch(self):
-        """run_import opens one session for each logical scope: bootstrap + TC-settings
+        """run_import opens one session for each logical scope: started_at re-stamp
+        (SURGE-04/D-03, on semaphore-slot acquisition) + bootstrap + TC-settings
         load + per-batch + end-of-run scope-reset reload + completion + Stage-B gate.
 
         With N=30 games and _BATCH_SIZE=12:
           12 (batch 1) + 12 (batch 2) + 6 (trailing) = 3 batch sessions
+          + 1 started_at re-stamp (Phase 209 Plan 02, SURGE-04/D-03 --
+            _stamp_started_at, fires once per import-semaphore acquisition,
+            before the bootstrap scope opens)
           + 1 bootstrap + 1 TC-settings load (Phase 186 Plan 01, _load_enabled_tc_buckets)
           + 1 end-of-run scope-reset reload (UAT-186-RACE, quick 260724-gnd --
             `_reset_cursors_if_scope_expanded_mid_run`'s own read session; the
             autouse `get_settings` default matches the job-start snapshot so
             scope never expands here, meaning no SECOND session for an actual
             `reset_backfill_cursors` call)
-          + 1 completion + 1 Stage-B gate read session (quick-260527-u3u) = 8 total session opens.
+          + 1 completion + 1 Stage-B gate read session (quick-260527-u3u) = 9 total session opens.
 
         The trailing +1 is the fresh read session opened inside _complete_import_job to
         evaluate users_with_zero_pending before firing compute_stage_b — see
@@ -2516,9 +2729,9 @@ class TestRunImportSessionPerBatch:
         n_full_batches = total_games // _BATCH_SIZE  # = 2
         n_trailing = total_games % _BATCH_SIZE  # = 6
         n_batch_sessions = n_full_batches + (1 if n_trailing > 0 else 0)  # = 3
-        # bootstrap + TC-settings load + batches + scope-reset reload + completion
-        # + Stage-B gate read session = 8
-        expected_session_calls = 1 + 1 + n_batch_sessions + 1 + 1 + 1
+        # started_at re-stamp + bootstrap + TC-settings load + batches + scope-reset
+        # reload + completion + Stage-B gate read session = 9
+        expected_session_calls = 1 + 1 + 1 + n_batch_sessions + 1 + 1 + 1
 
         call_count = [0]
         mock_maker = self._make_simple_session_maker(call_count)

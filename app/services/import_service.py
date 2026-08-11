@@ -87,6 +87,34 @@ _RETRIABLE_DB_OUTAGE_ERRORS: tuple[type[BaseException], ...] = (
 _BATCH_SIZE = 30
 IMPORT_TIMEOUT_SECONDS = 3 * 60 * 60  # 3 hours per D-24
 
+# SURGE-04 / D-03 (Phase 209): global cap on CONCURRENTLY EXECUTING imports
+# (i.e. jobs past the semaphore, not jobs merely registered). The outbound
+# per-platform limiters in app/core/rate_limiters.py already cap active
+# fetching at 3 chess.com + 3 lichess = 6 across both platforms, but that only
+# bounds outbound HTTP concurrency -- the ungated flush phase (PGN parse +
+# position-row build) holds a pooled DB session across CPU-bound work with no
+# cap at all. The SQLAlchemy pool is 10 + 10 overflow, and peak observed
+# production concurrency is ~3 simultaneous imports. 6 bounds flush-phase pool
+# pressure with headroom while never visibly queueing at today's load -- a
+# traffic surge (many more than 6 users importing at once) is exactly the case
+# this converts from a 30s-then-500 connection-pool failure into a bounded,
+# honestly-labeled wait (JobStatus.QUEUED). Deliberately NOT placed in
+# rate_limiters.py -- SURGE-06 requires that file byte-identical.
+IMPORT_CONCURRENCY_LIMIT = 6
+
+# Lazy-initialized to avoid creating a Semaphore before the event loop starts
+# (Python 3.10+ requirement) -- mirrors app/core/rate_limiters.py's shape.
+_import_semaphore: asyncio.Semaphore | None = None
+
+
+def get_import_semaphore() -> asyncio.Semaphore:
+    """Return the shared global import-concurrency semaphore (lazy init)."""
+    global _import_semaphore
+    if _import_semaphore is None:
+        _import_semaphore = asyncio.Semaphore(IMPORT_CONCURRENCY_LIMIT)
+    return _import_semaphore
+
+
 # Phase 186 Plan 02 (IMPORT-03): how many games to request per backward-walk
 # lichess chunk. Lichess bounds by (until, max), not by TC bucket, so a chunk
 # may contain a mix of enabled/disabled buckets; TC-filtering happens
@@ -152,6 +180,7 @@ class _PositionRowsResult:
 
 class JobStatus(str, Enum):
     PENDING = "pending"
+    QUEUED = "queued"  # SURGE-04/D-03: in-memory only, never written to the DB row
     IN_PROGRESS = "in_progress"
     COMPLETED = "completed"
     FAILED = "failed"
@@ -186,6 +215,14 @@ class JobState:
 
 # Module-level in-memory job registry
 _jobs: dict[str, JobState] = {}
+
+# SURGE-04/D-03: shared "is this job active" tuple for find_active_job,
+# find_active_jobs_for_user and count_active_platform_jobs -- a single
+# definition so the three call sites cannot drift apart again (they must all
+# treat QUEUED as active, or a queued job disappears from /imports/active,
+# stops blocking duplicate imports, and wrongly flips tier1 true on
+# GET /imports/readiness).
+_ACTIVE_JOB_STATUSES = (JobStatus.PENDING, JobStatus.QUEUED, JobStatus.IN_PROGRESS)
 
 
 async def cleanup_orphaned_jobs(
@@ -292,7 +329,7 @@ def find_active_job(user_id: int, platform: str) -> JobState | None:
         if (
             job.user_id == user_id
             and job.platform == platform
-            and job.status in (JobStatus.PENDING, JobStatus.IN_PROGRESS)
+            and job.status in _ACTIVE_JOB_STATUSES
         ):
             return job
     return None
@@ -312,7 +349,7 @@ def find_active_jobs_for_user(user_id: int) -> list[JobState]:
     return [
         job
         for job in _jobs.values()
-        if job.user_id == user_id and job.status in (JobStatus.PENDING, JobStatus.IN_PROGRESS)
+        if job.user_id == user_id and job.status in _ACTIVE_JOB_STATUSES
     ]
 
 
@@ -330,7 +367,7 @@ def count_active_platform_jobs(platform: str, exclude_user_id: int) -> int:
         1
         for job in _jobs.values()
         if job.platform == platform
-        and job.status in (JobStatus.PENDING, JobStatus.IN_PROGRESS)
+        and job.status in _ACTIVE_JOB_STATUSES
         and job.user_id != exclude_user_id
     )
 
@@ -749,6 +786,32 @@ async def _complete_import_job(job: JobState, job_id: str) -> None:
     # tier-2 auto-enqueue that used to fire here was removed in Phase 118.
 
 
+async def _stamp_started_at(job_id: str) -> None:
+    """Re-stamp ImportJob.started_at to now, at the moment the import semaphore
+    slot is acquired (SURGE-04/D-03).
+
+    Closes a reaper false-positive: `started_at` has `server_default=func.now()`,
+    so without this call it is stamped once, at DB-row-creation time -- i.e. the
+    moment the job entered JobStatus.QUEUED, not the moment it actually started
+    running. `fail_orphaned_jobs`' periodic-reaper predicate is
+    `started_at < now() - IMPORT_TIMEOUT_SECONDS`. A job that waited in the
+    queue for two hours and then ran for ninety minutes would otherwise be
+    marked failed at the three-hour mark despite having barely started real
+    work -- the queue-wait time would silently eat into the execution budget.
+
+    This helper MUST have exactly ONE call site (grep-gated, T-209-02-03): a
+    second call site would let a live-but-genuinely-stuck job keep resetting
+    its own reaper clock and become unreapable.
+    """
+    async with async_session_maker() as session:
+        await import_job_repository.update_import_job(
+            session,
+            job_id=job_id,
+            started_at=datetime.now(timezone.utc),
+        )
+        await session.commit()
+
+
 async def run_import(job_id: str) -> None:
     """Background import orchestrator — launched via asyncio.create_task.
 
@@ -774,68 +837,84 @@ async def run_import(job_id: str) -> None:
         logger.error("run_import called with unknown job_id: %s", job_id)
         return
 
-    job.status = JobStatus.IN_PROGRESS
+    job.status = JobStatus.QUEUED
 
     try:
-        async with asyncio.timeout(IMPORT_TIMEOUT_SECONDS):
-            # Phase 90 / SEED-018 / WR-01: pipeline reads as a list of stages.
-            # Each helper owns its own AsyncSession scope (bootstrap / per-batch /
-            # completion) so session lifetime is bounded — the old single-session
-            # pattern was the secondary accumulation surface alongside the Stage 5
-            # unique-SQL leak fixed in Plan 90-01.
-            bootstrap = await _bootstrap_import_job(job, job_id)
-            # Phase 186 Plan 01/02 (IMPORT-02): loaded once per job, not once per
-            # game -- see _load_import_settings docstring for the D-04 rationale.
-            # D-04: a running job finishes with the settings (TC + cap) it
-            # started with; the next Sync applies any mid-run PATCH.
-            settings = await _load_import_settings(job.user_id)
-            enabled_tc_buckets = _enabled_tc_buckets(settings)
+        # SURGE-04/D-03: acquire the global import-concurrency slot before any
+        # real work begins. Deliberately placed INSIDE the existing try: --
+        # this keeps the except TimeoutError / except Exception failure-
+        # recording branches below in force for an acquisition failure too,
+        # so run_import still never re-raises. A job past this line holds one
+        # of IMPORT_CONCURRENCY_LIMIT slots; a job that has not reached this
+        # line yet is JobStatus.QUEUED and visible as such on every
+        # active-job surface (find_active_job / find_active_jobs_for_user /
+        # count_active_platform_jobs, which all treat QUEUED as active).
+        async with get_import_semaphore():
+            job.status = JobStatus.IN_PROGRESS
+            # Re-stamp started_at NOW, not at DB-row-creation (queue-entry)
+            # time, so the periodic reaper's started_at < cutoff predicate
+            # measures execution time, not queue-wait time (SURGE-04/D-03).
+            await _stamp_started_at(job_id)
 
-            def _on_game_fetched() -> None:
-                job.games_fetched += 1
+            async with asyncio.timeout(IMPORT_TIMEOUT_SECONDS):
+                # Phase 90 / SEED-018 / WR-01: pipeline reads as a list of stages.
+                # Each helper owns its own AsyncSession scope (bootstrap / per-batch /
+                # completion) so session lifetime is bounded — the old single-session
+                # pattern was the secondary accumulation surface alongside the Stage 5
+                # unique-SQL leak fixed in Plan 90-01.
+                bootstrap = await _bootstrap_import_job(job, job_id)
+                # Phase 186 Plan 01/02 (IMPORT-02): loaded once per job, not once per
+                # game -- see _load_import_settings docstring for the D-04 rationale.
+                # D-04: a running job finishes with the settings (TC + cap) it
+                # started with; the next Sync applies any mid-run PATCH.
+                settings = await _load_import_settings(job.user_id)
+                enabled_tc_buckets = _enabled_tc_buckets(settings)
 
-            async with httpx.AsyncClient(timeout=60.0) as client:
-                # FORWARD PASS (D-02/D-05/D-06): post-anchor games, uncapped,
-                # TC-filtered. Bounded below by users.created_at -- since=None
-                # never reaches a platform client for a capped fetch (Pitfall 2).
-                forward_since = (
-                    bootstrap.previous_last_synced_at
-                    if bootstrap.previous_last_synced_at is not None
-                    else bootstrap.created_at
-                )
-                await _run_forward_pass(
-                    client, job, job_id, forward_since, enabled_tc_buckets, _on_game_fetched
-                )
+                def _on_game_fetched() -> None:
+                    job.games_fetched += 1
 
-                # BACKWARD PASS (D-01/D-05/D-06/D-07): capped per-(platform, TC)
-                # backfill, resumable via a persisted cursor (Pitfall 1).
-                await _run_backward_pass(
-                    client,
-                    job,
-                    job_id,
-                    bootstrap.created_at,
-                    enabled_tc_buckets,
-                    settings.game_cap,
-                    _on_game_fetched,
-                )
+                async with httpx.AsyncClient(timeout=60.0) as client:
+                    # FORWARD PASS (D-02/D-05/D-06): post-anchor games, uncapped,
+                    # TC-filtered. Bounded below by users.created_at -- since=None
+                    # never reaches a platform client for a capped fetch (Pitfall 2).
+                    forward_since = (
+                        bootstrap.previous_last_synced_at
+                        if bootstrap.previous_last_synced_at is not None
+                        else bootstrap.created_at
+                    )
+                    await _run_forward_pass(
+                        client, job, job_id, forward_since, enabled_tc_buckets, _on_game_fetched
+                    )
 
-            # Bug fix (UAT-186-RACE): a scope-expanding settings PATCH (TC turned
-            # on, or cap raised) issued WHILE this job is running has its cursor
-            # reset (the PATCH handler's own reset_backfill_cursors call) clobbered
-            # by this job's OWN cursor writes -- the backward pass persists its
-            # cursor incrementally (WR-03 batching) and _complete_import_job below
-            # advances last_synced_at, both of which happen AFTER the PATCH's
-            # reset and so silently win, leaving the next Sync resuming from
-            # "before the last-walked month" instead of re-walking the backlog the
-            # new scope wants. Re-check the job-start snapshot (`settings`, loaded
-            # above) against the current row now, after the backward pass's own
-            # final cursor flush, and reset again if it expanded during the run --
-            # this reset is the last write, so it always wins. Covers both
-            # platforms' cursors since reset_backfill_cursors NULLs all three.
-            await _reset_cursors_if_scope_expanded_mid_run(job.user_id, settings)
+                    # BACKWARD PASS (D-01/D-05/D-06/D-07): capped per-(platform, TC)
+                    # backfill, resumable via a persisted cursor (Pitfall 1).
+                    await _run_backward_pass(
+                        client,
+                        job,
+                        job_id,
+                        bootstrap.created_at,
+                        enabled_tc_buckets,
+                        settings.game_cap,
+                        _on_game_fetched,
+                    )
 
-            await _complete_import_job(job, job_id)
-            job.status = JobStatus.COMPLETED
+                # Bug fix (UAT-186-RACE): a scope-expanding settings PATCH (TC turned
+                # on, or cap raised) issued WHILE this job is running has its cursor
+                # reset (the PATCH handler's own reset_backfill_cursors call) clobbered
+                # by this job's OWN cursor writes -- the backward pass persists its
+                # cursor incrementally (WR-03 batching) and _complete_import_job below
+                # advances last_synced_at, both of which happen AFTER the PATCH's
+                # reset and so silently win, leaving the next Sync resuming from
+                # "before the last-walked month" instead of re-walking the backlog the
+                # new scope wants. Re-check the job-start snapshot (`settings`, loaded
+                # above) against the current row now, after the backward pass's own
+                # final cursor flush, and reset again if it expanded during the run --
+                # this reset is the last write, so it always wins. Covers both
+                # platforms' cursors since reset_backfill_cursors NULLs all three.
+                await _reset_cursors_if_scope_expanded_mid_run(job.user_id, settings)
+
+                await _complete_import_job(job, job_id)
+                job.status = JobStatus.COMPLETED
 
     except TimeoutError:
         # 3-hour timeout exceeded (D-24). Partial results already persisted

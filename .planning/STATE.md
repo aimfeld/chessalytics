@@ -2,17 +2,17 @@
 gsd_state_version: 1.0
 milestone: v2.12
 milestone_name: Train Reliability & Grading Agreement
-current_phase: 208
-current_phase_name: analysis-fen-pgn-paste
-status: shipped
-stopped_at: Completed 260809-iq1-01-PLAN.md
-last_updated: "2026-08-09T11:39:52.170Z"
-last_activity: 2026-08-09
-last_activity_desc: "Completed quick task 260809-iep: hide the floating feedback button on mobile (<sm), desktop unchanged"
+current_phase: 209
+current_phase_name: traffic-surge-quick-wins
+status: executing
+stopped_at: Phase 209 added to ROADMAP.md — next /gsd-plan-phase 209
+last_updated: "2026-08-10T18:04:59.199Z"
+last_activity: 2026-08-10
+last_activity_desc: Added Phase 209 (Traffic-Surge Quick Wins, SEED-146 quick-win cut) to ROADMAP.md
 progress:
-  total_phases: 3
+  total_phases: 4
   completed_phases: 3
-  total_plans: 10
+  total_plans: 14
   completed_plans: 10
 ---
 
@@ -20,10 +20,12 @@ progress:
 
 ## Current Position
 
-Phase: 208 (analysis-fen-pgn-paste) — SHIPPED
-Plan: 4 of 4
-Status: Phase 208 squash-merged to main (432075a03) — not yet deployed
-Last activity: 2026-08-09 — Completed quick task 260809-jzz: material display (net material difference) on Bots play page and Analysis board
+Phase: 209 (traffic-surge-quick-wins) — EXECUTING
+Plan: 1 of 4
+Status: Executing Phase 209
+
+Previous phase: 208 (analysis-fen-pgn-paste) — SHIPPED, squash-merged to main (432075a03), not yet deployed
+Last activity: 2026-08-10 — Phase 209 execution started
 
 Phase 208 shipped with the full pre-merge gate green (backend 4252 passed, frontend
 3411 passed, ruff/ty/eslint/tsc/knip clean). Verification is `human_needed`: 5 UAT
