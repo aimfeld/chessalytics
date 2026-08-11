@@ -28,10 +28,6 @@ class UserProfileResponse(BaseModel):
     impersonation: ImpersonationContext | None = None
     # BETA-01: beta_enabled flag (e.g. Endgame Insights). Default false; flipped via direct DB op.
     beta_enabled: bool
-    # MAIA-04 / D-07: rating from the user's most-recent game (across platforms),
-    # read-only, index-backed. Feeds the free-play ELO-selector default. None
-    # when the user has no games or their most recent game is unrated.
-    current_rating: int | None = None
     # Phase 171 D-07: the caller's own blitz-bucket `user_rating_anchors.anchor_rating`
     # -- the blended lichess-equivalent median Phase 167 already trusts for bot-game
     # rating derivation. None for guests, for users with no anchor at all, and for

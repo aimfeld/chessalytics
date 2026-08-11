@@ -17,10 +17,6 @@ export interface UserProfile {
   impersonation: ImpersonationContext | null;
   // BETA-01: beta feature flag (e.g. Endgame Insights in v1.11). Default false; flipped via direct DB op.
   beta_enabled: boolean;
-  // MAIA-04 / D-07: rating from the user's most-recent game (across platforms),
-  // read-only. Feeds the free-play ELO-selector default (Plan 06). Null when the
-  // user has no games or their most recent game is unrated.
-  current_rating: number | null;
   // Phase 171 D-07: the user's blitz-bucket anchor (lichess-equivalent, blended
   // median). Null for guests / users with no blitz-bucket anchor, in which case
   // the frontend falls back to 1500. UI DEFAULT ONLY — never fed into bot move

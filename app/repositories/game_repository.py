@@ -504,53 +504,6 @@ async def get_platform_game_ids_for_user(
     return frozenset(row[0] for row in result.all())
 
 
-async def get_current_rating_by_platform(
-    session: AsyncSession, user_id: int
-) -> dict[str, int | None]:
-    """Return each platform's rating from the user's most-recent game on that platform.
-
-    MAIA-04 / D-07: feeds the free-play ELO-selector default so engaged users see
-    a rating-based starting point instead of the flat 1500 fallback. Read-only,
-    no migration, no write (see 151-03-PLAN.md threat T-151-06: ORDER BY
-    played_at DESC rides ix_games_user_played_at, bounded to the user's own rows).
-
-    Single query keyed on user_id, ordered by played_at DESC (index-backed on
-    ix_games_user_played_at) — reduced to one row per platform in Python by
-    keeping the FIRST (= most recent) row seen for each platform, instead of
-    issuing one query per platform.
-
-    The returned dict is insertion-ordered by recency: the first key inserted is
-    the platform of the user's single most-recent game across ALL platforms
-    (because that row is necessarily the first one scanned in DESC order, and
-    also the first occurrence of its own platform). Callers wanting one scalar
-    "current" rating — rather than a per-platform breakdown — should take
-    `next(iter(ratings.values()), None)`; see routers/users.py.
-
-    Args:
-        session: AsyncSession to use.
-        user_id: Internal user ID.
-
-    Returns:
-        Dict keyed by platform ("chess.com" / "lichess"), mapping to the rating
-        (white_rating or black_rating, whichever matches the user's color on
-        that game) of the most recent game on that platform. A platform maps to
-        None if its most recent game has no rating for the user's color (e.g.
-        an unrated game). Platforms the user has never played on are absent.
-        Empty dict if the user has no games at all.
-    """
-    result = await session.execute(
-        select(Game.platform, Game.user_color, Game.white_rating, Game.black_rating)
-        .where(Game.user_id == user_id)
-        .order_by(Game.played_at.desc())
-    )
-    ratings: dict[str, int | None] = {}
-    for platform, user_color, white_rating, black_rating in result.all():
-        if platform in ratings:
-            continue
-        ratings[platform] = white_rating if user_color == "white" else black_rating
-    return ratings
-
-
 async def bulk_insert_positions(session: AsyncSession, position_rows: list[dict]) -> None:
     """Bulk insert GamePosition rows via asyncpg's binary COPY protocol.
 

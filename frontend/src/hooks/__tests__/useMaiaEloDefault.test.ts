@@ -5,10 +5,8 @@
  * Behaviors verified:
  * 1. Game mode, white user, white_rating=1720 -> resolved default 1720 (clamped to ladder bounds).
  * 2. Game mode, black user -> resolves from black_rating.
- * 3. Free play (D-08), profile.lichess_blitz_equivalent_rating=1650 -> resolved default 1650,
- *    even though a raw (inflated) current_rating of 1900 is present on the profile.
- * 4. Free play, lichess_blitz_equivalent_rating null -> FREE_PLAY_DEFAULT_ELO (1500);
- *    current_rating is never a fallback.
+ * 3. Free play (D-08), profile.lichess_blitz_equivalent_rating=1650 -> resolved default 1650.
+ * 4. Free play, lichess_blitz_equivalent_rating null -> FREE_PLAY_DEFAULT_ELO (1500).
  * 5. User-override precedence: a later gameData/profile load does not clobber a user pick.
  * 6. Re-derivation happens when gameData/profile FIRST load (not on every re-render).
  */
@@ -36,25 +34,16 @@ function gameData(overrides: Partial<MaiaEloGameData>): MaiaEloGameData {
 }
 
 /**
- * WR-04: `current_rating` is no longer part of `MaiaEloProfile` — the hook
- * cannot see it at all, which is the point (D-08's repoint to the normalized
- * rating is now enforced by the TYPE, not just by an assertion). It is still
- * supplied here at RUNTIME as a DECOY, on a widened shape: a real `UserProfile`
- * carries it, so the tests below keep proving that a present-but-inflated raw
- * rating never leaks into the derived default.
+ * WR-04: the blitz anchor is the ONLY rating `MaiaEloProfile` exposes, so D-08's
+ * repoint is enforced by the TYPE rather than by an assertion — the hook cannot
+ * see a raw platform rating even if `UserProfile` grows one again. (It carried a
+ * `current_rating` field until SEED-147 deleted it; earlier revisions of this file
+ * passed one at runtime as a decoy. If a current-strength field is reintroduced,
+ * widen this factory and restore that decoy rather than adding it to
+ * `MaiaEloProfile`.)
  */
-type ProfileWithRawRating = MaiaEloProfile & { current_rating: number | null };
-
-const RAW_INFLATED_RATING_DECOY = 1900;
-
-function profile(
-  lichessBlitzEquivalentRating: number | null,
-  currentRatingDecoy: number | null = RAW_INFLATED_RATING_DECOY,
-): ProfileWithRawRating {
-  return {
-    current_rating: currentRatingDecoy,
-    lichess_blitz_equivalent_rating: lichessBlitzEquivalentRating,
-  };
+function profile(lichessBlitzEquivalentRating: number | null): MaiaEloProfile {
+  return { lichess_blitz_equivalent_rating: lichessBlitzEquivalentRating };
 }
 
 describe('useMaiaEloDefault', () => {
@@ -169,11 +158,9 @@ describe('useMaiaEloDefault', () => {
     expect(black.result.current.selectedElo).toBe(1350);
   });
 
-  it('free play: resolves from profile.lichess_blitz_equivalent_rating, NOT the raw current_rating (D-08)', () => {
-    // current_rating (1900, raw/inflated) and lichess_blitz_equivalent_rating (1650,
-    // normalized) deliberately DIFFER here — this is the whole point of D-08. If the
-    // one-line repoint in deriveRawDefault is ever reverted back to current_rating,
-    // this assertion turns red (1900 !== 1650).
+  it('free play: resolves from profile.lichess_blitz_equivalent_rating (D-08)', () => {
+    // The normalized blitz anchor is the only rating the hook may read; a raw
+    // platform rating would be chess.com-inflated relative to the Maia scale.
     const { result } = renderHook(() =>
       useMaiaEloDefault({
         isGameMode: false,
@@ -184,13 +171,13 @@ describe('useMaiaEloDefault', () => {
     expect(result.current.selectedElo).toBe(1650);
   });
 
-  it('free play: lichess_blitz_equivalent_rating null falls back to FREE_PLAY_DEFAULT_ELO regardless of current_rating', () => {
+  it('free play: lichess_blitz_equivalent_rating null falls back to FREE_PLAY_DEFAULT_ELO', () => {
     const { result } = renderHook(() =>
       useMaiaEloDefault({
         isGameMode: false,
         gameData: undefined,
-        // current_rating is a non-null 1900, but with no blitz anchor the free-play
-        // default must still fall back to 1500 — current_rating is never a fallback.
+        // No blitz anchor -> the free-play default must fall back to 1500 rather
+        // than reaching for any other rating on the profile.
         profile: profile(null),
       }),
     );

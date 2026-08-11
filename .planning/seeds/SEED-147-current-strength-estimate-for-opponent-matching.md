@@ -62,7 +62,7 @@ that only matters on the surfaces where "current" is the question.
    `/pub/player/{u}/stats`. Accepts that the estimate goes stale between imports; revisit only
    if stale numbers actually show up in practice.
 
-## The Trap: `get_current_rating_by_platform` does not filter bots
+## The Trap: `get_current_rating_by_platform` did not filter bots — REMOVED 2026-08-11
 
 The anchor pipeline is **already bot-clean** — verified, do not re-investigate:
 `_recent_capped_per_tc_cte` (`canonical_slice_sql.py:309`) filters
@@ -84,15 +84,19 @@ user 3 today it returns **1340** — the stale *rapid* anchor, echoed through a 
 this evening. Across prod: the most recent game is a flawchess bot game for **44 of 299**
 users, another 9 have a lichess/chess.com bot game, and 27 have an unrated human game.
 
-This is currently harmless — Phase 171 code review (WR-04) removed `current_rating` from
-`useMaiaEloDefault`'s shape and no frontend reader remains; the field is on the wire in
-`UserProfileResponse` and dead. But it is exactly the function someone implementing this seed
-would reach for.
+This was harmless in practice — Phase 171 code review (WR-04) removed `current_rating` from
+`useMaiaEloDefault`'s shape and no frontend reader remained. **All of it has now been deleted**
+(2026-08-11), closing out the follow-up that `171-REVIEW-FIX.md:73` deferred: the
+`current_rating` wire field on `UserProfileResponse`, `_primary_current_rating`, both
+`get_current_rating_by_platform` calls in `app/routers/users.py`, the repository function
+itself, its 6 repository tests and 2 router tests, and the frontend `UserProfile.current_rating`
+field plus its test fixtures. Each profile GET **and** PUT also drops one DB round-trip.
 
-**Therefore:** source the ladder through `apply_game_filters` (or replicate
-`rated AND NOT is_computer_game AND platform NOT IN DEFAULT_EXCLUDED_PLATFORMS`), and delete
-the dead `current_rating` field and `_primary_current_rating` (`app/routers/users.py:41`)
-rather than leaving them as bait.
+**Therefore, for this seed:** source the ladder through `apply_game_filters` (or replicate
+`rated AND NOT is_computer_game AND platform NOT IN DEFAULT_EXCLUDED_PLATFORMS`). Do not
+reintroduce an unfiltered "rating from the most recent game" query — that is the exact shape
+that produced 1340 for user 3. The `MaiaEloProfile` docblock in
+`frontend/src/hooks/useMaiaEloDefault.ts` carries this warning at the point of temptation.
 
 ## Open Questions (deliberately not settled)
 

@@ -823,7 +823,7 @@ export default function Analysis() {
   const { data: userProfile } = useUserProfile();
 
   // D-06/D-07: "you are here" ELO for the Maia surfaces, derived from game-mode
-  // rating-at-game-time or free-play current_rating, with user-override precedence.
+  // rating-at-game-time or the free-play blitz anchor, with user-override precedence.
   const { selectedElo, setSelectedElo, defaultElo, resetToDefault } = useMaiaEloDefault({
     isGameMode,
     gameData,

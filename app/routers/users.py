@@ -38,18 +38,6 @@ router = APIRouter(prefix="/users", tags=["users"])
 _JWT_AUDIENCE = ["fastapi-users:auth"]
 
 
-def _primary_current_rating(ratings_by_platform: dict[str, int | None]) -> int | None:
-    """Pick the scalar current_rating (MAIA-04 / D-07) from the per-platform dict.
-
-    game_repository.get_current_rating_by_platform returns an insertion-ordered
-    dict where the first key is the platform of the user's single most-recent
-    game across all platforms (see its docstring for why that ordering holds).
-    Taking the first value gives the free-play ELO-selector default a single
-    scalar without a second query. Returns None if the user has no games.
-    """
-    return next(iter(ratings_by_platform.values()), None)
-
-
 def _lichess_blitz_equivalent_rating(
     anchors: dict[TimeControlBucket, RatingAnchorRow],
 ) -> int | None:
@@ -115,7 +103,6 @@ async def get_profile(
     profile = await user_repository.get_profile(session, user.id)
     counts = await game_repository.count_games_by_platform(session, user.id)
     last_syncs = await import_job_repository.get_last_completed_at_by_platform(session, user.id)
-    ratings = await game_repository.get_current_rating_by_platform(session, user.id)
     anchors = await user_rating_anchors_repository.fetch_anchors_for_user(session, user_id=user.id)
     return UserProfileResponse(
         email=user.email,
@@ -131,7 +118,6 @@ async def get_profile(
         lichess_last_sync_at=last_syncs.get("lichess"),
         impersonation=impersonation,
         beta_enabled=user.beta_enabled,
-        current_rating=_primary_current_rating(ratings),
         lichess_blitz_equivalent_rating=_lichess_blitz_equivalent_rating(anchors),
     )
 
@@ -146,7 +132,6 @@ async def update_profile(
     updated = await user_repository.update_profile(session, user.id, body.model_dump())
     counts = await game_repository.count_games_by_platform(session, user.id)
     last_syncs = await import_job_repository.get_last_completed_at_by_platform(session, user.id)
-    ratings = await game_repository.get_current_rating_by_platform(session, user.id)
     anchors = await user_rating_anchors_repository.fetch_anchors_for_user(session, user_id=user.id)
     return UserProfileResponse(
         email=user.email,
@@ -162,7 +147,6 @@ async def update_profile(
         lichess_last_sync_at=last_syncs.get("lichess"),
         impersonation=None,
         beta_enabled=updated.beta_enabled,
-        current_rating=_primary_current_rating(ratings),
         lichess_blitz_equivalent_rating=_lichess_blitz_equivalent_rating(anchors),
     )
 
