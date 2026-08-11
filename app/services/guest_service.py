@@ -5,6 +5,7 @@ their 30-day JWT tokens. Guest accounts have sentinel emails in the form
 `guest_<uuid>@guest.local` and are marked with `is_guest=True`.
 """
 
+import asyncio
 from uuid import uuid4
 
 from fastapi_users.exceptions import UserAlreadyExists
@@ -91,7 +92,12 @@ async def promote_guest_with_password(
     if result.unique().scalar_one_or_none() is not None:
         raise UserAlreadyExists()
 
-    hashed_password = _password_helper.hash(password)
+    # SURGE-02 (Phase 209): the measured 65.9ms argon2id hash previously ran
+    # synchronously on the single event loop, freezing every other request for
+    # its duration. Moving it to a worker thread lets other requests proceed
+    # while this one hashes. The algorithm and cost parameters are unchanged —
+    # only the thread the call runs on changes.
+    hashed_password = await asyncio.to_thread(_password_helper.hash, password)
 
     await session.execute(
         sa_update(User)

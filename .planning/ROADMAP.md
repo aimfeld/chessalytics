@@ -438,9 +438,9 @@ Plans:
 Plans:
 **Wave 1** *(all four plans are independent — no shared files, no cross-plan dependency)*
 
-- [ ] 209-01-PLAN.md — Guest-promotion `to_thread` + percentile-compute semaphore, plus the phase requirement traceability table and mutation-test ledger (wave 1)
-- [ ] 209-02-PLAN.md — Global import concurrency cap, in-memory `QUEUED` state, `started_at` re-stamp for the reaper exemption, and the bare queued label (wave 1)
-- [ ] 209-03-PLAN.md — `useReadiness` backoff ladder + 30-minute backoff budget, with the emitted interval sequence as the tested artifact (wave 1)
+- [x] 209-01-PLAN.md — Guest-promotion `to_thread` + percentile-compute semaphore, plus the phase requirement traceability table and mutation-test ledger (wave 1)
+- [x] 209-02-PLAN.md — Global import concurrency cap, in-memory `QUEUED` state, `started_at` re-stamp for the reaper exemption, and the bare queued label (wave 1)
+- [x] 209-03-PLAN.md — `useReadiness` backoff ladder + 30-minute backoff budget, with the emitted interval sequence as the tested artifact (wave 1)
 - [ ] 209-04-PLAN.md — Cloudflare CDN cutover runbook + operator checkpoint (no executor DNS actions) (wave 1)
 
 **UI hint**: minimal — a "queued" state on the existing import progress surface and whatever the poll backoff needs (likely nothing visible). No new pages or components.

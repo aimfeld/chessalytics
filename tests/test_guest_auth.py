@@ -382,6 +382,103 @@ class TestPromoteGuestWithPassword:
                 db_session, regular_user, unique_email("target"), "SecurePass1!"
             )
 
+    @pytest.mark.asyncio
+    async def test_promotion_hashes_off_the_event_loop_thread(self, db_session, monkeypatch):
+        """SURGE-02: the argon2 hash call runs on a worker thread, not the event loop.
+
+        Reverting the asyncio.to_thread wrap in promote_guest_with_password makes
+        the recorded thread id equal the test's own thread id, failing this test.
+        """
+        import threading
+
+        from app.services import guest_service
+        from app.services.guest_service import create_guest_user, promote_guest_with_password
+
+        main_thread_id = threading.get_ident()
+        observed_thread_id: list[int] = []
+
+        def spy_hash(password: str) -> str:
+            observed_thread_id.append(threading.get_ident())
+            return "irrelevant-hash"
+
+        monkeypatch.setattr(guest_service._password_helper, "hash", spy_hash)
+
+        user, _token = await create_guest_user(db_session)
+        await promote_guest_with_password(
+            db_session, user, unique_email("threadtest"), "SecurePass1!"
+        )
+
+        assert observed_thread_id, "hash was never called"
+        assert observed_thread_id[0] != main_thread_id, (
+            "hash ran on the event-loop thread — asyncio.to_thread wrap is missing/reverted"
+        )
+
+    @pytest.mark.asyncio
+    async def test_second_promotion_of_the_same_user_raises(self, db_session):
+        """Promoting an already-promoted user again raises ValueError('Not a guest user').
+
+        Moving the hash off the loop must not change the idempotency contract.
+        """
+        from app.services.guest_service import create_guest_user, promote_guest_with_password
+
+        user, _token = await create_guest_user(db_session)
+        first_email = unique_email("firstpromo")
+        updated_user, _token = await promote_guest_with_password(
+            db_session, user, first_email, "SecurePass1!"
+        )
+
+        with pytest.raises(ValueError, match="Not a guest user"):
+            await promote_guest_with_password(
+                db_session, updated_user, unique_email("secondpromo"), "AnotherPass1!"
+            )
+
+    @pytest.mark.asyncio
+    async def test_concurrent_promotions_of_two_guests_produce_distinct_hashes(self, test_engine):
+        """Two different guests promoted concurrently each get a distinct, verifying hash.
+
+        Uses the real hasher (no monkeypatch) to also prove the algorithm was not
+        swapped by the to_thread wrap. The module-level _password_helper carries
+        no mutable state, so concurrent to_thread calls do not interfere.
+
+        CLAUDE.md forbids asyncio.gather on the same AsyncSession — each guest is
+        created and promoted through its own independent session (own connection),
+        so the two promote_guest_with_password calls genuinely run concurrently
+        without sharing a session.
+        """
+        import asyncio
+
+        from fastapi_users.password import PasswordHelper
+        from sqlalchemy.ext.asyncio import async_sessionmaker
+
+        from app.services.guest_service import create_guest_user, promote_guest_with_password
+
+        session_maker = async_sessionmaker(test_engine, expire_on_commit=False)
+        password_one = "SecurePassOne1!"
+        password_two = "SecurePassTwo2!"
+
+        async def _create_and_promote(password: str, email_prefix: str) -> str:
+            async with session_maker() as session:
+                user, _token = await create_guest_user(session)
+                updated, _new_token = await promote_guest_with_password(
+                    session, user, unique_email(email_prefix), password
+                )
+                return updated.hashed_password
+
+        hash_one, hash_two = await asyncio.gather(
+            _create_and_promote(password_one, "concurrent1"),
+            _create_and_promote(password_two, "concurrent2"),
+        )
+
+        assert hash_one
+        assert hash_two
+        assert hash_one != hash_two
+
+        verifier = PasswordHelper()
+        valid1, _ = verifier.verify_and_update(password_one, hash_one)
+        valid2, _ = verifier.verify_and_update(password_two, hash_two)
+        assert valid1, "guest_one's password does not verify against its stored hash"
+        assert valid2, "guest_two's password does not verify against its stored hash"
+
 
 # ---------------------------------------------------------------------------
 # POST /auth/guest/promote/email endpoint integration tests

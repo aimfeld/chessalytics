@@ -131,6 +131,12 @@ function ImportProgressBar({ jobId, onDismiss, platformFilter, onProgress }: { j
 
   const isDone = data?.status === 'completed';
   const isError = data?.status === 'failed';
+  // SURGE-04/D-03 (Phase 209): a queued job is not done and not failed, so it
+  // stays "active" -- keeps the indeterminate progress bar animating and the
+  // polling running, which is exactly the "not silently stalled" signal D-03
+  // requires. No separate colour or badge; the existing muted-text treatment
+  // applies to the queued label too.
+  const isQueued = data?.status === 'queued';
   const isActive = !!data && !isDone && !isError;
 
   // Report live games_imported up to the page so the per-platform header count
@@ -194,17 +200,24 @@ function ImportProgressBar({ jobId, onDismiss, platformFilter, onProgress }: { j
   // Phase 96 Constraint 3: the hot-import "done" copy must not over-claim completion
   // by saying "Imported N games" — Stockfish eval and percentile computation still
   // run after the import job finishes. Use a neutral status message instead.
+  // SURGE-04/D-03: a bare queued label with NO queue position, NO queue
+  // depth, and NO ETA -- the full position/ETA feature is explicitly
+  // deferred (209-CONTEXT.md D-01/D-03). A comma replaces the dash from the
+  // CONTEXT.md illustration since rendering is Claude's Discretion here and
+  // CLAUDE.md asks for sparing em-dashes in UI copy; the content is identical.
   const progressText = isDone
     ? (data.games_imported === 0 ? 'No new games found since last sync' : `${data.games_imported} games imported.`)
     : isError
       ? `Import failed: ${data.error ?? 'Unknown error'}`
-      : `Importing ${data.username} (${data.platform})... ${data.games_fetched} fetched, ${data.games_imported} saved`;
+      : isQueued
+        ? 'Import queued, starting shortly'
+        : `Importing ${data.username} (${data.platform})... ${data.games_fetched} fetched, ${data.games_imported} saved`;
 
   return (
     <div className="space-y-1.5">
       <div className="flex items-center justify-between gap-2">
         <div className={`flex items-center gap-1.5 text-sm ${isError ? 'text-destructive' : isDone ? 'text-green-600 dark:text-green-400' : 'text-muted-foreground'}`}>
-          <span>{progressText}</span>
+          <span data-testid="import-progress-text">{progressText}</span>
         </div>
         {canDismiss && (
           <Tooltip content="Dismiss">

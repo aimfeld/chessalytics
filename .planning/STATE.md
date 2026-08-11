@@ -4,9 +4,9 @@ milestone: v2.12
 milestone_name: Train Reliability & Grading Agreement
 current_phase: 209
 current_phase_name: traffic-surge-quick-wins
-status: not_started
+status: executing
 stopped_at: Phase 209 added to ROADMAP.md — next /gsd-plan-phase 209
-last_updated: "2026-08-10T17:32:17.100Z"
+last_updated: "2026-08-10T18:04:59.199Z"
 last_activity: 2026-08-10
 last_activity_desc: Added Phase 209 (Traffic-Surge Quick Wins, SEED-146 quick-win cut) to ROADMAP.md
 progress:
@@ -20,12 +20,12 @@ progress:
 
 ## Current Position
 
-Phase: 209 (traffic-surge-quick-wins) — NOT STARTED (added to ROADMAP.md 2026-08-10)
-Plan: none yet — next `/gsd-plan-phase 209`
-Status: Phase 209 is the quick-win cut of SEED-146 (traffic-surge readiness): readiness-poll backoff+cap, guest-Argon2 `to_thread`, CDN for `/maia/*`+`/engine/*` (operator DNS work), global import semaphore with a bare "queued" status (no position/ETA), and a `Semaphore(2–3)` on `compute_stage_a/b`. Register/login hashing, the full queue UX, and seed item 6 are explicitly deferred by user decision 2026-08-10. Seed stays active until the deferred items are done or abandoned.
+Phase: 209 (traffic-surge-quick-wins) — EXECUTING
+Plan: 1 of 4
+Status: Executing Phase 209
 
 Previous phase: 208 (analysis-fen-pgn-paste) — SHIPPED, squash-merged to main (432075a03), not yet deployed
-Last activity: 2026-08-10 — Added Phase 209 to ROADMAP.md
+Last activity: 2026-08-10 — Phase 209 execution started
 
 Phase 208 shipped with the full pre-merge gate green (backend 4252 passed, frontend
 3411 passed, ruff/ty/eslint/tsc/knip clean). Verification is `human_needed`: 5 UAT

@@ -161,6 +161,36 @@ STAGE_B_METRIC_FAMILIES: tuple[CdfMetricId, ...] = (
 )
 
 
+# SURGE-05 (Phase 209, D-06): bounds how many compute_stage_a/compute_stage_b
+# bodies can hold a DB connection from the 10+10 pool at once. The measured
+# mean query time for one compute is 1,111.7ms — under a burst of import
+# completions (or a cold-drain batch crossing many users to zero-pending at
+# once) an unbounded fan-out could hold a large share of the pool in these
+# queries alone. 2 keeps that worst case to at most 2 of 20 connections.
+PERCENTILE_COMPUTE_LIMIT = 2
+
+# Lazy-initialized (module import time predates the event loop starting;
+# constructing an asyncio.Semaphore before a running loop exists raises on
+# some Python versions). Mirrors app/core/rate_limiters.py's shape.
+_percentile_semaphore: asyncio.Semaphore | None = None
+
+
+def get_percentile_semaphore() -> asyncio.Semaphore:
+    """Return the shared percentile-compute concurrency semaphore (lazy init).
+
+    Acquired INSIDE compute_stage_a and compute_stage_b (not at their
+    asyncio.create_task call sites) because compute_stage_b has two
+    independent trigger sites — app/services/import_service.py's
+    import-completion path and app/services/eval_drain.py's cold-drain
+    zero-pending crossing — and only an in-function acquisition covers
+    both by construction (RESEARCH Pitfall 4).
+    """
+    global _percentile_semaphore
+    if _percentile_semaphore is None:
+        _percentile_semaphore = asyncio.Semaphore(PERCENTILE_COMPUTE_LIMIT)
+    return _percentile_semaphore
+
+
 # ---------------------------------------------------------------------------
 # Internal helpers.
 # ---------------------------------------------------------------------------
@@ -413,59 +443,63 @@ async def compute_stage_a(
     no percentile rows are written and the chip suppresses naturally.
     """
     maker = session_maker if session_maker is not None else _default_session_maker
-    try:
-        async with maker() as session:
-            anchors = await compute_anchors_for_user(session, user_id)
-            # D-03: one batched prefetch per import for all (anchor, TC) cells.
-            # The ~few per-TC lookups inside the loop then hit the in-memory dict.
-            rounded_anchors = [_round_anchor_to_grid(a.anchor_rating) for a in anchors.values()]
-            cohort_a = await load_cohort_cells(session, rounded_anchors, list(anchors.keys()))
-            for tc, anchor in anchors.items():
-                try:
-                    result = await _compute_metric_for_user_per_tc(
-                        session, user_id, STAGE_A_METRIC, tc
-                    )
-                    if result is None:
-                        # Below per-TC floor for score_gap → no row.
-                        continue
-                    value, n_games = result
-                    table_a = cohort_a.get(
-                        (STAGE_A_METRIC, _round_anchor_to_grid(anchor.anchor_rating), tc)
-                    )
-                    percentile: float | None = interpolate_cohort_percentile(value, table_a)
-                    await upsert_percentile(
-                        session,
-                        user_id=user_id,
-                        metric=STAGE_A_METRIC,
-                        time_control_bucket=tc,
-                        value=value,
-                        n_games=n_games,
-                        percentile=percentile,
-                        cdf_snapshot=date.today(),
-                    )
-                except asyncio.CancelledError:
-                    raise
-                except Exception as exc:
-                    # Per-TC capture: other TCs continue.
-                    sentry_sdk.set_context(
-                        "percentile_compute",
-                        {
-                            "user_id": user_id,
-                            "stage": "A",
-                            "metric": STAGE_A_METRIC,
-                            "tc": tc,
-                        },
-                    )
-                    sentry_sdk.capture_exception(exc)
-            await session.commit()
-    except asyncio.CancelledError:
-        raise  # lifespan shutdown contract
-    except Exception as exc:
-        # Top-level capture for session-open / commit / anchor-compute failures.
-        # CLAUDE.md Backend Rules: variables via set_context, NEVER in message.
-        sentry_sdk.set_context("percentile_compute", {"user_id": user_id, "stage": "A"})
-        sentry_sdk.capture_exception(exc)
-        # Do NOT re-raise — Stage A errors must not propagate to import worker.
+    # SURGE-05 (Phase 209, D-06): bound how many compute_stage_a/compute_stage_b
+    # bodies hold a pooled DB connection at once. Acquired outside the
+    # try/except so the existing Sentry capture semantics below are unchanged.
+    async with get_percentile_semaphore():
+        try:
+            async with maker() as session:
+                anchors = await compute_anchors_for_user(session, user_id)
+                # D-03: one batched prefetch per import for all (anchor, TC) cells.
+                # The ~few per-TC lookups inside the loop then hit the in-memory dict.
+                rounded_anchors = [_round_anchor_to_grid(a.anchor_rating) for a in anchors.values()]
+                cohort_a = await load_cohort_cells(session, rounded_anchors, list(anchors.keys()))
+                for tc, anchor in anchors.items():
+                    try:
+                        result = await _compute_metric_for_user_per_tc(
+                            session, user_id, STAGE_A_METRIC, tc
+                        )
+                        if result is None:
+                            # Below per-TC floor for score_gap → no row.
+                            continue
+                        value, n_games = result
+                        table_a = cohort_a.get(
+                            (STAGE_A_METRIC, _round_anchor_to_grid(anchor.anchor_rating), tc)
+                        )
+                        percentile: float | None = interpolate_cohort_percentile(value, table_a)
+                        await upsert_percentile(
+                            session,
+                            user_id=user_id,
+                            metric=STAGE_A_METRIC,
+                            time_control_bucket=tc,
+                            value=value,
+                            n_games=n_games,
+                            percentile=percentile,
+                            cdf_snapshot=date.today(),
+                        )
+                    except asyncio.CancelledError:
+                        raise
+                    except Exception as exc:
+                        # Per-TC capture: other TCs continue.
+                        sentry_sdk.set_context(
+                            "percentile_compute",
+                            {
+                                "user_id": user_id,
+                                "stage": "A",
+                                "metric": STAGE_A_METRIC,
+                                "tc": tc,
+                            },
+                        )
+                        sentry_sdk.capture_exception(exc)
+                await session.commit()
+        except asyncio.CancelledError:
+            raise  # lifespan shutdown contract
+        except Exception as exc:
+            # Top-level capture for session-open / commit / anchor-compute failures.
+            # CLAUDE.md Backend Rules: variables via set_context, NEVER in message.
+            sentry_sdk.set_context("percentile_compute", {"user_id": user_id, "stage": "A"})
+            sentry_sdk.capture_exception(exc)
+            # Do NOT re-raise — Stage A errors must not propagate to import worker.
 
 
 async def compute_stage_b(
@@ -497,65 +531,76 @@ async def compute_stage_b(
     conflict (RESEARCH Pitfall 2).
     """
     maker = session_maker if session_maker is not None else _default_session_maker
-    try:
-        async with maker() as session:
-            anchors = await fetch_anchors_for_user(session, user_id=user_id)
-            if not anchors:
-                # No above-floor anchors — Stage A wrote nothing, Stage B has
-                # no per-TC cohort key to interpolate against; no-op.
-                return
-            # D-03: one batched prefetch per import for all (anchor, TC) cells.
-            # The ~32 per-import lookups inside the loop then hit the in-memory dict.
-            rounded_anchors_b = [_round_anchor_to_grid(a.anchor_rating) for a in anchors.values()]
-            cohort_b = await load_cohort_cells(session, rounded_anchors_b, list(anchors.keys()))
-            for family in STAGE_B_METRIC_FAMILIES:
-                for tc, anchor in anchors.items():
-                    try:
-                        result = await _compute_metric_for_user_per_tc(session, user_id, family, tc)
-                        if result is None:
-                            # Below per-TC floor for this (family, tc) → no row.
-                            continue
-                        value, n_games = result
-                        table_b = cohort_b.get(
-                            (family, _round_anchor_to_grid(anchor.anchor_rating), tc)
-                        )
-                        percentile: float | None = interpolate_cohort_percentile(value, table_b)
-                        await upsert_percentile(
-                            session,
-                            user_id=user_id,
-                            metric=family,
-                            time_control_bucket=tc,
-                            value=value,
-                            n_games=n_games,
-                            percentile=percentile,
-                            cdf_snapshot=date.today(),
-                        )
-                    except asyncio.CancelledError:
-                        raise
-                    except Exception as exc:
-                        # Per-(family, tc) capture: other cells continue.
-                        sentry_sdk.set_context(
-                            "percentile_compute",
-                            {
-                                "user_id": user_id,
-                                "stage": "B",
-                                "metric": family,
-                                "tc": tc,
-                            },
-                        )
-                        sentry_sdk.capture_exception(exc)
-            await session.commit()
-    except asyncio.CancelledError:
-        raise
-    except Exception as exc:
-        # Top-level capture for session-open / commit / anchor-fetch failures.
-        sentry_sdk.set_context("percentile_compute", {"user_id": user_id, "stage": "B"})
-        sentry_sdk.capture_exception(exc)
-    finally:
-        # Quick 260529-015: release the Tier-2 readiness gate regardless of how
-        # Stage B exits — success, the no-anchors early return, the top-level
-        # exception path, or cancellation (finally runs before the re-raise
-        # propagates). Clearing even when zero rows are written is what prevents
-        # below-floor / no-anchor users from being locked out of the page forever.
-        # Additive only: does not replace the Sentry capture above.
-        percentile_compute_registry.clear(user_id)
+    # SURGE-05 (Phase 209, D-06): bound how many compute_stage_a/compute_stage_b
+    # bodies hold a pooled DB connection at once. Acquired outside the
+    # try/except so the existing Sentry capture semantics below are unchanged.
+    # This also covers the eval_drain.py cold-drain trigger site (RESEARCH
+    # Pitfall 4) since the semaphore lives inside the function, not at either
+    # asyncio.create_task call site.
+    async with get_percentile_semaphore():
+        try:
+            async with maker() as session:
+                anchors = await fetch_anchors_for_user(session, user_id=user_id)
+                if not anchors:
+                    # No above-floor anchors — Stage A wrote nothing, Stage B has
+                    # no per-TC cohort key to interpolate against; no-op.
+                    return
+                # D-03: one batched prefetch per import for all (anchor, TC) cells.
+                # The ~32 per-import lookups inside the loop then hit the in-memory dict.
+                rounded_anchors_b = [
+                    _round_anchor_to_grid(a.anchor_rating) for a in anchors.values()
+                ]
+                cohort_b = await load_cohort_cells(session, rounded_anchors_b, list(anchors.keys()))
+                for family in STAGE_B_METRIC_FAMILIES:
+                    for tc, anchor in anchors.items():
+                        try:
+                            result = await _compute_metric_for_user_per_tc(
+                                session, user_id, family, tc
+                            )
+                            if result is None:
+                                # Below per-TC floor for this (family, tc) → no row.
+                                continue
+                            value, n_games = result
+                            table_b = cohort_b.get(
+                                (family, _round_anchor_to_grid(anchor.anchor_rating), tc)
+                            )
+                            percentile: float | None = interpolate_cohort_percentile(value, table_b)
+                            await upsert_percentile(
+                                session,
+                                user_id=user_id,
+                                metric=family,
+                                time_control_bucket=tc,
+                                value=value,
+                                n_games=n_games,
+                                percentile=percentile,
+                                cdf_snapshot=date.today(),
+                            )
+                        except asyncio.CancelledError:
+                            raise
+                        except Exception as exc:
+                            # Per-(family, tc) capture: other cells continue.
+                            sentry_sdk.set_context(
+                                "percentile_compute",
+                                {
+                                    "user_id": user_id,
+                                    "stage": "B",
+                                    "metric": family,
+                                    "tc": tc,
+                                },
+                            )
+                            sentry_sdk.capture_exception(exc)
+                await session.commit()
+        except asyncio.CancelledError:
+            raise
+        except Exception as exc:
+            # Top-level capture for session-open / commit / anchor-fetch failures.
+            sentry_sdk.set_context("percentile_compute", {"user_id": user_id, "stage": "B"})
+            sentry_sdk.capture_exception(exc)
+        finally:
+            # Quick 260529-015: release the Tier-2 readiness gate regardless of how
+            # Stage B exits — success, the no-anchors early return, the top-level
+            # exception path, or cancellation (finally runs before the re-raise
+            # propagates). Clearing even when zero rows are written is what prevents
+            # below-floor / no-anchor users from being locked out of the page forever.
+            # Additive only: does not replace the Sentry capture above.
+            percentile_compute_registry.clear(user_id)

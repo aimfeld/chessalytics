@@ -174,7 +174,11 @@ export interface ImportStartedResponse {
   status: string;
 }
 
-export type ImportJobStatus = 'pending' | 'in_progress' | 'completed' | 'failed';
+// SURGE-04/D-03 (Phase 209): 'queued' matches backend ImportJobStatusLiteral
+// value-for-value (app/schemas/imports.py). It is in-memory only on the
+// backend — never persisted — but flows through the same wire field, so it
+// belongs in the same union here.
+export type ImportJobStatus = 'pending' | 'queued' | 'in_progress' | 'completed' | 'failed';
 
 export interface ImportStatusResponse {
   job_id: string;

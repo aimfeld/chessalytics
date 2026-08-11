@@ -4,7 +4,7 @@ HTTP layer only — all orchestration logic lives in import_service.
 """
 
 import asyncio
-from typing import Annotated
+from typing import Annotated, cast
 
 import sentry_sdk
 from fastapi import APIRouter, Depends, HTTPException, Response
@@ -30,6 +30,7 @@ from app.schemas.imports import (
     DeleteGamesResponse,
     EnqueueTier1Response,
     EvalCoverageResponse,
+    ImportJobStatusLiteral,
     ImportRequest,
     ImportStartedResponse,
     ImportStatusResponse,
@@ -137,7 +138,12 @@ async def start_import(
             sentry_sdk.capture_exception(exc)
             raise exc
         response.status_code = 200
-        return ImportStartedResponse(job_id=existing_row.id, status=existing_row.status)
+        # ImportJob.status is a DB column typed Mapped[str] (SURGE-04/D-03: "queued"
+        # is in-memory only and never written to this column, so the DB value is
+        # always one of the four DB-writer statuses -- see ImportJobStatusLiteral).
+        return ImportStartedResponse(
+            job_id=existing_row.id, status=cast(ImportJobStatusLiteral, existing_row.status)
+        )
     except Exception:
         # Bug fix (CR-01 code review 2026-07-04): the durable-insert write
         # above can fail for reasons OTHER than the expected IntegrityError
@@ -202,7 +208,9 @@ async def get_active_imports(
                 job_id=db_job.id,
                 platform=db_job.platform,
                 username=db_job.username,
-                status=db_job.status,
+                # ImportJob.status is DB-writer-only ("queued" is in-memory-only,
+                # SURGE-04/D-03) -- see ImportJobStatusLiteral.
+                status=cast(ImportJobStatusLiteral, db_job.status),
                 games_fetched=db_job.games_fetched,
                 games_imported=db_job.games_imported,
                 error=db_job.error_message,
@@ -475,7 +483,9 @@ async def get_import_status(
             job_id=db_job.id,
             platform=db_job.platform,
             username=db_job.username,
-            status=db_job.status,
+            # ImportJob.status is DB-writer-only ("queued" is in-memory-only,
+            # SURGE-04/D-03) -- see ImportJobStatusLiteral.
+            status=cast(ImportJobStatusLiteral, db_job.status),
             games_fetched=db_job.games_fetched,
             games_imported=db_job.games_imported,
             error=db_job.error_message,

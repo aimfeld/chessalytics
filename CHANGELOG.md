@@ -24,6 +24,12 @@ in `YYYY-MM-DD` (Europe/Zurich).
 
 - Train no longer serves a blunder whose second-best move still leaves the player clearly winning (+2 pawns or a forced mate), so the puzzle pool is ~24% smaller and a larger share of what remains has exactly one right move. (SEED-141)
 
+- When many imports arrive at once, new ones now wait in a short queue with an "Import queued, starting shortly" notice instead of all running at the same time and slowing the whole site down. Queued imports start automatically and waiting in line never counts against an import's time limit. (Phase 209)
+
+- The "is your data ready" check that pages run in the background now slows its polling down step by step and stops after a few minutes instead of asking the server every few seconds indefinitely. This substantially cuts server load when many people have FlawChess open at once. (Phase 209)
+
+- Creating an account from a guest session and computing your percentile ranking no longer momentarily stall other users' requests under heavy load. (Phase 209)
+
 ### Fixed
 
 - Games no longer silently keep gaps in their move-by-move evaluation. A volunteer machine that runs out of time on a position now retries it once before giving up, so a merely slow or overloaded computer no longer leaves a hole behind. Re-analysis attempts are no longer spent on duplicate submissions when two machines happen to race on the same game, and the retry budget itself is larger. Any game that still ends up with gaps is now repaired automatically every day instead of waiting for someone to notice and run a script by hand. (SEED-139)
