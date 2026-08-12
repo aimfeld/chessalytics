@@ -53,13 +53,25 @@ MIN_QUALIFYING_GAMES = 20
 # games.
 MEDIAN_SAMPLE_SIZE = 20
 
-# P-02: native-Lichess-blitz tiebreak constants. A native lichess-blitz rung
-# wins over a more-recent rung when it is within this many days of the
-# leader's most recent game AND its normalized estimate agrees within this
-# many points -- because a native-blitz rung carries zero conversion error.
-# Thresholds are Claude's-discretion picks (CONTEXT), not from the seed.
+# P-02 (revised 2026-08-11 against real prod data): a native Lichess-blitz
+# rung wins over a more-recent rung when it is within this many days of the
+# leader's most recent game -- because a native-blitz rung IS the target
+# scale and so carries zero conversion error.
+#
+# There is deliberately NO point-gap condition. The original P-02 also
+# required the two normalized estimates to agree within 50 points, which was
+# backwards: it made the tiebreak fire exactly when the choice did not
+# matter (the rungs agree) and abstain exactly when it did (they disagree).
+# Prod user 3 proved the cost -- chess.com blitz normalized to 1467 vs a
+# native lichess blitz 1554, an 87-point gap that skipped the tiebreak and
+# published the converted number, an 87-point under-estimate of a rating we
+# can read natively. A large gap is evidence the ChessGoals conversion is
+# off for this user, which argues FOR the native rung, not against it.
+#
+# The lag bound stays: it is what keeps a genuinely stale native rung from
+# beating a currently-played one. The threshold is a Claude's-discretion
+# pick (CONTEXT), not from the seed.
 NATIVE_BLITZ_TIEBREAK_MAX_LAG_DAYS = 7
-NATIVE_BLITZ_TIEBREAK_MAX_POINT_GAP = 50
 
 
 def _normalized_estimate(rung: RecentRungRow) -> int | None:
@@ -150,13 +162,11 @@ def resolve_current_strength(
         # leader_rung.latest_played_at is the max over all candidates by
         # construction, so this lag is always >= 0 ("trails the leader's").
         lag = leader_rung.latest_played_at - native_rung.latest_played_at
-        point_gap = abs(native_estimate - leader_estimate)
-        if (
-            lag <= datetime.timedelta(days=NATIVE_BLITZ_TIEBREAK_MAX_LAG_DAYS)
-            and point_gap <= NATIVE_BLITZ_TIEBREAK_MAX_POINT_GAP
-        ):
+        if lag <= datetime.timedelta(days=NATIVE_BLITZ_TIEBREAK_MAX_LAG_DAYS):
             # Wins because it carries zero conversion error, not because it
-            # is more recent -- the recency check above already failed.
+            # is more recent -- the recency check above already failed. How
+            # far it sits from the leader's estimate is deliberately NOT
+            # consulted; see the NATIVE_BLITZ_TIEBREAK_MAX_LAG_DAYS comment.
             selected_rung, selected_estimate = native_rung, native_estimate
 
     return CurrentStrengthResponse(

@@ -103,7 +103,11 @@ class TestRecencyRanking:
 
 
 class TestNativeBlitzTiebreak:
-    """D-03/P-02: the CONTEXT-approved worked example and its two negatives."""
+    """D-03/P-02: the CONTEXT-approved worked example, plus the lag negative.
+
+    P-02 was revised on 2026-08-11 against real prod data: the tiebreak has
+    NO point-gap condition. Only the lag bound can stop it.
+    """
 
     def test_positive_tiebreak_prefers_native_blitz(self) -> None:
         # chess.com blitz, native 1118 -> ~1493; most recent (2026-08-11).
@@ -111,7 +115,7 @@ class TestNativeBlitzTiebreak:
             "chess.com", "blitz", 317, 1118, datetime.datetime(2026, 8, 11, tzinfo=_UTC)
         )
         # lichess blitz, native/identity 1532; one day behind, within the
-        # 7-day lag bound, and within 50 points of 1493.
+        # 7-day lag bound.
         li_blitz = _rung("lichess", "blitz", 152, 1532, datetime.datetime(2026, 8, 10, tzinfo=_UTC))
 
         result = resolve_current_strength([cc_blitz, li_blitz], anchors={})
@@ -123,9 +127,11 @@ class TestNativeBlitzTiebreak:
         assert result.rung.time_control_bucket == "blitz"
         assert result.rung.converted is False
 
-    def test_negative_on_point_gap_more_recent_rung_wins(self) -> None:
-        # Same one-day lag as the positive case, but cc's native rating (700)
-        # normalizes far enough from li's (1532) to fail the 50-point bound.
+    def test_wide_point_gap_does_not_block_the_tiebreak(self) -> None:
+        # The revised-P-02 regression. cc's native 700 normalizes hundreds of
+        # points away from li's 1532 -- under the original 50-point bound the
+        # converted rung won. A wide gap is evidence the ChessGoals conversion
+        # is off for this user, so the native rung must still win.
         cc_blitz = _rung(
             "chess.com", "blitz", 317, 700, datetime.datetime(2026, 8, 11, tzinfo=_UTC)
         )
@@ -134,19 +140,64 @@ class TestNativeBlitzTiebreak:
             700, "chess.com", "blitz", is_correspondence=False
         )
         assert cc_normalized is not None
+        # Guard the premise: this fixture must stay a genuinely wide gap, so
+        # the test cannot silently degrade into the narrow-gap case above.
         assert abs(cc_normalized - 1532) > 50
 
         result = resolve_current_strength([cc_blitz, li_blitz], anchors={})
 
         assert result is not None
+        assert result.rating == 1532
         assert result.rung is not None
-        assert result.rung.platform == "chess.com"
+        assert result.rung.platform == "lichess"
         assert result.rung.time_control_bucket == "blitz"
-        assert result.rung.converted is True
+        assert result.rung.converted is False
+
+    def test_prod_user_3_regression(self) -> None:
+        """The real 2026-08-11 prod snapshot that motivated the P-02 revision.
+
+        chess.com blitz led on recency by ~8 hours and normalized to 1467;
+        native lichess blitz sat at 1554, an 87-point gap that the original
+        50-point bound rejected -- publishing an 87-point under-estimate of a
+        rating readable natively. Expected answer: 1554.
+        """
+        cc_blitz = _rung(
+            "chess.com",
+            "blitz",
+            315,
+            1086,
+            datetime.datetime(2026, 8, 11, 16, 2, 20, tzinfo=_UTC),
+        )
+        li_blitz = _rung(
+            "lichess",
+            "blitz",
+            152,
+            1554,
+            datetime.datetime(2026, 8, 11, 7, 40, 17, tzinfo=_UTC),
+        )
+        li_rapid = _rung(
+            "lichess",
+            "rapid",
+            75,
+            1655,
+            datetime.datetime(2026, 8, 11, 7, 10, 17, tzinfo=_UTC),
+        )
+        # 8 games -- below the 20-game floor, must never be selected.
+        cc_rapid = _rung("chess.com", "rapid", 8, 1387, datetime.datetime(2026, 8, 2, tzinfo=_UTC))
+
+        result = resolve_current_strength([cc_blitz, li_blitz, li_rapid, cc_rapid], anchors={})
+
+        assert result is not None
+        assert result.rating == 1554
+        assert result.rung is not None
+        assert result.rung.platform == "lichess"
+        assert result.rung.time_control_bucket == "blitz"
+        assert result.rung.n_games == 152
+        assert result.rung.converted is False
 
     def test_negative_on_lag_top_rung_wins(self) -> None:
-        # Within the 50-point agreement bound, but li's latest game is 10
-        # days behind cc's -- past the 7-day lag bound.
+        # The one condition that still blocks the tiebreak: li's latest game
+        # is 10 days behind cc's, past the 7-day lag bound.
         cc_blitz = _rung(
             "chess.com", "blitz", 317, 1118, datetime.datetime(2026, 8, 11, tzinfo=_UTC)
         )
