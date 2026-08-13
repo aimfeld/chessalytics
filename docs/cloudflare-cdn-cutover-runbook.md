@@ -651,8 +651,23 @@ looks like, not just what was planned._
   the SERVFAIL-for-stale-DS-resolvers outage described in Section 3. Site
   unreachable from the operator's resolver while the origin served 200 throughout.
   Drains by 2026-08-12 ~19:55.
-- DNSSEC re-enabled on Cloudflare afterwards: **no** — deliberately left off through
-  the cutover.
+- DNSSEC left off through the cutover itself: **yes**, deliberately.
+- DNSSEC re-enabled on Cloudflare afterwards: **yes**, 2026-08-13, once all three
+  Section 3 gates were met (delegation stable on Cloudflare, old DS fully drained,
+  Section 9 green). Cloudflare signs with algorithm 13 (ECDSAP256SHA256). The KSK
+  published at enable time yields DS key tag `2371`, digest type 2 (SHA-256),
+  `8C644680A5F6A8A21642EE32AA004673632B6A8F5C671311C113130AE1FA67F4` — computed
+  independently from the zone's published `DNSKEY`, so it can be checked against
+  both the Cloudflare panel and whatever ends up at the registry.
+- Registry publication of the DS is **not instant** (Cloudflare warns up to an
+  hour). Until the DS appears in `.com`, the zone is signed but the delegation is
+  insecure: resolvers see RRSIGs, have no trust anchor, and treat the zone as
+  unsigned. Nothing breaks in that window — verified 2026-08-13 with 1.1.1.1,
+  8.8.8.8, 9.9.9.9 and the local resolver all answering normally while the DS was
+  still absent. The failure mode to watch for is the reverse of the teardown: once
+  the DS *is* live, a strict validator (9.9.9.9) going quiet while a lenient one
+  still answers means the chain is broken, and the DS should be pulled at Swizzonic
+  immediately rather than waited out.
 
 **Cutover:**
 
