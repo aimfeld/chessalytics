@@ -63,10 +63,17 @@ known to be load-bearing. A guessed-name probe already turned up four CNAMEs and
 SRV record that the first version of this runbook did not know about — assume there
 may be more.
 
+The capture is split into two files on purpose. The **site block** records values
+that are *supposed* to change at cutover (the apex and `www` move to Cloudflare
+anycast), so it is a rollback reference only and is never diffed. The **mail block**
+records values that must survive the cutover unchanged, and it is reproduced
+verbatim in Section 9 so the two outputs diff clean.
+
 ```bash
 NS=dns1.swizzonic.ch
-OUT=cloudflare-cutover-preflight-$(date +%Y%m%d).txt
+STAMP=$(date +%Y%m%d)
 
+# Site + registry state — rollback reference. NOT diffed after the cutover.
 {
   echo "=== DS at .com registry (DNSSEC state, see Section 3) ==="
   dig @a.gtld-servers.net DS flawchess.com +norec +short
@@ -80,6 +87,17 @@ OUT=cloudflare-cutover-preflight-$(date +%Y%m%d).txt
   dig @$NS +short A www.flawchess.com
   dig @$NS +short AAAA www.flawchess.com
   dig @$NS +short CNAME www.flawchess.com
+} | tee "cloudflare-cutover-site-$STAMP.txt"
+```
+
+**The block below is reproduced verbatim in Section 9.** Only `$NS` and the output
+filename differ there. If you edit one, edit both — the Section 9 `diff` is the
+acceptance gate, and any wording or loop-breadth drift between the two makes it
+report differences that are not real.
+
+```bash
+# Mail inventory — must be identical before and after. VERBATIM COPY IN SECTION 9.
+{
   echo "=== apex MX ==="
   dig @$NS +short MX flawchess.com
   echo "=== apex TXT (SPF) ==="
@@ -101,8 +119,12 @@ OUT=cloudflare-cutover-preflight-$(date +%Y%m%d).txt
   dig @$NS +short TXT resend._domainkey.flawchess.com
   echo "=== _dmarc.flawchess.com TXT ==="
   dig @$NS +short TXT _dmarc.flawchess.com
-} | tee "$OUT"
+} | tee "cloudflare-cutover-mail-preflight-$STAMP.txt"
 ```
+
+The CNAME and SRV loops deliberately probe names that probably do not exist. A name
+with no record prints an empty line in both captures and diffs clean, so the wider
+net costs nothing and catches a record nobody remembered.
 
 Expected values, per the record set observed on 2026-08-11 and
 `docs/email-resend-runbook.md`:
@@ -160,8 +182,8 @@ Two clocks run in sequence, and both must finish before Section 8:
 
 Steps:
 
-1. Record the current DS value into the Section 2 pre-flight file (it is part of the
-   rollback picture).
+1. Record the current DS value into the Section 2 site file
+   (`cloudflare-cutover-site-<date>.txt`; it is part of the rollback picture).
 2. Disable DNSSEC: Swizzonic new panel → DNS page for **`flawchess.com`** → DNSSEC
    toggle off. Check the domain name in the page header — the account also holds
    `flawchess.ch` (a separate, differently-pointed domain), and its DNS page looks
@@ -394,11 +416,17 @@ dig @$CF_NS +short TXT resend._domainkey.flawchess.com
 dig @$CF_NS +short TXT _dmarc.flawchess.com
 ```
 
-Compare every line against the pre-flight file from Section 2. **Stop here if
-anything differs** — do not proceed to Section 8 until the Cloudflare-side answers
-match record-for-record (mail records match exactly; the proxied apex A/AAAA
-record legitimately differs, since it now points at Cloudflare's anycast IPs
-instead of the origin — that difference is expected and correct).
+Compare every line against Section 2's two capture files — mail records against
+`cloudflare-cutover-mail-preflight-<date>.txt`, the apex and `www` against
+`cloudflare-cutover-site-<date>.txt`. **Stop here if anything differs** — do not
+proceed to Section 8 until the Cloudflare-side answers match record-for-record
+(mail records match exactly; the proxied apex A/AAAA record legitimately differs,
+since it now points at Cloudflare's anycast IPs instead of the origin — that
+difference is expected and correct).
+
+This is an eyeball comparison, not the Section 9 `diff`: these queries hit
+Cloudflare directly by IP before delegation has moved, so they are shaped for
+reading rather than for byte-comparison.
 
 ## 8. The flip
 
@@ -456,36 +484,49 @@ ticket.
 
 **Mail inventory, re-verified:**
 
+**This block is a verbatim copy of the Section 2 mail block** — only `$NS` and the
+output filename differ. Do not "improve" it here: any wording or loop-breadth drift
+from Section 2 shows up as a phantom difference and destroys the value of the
+`diff`. Do not capture the site records here either; those are supposed to have
+changed, and Section 2 keeps them in a separate file for exactly that reason.
+
 ```bash
 NS=<assigned-cloudflare-ns-1>
-OUT=cloudflare-cutover-postflight-$(date +%Y%m%d).txt
+STAMP=$(date +%Y%m%d)
 
+# Mail inventory — must be identical before and after. VERBATIM COPY OF SECTION 2.
 {
   echo "=== apex MX ==="
   dig @$NS +short MX flawchess.com
   echo "=== apex TXT (SPF) ==="
   dig @$NS +short TXT flawchess.com
   echo "=== mail client autoconfiguration CNAMEs ==="
-  for n in autoconfig smtp imap pop; do
+  for n in autoconfig autodiscover mail webmail smtp imap pop; do
     printf '%s: ' "$n"; dig @$NS +short CNAME $n.flawchess.com
   done
   echo "=== mail client autoconfiguration SRV ==="
-  dig @$NS +short SRV _autodiscover._tcp.flawchess.com
-  echo "=== send.flawchess.com MX ==="
+  for s in _autodiscover._tcp _submission._tcp _submissions._tcp \
+           _imaps._tcp _imap._tcp _pop3s._tcp; do
+    printf '%s: ' "$s"; dig @$NS +short SRV $s.flawchess.com
+  done
+  echo "=== send.flawchess.com MX (Resend bounce) ==="
   dig @$NS +short MX send.flawchess.com
-  echo "=== send.flawchess.com TXT (SPF) ==="
+  echo "=== send.flawchess.com TXT (Resend SPF) ==="
   dig @$NS +short TXT send.flawchess.com
-  echo "=== resend._domainkey.flawchess.com TXT ==="
+  echo "=== resend._domainkey.flawchess.com TXT (Resend DKIM, apex-level) ==="
   dig @$NS +short TXT resend._domainkey.flawchess.com
   echo "=== _dmarc.flawchess.com TXT ==="
   dig @$NS +short TXT _dmarc.flawchess.com
-} | tee "$OUT"
+} | tee "cloudflare-cutover-mail-postflight-$STAMP.txt"
 
-diff cloudflare-cutover-preflight-*.txt "$OUT"
+diff cloudflare-cutover-mail-preflight-*.txt cloudflare-cutover-mail-postflight-*.txt
 ```
 
-The mail-record lines must be byte-identical to the pre-flight file. Any diff on a
-mail record is a stop-the-line failure — see Section 10.
+**The `diff` must be empty.** Not "empty apart from the headers", not "empty apart
+from a trailing newline" — empty. Every line the two captures produce is either a
+record that must survive the cutover or a section label that is identical by
+construction, so there is no such thing as an expected difference here. Any output
+at all is a stop-the-line failure; see Section 10.
 
 **Outbound mail — password-reset email, end-to-end proof that apex DKIM survived:**
 request a password reset for an operator-controlled account
@@ -662,9 +703,47 @@ looks like, not just what was planned._
   four autoconfiguration CNAMEs, the `_autodiscover._tcp` SRV, `send.` MX and SPF
   TXT, the Resend DKIM key, and `_dmarc`. The only differing records are the three
   proxied site records (`flawchess.com`, `www`, `analytics`), which is expected.
-- Password-reset (outbound) email verification result: **not yet run**
-- Inbound mail to the Swizzonic mailbox verification result: **not yet run**
-- IMAP/SMTP client connection via `imap.` / `smtp.` CNAMEs: **not yet run**
+- Password-reset (outbound) email verification result: **pass** (2026-08-13).
+- Inbound mail to the Swizzonic mailbox verification result: **pass** (2026-08-13) —
+  mail to `support@flawchess.com` arrives, and replies send.
+- IMAP/SMTP client connection via `imap.` / `smtp.` CNAMEs: **pass** (2026-08-13),
+  verified by TLS handshake rather than a configured client. All four ports connect
+  with valid certificates: `imap.` :993, `pop.` :995, `smtp.` :465 and :587.
+
+Two mail findings from that verification are **pre-existing Swizzonic behavior, not
+cutover damage.** Both were checked against `dns1.swizzonic.ch`, which still serves
+the old zone, so the comparison is direct rather than inferred:
+
+1. **Outbound mail from the Swizzonic mailbox is not DKIM-signed, so DMARC fails on
+   any forwarded copy.** A reply from `support@flawchess.com` that is forwarded (a
+   Sieve redirect, in the observed case) arrives with `dmarc=fail`, because SRS
+   rewrites the envelope sender to the forwarder's domain and SPF then aligns to
+   that domain instead of `flawchess.com` — with no DKIM signature to fall back on.
+   This is not a lost record: probing 18 candidate selectors against the old
+   Swizzonic zone and against Cloudflare found **no DKIM selector on either side**.
+   The only DKIM key the domain has ever had is `resend._domainkey`, which covers
+   Resend's transactional mail and is intact. Direct (unforwarded) mail from the
+   mailbox still passes DMARC via SPF: the outbound host `81.88.49.227` is covered
+   by `81.88.49.224/27` in `spf2.webapps.net`. DMARC is `p=none`, so nothing is
+   rejected either way. Fixing it would mean asking Swizzonic to sign outbound for
+   the domain and publishing their selector — out of scope here.
+2. **The `imap.` / `smtp.` / `pop.` CNAMEs do not match the certificates their
+   targets present.** `smtp.swizzonic.email` serves a cert for
+   `smtp.mail.webnode.com` + `*.securemail.pro`; `imap.swizzonic.email` serves
+   `*.securemail.pro`. Neither covers `*.flawchess.com` *or* `*.swizzonic.email`, so
+   a strict client pointed at either name gets a name mismatch. The only hostnames
+   that validate are the `*.securemail.pro` ones, which is what the `autoconfig`
+   CNAME (`tb-ch.securemail.pro`) hands out. The CNAME targets and their
+   certificates are untouched by this procedure, so this predates the cutover.
+
+One genuine cutover side effect, low impact: the apex SPF record's `a` mechanism now
+resolves to Cloudflare's anycast addresses (`188.114.96.12` / `188.114.97.12`)
+instead of the origin `178.104.89.1`, because the apex is proxied. Nothing sends
+mail directly from the origin — the app sends through Resend and aligns via DKIM —
+so no delivery path depends on it. It does mean the record authorizes shared
+Cloudflare addresses rather than a box under our control. Dropping `a` from the SPF
+record is a reasonable cleanup, but it is a change to a working mail setup and
+should not be bundled into a cutover.
 
 **Cache verification (Section 9), measured 2026-08-11 after the 6a fix:**
 
