@@ -664,10 +664,28 @@ looks like, not just what was planned._
   insecure: resolvers see RRSIGs, have no trust anchor, and treat the zone as
   unsigned. Nothing breaks in that window — verified 2026-08-13 with 1.1.1.1,
   8.8.8.8, 9.9.9.9 and the local resolver all answering normally while the DS was
-  still absent. The failure mode to watch for is the reverse of the teardown: once
-  the DS *is* live, a strict validator (9.9.9.9) going quiet while a lenient one
-  still answers means the chain is broken, and the DS should be pulled at Swizzonic
-  immediately rather than waited out.
+  still absent.
+- **Cloudflare cannot publish the DS for a domain registered elsewhere.** Its
+  "DNSSEC is pending while we wait for the DS to be added to your registrar"
+  message means it is polling the registry, not working a queue — the panel will
+  sit there indefinitely until someone enters the DS at Swizzonic by hand.
+  Cloudflare does publish `CDS`/`CDNSKEY` (RFC 7344/8078) for automated pickup, and
+  the `CDS` matched the independently computed DS exactly, but `.com` leaves CDS
+  scanning to the registrar and Swizzonic does not appear to do it. Entering the DS
+  manually was required.
+- **DS live and chain validating: 2026-08-13.** Confirmed at both `a.gtld-servers.net`
+  and `m.gtld-servers.net`, matching the computed value. `delv @1.1.1.1
+  flawchess.com A` reports `; fully validated`; the `ad` flag is set by 1.1.1.1,
+  8.8.8.8 and 9.9.9.9; signed negative answers validate; every mail record still
+  resolves and the site returns 200.
+- Expect a lag of up to the record TTL (300s here) before a given resolver sets
+  `ad`, because one that cached an answer as *insecure* just before the DS landed
+  keeps serving it that way until expiry. Observed on 9.9.9.9: the apex answer had
+  276s remaining and showed no `ad`, while an uncached name under the same zone
+  validated immediately. Not a fault, and it clears itself.
+- The failure mode to watch for is the reverse of the teardown: a strict validator
+  (9.9.9.9) going quiet while a lenient one still answers means the chain is broken,
+  and the DS should be pulled at Swizzonic immediately rather than waited out.
 
 **Cutover:**
 
