@@ -1180,7 +1180,7 @@ describe('TrainSolveScreen — progress, last move, grading state, engine failur
     expect(mockSetMuted).toHaveBeenCalledWith(true);
   });
 
-  it('a live 3-point solve plays the WinChime (game-win) sound and pops the "Points: +3" flash over the board (190.1 UAT round 7, SEED-119 max)', async () => {
+  it('a live 3-point solve plays the per-puzzle score-full sound and pops the "Points: +3" flash over the board (190.1 UAT round 7, SEED-119 max)', async () => {
     const { playSound } = await import('@/lib/sounds');
     vi.mocked(playSound).mockClear();
     await renderScreen(makePuzzle());
@@ -1191,9 +1191,13 @@ describe('TrainSolveScreen — progress, last move, grading state, engine failur
     });
     await waitFor(() => expect(screen.getByTestId('train-points-flash')).not.toBeNull());
     expect(screen.getByTestId('train-points-flash').textContent).toBe('Points: +3');
-    // Round 7: the perfect-score sound is the gentle WinChime, not the
-    // Victory fanfare (that SoundEvent no longer exists).
-    expect(playSound).toHaveBeenCalledWith('game-win');
+    // Quick 260814-b: the per-puzzle perfect score has its own clip. It must
+    // NOT be 'game-win' — that is reserved for the green session verdict and
+    // bot-game wins, and reusing it here made one puzzle sound like the whole
+    // session (round 7's earlier verdict, that it is not the Victory fanfare
+    // either, still holds — that SoundEvent no longer exists).
+    expect(playSound).toHaveBeenCalledWith('score-full');
+    expect(playSound).not.toHaveBeenCalledWith('game-win');
   });
 
   it('a REMOUNT (dev-clock time travel -> new session) replays neither the previous session’s result sound nor its points flash (Phase 200 UAT round 7)', async () => {

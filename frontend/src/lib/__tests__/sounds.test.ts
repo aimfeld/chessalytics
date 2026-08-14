@@ -10,8 +10,10 @@
  * 3. setMuted persists to localStorage under MUTE_KEY and notifies
  *    useSyncExternalStore subscribers (useMuted re-renders).
  * 4. unlockAudio calls play then pause on each preloaded clip (Pitfall 4).
- * 5. The two D-09 events ('low-time', 'draw-declined') dispatch their own
- *    distinct assets (LowTime, GenericNotify).
+ * 5. Every event dispatches its mapped asset — including the Train
+ *    mixed-result event 'score-partial' (PartialScore, the clip 'low-time'
+ *    used to play) and the two events that deliberately SHARE one clip
+ *    ('draw-declined' and 'game-draw' both play Notify.mp3, Quick 260814-b).
  *
  * Each test re-imports the module fresh via vi.resetModules() + dynamic
  * import — sounds.ts caches Audio instances and listeners at module scope,
@@ -27,6 +29,10 @@ import type { SoundEvent } from '../sounds';
 class MockAudio {
   src: string;
   currentTime = 0;
+  /** Mirrors the real HTMLAudioElement default. unlockAudio skips clips whose
+   * `paused` is exactly `false`, so this must be a real boolean for the
+   * skip-currently-playing test to exercise anything. */
+  paused = true;
   play = vi.fn(() => Promise.resolve());
   pause = vi.fn();
 
@@ -43,6 +49,21 @@ function stubAudio(): void {
     'Audio',
     vi.fn(function (this: MockAudio, src: string) {
       const instance = new MockAudio(src);
+      instances.push(instance);
+      return instance;
+    }),
+  );
+}
+
+/** Models an environment whose Audio has no `paused` property at all, to prove
+ * unlockAudio's skip guard fails toward unlocking rather than skipping. */
+function stubAudioWithoutPaused(): void {
+  instances = [];
+  vi.stubGlobal(
+    'Audio',
+    vi.fn(function (this: MockAudio, src: string) {
+      const instance = new MockAudio(src);
+      delete (instance as Partial<MockAudio>).paused;
       instances.push(instance);
       return instance;
     }),
@@ -82,10 +103,13 @@ describe('sounds', () => {
     ['check', 'Check.mp3'],
     ['game-end', 'Checkmate.mp3'],
     ['low-time', 'LowTime.mp3'],
-    ['draw-declined', 'GenericNotify.mp3'],
+    ['draw-declined', 'Notify.mp3'],
     ['game-win', 'WinChime.mp3'],
     ['game-loss', 'Defeat.mp3'],
-    ['game-draw', 'Draw.mp3'],
+    ['game-draw', 'Notify.mp3'],
+    ['game-start', 'GameStart.mp3'],
+    ['score-partial', 'PartialScore.mp3'],
+    ['score-full', 'FullScore.mp3'],
   ] satisfies [SoundEvent, string][])(
     'dispatches the %s asset (%s)',
     async (event, filename) => {
@@ -95,6 +119,22 @@ describe('sounds', () => {
       expect(instances[0]?.src).toContain(`/sound/${filename}`);
     },
   );
+
+  it('gives the two clip-sharing events (draw-declined, game-draw) their own Audio instances', async () => {
+    // Quick 260814-b: both play Notify.mp3, but audioCache is keyed by EVENT,
+    // not by filename. That is deliberate — a shared instance would make a
+    // `game-draw` fired moments after a `draw-declined` restart the same
+    // element (currentTime = 0) instead of sounding independently.
+    const { playSound } = await loadSounds();
+
+    playSound('draw-declined');
+    playSound('game-draw');
+
+    expect(instances).toHaveLength(2);
+    expect(instances[0]?.src).toContain('/sound/Notify.mp3');
+    expect(instances[1]?.src).toContain('/sound/Notify.mp3');
+    expect(instances[0]).not.toBe(instances[1]);
+  });
 
   it('is a no-op after setMuted(true), and audible again after setMuted(false)', async () => {
     const { playSound, setMuted } = await loadSounds();
@@ -132,10 +172,13 @@ describe('sounds', () => {
 
     unlockAudio();
 
-    // Nine SoundEvent members (Task 1 added game-win/game-loss/game-draw;
-    // 190.1 UAT round 7 removed the short-lived victory event again), each
-    // gets its own preloaded Audio instance.
-    expect(instances).toHaveLength(9);
+    // Twelve SoundEvent members (Task 1 added game-win/game-loss/game-draw;
+    // 190.1 UAT round 7 removed the short-lived victory event again; Quick
+    // 260813-oae added game-start; Quick 260814 added score-partial; Quick
+    // 260814-b added score-full), each gets its own preloaded Audio instance.
+    // Twelve, not eleven, even though draw-declined and game-draw now point at
+    // the same file — the cache is keyed by event, not by filename.
+    expect(instances).toHaveLength(12);
     for (const instance of instances) {
       expect(instance.play).toHaveBeenCalledTimes(1);
       expect(instance.pause).toHaveBeenCalledTimes(1);
@@ -144,6 +187,47 @@ describe('sounds', () => {
       const playOrder = instance.play.mock.invocationCallOrder[0] ?? 0;
       const pauseOrder = instance.pause.mock.invocationCallOrder[0] ?? 0;
       expect(playOrder).toBeLessThan(pauseOrder);
+    }
+  });
+
+  it('unlockAudio does not interrupt a clip that is already playing', async () => {
+    // Quick 260813-oae: `game-start` is ~0.78s and fires from the Start click,
+    // so a pointerdown inside the game view moments later reaches unlockAudio
+    // while it is still sounding. That must not pause it mid-clip.
+    const { playSound, unlockAudio } = await loadSounds();
+
+    playSound('game-start');
+    const startClip = instances[0];
+    expect(startClip?.src).toContain('/sound/GameStart.mp3');
+    // Real HTMLAudioElement flips this on play(); MockAudio does not.
+    startClip!.paused = false;
+
+    unlockAudio();
+
+    expect(startClip?.pause).not.toHaveBeenCalled();
+    expect(startClip?.play).toHaveBeenCalledTimes(1); // the original playSound
+    // Every other clip still got unlocked.
+    for (const instance of instances.filter((i) => i !== startClip)) {
+      expect(instance.play).toHaveBeenCalledTimes(1);
+      expect(instance.pause).toHaveBeenCalledTimes(1);
+    }
+  });
+
+  it('unlockAudio still unlocks when `paused` is undefined (fails toward unlocking)', async () => {
+    // The skip guard tests `=== false`, so an environment whose Audio lacks a
+    // `paused` property must still be unlocked rather than silently skipped.
+    // Re-stub AFTER loadSounds but BEFORE unlockAudio: sounds.ts constructs its
+    // Audio instances lazily on first use, so this stub is the one it sees.
+    const { unlockAudio } = await loadSounds();
+    stubAudioWithoutPaused();
+
+    unlockAudio();
+
+    expect(instances).toHaveLength(12);
+    for (const instance of instances) {
+      expect(instance.paused).toBeUndefined();
+      expect(instance.play).toHaveBeenCalledTimes(1);
+      expect(instance.pause).toHaveBeenCalledTimes(1);
     }
   });
 

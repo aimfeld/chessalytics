@@ -131,7 +131,7 @@ describe('TrainScoreScreen', () => {
 
   it.each([
     ['green', { total: 20, max: 20 }, 'game-win'],
-    ['yellow', { total: 12, max: 20 }, 'low-time'],
+    ['yellow', { total: 12, max: 20 }, 'score-partial'],
     ['red', { total: 4, max: 20 }, 'game-loss'],
   ] as const)('a %s-band score plays its result sound exactly once', (_band, score, event) => {
     renderScoreScreen(score);
@@ -148,7 +148,7 @@ describe('TrainScoreScreen', () => {
     prefersReducedMotion.mockReturnValue(true);
     renderScoreScreen({ total: 12, max: 20 });
     expect(firePartialConfetti).not.toHaveBeenCalled();
-    expect(playSound).toHaveBeenCalledWith('low-time');
+    expect(playSound).toHaveBeenCalledWith('score-partial');
   });
 
   it('the badge animates by default and drops the animation class under reduced motion', () => {
