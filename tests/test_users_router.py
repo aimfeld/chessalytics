@@ -290,15 +290,16 @@ class TestProfileBetaEnabled:
 
 
 # ---------------------------------------------------------------------------
-# MAIA-04 / 151-03: current_rating (D-07 free-play ELO-selector default)
+# Quick 260811-u11 (SEED-147): current_strength, replacing
+# lichess_blitz_equivalent_rating (P-01)
 # ---------------------------------------------------------------------------
 
 
-class TestProfileCurrentRating:
+class TestProfileCurrentStrength:
     @pytest.mark.asyncio
-    async def test_profile_returns_null_current_rating_with_no_games(self):
-        """A user with zero games gets current_rating=None (not omitted)."""
-        email = unique_email("rating_none")
+    async def test_profile_returns_null_current_strength_when_no_games_or_anchors(self):
+        """A freshly registered user (no games, no anchors) gets field=None, present."""
+        email = unique_email("current_strength_none")
         password = "testpassword123"
 
         async with httpx.AsyncClient(
@@ -312,95 +313,17 @@ class TestProfileCurrentRating:
 
         assert resp.status_code == 200
         body = resp.json()
-        assert "current_rating" in body
-        assert body["current_rating"] is None
+        assert "current_strength" in body
+        assert body["current_strength"] is None
+        assert "lichess_blitz_equivalent_rating" not in body
 
     @pytest.mark.asyncio
-    async def test_profile_returns_current_rating_from_most_recent_game(self):
-        """current_rating reflects the user's color rating on their most recent game."""
-        import datetime
-
-        from app.core.database import async_session_maker
-        from app.repositories.game_repository import bulk_insert_games
-
-        email = unique_email("rating_present")
-        password = "testpassword123"
-
-        async with httpx.AsyncClient(
-            transport=httpx.ASGITransport(app=app), base_url="http://test"
-        ) as client:
-            user_id, token = await _register_login_and_get_id(client, email, password)
-
-            async with async_session_maker() as session:
-                await bulk_insert_games(
-                    session,
-                    [
-                        {
-                            "user_id": user_id,
-                            "platform": "chess.com",
-                            "platform_game_id": f"rating-{uuid.uuid4().hex}",
-                            "platform_url": "https://chess.com/game/1",
-                            "pgn": '[Event "Test"]\n\n1. e4 *',
-                            "result": "1-0",
-                            "user_color": "white",
-                            "time_control_str": "600+0",
-                            "time_control_bucket": "blitz",
-                            "time_control_seconds": 600,
-                            "rated": True,
-                            "white_username": "u",
-                            "black_username": "o",
-                            "white_rating": 1720,
-                            "black_rating": 1650,
-                            "opening_name": None,
-                            "opening_eco": None,
-                            "played_at": datetime.datetime.now(datetime.timezone.utc),
-                        }
-                    ],
-                )
-                await session.commit()
-
-            resp = await client.get(
-                "/api/users/me/profile",
-                headers={"Authorization": f"Bearer {token}"},
-            )
-
-        assert resp.status_code == 200
-        assert resp.json()["current_rating"] == 1720
-
-
-# ---------------------------------------------------------------------------
-# Phase 171-02 D-07: lichess_blitz_equivalent_rating (blitz-bucket anchor)
-# ---------------------------------------------------------------------------
-
-
-class TestProfileLichessBlitzEquivalentRating:
-    @pytest.mark.asyncio
-    async def test_profile_returns_null_lichess_blitz_when_no_anchors(self):
-        """A freshly registered user (no anchors at all) gets field=None, present."""
-        email = unique_email("blitz_anchor_none")
-        password = "testpassword123"
-
-        async with httpx.AsyncClient(
-            transport=httpx.ASGITransport(app=app), base_url="http://test"
-        ) as client:
-            token = await _register_and_login(client, email, password)
-            resp = await client.get(
-                "/api/users/me/profile",
-                headers={"Authorization": f"Bearer {token}"},
-            )
-
-        assert resp.status_code == 200
-        body = resp.json()
-        assert "lichess_blitz_equivalent_rating" in body
-        assert body["lichess_blitz_equivalent_rating"] is None
-
-    @pytest.mark.asyncio
-    async def test_profile_returns_lichess_blitz_anchor_rating(self):
-        """A user with a blitz-bucket anchor gets that anchor's rating."""
+    async def test_profile_falls_back_to_blitz_anchor_when_no_qualifying_games(self):
+        """D-07: blitz anchor only, no games -> {rating, source: rating_anchor, rung: null}."""
         from app.core.database import async_session_maker
         from app.repositories.user_rating_anchors_repository import upsert_anchor
 
-        email = unique_email("blitz_anchor_present")
+        email = unique_email("current_strength_anchor_only")
         password = "testpassword123"
 
         async with httpx.AsyncClient(
@@ -428,17 +351,20 @@ class TestProfileLichessBlitzEquivalentRating:
 
         assert resp.status_code == 200
         body = resp.json()
-        assert "lichess_blitz_equivalent_rating" in body
-        assert body["lichess_blitz_equivalent_rating"] == 1740
+        assert body["current_strength"] == {
+            "rating": 1740,
+            "source": "rating_anchor",
+            "rung": None,
+        }
 
     @pytest.mark.asyncio
-    async def test_profile_returns_null_lichess_blitz_when_only_non_blitz_anchors(self):
-        """A user with only rapid/classical anchors (no blitz) gets None -- the
-        blitz-bucket semantic is deliberate, not a bug (D-07)."""
+    async def test_profile_returns_null_when_only_non_blitz_anchors_and_no_games(self):
+        """A user with only rapid/classical anchors (no blitz), no games -> None -- the
+        blitz-bucket-only semantic is deliberate, not a bug (D-07)."""
         from app.core.database import async_session_maker
         from app.repositories.user_rating_anchors_repository import upsert_anchor
 
-        email = unique_email("blitz_anchor_nonblitz")
+        email = unique_email("current_strength_nonblitz")
         password = "testpassword123"
 
         async with httpx.AsyncClient(
@@ -476,16 +402,15 @@ class TestProfileLichessBlitzEquivalentRating:
 
         assert resp.status_code == 200
         body = resp.json()
-        assert "lichess_blitz_equivalent_rating" in body
-        assert body["lichess_blitz_equivalent_rating"] is None
+        assert body["current_strength"] is None
 
     @pytest.mark.asyncio
-    async def test_put_profile_returns_lichess_blitz_anchor_rating(self):
-        """PUT /me/profile returns the same field with the same value as GET."""
+    async def test_put_profile_returns_same_current_strength_as_get(self):
+        """PUT /me/profile returns the same current_strength object as GET."""
         from app.core.database import async_session_maker
         from app.repositories.user_rating_anchors_repository import upsert_anchor
 
-        email = unique_email("blitz_anchor_put")
+        email = unique_email("current_strength_put")
         password = "testpassword123"
 
         async with httpx.AsyncClient(
@@ -506,16 +431,106 @@ class TestProfileLichessBlitzEquivalentRating:
                 )
                 await session.commit()
 
-            resp = await client.put(
+            get_resp = await client.get(
+                "/api/users/me/profile",
+                headers={"Authorization": f"Bearer {token}"},
+            )
+            put_resp = await client.put(
                 "/api/users/me/profile",
                 json={"chess_com_username": "someuser"},
                 headers={"Authorization": f"Bearer {token}"},
             )
 
+        assert get_resp.status_code == 200
+        assert put_resp.status_code == 200
+        assert get_resp.json()["current_strength"] == put_resp.json()["current_strength"]
+        assert put_resp.json()["current_strength"] == {
+            "rating": 1680,
+            "source": "rating_anchor",
+            "rung": None,
+        }
+
+    @pytest.mark.asyncio
+    async def test_recent_games_path_end_to_end(self):
+        """25 committed rated human lichess blitz games outrank a differing blitz anchor."""
+        import datetime
+
+        from app.core.database import async_session_maker
+        from app.models.game import Game
+        from app.repositories.user_rating_anchors_repository import upsert_anchor
+
+        email = unique_email("current_strength_recent_games")
+        password = "testpassword123"
+        now = datetime.datetime.now(datetime.timezone.utc)
+        game_ids: list[int] = []
+
+        async with httpx.AsyncClient(
+            transport=httpx.ASGITransport(app=app), base_url="http://test"
+        ) as client:
+            user_id, token = await _register_login_and_get_id(client, email, password)
+
+            async with async_session_maker() as session:
+                # Blitz anchor differs from the games' 1500 median -- the
+                # recent-games path must win, not the anchor.
+                await upsert_anchor(
+                    session,
+                    user_id=user_id,
+                    time_control_bucket="blitz",
+                    anchor_rating=1200,
+                    n_chesscom_games=0,
+                    n_lichess_games=30,
+                    chesscom_median_native=None,
+                    lichess_median_native=1200,
+                )
+                for i in range(25):
+                    game = Game(
+                        user_id=user_id,
+                        platform="lichess",
+                        platform_game_id=f"router-recent-{i}",
+                        pgn="1. e4 e5 1-0",
+                        result="1-0",
+                        user_color="white",
+                        rated=True,
+                        is_computer_game=False,
+                        white_rating=1500,
+                        black_rating=1400,
+                        time_control_str="180+2",
+                        time_control_bucket="blitz",
+                        played_at=now - datetime.timedelta(days=i),
+                    )
+                    session.add(game)
+                    await session.flush()
+                    game_ids.append(game.id)
+                await session.commit()
+
+            try:
+                resp = await client.get(
+                    "/api/users/me/profile",
+                    headers={"Authorization": f"Bearer {token}"},
+                )
+            finally:
+                # Committed non-guest games are tier-3 eval-lottery candidates
+                # -- delete them again so they don't leak into unrelated tests.
+                async with async_session_maker() as cleanup_session:
+                    for game_id in game_ids:
+                        game_row = await cleanup_session.get(Game, game_id)
+                        if game_row is not None:
+                            await cleanup_session.delete(game_row)
+                    await cleanup_session.commit()
+
         assert resp.status_code == 200
         body = resp.json()
-        assert "lichess_blitz_equivalent_rating" in body
-        assert body["lichess_blitz_equivalent_rating"] == 1680
+        current_strength = body["current_strength"]
+        assert current_strength is not None
+        assert current_strength["rating"] == 1500
+        assert current_strength["source"] == "recent_games"
+        rung = current_strength["rung"]
+        assert rung is not None
+        assert rung["platform"] == "lichess"
+        assert rung["time_control_bucket"] == "blitz"
+        assert rung["n_games"] == 25
+        assert rung["window_days"] == 90
+        assert rung["converted"] is False
 
 
 # ---------------------------------------------------------------------------

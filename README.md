@@ -67,11 +67,152 @@ The files `frontend/public/engine/stockfish-18-lite-single.js` and `frontend/pub
 
 ## Sound Assets
 
-The files under `frontend/public/sound/` (`Move.mp3`, `Capture.mp3`, `Check.mp3`, `Checkmate.mp3`, `Victory.mp3`, `Defeat.mp3`, `Draw.mp3`, `LowTime.mp3`, `GenericNotify.mp3`) are vendored from lichess's [lila](https://github.com/lichess-org/lila) `public/sound/sfx` directory, created by **Enigmahack**, and licensed under [GNU Affero General Public License v3 or later (AGPLv3+)](https://www.gnu.org/licenses/agpl-3.0.html) — fully compatible with FlawChess's own AGPL-3.0 license (see the LICENSE file). Note: lila's `public/sound/standard` set (a different, similarly-named directory) is explicitly a **non-free exception** per lila's own `COPYING.md` and is NOT used here — only the `sfx` directory's AGPLv3+ clips are vendored.
+The files under `frontend/public/sound/` come from three different sources. Check
+which group a file belongs to before assuming its license.
+
+**1. `Move.mp3`, `Capture.mp3`, `Check.mp3`, `GameStart.mp3`, `LowTime.mp3`,
+`Defeat.mp3`, `Notify.mp3`, `FullScore.mp3`** — taken from recordings downloaded
+from [sounddino.com](https://sounddino.com/en/effects/chess/) on 2026-08-13
+(2026-08-14 for `LowTime.mp3`, `Defeat.mp3`, `Notify.mp3` and `FullScore.mp3`):
+
+| File | Source recording | Which hit |
+|------|-----------------|-----------|
+| `Move.mp3` | `/mp3/6/the-sound-of-arranging-pieces-one-by-one-on-a-chessboard.mp3` | 2nd of 9 (at 2.83s) |
+| `Capture.mp3` | `/mp3/6/the-sound-of-arranging-pieces-one-by-one-on-a-chessboard.mp3` | 8th of 9 (at 22.13s) |
+| `Check.mp3` | `/mp3/6/the-sound-of-arranging-pieces-one-by-one-on-a-chessboard.mp3` | 3rd of 9 (at 8.10s) |
+| `GameStart.mp3` | `/mp3/6/there-is-such-an-option-small-figures.mp3` | whole recording, uncut |
+| `LowTime.mp3` | `clock-stopwatch-ticking.mp3` (title tag "Clock: stopwatch ticking") | 6 ticks, onsets 12.502–13.504s |
+| `Defeat.mp3` | `cello-sad-arpeggio.mp3` (title tag "Cello sad arpeggio", from the [cello category](https://sounddino.com/en/effects/cello/)) | opening phrase, 0–1.50s |
+| `Notify.mp3` | `sound-messages-odnoklassniki.mp3` (title tag "Sound messages Odnoklassniki") | whole recording, uncut |
+| `FullScore.mp3` | `small-victory.mp3` (title tag "small victory") | opening phrase, 0–1.10s |
+
+`Move`, `Capture` and `Check` come from the same take. The source recordings are
+multi-hit field recordings rather than one-shots, so "which hit" is what makes a
+cut reproducible; each was isolated by onset detection, cut to a 90ms window from
+3ms before the attack, and faded out. `GameStart.mp3` and `Notify.mp3` are the
+two used whole (~0.78s and ~0.84s) — each marks a one-time event, so neither
+needs shortening. Both sources are already single events rather than multi-hit
+takes, and `Notify.mp3`'s own last ~0.2s is already below the noise floor, so
+trimming it would only raise its measured RMS without changing what is heard.
+
+`Defeat.mp3` is the source's opening phrase, not the whole 3.13s recording. The
+source keeps bowing new notes until ~2.9s, so it is a real three-second phrase
+rather than a short one with a long tail, and it cannot simply be truncated —
+that would cut a note mid-attack. It is instead untouched to 1.15s and then
+faded to silence by 1.50s on a raised-cosine taper, which lands the fade in the
+gap before the next bowed note (onsets sit at ~0.08, 0.41, 0.73, 0.94, 1.49,
+2.16 and 2.83s). Three seconds of cello is too long for a sound that also fires
+on every zero-score Train puzzle, not just at the end of a bot game. Cut it at a
+different length the same way — end the fade just before an onset, never on one.
+
+`LowTime.mp3` is **not** a straight cut of its source. The recording ticks at
+~5/s, which is too slow to read as urgent, and it ramps up in level across its 16
+seconds — so the six ticks come from the loud, steady late region. Each tick was
+extracted as its own 90ms grain (3ms pre-roll, 20ms tail taper; a tick is back at
+the noise floor within ~40ms, so the grains never overlap) and re-placed at 1.5x
+tempo, giving 7.5 ticks/s in 0.82s. **Speeding it up by resampling would raise the
+pitch and a WSOLA time-stretch would smear the click transients** — re-placing the
+grains does neither, and the source's natural tick jitter is preserved
+proportionally so it does not sound machine-gridded. Verified by spectral
+centroid: 6685 Hz before and after.
+
+Those three are **loudness-matched, not peak-normalized**. Peak normalization
+makes short percussive clips measure the same while sounding different, because a
+sharp transient and a softer knock at equal peak are not equally loud. Each was
+instead scaled to a common RMS, measured over the region above −40 dB of that
+clip's own peak. Re-cut any replacement the same way, or it will not sit
+correctly against the others.
+
+`Capture` and `Check` then take one shared makeup gain so the louder of them
+reaches 0.95 peak, landing at RMS ≈ 0.117 — in line with `GameStart.mp3` (0.122)
+and within the lila clips' own range below. `LowTime` is matched the same way, to
+RMS ≈ 0.095 / 0.67 peak: it is an alert rather than a per-move tick, but a
+1.5-second-scale ticking clip at the event-sound level dominates whatever the user
+is thinking about.
+
+**`Move` deliberately takes only half that makeup gain** (+4.5 dB of the ~9 dB),
+landing at RMS ≈ 0.070 / 0.50 peak, about 4.5 dB below `Capture` and `Check`.
+This is intentional, not an oversight: the move sound fires on every single ply,
+so at parity with the event sounds it dominates the mix and grates over a game,
+while the bare matched level (RMS ≈ 0.042) proved too quiet to register. Keep the
+gap if you replace it.
+
+`Defeat` was matched the same way, to the level of the lila clip it replaced
+(RMS ≈ 0.095 / 0.39 peak). Matching the outgoing clip rather than the makeup-gain
+target keeps the win/loss pair balanced: `WinChime` sits at RMS ≈ 0.086, and a
+sustained cello at the short event-sound level would read considerably louder
+than a chime. Gain is applied after the fade and re-measured on the encoded mp3,
+since trimming the quiet tail raises the clip's own RMS.
+
+`FullScore.mp3` is the source's first 1.10s, faded out from 0.85s on the same
+raised-cosine taper. Unlike the cello, the discarded part is pure reverb tail
+with no further onsets — the phrase itself is over by ~0.5s and everything after
+1.10s sits below −34 dB — so this is a tail trim, not a shortened phrase. It
+matters because this clip fires on every fully-solved Train puzzle, and the
+untrimmed 1.85s is the longest asset in the set. It is gain-matched to
+`WinChime.mp3` (RMS ≈ 0.086), the clip it took over from at that moment.
+
+`Notify.mp3` was likewise matched to the outgoing clip, `GenericNotify.mp3`
+(RMS ≈ 0.122), which lands it between `WinChime` and `Defeat` — right for a
+sound that plays both at a drawn game's end and on a declined draw offer. It
+replaces `Draw.mp3` too, but was deliberately **not** matched to that one:
+`Draw.mp3` peaked at 1.03 (clipped) and was the loudest asset in the set at
+RMS ≈ 0.171. `Notify.mp3` peaks at 0.68. The source carries embedded cover art,
+which is stripped on encode (`-map 0:a:0`) — leaving it in doubles the file
+size for a picture nothing ever displays. Note that a 0.24 dB pre-gain measured
+0.45 dB low after LAME encoding, so the gain was re-derived from the encoded
+file and applied in a second pass, per the rule above.
+
+sounddino.com publishes no license or terms page. Its only usage statement is the
+category-page claim that the clips are royalty-free, require no attribution, and
+are free for commercial use. We rely on that claim rather than on an explicit
+per-file grant, which is a deliberate risk-based decision: these are short generic
+clips and replacing any of them is a one-file swap. **Do not describe these files as
+AGPLv3+ or CC0.** If a claim is ever raised, re-cut replacements from a CC0 source
+(Freesound filtered to CC0, or OpenGameArt) and update this section.
+
+**2. `Checkmate.mp3`, `PartialScore.mp3`** —
+vendored from lichess's
+[lila](https://github.com/lichess-org/lila) `public/sound/sfx` directory, created
+by **Enigmahack**, licensed [AGPLv3+](https://www.gnu.org/licenses/agpl-3.0.html),
+which is compatible with FlawChess's own AGPL-3.0 license (see `LICENSE`).
 
 - Source: https://github.com/lichess-org/lila/tree/master/public/sound/sfx
 - Author: Enigmahack
 - License: AGPLv3+
+
+`Checkmate.mp3` was byte-identical to the old `Check.mp3`, faithful to lila,
+whose `sfx/Checkmate.mp3` is a symlink to `sfx/Check.mp3` — so checkmate used to
+sound exactly like a check. Replacing `Check.mp3` from the sounddino take above
+resolved that: the two are now distinct, and the contrast reads correctly (a
+53ms dark knock for check, a 411ms bright lila flourish for checkmate).
+
+`PartialScore.mp3` is lila's `sfx/LowTime.mp3`, renamed and otherwise untouched.
+It is played for a mixed Train result (a partial per-puzzle score, and the yellow
+session-verdict band), which is what it had always been used for here alongside
+the bot-game clock warning. Once the clock warning became an actual ticking clock,
+the shared file stopped making sense on a Train score, so the two split: the name
+now describes the use, not the lila original.
+
+`Defeat.mp3` used to be lila's `sfx/Defeat.mp3` and is now the sounddino cello
+clip listed in group 1 — it is no longer an AGPLv3+ file. Likewise, lila's
+`Draw.mp3` and `GenericNotify.mp3` were deleted outright: both events that
+played them (a drawn bot game, and the bot declining a draw offer) now play
+`Notify.mp3` from group 1.
+
+**3. `WinChime.mp3`** — self-authored, released CC0 (no attribution required).
+It plays only at the two moments that end something: a bot-game win, and a Train
+session that finishes in the green band (≥75%). It used to play for a fully
+solved single puzzle as well, which made one puzzle sound exactly like the whole
+session; that moment now has `FullScore.mp3`. Keep the distinction if either is
+re-cut — they are deliberately at the same level, so only the phrase separates
+them.
+
+Note on lila's other sound sets: only `sfx`, `piano`, `futuristic`, `nes`
+(Enigmahack, AGPLv3+) and `lisp` (CC BY-NC-SA 4.0, NonCommercial so unusable here)
+carry a license in lila's `COPYING.md`. Its default `standard` set is **not** among
+them and falls under the catch-all "The other sounds in public/sound" bullet in
+that file's **Exceptions (non-free)** section, so it must not be vendored.
 
 ## Getting Started
 

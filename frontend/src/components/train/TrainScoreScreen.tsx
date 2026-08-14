@@ -16,7 +16,7 @@
  * circular badge that pops in on arrival, with the raw points line demoted
  * to supporting text beneath it. Each band also gets a result sound, reusing
  * the exact per-puzzle mapping `TrainSolveScreen`'s reveal already fires
- * (green = WinChime, yellow = LowTime, red = Defeat) so the session verdict
+ * (green = WinChime, yellow = PartialScore, red = Defeat) so the session verdict
  * sounds like a louder version of the per-puzzle verdicts rather than a new
  * vocabulary. Yellow additionally gets the smaller `firePartialConfetti`
  * burst — acknowledged, not celebrated.
@@ -55,10 +55,14 @@ const RATING_BAND_COLOR: Record<TrainRatingBand, string> = {
   red: TRAIN_RATING_RED,
 };
 
-/** Result sound per band — the same three clips the per-puzzle reveal uses. */
+/** Result sound per band. Quick 260814-b: `green` keeps WinChime, which is now
+ * reserved for this session verdict and bot-game wins — the per-puzzle reveal
+ * moved its full-score case to its own `score-full` clip, so the session end no
+ * longer sounds like just one more solved puzzle. The other two bands still
+ * share the reveal's clips. */
 const RATING_BAND_SOUND: Record<TrainRatingBand, SoundEvent> = {
   green: 'game-win',
-  yellow: 'low-time',
+  yellow: 'score-partial',
   red: 'game-loss',
 };
 

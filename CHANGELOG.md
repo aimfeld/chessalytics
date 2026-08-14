@@ -30,6 +30,16 @@ in `YYYY-MM-DD` (Europe/Zurich).
 
 - Creating an account from a guest session and computing your percentile ranking no longer momentarily stall other users' requests under heavy load. (Phase 209)
 
+- The low-time warning in bot games is now an actual ticking clock instead of a generic alert tone. Train keeps the previous sound for a partial puzzle score and a middling session verdict, where a ticking clock would have made no sense.
+
+- Solving a Train puzzle fully now has its own short fanfare. The win chime it used to share is reserved for the two moments that actually end something: winning a bot game, and finishing a Train session at 75% or better.
+
+- A drawn bot game, and the bot declining your draw offer, now play a two-note chime. It replaces two clips that no longer fit the rest of the set, one of which was the loudest sound in the app.
+
+- The Bots page, the custom-bot ELO default, and the free-play ELO default now estimate your strength from your recent games on whichever platform and time control you have actually been playing, instead of an all-time average that could lag an improving player by a couple of hundred points. The number now explains which games it came from, and players without enough recent games keep the previous value. (SEED-147)
+
+- Losing a bot game (and a zero-score Train result) now plays a short sad cello phrase instead of the previous synthetic defeat tone. It is level-matched to the sound it replaces, so nothing else in the mix changes.
+
 ### Fixed
 
 - Games no longer silently keep gaps in their move-by-move evaluation. A volunteer machine that runs out of time on a position now retries it once before giving up, so a merely slow or overloaded computer no longer leaves a hole behind. Re-analysis attempts are no longer spent on duplicate submissions when two machines happen to race on the same game, and the retry budget itself is larger. Any game that still ends up with gaps is now repaired automatically every day instead of waiting for someone to notice and run a script by hand. (SEED-139)

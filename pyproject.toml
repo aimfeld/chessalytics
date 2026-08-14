@@ -11,7 +11,8 @@ dependencies = [
     "alembic>=1.13.0",
     "chess>=1.10.0",
     "pydantic>=2.0.0",
-    "pydantic-ai-slim[anthropic,google]>=1.85,<2.0",
+    # Floor is 1.106 for CVE-2026-54249 (fixed in 1.106.0); do not lower it.
+    "pydantic-ai-slim[anthropic,google]>=1.106,<2.0",
     "pydantic-settings>=2.0.0",
     "python-dotenv>=1.0.0",
     "httpx>=0.27.0",

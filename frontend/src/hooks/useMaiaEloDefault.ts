@@ -11,11 +11,14 @@
  *     defaults to the opponent's (normalized) rating, matching who is actually choosing
  *     the move (quick 260705-m3z). `sideToMove` omitted → falls back to `gameData.user_color`.
  *     Never the frozen current-rating snapshot.
- *   - Free play (Phase 171 D-08): the user's normalized `profile.lichess_blitz_equivalent_rating`
- *     (the blitz-bucket anchor, Phase 171 D-07), else the FREE_PLAY_DEFAULT_ELO (1500)
- *     midpoint fallback. Deliberately NOT `profile.current_rating` — that is the raw
- *     platform rating from the user's most recent game, which is inflated for
- *     chess.com users relative to the Maia/Lichess-blitz scale this slider is on.
+ *   - Free play (Quick 260811-u11, SEED-147, replacing Phase 171 D-08): the user's
+ *     `profile.current_strength.rating` — a current-strength estimate read through
+ *     `apply_game_filters`, with the blitz-bucket anchor as its own server-side
+ *     fallback — else the FREE_PLAY_DEFAULT_ELO (1500) midpoint fallback. Deliberately
+ *     NOT a raw platform rating from the user's most recent game — that is inflated for
+ *     chess.com users relative to the Maia/Lichess-blitz scale this slider is on. (The
+ *     `current_rating` wire field that once carried an unfiltered version of this was
+ *     deleted outright; see the `MaiaEloProfile` docblock below.)
  *   - The resolved default is clamped to the MAIA_ELO_LADDER's [min, max] bounds
  *     (NOT snapped to its 100-ELO steps — a rating like 1720 stays 1720; only the
  *     ladder's outer bounds are enforced. useMaiaEngine's own `nearestByElo` picks
@@ -53,18 +56,29 @@ export interface MaiaEloGameData {
 /**
  * Minimal profile shape this hook needs (structurally satisfied by UserProfile).
  *
- * Phase 171 code review (WR-04): `current_rating` was REMOVED from this shape.
- * D-08 repointed `deriveRawDefault` to `lichess_blitz_equivalent_rating`, which
- * left `current_rating` a REQUIRED field of this interface that nothing read —
- * forcing every caller to supply a value with no consumer. Dropping it also
- * makes the D-08 repoint structurally irreversible-by-accident: the raw
- * (chess.com-inflated) rating is now not even visible to this hook, so a future
- * edit cannot silently read it back. `current_rating` remains on the wire
- * (`UserProfile` / `app/schemas/users.py`) for other consumers.
+ * Phase 171 code review (WR-04): `current_rating` was REMOVED from this shape when
+ * D-08 repointed `deriveRawDefault` to `lichess_blitz_equivalent_rating`, which left
+ * it a REQUIRED field of this interface that nothing read. That made the D-08 repoint
+ * structurally irreversible-by-accident: the raw (chess.com-inflated) rating was no
+ * longer visible to this hook, so a future edit could not silently read it back.
+ *
+ * WR-04 left the field on the wire as a deferred contract change; `current_rating`
+ * was deleted from `UserProfile` / `app/schemas/users.py` entirely, and
+ * `lichess_blitz_equivalent_rating` itself was later replaced by `current_strength`
+ * (Quick 260811-u11, SEED-147) for the same reason: once all three opponent-matching
+ * surfaces repointed here, the plain anchor field had zero readers left, and the
+ * anchor fallback now happens SERVER-SIDE inside `current_strength`'s resolution.
+ * `current_strength.rating` is a value derived through `apply_game_filters`
+ * (rated=True, opponent_type="human", platform=None) — the filtering that excludes
+ * FlawChess's OWN bot-game rating stamps and unrated/pasted games. The deleted
+ * `get_current_rating_by_platform` bypassed that filter and, for prod user 3,
+ * reported 1340 — an echo of a stale rapid anchor read back as the user's own
+ * rating. Do not reintroduce a "rating from the most recent game" field without
+ * that filtering.
  */
 export interface MaiaEloProfile {
-  // Phase 171 D-08: the normalized rating the free-play branch actually reads.
-  lichess_blitz_equivalent_rating: number | null;
+  // Quick 260811-u11 (SEED-147): the rating the free-play branch actually reads.
+  current_strength: { rating: number } | null;
 }
 
 export interface UseMaiaEloDefaultOptions {
@@ -129,7 +143,7 @@ export function deriveRawDefault(
     }
     return gameData.black_rating_lichess_blitz ?? gameData.black_rating;
   }
-  return profile?.lichess_blitz_equivalent_rating ?? FREE_PLAY_DEFAULT_ELO;
+  return profile?.current_strength?.rating ?? FREE_PLAY_DEFAULT_ELO;
 }
 
 export function useMaiaEloDefault({

@@ -192,11 +192,35 @@ vi.mock('@/hooks/useBotGame', () => ({
 interface FakeProfile {
   email: string | null;
   is_guest: boolean;
-  lichess_blitz_equivalent_rating: number | null;
+  current_strength: {
+    rating: number;
+    source: 'recent_games' | 'rating_anchor';
+    rung: {
+      platform: 'chess.com' | 'lichess';
+      time_control_bucket: 'bullet' | 'blitz' | 'rapid' | 'classical';
+      n_games: number;
+      window_days: number;
+      converted: boolean;
+    } | null;
+  } | null;
 }
 
 const profileState: { data: FakeProfile | undefined; isLoading: boolean; isError: boolean } = {
-  data: { email: 'user@example.com', is_guest: false, lichess_blitz_equivalent_rating: 1600 },
+  data: {
+    email: 'user@example.com',
+    is_guest: false,
+    current_strength: {
+      rating: 1600,
+      source: 'recent_games',
+      rung: {
+        platform: 'lichess',
+        time_control_bucket: 'blitz',
+        n_games: 40,
+        window_days: 90,
+        converted: false,
+      },
+    },
+  },
   isLoading: false,
   isError: false,
 };
@@ -377,7 +401,17 @@ beforeEach(() => {
   profileState.data = {
     email: 'user@example.com',
     is_guest: false,
-    lichess_blitz_equivalent_rating: 1600,
+    current_strength: {
+      rating: 1600,
+      source: 'recent_games',
+      rung: {
+        platform: 'lichess',
+        time_control_bucket: 'blitz',
+        n_games: 40,
+        window_days: 90,
+        converted: false,
+      },
+    },
   };
   profileState.isLoading = false;
   profileState.isError = false;
@@ -551,7 +585,7 @@ describe('Bots — setup/resume/new-game convergence (V-11)', () => {
     profileState.data = {
       email: null,
       is_guest: true,
-      lichess_blitz_equivalent_rating: null,
+      current_strength: null,
     };
 
     renderBots();

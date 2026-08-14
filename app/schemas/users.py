@@ -6,7 +6,46 @@ from typing import Literal
 from pydantic import BaseModel, field_validator
 
 from app.core.platform_usernames import extract_platform_username
+from app.repositories.query_utils import AnalyticsPlatform
 from app.schemas.admin import ImpersonationContext
+from app.schemas.normalization import TimeControlBucket
+
+
+class CurrentStrengthRung(BaseModel):
+    """Provenance of a recent-games-derived current-strength estimate.
+
+    Quick 260811-u11 (SEED-147). ``converted`` is False only for a native
+    Lichess blitz rung; every other rung was mapped onto the Lichess blitz
+    scale by ``normalize_to_lichess_blitz`` before comparison, so it always
+    carries some conversion error.
+    """
+
+    platform: AnalyticsPlatform
+    time_control_bucket: TimeControlBucket
+    n_games: int
+    window_days: int
+    converted: bool
+
+
+class CurrentStrengthResponse(BaseModel):
+    """The opponent-matching current-strength estimate (Quick 260811-u11, SEED-147).
+
+    Separate from the ``user_rating_anchors`` career-median anchor the
+    percentile chip reads -- this value answers "who should I play right
+    now", not "how do I compare over the long run". ``rung`` is non-None
+    exactly when ``source == "recent_games"``; when no rung passes the
+    90-day/20-game activity floor, ``source`` is "rating_anchor" and ``rung``
+    is None.
+
+    UI DEFAULT ONLY -- never fed into bot move selection (BOT-03). This
+    value seeds the Bots page's PersonaGrid rating line, the custom-bot ELO
+    default, and the analysis board's free-play ELO default; it must never
+    reach the bot's move-selection budget.
+    """
+
+    rating: int
+    source: Literal["recent_games", "rating_anchor"]
+    rung: CurrentStrengthRung | None
 
 
 class UserProfileResponse(BaseModel):
@@ -28,17 +67,16 @@ class UserProfileResponse(BaseModel):
     impersonation: ImpersonationContext | None = None
     # BETA-01: beta_enabled flag (e.g. Endgame Insights). Default false; flipped via direct DB op.
     beta_enabled: bool
-    # MAIA-04 / D-07: rating from the user's most-recent game (across platforms),
-    # read-only, index-backed. Feeds the free-play ELO-selector default. None
-    # when the user has no games or their most recent game is unrated.
-    current_rating: int | None = None
-    # Phase 171 D-07: the caller's own blitz-bucket `user_rating_anchors.anchor_rating`
-    # -- the blended lichess-equivalent median Phase 167 already trusts for bot-game
-    # rating derivation. None for guests, for users with no anchor at all, and for
-    # users with anchors only in non-blitz buckets (rapid/classical-only players
-    # included -- deliberate, not a bug); the frontend falls back to 1500.
-    # UI DEFAULT ONLY -- never fed into bot move selection (BOT-03).
-    lichess_blitz_equivalent_rating: int | None = None
+    # Quick 260811-u11 (SEED-147): the opponent-matching current-strength
+    # estimate, replacing `lichess_blitz_equivalent_rating` (P-01) -- that
+    # field had zero readers left once all three opponent-matching surfaces
+    # repointed here, and the anchor fallback (D-07) now happens server-side
+    # inside this field's resolution instead of at each call site. None for
+    # guests, for users with no anchor at all, and for users with anchors
+    # only in non-blitz buckets and no qualifying recent games (deliberate,
+    # not a bug); the frontend falls back to 1500. UI DEFAULT ONLY -- never
+    # fed into bot move selection (BOT-03).
+    current_strength: CurrentStrengthResponse | None = None
 
 
 class UserProfileUpdate(BaseModel):

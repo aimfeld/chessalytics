@@ -768,12 +768,16 @@ export function TrainSolveScreen({
   // sound AND pops the "Points: +N" flash over the board the moment a LIVE
   // solve response lands — never for a restored reveal (its solve happened
   // on a prior page visit). The full per-puzzle max (3, guess + a good move)
-  // plays WinChime (round 7: the Victory fanfare read too aggressive here,
-  // same verdict as bot games); any lesser positive score (e.g. guess-only,
-  // or guess plus an inaccuracy) plays LowTime; 0 points plays Defeat. The
+  // plays FullScore; any lesser positive score (e.g. guess-only,
+  // or guess plus an inaccuracy) plays PartialScore; 0 points plays Defeat. The
   // ref keeps StrictMode's dev-only double effect invocation (and any later
   // re-render with the same response object) from playing it twice;
   // playSound itself honors the shared mute preference.
+  //
+  // Quick 260814-b: the full-score branch now plays `score-full` (its own
+  // clip), NOT `game-win`. One solved puzzle and a whole green session used to
+  // sound identical, which flattened the session-end payoff; WinChime is now
+  // reserved for the session verdict (TrainScoreScreen) and bot-game wins.
   //
   // Bug fix (Phase 200 UAT round 7): the ref is seeded with whatever verdict
   // the solve mutation ALREADY holds at mount, not with null. The solve
@@ -791,7 +795,9 @@ export function TrainSolveScreen({
     if (liveSolveResponse === null || soundedSolveRef.current === liveSolveResponse) return;
     soundedSolveRef.current = liveSolveResponse;
     const points = scorePuzzle(liveSolveResponse.correct_guess, liveSolveResponse.move_quality);
-    playSound(points === TRAIN_POINTS_PER_PUZZLE ? 'game-win' : points > 0 ? 'low-time' : 'game-loss');
+    playSound(
+      points === TRAIN_POINTS_PER_PUZZLE ? 'score-full' : points > 0 ? 'score-partial' : 'game-loss',
+    );
     setPointsFlash(points);
   }, [liveSolveResponse]);
 

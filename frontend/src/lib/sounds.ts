@@ -7,11 +7,10 @@
  * npm dependency: nine independent, non-overlapping, non-spatial one-shot
  * clips are exactly `HTMLAudioElement`'s designed use case.
  *
- * Quick 260723-tqn: added `game-win`/`game-loss`/`game-draw`, which now play
- * the previously-unused vendored Victory/Defeat/Draw clips instead of the
- * single undiscriminated `game-end` (Checkmate) fired for every outcome.
- * `game-end` itself is kept (still iterated by `unlockAudio`) since callers
- * may still reference it.
+ * Quick 260723-tqn: added `game-win`/`game-loss`/`game-draw`, which play
+ * outcome-specific clips instead of the single undiscriminated `game-end`
+ * (Checkmate) fired for every outcome. `game-end` itself is kept (still
+ * iterated by `unlockAudio`) since callers may still reference it.
  *
  * Mute persistence (D-10) deliberately does NOT reuse `useUserFlag.ts` — that
  * hook is a one-shot, per-user-email-scoped, set-only-to-true flag (used for
@@ -41,7 +40,10 @@ export type SoundEvent =
   | 'draw-declined'
   | 'game-win'
   | 'game-loss'
-  | 'game-draw';
+  | 'game-draw'
+  | 'game-start'
+  | 'score-partial'
+  | 'score-full';
 
 // ─── Named constants ─────────────────────────────────────────────────────────
 
@@ -55,22 +57,49 @@ const MUTED_VALUE = '1';
 
 /** Maps each SoundEvent to its clip filename (without extension) under
  * `frontend/public/sound/`. `game-end` still uses `Checkmate` (kept for any
- * remaining undiscriminated caller); `game-loss`/`game-draw` (Quick 260723-tqn)
- * use the vendored lila Defeat/Draw clips. `game-win` uses `WinChime` — a
- * gentle, self-authored (CC0, no attribution) chime chosen over the vendored
+ * remaining undiscriminated caller); `game-loss` uses a ~1.5s sad cello phrase
+ * (sounddino, not lila — see README "## Sound Assets"). `game-win` uses
+ * `WinChime` — a
+ * gentle, self-authored (CC0, no attribution) chime chosen over lila's
  * `Victory` fanfare, which read as too aggressive for bot games (and, per
  * 190.1 UAT round 7, for the Train reveal's perfect-score moment too — the
- * short-lived `victory` event was removed again). */
+ * short-lived `victory` event was removed again, and `Victory.mp3` has since
+ * been deleted from `public/sound/`). Quick 260814-b narrowed `game-win` to
+ * the two end-of-everything wins (a bot-game win, and a green Train SESSION);
+ * the per-puzzle full score moved to `score-full`. */
 const SOUND_FILES: Record<SoundEvent, string> = {
   move: 'Move',
   capture: 'Capture',
   check: 'Check',
   'game-end': 'Checkmate',
   'low-time': 'LowTime',
-  'draw-declined': 'GenericNotify',
+  // Quick 260814-b: `draw-declined` and `game-draw` share one clip. Both are
+  // "the game did not resolve" moments, and the two lila clips they used to
+  // play (GenericNotify, Draw) were deleted — Draw peaked above full scale and
+  // was the loudest asset in the set. The replacement is a two-note sounddino
+  // chime, level-matched to the outgoing GenericNotify. Keep the two events
+  // separate (not one merged event) so either can be re-pointed on its own.
+  'draw-declined': 'Notify',
   'game-win': 'WinChime',
   'game-loss': 'Defeat',
-  'game-draw': 'Draw',
+  'game-draw': 'Notify',
+  // Quick 260813-oae: fired from `BotsPage`'s `handleStart` (the single start
+  // path). Deliberately a longer clip (~0.78s of pieces being set out) than the
+  // sub-100ms one-shots above — it marks a one-time event, not a per-move tick.
+  'game-start': 'GameStart',
+  // Quick 260814: the "mixed result" sound — a partial per-puzzle Train score
+  // and the yellow session-verdict band. This is the lila clip that used to be
+  // `LowTime.mp3` (renamed, byte-identical); `low-time` now plays an actual
+  // ticking clock, which reads as a clock warning and made no sense on a Train
+  // score. Keep them separate if either is re-cut.
+  'score-partial': 'PartialScore',
+  // Quick 260814-b: the per-puzzle FULL score. This used to play `game-win`
+  // (WinChime), which made the reward for solving one puzzle sound identical
+  // to the reward for the whole session. WinChime is now reserved for the two
+  // end-of-everything wins — a green (>=75%) Train session and a bot-game win
+  // — and a solved puzzle gets its own shorter phrase, level-matched to the
+  // WinChime it took over from so the reveal does not jump in loudness.
+  'score-full': 'FullScore',
 };
 
 const SOUND_EVENTS = Object.keys(SOUND_FILES) as SoundEvent[];
@@ -164,6 +193,13 @@ export function playSound(event: SoundEvent): void {
 export function unlockAudio(): void {
   for (const event of SOUND_EVENTS) {
     const audio = getAudio(event);
+    // Never interrupt a clip that is already sounding. `game-start` (Quick
+    // 260813-oae) is ~0.78s and fires from the Start click, so a pointerdown
+    // inside the game view moments later would otherwise reach this loop and
+    // pause it mid-clip. Tested `=== false`, not `!audio.paused`, so an
+    // environment where `paused` is undefined still gets unlocked — failing to
+    // unlock is far worse than clipping one sound.
+    if (audio.paused === false) continue;
     safePlay(audio);
     audio.pause();
   }

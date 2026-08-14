@@ -2,7 +2,7 @@
 
 import datetime
 from collections.abc import Sequence
-from typing import Any, Literal, cast
+from typing import Any, Literal, cast, get_args
 
 from sqlalchemy import case, literal
 from sqlalchemy.sql.elements import ColumnElement
@@ -47,7 +47,15 @@ DEFAULT_EXCLUDED_PLATFORMS = ("flawchess", "pgn")
 # tests/repositories/test_query_utils.py::test_every_platform_has_an_analytics_disposition
 # enforces this invariant by comparing typing.get_args(Platform) against the
 # union of the two tuples.
-ANALYTICS_INCLUDED_PLATFORMS: tuple[str, ...] = ("chess.com", "lichess")
+#
+# Quick 260811-u11: AnalyticsPlatform is the type-level twin of the tuple
+# below, derived via get_args() so the two are structurally impossible to
+# drift apart (rather than merely documented as agreeing). Exported for
+# current_strength_repository / current_strength_service to import and cast
+# a raw platform string once apply_game_filters(platform=None) has already
+# excluded every other Platform member.
+AnalyticsPlatform = Literal["chess.com", "lichess"]
+ANALYTICS_INCLUDED_PLATFORMS: tuple[str, ...] = get_args(AnalyticsPlatform)
 
 
 def mover_is_white_at_ply(ply: int) -> bool:

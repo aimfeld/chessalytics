@@ -61,7 +61,7 @@ import { readSnapshot, clearSnapshot, type BotGameSnapshot } from '@/lib/botGame
 import { useMarkPlayActive } from '@/lib/playActive';
 import { removePendingStore } from '@/lib/botPendingStore';
 import { resolvePlayerName } from '@/lib/playerName';
-import { setMuted, unlockAudio, useMuted } from '@/lib/sounds';
+import { playSound, setMuted, unlockAudio, useMuted } from '@/lib/sounds';
 import { buildAnalysisLineUrl, buildGameAnalysisUrl } from '@/lib/analysisUrl';
 
 /** Width at which the two-column desktop layout kicks in. Below this the
@@ -584,7 +584,7 @@ export default function BotsPage(): ReactElement {
   // Phase 185: ONE useBotPersonaWins() call here, prop-drilled into
   // PersonaGrid -> PersonaCard as winsByPersona/winsForPersona (Pattern 3 —
   // single-fetch-then-prop-drill, mirrors this file's existing single
-  // useUserProfile() -> playerRating prop). Loading/error both resolve to
+  // useUserProfile() -> currentStrength prop). Loading/error both resolve to
   // `undefined` data, which PersonaCard's stars row already renders as its
   // all-outline zero-state — no isError branch needed here, this is a small
   // decorative stat row degrading gracefully, not a page-blocking query.
@@ -652,6 +652,11 @@ export default function BotsPage(): ReactElement {
   // bumps `nonce` for a fresh `BotsGame` mount — `useBotGame` initializes
   // with exactly these settings, never with placeholders (T-171-06-02).
   const handleStart = useCallback((settings: BotGameSettings): void => {
+    // Quick 260813-oae: play the start sound here rather than from a mount
+    // effect in `BotsGame` — this runs inside the Start/Play/Rematch click
+    // gesture, which is what satisfies the iOS/mobile-Chrome autoplay policy
+    // (Pitfall 4) without depending on `unlockAudio` having already run.
+    playSound('game-start');
     setStartedSettings(settings);
     // Reset the setup view back to its grid default for the NEXT time it is
     // shown (a later "new game"/discard), not the one just used to start.
@@ -738,7 +743,7 @@ export default function BotsPage(): ReactElement {
           </div>
           <SetupScreen
             ownerKey={ownerKey}
-            normalizedRating={profile?.lichess_blitz_equivalent_rating ?? null}
+            normalizedRating={profile?.current_strength?.rating ?? null}
             onStart={handleStart}
           />
         </>
@@ -754,7 +759,7 @@ export default function BotsPage(): ReactElement {
         <PersonaGrid
           onSelectPersona={setDetailPersona}
           onSelectCustom={() => setShowCustomSetup(true)}
-          playerRating={profile?.lichess_blitz_equivalent_rating ?? null}
+          currentStrength={profile?.current_strength ?? null}
           winsByPersona={winsByPersona}
         />
         <PersonaDetailSurface
