@@ -1,8 +1,15 @@
 # FlawChess Data Stories (GitHub Pages)
 
-Public, interactive data stories published at **https://flawchess.github.io/flawchess/**.
+Public, interactive data stories published at **https://stories.flawchess.com/**
+(GitHub Pages with a custom domain; `flawchess.github.io/flawchess/*` 301-redirects there).
 This directory is the site root: it is deployed automatically by
 `.github/workflows/pages.yml` on every push to `main` that touches `dashboards/**`.
+
+DNS: `stories` CNAME `flawchess.github.io` in Cloudflare, **DNS-only (grey cloud)** —
+GitHub provisions and renews the TLS certificate itself, which requires seeing the
+CNAME directly; Pages is already a CDN, so proxying adds nothing. The custom domain
+is set in the repo's Pages settings (`gh api repos/flawchess/flawchess/pages`), not
+via a CNAME file (that mechanism is for branch-based builds, not workflow deploys).
 
 ## Layout
 
