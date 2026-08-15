@@ -968,9 +968,15 @@ export default function Analysis() {
     const key = `game:${gameId}`;
     if (seededKey.current === key) return;
     seededKey.current = key;
-    loadMainLine(gameData.moves, STARTING_FEN);
+    // Phase 210 (SEED-042): seed from the game's OWN starting position. This was
+    // hardcoded to STARTING_FEN, so a custom-start game (chess.com thematic /
+    // custom-position, or a pasted [SetUp] PGN) replayed SANs that are illegal
+    // from the standard start and took the whole page down through the
+    // ErrorBoundary (Sentry FLAWCHESS-96). initial_fen is null for every
+    // standard game, so `?? STARTING_FEN` keeps that path byte-identical.
+    loadMainLine(gameData.moves, gameData.initial_fen ?? STARTING_FEN);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [gameData?.moves, isGameMode, gameId]);
+  }, [gameData?.moves, gameData?.initial_fen, isGameMode, gameId]);
 
   // Free play: seed the opening main line from the ?line= param once. The cursor
   // lands at the end of the line (loadMainLine's default), and the user can step

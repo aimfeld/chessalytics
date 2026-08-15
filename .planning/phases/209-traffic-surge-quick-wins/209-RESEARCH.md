@@ -755,7 +755,7 @@ Cloudflare account setup (operator-managed, D-04) and stdlib-only code changes. 
 - `tests/test_guest_auth.py` (grep) — `TestPromoteGuestWithPassword` class location
 - `deploy/Caddyfile` (lines 1-75) — exact `@vendored_runtime`/`@maiaworker` matchers and headers
 - `.planning/phases/209-traffic-surge-quick-wins/209-CONTEXT.md` — locked decisions D-01..D-07
-- `.planning/seeds/SEED-146-traffic-surge-readiness.md` — measured facts, correction block
+- `../../seeds/closed/SEED-146-traffic-surge-readiness.md` — measured facts, correction block
 - `.planning/ROADMAP.md` (Phase 209 section, lines 397-438) — Success Criteria / SURGE-01..07 mapping
 - `.planning/config.json` — `nyquist_validation: true`, no `security_enforcement` key (treated as enabled)
 - `frontend/package.json` — `@tanstack/react-query ^5.100.14`, `vitest ^4.1.7`

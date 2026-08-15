@@ -390,14 +390,35 @@ export function useAnalysisBoard(
   const loadMainLine = useCallback((sans: string[], newRootFen: string): void => {
     const newNodes = new Map<NodeId, MoveNode>();
     const newMainLine: NodeId[] = [];
-    const chess = new Chess(newRootFen);
+    // Phase 210 (SEED-042): `new Chess(fen)` THROWS on an unparseable FEN, and
+    // this constructor sits outside the per-move guard below — so a bad root
+    // would crash the page exactly like the illegal-SAN bug it fixes. The root
+    // now arrives from games.initial_fen (nullable free-text), so validate it
+    // here rather than trusting every present and future writer of that column.
+    let chess: Chess;
+    try {
+      chess = new Chess(newRootFen);
+    } catch {
+      chess = new Chess();
+    }
+    const resolvedRootFen = chess.fen();
     let prevId: NodeId | null = null;
     let id = 0;
 
     for (const san of sans) {
-      // safe: for-of iterates defined SAN strings from the caller
-      const move = chess.move(san);
-      if (!move) break; // stop on illegal SAN rather than throwing
+      // Phase 210 (SEED-042): chess.js 1.4 move() THROWS on illegal SAN — it does
+      // not return null — so the previous `if (!move) break` was dead code and the
+      // throw escaped into React, unmounting /analysis via the ErrorBoundary
+      // (Sentry FLAWCHESS-96). Reachable whenever the SANs don't belong to this
+      // root, e.g. a custom-start game seeded from the standard position.
+      // Keep the legal prefix and stop; a degraded board beats a crashed page.
+      let move: ReturnType<typeof chess.move>;
+      try {
+        // safe: for-of iterates defined SAN strings from the caller
+        move = chess.move(san);
+      } catch {
+        break;
+      }
       const node = buildNode(id, move.san, chess.fen(), move.from, move.to, prevId);
       newNodes.set(id, node);
       newMainLine.push(id);
@@ -420,7 +441,10 @@ export function useAnalysisBoard(
       currentNodeId: landingId,
       mainLine: newMainLine,
       pvNodeIds: new Set<NodeId>(),
-      rootFen: newRootFen,
+      // The root we ACTUALLY replayed from, not the argument — they differ when
+      // newRootFen failed to parse and we fell back to the standard start above.
+      // Storing the raw argument would put an unrenderable FEN on the board.
+      rootFen: resolvedRootFen,
       nextId: id,
     });
   }, []);
@@ -471,8 +495,18 @@ export function useAnalysisBoard(
       let id = prev.nextId;
 
       for (const san of pvSans) {
-        const move = chess.move(san);
-        if (!move) break; // break on illegal SAN rather than crashing (T-140-01a)
+        // Phase 210 (SEED-042): same dead guard as loadMainLine — chess.js 1.4
+        // move() throws rather than returning null, so T-140-01a's intent was
+        // never actually implemented. Worse here than there: this loop runs
+        // inside a setState updater, so an escaping throw corrupts React state,
+        // and PV SANs cross a worker boundary (treeCommon.ts:218 documents the
+        // same hazard for the sibling UCI path).
+        let move: ReturnType<typeof chess.move>;
+        try {
+          move = chess.move(san);
+        } catch {
+          break;
+        }
         const node = buildNode(id, move.san, chess.fen(), move.from, move.to, prevId);
         newNodes.set(id, node);
         newPvIds.push(id);

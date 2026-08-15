@@ -770,6 +770,7 @@ async def _seed_db_game(
     time_control_bucket: str | None = "blitz",
     white_accuracy: float | None = None,
     black_accuracy: float | None = None,
+    initial_fen: str | None = None,
 ) -> object:
     """Insert a Game row, returning the persisted object.
 
@@ -827,6 +828,7 @@ async def _seed_db_game(
         black_accuracy=black_accuracy,
         played_at=played_at or _dt.datetime(2026, 1, 1, tzinfo=_dt.timezone.utc),
         full_evals_completed_at=full_evals_completed_at,
+        initial_fen=initial_fen,
     )
     sess.add(game)
     await sess.flush()
@@ -2703,3 +2705,49 @@ class TestOpponentTacticMarker:
         # SeverityCounts is a TypedDict (plain dict at runtime) — use [] access.
         assert card.severity_counts is not None
         assert card.severity_counts["blunder"] == 1
+
+
+class TestGameCardInitialFen:
+    """Phase 210 (SEED-042): the game-detail payload carries the game's own root.
+
+    /analysis game mode replays `moves` from this position. Before it existed the
+    board seeded unconditionally from the standard start, which is illegal for a
+    custom-start game and crashed the page (Sentry FLAWCHESS-96).
+    """
+
+    @pytest.mark.asyncio
+    async def test_custom_start_game_exposes_its_initial_fen(self, db_session: object) -> None:
+        from sqlalchemy.ext.asyncio import AsyncSession
+
+        from app.services.library_service import get_library_game
+        from tests.conftest import ensure_test_user
+
+        session = cast(AsyncSession, db_session)
+        await ensure_test_user(session, 99931)
+        custom_fen = "r1bqk1nr/pppp1ppp/2n5/2b1p3/1PB1P3/5N2/P1PP1PPP/RNBQK2R b KQkq b3 0 4"
+        game = await _seed_db_game(
+            session, user_id=99931, user_color="black", initial_fen=custom_fen
+        )
+        await _seed_db_pos(session, game=game, ply=0, move_san="Bxb4")
+
+        card = await get_library_game(session, cast(Game, game).id)
+        assert card is not None
+        assert card.initial_fen == custom_fen
+
+    @pytest.mark.asyncio
+    async def test_standard_start_game_exposes_null(self, db_session: object) -> None:
+        """The 99.95% path must stay null so the frontend's `?? STARTING_FEN`
+        fallback keeps standard games byte-identical."""
+        from sqlalchemy.ext.asyncio import AsyncSession
+
+        from app.services.library_service import get_library_game
+        from tests.conftest import ensure_test_user
+
+        session = cast(AsyncSession, db_session)
+        await ensure_test_user(session, 99932)
+        game = await _seed_db_game(session, user_id=99932, user_color="white")
+        await _seed_db_pos(session, game=game, ply=0, move_san="e4")
+
+        card = await get_library_game(session, cast(Game, game).id)
+        assert card is not None
+        assert card.initial_fen is None

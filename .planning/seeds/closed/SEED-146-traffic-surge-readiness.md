@@ -96,13 +96,13 @@ the constraint.**
 
 | File | Size |
 |---|---|
-| `frontend/public/maia/maia3_simplified.onnx` | **45.68 MB** |
+| `../../../frontend/public/maia/maia3_simplified.onnx` | **45.68 MB** |
 | `ort-wasm-simd-threaded.asyncify.wasm` | 24.25 MB |
 | `ort-wasm-simd-threaded.wasm` | 13.48 MB |
-| `frontend/public/engine/stockfish-18-lite-single.wasm` | 7.30 MB |
+| `../../../frontend/public/engine/stockfish-18-lite-single.wasm` | 7.30 MB |
 
 Correctly `lazy()`-loaded (Analysis/Bots/Train only, `App.tsx:48–54`) and cached 30 days
-(`deploy/Caddyfile` `@vendored_runtime`). The problem is purely first-visit concurrency off a
+(`../../../deploy/Caddyfile` `@vendored_runtime`). The problem is purely first-visit concurrency off a
 single 1 Gbps NIC: ~45 MB/user ≈ **2.8 users/sec** before the link saturates — on the same box
 as Postgres and the backend.
 
@@ -181,7 +181,7 @@ Split the fix — the two halves are not the same size:
 - **Register / login (M).** Goes through `BaseUserManager.create()` / `authenticate()`, which
   call the hasher internally, and `PasswordHelperProtocol`'s methods are **sync — not awaitable**,
   so a custom password helper cannot fix this. The path is overriding both methods on our
-  `UserManager` (`app/users.py`). Do not scope this as a one-liner.
+  `UserManager` (`../../../app/users.py`). Do not scope this as a one-liner.
 
 Tuning Argon2 cost parameters downward is a *third* option and a security trade — treat it as a
 fallback, not the plan.
@@ -195,7 +195,7 @@ against one of the bots while your import runs"* — which sends a first-time vi
 45.68 MB at precisely the moment the box is at peak load. Good UX instinct, bad infrastructure
 moment, unless the bytes come from somewhere else.
 
-`@vendored_runtime` already carries `max-age=2592000` (`deploy/Caddyfile`), so a cache in front
+`@vendored_runtime` already carries `max-age=2592000` (`../../../deploy/Caddyfile`), so a cache in front
 needs no code change. Note `@maiaworker` (`/maia/maia-worker.js`) is deliberately `no-cache` and
 must stay that way — the CDN config has to respect the existing per-path headers rather than
 blanket-caching `/maia/*`.
@@ -206,13 +206,13 @@ blanket-caching `/maia/*`.
 **no global cap** — only per-user-per-platform duplicate prevention.
 
 What currently prevents catastrophe is accidental: the module-level outbound rate limiters
-(`app/core/rate_limiters.py`, `CHESSCOM_SEMAPHORE_LIMIT = 3` / `LICHESS_SEMAPHORE_LIMIT = 3`)
+(`../../../app/core/rate_limiters.py`, `CHESSCOM_SEMAPHORE_LIMIT = 3` / `LICHESS_SEMAPHORE_LIMIT = 3`)
 throttle fetching, and lichess holds its slot for the entire stream. That also keeps memory off
 the critical path (~6 imports actively buffering, not 100). **Do not remove these while raising
 concurrency elsewhere** — they are load-bearing for the 4 GB backend limit.
 
 But the *flush* phase is not semaphore-gated, and `_flush_batch` (`import_service.py:1326`) holds
-a pooled session across the CPU-bound PGN parse. Pool is 10 + 10 = 20 (`app/core/database.py`),
+a pooled session across the CPU-bound PGN parse. Pool is 10 + 10 = 20 (`../../../app/core/database.py`),
 `pool_timeout` is **unset** → SQLAlchemy's 30 s default, then `TimeoutError`. Past ~20 imports
 simultaneously in flush, requests **from users who aren't importing** hang 30 s and then 500.
 
@@ -243,7 +243,7 @@ Sized here only so it is not mistaken for cheap:
 - **`uvicorn --workers`.** Biggest raw browsing win, but blocked by per-process module state:
   `import_service._jobs`, `last_activity._last_updated`, the `rate_limiters` semaphores,
   `percentile_compute_registry` — plus **six** lifespan background loops that would each run N×.
-  `deploy/entrypoint.sh` currently passes no `--workers` by design.
+  `../../../deploy/entrypoint.sh` currently passes no `--workers` by design.
 - **Rate limiting.** There is none at all (no slowapi, no limiter middleware). 100 legitimate
   users are fine; one abusive client can peg the single loop.
 
@@ -259,7 +259,7 @@ Sized here only so it is not mistaken for cheap:
 - **`full_evals_completed_at IS NULL` counted 176,693 games** at exploration time, which reads as
   a large backlog and is misleading — it is the drain's pick predicate and almost certainly
   includes guest games the drain never processes. Do not cite it as a backlog figure without
-  reconciling against `.planning/notes/eval-completion-columns.md`.
+  reconciling against `../../notes/eval-completion-columns.md`.
 - **Item 1's fix is invisible to `tsc`/eslint/knip.** A backoff that silently never engages
   type-checks perfectly. Test the emitted interval sequence.
 - **Measure before assuming the spike hits imports.** The whole reason this seed exists is that

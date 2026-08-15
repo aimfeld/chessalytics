@@ -1639,16 +1639,19 @@ class TestComputeInsightsTranspositionWdl:
 # ---------------------------------------------------------------------------
 
 
-def test_row_wrapping_drops_unreachable_san_and_captures_to_sentry() -> None:
-    """_wrap_transition_row returns None and captures to Sentry when board replay
-    fails due to an unreachable SAN (custom-FEN survivor).
+def test_row_wrapping_drops_unreachable_san_and_reports_a_warning() -> None:
+    """_wrap_transition_row returns None and reports a WARNING (not an exception)
+    when board replay fails due to an unreachable SAN.
 
     Uses an entry_san_sequence containing "Kd9" — an illegal square coordinate —
     to trigger chess.IllegalMoveError on the first SAN replay step. Verifies:
     - The function returns None (row dropped).
-    - sentry_sdk.capture_exception was called exactly once.
+    - Phase 210 (SEED-042) D-07: reported via capture_message(level="warning"),
+      NOT capture_exception. Modelling a handled drop as an exception escalated a
+      non-bug 74 times (FLAWCHESS-5E) and buried the real issues underneath it.
     - sentry_sdk.set_tag was called with ("source", "opening_insights").
-    - sentry_sdk.set_context was called with a dict containing the required keys.
+    - set_context carries the diagnostic keys AND the drop reason, so the two
+      distinct drop paths stay distinguishable in Sentry.
     """
     from types import SimpleNamespace
     from unittest.mock import MagicMock, patch
@@ -1670,12 +1673,20 @@ def test_row_wrapping_drops_unreachable_san_and_captures_to_sentry() -> None:
     # The prefix lookup resolves ply=1 to ["Kd9"] — an illegal SAN from start.
     prefixes: dict[tuple[int, int], list[str]] = {(42, 1): ["Kd9"]}
 
-    mock_capture = MagicMock()
+    mock_capture_exception = MagicMock()
+    mock_capture_message = MagicMock()
     mock_set_tag = MagicMock()
     mock_set_context = MagicMock()
 
     with (
-        patch("app.services.opening_insights_service.sentry_sdk.capture_exception", mock_capture),
+        patch(
+            "app.services.opening_insights_service.sentry_sdk.capture_exception",
+            mock_capture_exception,
+        ),
+        patch(
+            "app.services.opening_insights_service.sentry_sdk.capture_message",
+            mock_capture_message,
+        ),
         patch("app.services.opening_insights_service.sentry_sdk.set_tag", mock_set_tag),
         patch("app.services.opening_insights_service.sentry_sdk.set_context", mock_set_context),
     ):
@@ -1684,9 +1695,13 @@ def test_row_wrapping_drops_unreachable_san_and_captures_to_sentry() -> None:
     # Row must be dropped (None returned)
     assert result is None, f"Expected None for unreachable SAN, got {result!r}"
 
-    # Sentry must be notified exactly once
-    assert mock_capture.call_count == 1, (
-        f"capture_exception must be called once, got {mock_capture.call_count}"
+    # Reported exactly once, at warning level, and NEVER as an exception (D-07).
+    assert mock_capture_message.call_count == 1, (
+        f"capture_message must be called once, got {mock_capture_message.call_count}"
+    )
+    assert mock_capture_message.call_args.kwargs["level"] == "warning"
+    assert mock_capture_exception.call_count == 0, (
+        "an expected, handled drop must not escalate as an exception"
     )
 
     # source tag must be set
@@ -1701,3 +1716,67 @@ def test_row_wrapping_drops_unreachable_san_and_captures_to_sentry() -> None:
     assert "move_san" in context_dict
     assert "sample_game_id" in context_dict
     assert "sample_ply" in context_dict
+    assert context_dict["reason"] == "san_prefix_unreplayable"
+
+
+def test_row_wrapping_drops_all_custom_group_without_raising() -> None:
+    """A group in which EVERY game is custom-start yields a NULL sample_pair, and
+    _wrap_transition_row drops it cleanly rather than raising.
+
+    Phase 210 (SEED-042) D-03 / landmine 4. The sample aggregate is now
+    `MIN(...) FILTER (WHERE games.initial_fen IS NULL)`, which PostgreSQL
+    evaluates to NULL when the filter excludes every row in the group. asyncpg
+    surfaces that as Python None (NOT an empty list), and the pre-existing code
+    did `int(raw_row.sample_pair[0])` unguarded — a TypeError, i.e. a 500, on the
+    very case the fix introduces.
+
+    This is the seed's stated residual: "the user played 50 Evans Gambit thematic
+    games from the same custom start". It cannot be rendered (there is no
+    replayable SAN path to it), so dropping is correct — but it must drop as a
+    warning, with its own distinct reason, not as a crash.
+    """
+    from types import SimpleNamespace
+    from unittest.mock import MagicMock, patch
+
+    from app.services.opening_insights_service import _wrap_transition_row
+
+    raw_row = SimpleNamespace(
+        entry_hash=88002,
+        move_san="Bxb4",
+        sample_pair=None,  # every game in the group is custom-start
+        n=50,
+        w=34,
+        d=0,
+        l=16,
+        last_played_at=None,
+    )
+
+    mock_capture_exception = MagicMock()
+    mock_capture_message = MagicMock()
+    mock_set_tag = MagicMock()
+    mock_set_context = MagicMock()
+
+    with (
+        patch(
+            "app.services.opening_insights_service.sentry_sdk.capture_exception",
+            mock_capture_exception,
+        ),
+        patch(
+            "app.services.opening_insights_service.sentry_sdk.capture_message",
+            mock_capture_message,
+        ),
+        patch("app.services.opening_insights_service.sentry_sdk.set_tag", mock_set_tag),
+        patch("app.services.opening_insights_service.sentry_sdk.set_context", mock_set_context),
+    ):
+        result = _wrap_transition_row(raw_row, {})
+
+    assert result is None
+    assert mock_capture_exception.call_count == 0
+    assert mock_capture_message.call_count == 1
+    assert mock_capture_message.call_args.kwargs["level"] == "warning"
+
+    # The reason must distinguish this from the replay-failure path — collapsing
+    # the two would make the Sentry payload lie about which one fired.
+    _, context_dict = mock_set_context.call_args_list[0].args
+    assert context_dict["reason"] == "all_games_custom_start"
+    assert context_dict["n"] == 50

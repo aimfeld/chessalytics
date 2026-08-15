@@ -732,6 +732,7 @@ def _build_card(
         flaw_markers=flaw_marker_data,
         phase_transitions=phase_transition_data,
         moves=moves_data,
+        initial_fen=game.initial_fen,
         active_eval_status=active_eval_status,
         opening_ply_count=opening_ply_count,
     )

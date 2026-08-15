@@ -152,6 +152,12 @@ class GameFlawCard(BaseModel):
     # replaying moves[0..i] yields the position whose eval is eval_series[i].es.
     # Null for unanalyzed games / games without positions.
     moves: list[str] | None = None
+    # Phase 210 (SEED-042): the position `moves` is replayed FROM. Null means the
+    # standard start, which is the overwhelming majority. Non-null for chess.com
+    # thematic/custom-position games and pasted [SetUp] PGNs — replaying their
+    # SANs from the standard start is illegal and used to crash the analysis
+    # board outright (Sentry FLAWCHESS-96).
+    initial_fen: str | None = None
     # Active eval-job state for the on-demand analyze pill; null when no active job
     # (unanalyzed-and-unqueued, or already analyzed). The partial unique index
     # uq_eval_jobs_game_active guarantees at most one active row per game.

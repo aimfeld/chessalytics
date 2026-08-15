@@ -42,6 +42,10 @@ in `YYYY-MM-DD` (Europe/Zurich).
 
 ### Fixed
 
+- Opening a game that did not start from the standard chess position — a chess.com thematic tournament, a custom-position "Let's Play!" game, or a pasted PGN with a set-up position — no longer crashes the analysis page. The board now opens such a game from its own starting position and plays through it normally. (Phase 210)
+
+- Opening insights no longer silently drop entire lines. A popular opening could vanish from your strengths and weaknesses because one game in it happened to start from a custom position; every game still counts toward the win/draw/loss numbers, and the line is shown. (Phase 210)
+
 - Games no longer silently keep gaps in their move-by-move evaluation. A volunteer machine that runs out of time on a position now retries it once before giving up, so a merely slow or overloaded computer no longer leaves a hole behind. Re-analysis attempts are no longer spent on duplicate submissions when two machines happen to race on the same game, and the retry budget itself is larger. Any game that still ends up with gaps is now repaired automatically every day instead of waiting for someone to notice and run a script by hand. (SEED-139)
 
 - A chess.com month that temporarily fails to load is now retried on the next sync instead of being silently skipped and forgotten forever.

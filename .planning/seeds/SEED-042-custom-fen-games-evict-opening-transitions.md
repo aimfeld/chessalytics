@@ -3,10 +3,26 @@ id: SEED-042
 status: dormant
 planted: 2026-06-12
 planted_during: v1.26 Full-Game Eval Pipeline
-revised: 2026-08-06
-trigger_when: when touching opening insights, the import/normalization pipeline, or the games schema
-scope: small (Tier 1) + deferred phase (Tier 2)
+revised: 2026-08-15
+trigger_when: when touching the opening explorer, position bookmarks, or the /analysis URL params
+scope: deferred phase (Tier 2 only — Tier 1 shipped in Phase 210)
 ---
+
+> **STATUS 2026-08-15 — Tier 1 and the analysis-board crash SHIPPED in Phase 210.**
+> `games.initial_fen` exists and is backfilled, the sample-representative aggregate is
+> filtered, the all-custom NULL sample is guarded, the Sentry capture is warning-level, all
+> four unguarded `chess.move()` replay sites are contained, and `/analysis` game mode seeds
+> from the game's real root. Sentry FLAWCHESS-96 and FLAWCHESS-5E are both addressed.
+>
+> **What remains open in this seed is Tier 2 only** (see that section below): custom roots in
+> the opening *explorer*, root FENs on position bookmarks, and combining `?fen=` with
+> `?line=`. Everything above that section is retained as the historical root-cause record —
+> the "Related" and "Related Quick Fix" sections are both DONE. See
+> `.planning/phases/210-custom-start-games/210-SUMMARY.md`.
+>
+> One finding from execution worth carrying into any Tier 2 work: `initial_fen` is nullable
+> free-text, and `new Chess(fen)` throws on an unparseable value. `loadMainLine` validates
+> and falls back to the standard start; any *new* consumer of that column must do the same.
 
 # SEED-042: Custom-FEN games silently evict legitimate opening transitions from /api/insights/openings
 
@@ -123,20 +139,43 @@ analysis-board check below turns up something worse.
 games that legitimately participate in position matching (openings, endgames). Only
 their use as a SAN-path representative is the problem.
 
-## Related: likely latent bug in the analysis board's game mode (UNVERIFIED)
+## Related: analysis-board game mode crashes on custom-start games (CONFIRMED IN PROD 2026-08-15)
 
-Independent of the insights eviction, and possibly higher user-visible value.
+Independent of the insights eviction, and **higher user-visible value** — this one is a
+full white-screen, not a silent drop.
 
 Game mode seeds unconditionally from the standard start:
-`loadMainLine(gameData.moves, STARTING_FEN)` (`Analysis.tsx:919`). For a custom-start game
+`loadMainLine(gameData.moves, STARTING_FEN)` (`Analysis.tsx:971`). For a custom-start game
 in the user's library, those SANs are illegal from the standard start. `loadMainLine`
 comments `if (!move) break; // stop on illegal SAN rather than throwing`, but **chess.js 1.4's
-`move()` throws** on illegal input rather than returning null — so this likely throws inside
-the seeding effect instead of degrading gracefully.
+`move()` throws** on illegal input rather than returning null (`chess.js/dist/esm/chess.js:2527`),
+so the guard is dead code and the throw escapes the seeding effect.
 
-**Not reproduced.** Verify by opening one of the ~176 prod custom-FEN games in the analysis
-board before planning anything. If real, the fix is the same `initial_fen` column plumbed
-through the library game endpoint — another argument for the FEN column over a boolean.
+**Confirmed by Sentry FLAWCHESS-96** (`Error: Invalid move: Nd3`, 3 events, first seen
+2026-07-24, `transaction: /analysis`, Chrome Mobile / Android). The stack runs
+`Analysis.tsx` seeding effect → `loadMainLine` → `chess.js O0.move` → **React ErrorBoundary**.
+The whole `/analysis` page unmounts; the user sees a crash screen, not a degraded board.
+`Users Impacted: 0` is a Sentry artifact (no user context on the event), not evidence of
+low impact.
+
+**Same root cause as the insights eviction** — both are "custom-start game replayed from
+the standard start". `initial_fen` (Tier 1) plumbed through the library game endpoint fixes
+this properly; `Analysis.tsx:971` then passes the game's real root instead of `STARTING_FEN`.
+
+**Containment fix, shippable independently and immediately** (does not wait on the
+migration): replace the dead `if (!move) break` guards with try/catch + `break` so a
+custom-start game degrades to a partial/empty board instead of crashing the page. Two sites,
+both in `useAnalysisBoard.ts`:
+- `:399` (`loadMainLine`) — the confirmed crash site.
+- `:474` (`insertPvLine`) — same dead-guard idiom, and worse: it throws **inside a `setState`
+  updater**. Not yet observed in prod, but the PV SANs cross a worker boundary
+  (`treeCommon.ts:218` documents exactly this hazard for the sibling UCI path).
+
+The same unguarded-replay pattern also exists at `useChessGame.ts:147` (`replayTo`) and
+`useBotGame.ts:299` (`replayToPly`). Both replay our own stored history, so they are lower
+risk, but they are the same latent crash and worth folding into the containment fix. The
+correctly-guarded precedents to copy are `analysisUrl.ts:58`, `sanToSquares.ts:19`,
+`TrainLineStepper.tsx:139` and `treeCommon.ts:222`, which all already try/catch.
 
 ## Related Quick Fix (independent, smaller)
 
@@ -160,19 +199,30 @@ Backend:
 
 Frontend:
 - `frontend/src/hooks/useAnalysisBoard.ts:390` — `loadMainLine(sans, newRootFen)`, already root-FEN aware
-- `frontend/src/pages/Analysis.tsx:919` — game mode hardcodes `STARTING_FEN` (suspected latent bug)
+- `frontend/src/hooks/useAnalysisBoard.ts:399` — dead `if (!move) break` guard, CONFIRMED crash site (FLAWCHESS-96)
+- `frontend/src/hooks/useAnalysisBoard.ts:474` — same dead guard in `insertPvLine`, inside a `setState` updater
+- `frontend/src/hooks/useChessGame.ts:147` / `frontend/src/hooks/useBotGame.ts:299` — same unguarded replay pattern
+- `frontend/src/lib/engine/treeCommon.ts:218` — the correctly-contained precedent ("chess.js's `.move()` THROWS")
+- `frontend/src/pages/Analysis.tsx:971` — game mode hardcodes `STARTING_FEN` (confirmed bug, was line 919)
 - `frontend/src/pages/Analysis.tsx:532-545` — `?fen=` entry point (SEED-094), fen-beats-line precedence
 - `frontend/src/hooks/useChessGame.ts` — explorer board, start-anchored in 5 places + sessionStorage persistence
 - `frontend/src/pages/openings/useOpeningsHandlers.ts:96,114` — insights deep-link into the explorer via `loadMoves`
 - `frontend/src/types/position_bookmarks.ts` — bookmarks store bare `moves: string[]`, no root
 
 Other:
-- Sentry: FLAWCHESS-5E (issue 126278993)
+- Sentry: FLAWCHESS-5E (issue 126278993) — the insights eviction (74 events)
+- Sentry: FLAWCHESS-96 — the analysis-board crash (3 events, confirms the "Related" section above)
 
 ## Notes
 
 Captured 2026-06-12 from a Sentry FLAWCHESS-5E analysis. Full root-cause confirmed in
 code, not inferred.
+
+Revised 2026-08-15 after a Sentry triage sweep: the analysis-board suspicion is now
+**confirmed in production** (FLAWCHESS-96), upgrading it from "verify before planning" to a
+known crash with a shippable containment fix. Nothing else changed — Tier 1 / Tier 2 scope,
+the aggregate-`FILTER` approach and the `initial_fen` decision all stand. The confirmation
+strengthens Tier 1's priority: it now fixes a page crash, not just a silent data drop.
 
 Revised 2026-08-06 after a code re-read: root cause unchanged and still accurate, but
 scope re-tiered (Tier 1 is a quick task, not a phase), the aggregate-`FILTER` approach

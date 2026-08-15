@@ -1,5 +1,7 @@
 """Tests for normalization utilities: parse_time_control, normalize_chesscom_game, normalize_lichess_game."""
 
+import pytest
+
 
 class TestParseTimeControl:
     """Tests for parse_time_control function."""
@@ -1486,3 +1488,266 @@ class TestBaseAndIncrementInNormalizers:
         assert result is not None
         assert result.base_time_seconds is None
         assert result.increment_seconds is None
+
+
+# ---------------------------------------------------------------------------
+# Phase 210 (SEED-042): extract_initial_fen + the migration's SQL mirror
+# ---------------------------------------------------------------------------
+
+# A genuinely custom start: the Evans Gambit thematic position shape that caused
+# the production eviction (Sentry FLAWCHESS-5E).
+CUSTOM_START_FEN = "r1bqk1nr/pppp1ppp/2n5/2b1p3/1PB1P3/5N2/P1PP1PPP/RNBQK2R b KQkq b3 0 4"
+STANDARD_START_FEN = "rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1"
+
+
+def _pgn_with_headers(headers: str, movetext: str = "1. e4 e5 *") -> str:
+    return f'[Event "Test"]\n[White "A"]\n[Black "B"]\n{headers}\n\n{movetext}'
+
+
+class TestExtractInitialFen:
+    """extract_initial_fen is the single producer of games.initial_fen (D-06)."""
+
+    def test_setup_and_fen_pair_returns_the_fen(self):
+        from app.services.normalization import extract_initial_fen
+
+        pgn = _pgn_with_headers(f'[SetUp "1"]\n[FEN "{CUSTOM_START_FEN}"]')
+        assert extract_initial_fen(pgn) == CUSTOM_START_FEN
+
+    def test_no_headers_returns_none(self):
+        from app.services.normalization import extract_initial_fen
+
+        assert extract_initial_fen(_pgn_with_headers('[Result "1-0"]')) is None
+
+    def test_fen_without_setup_marker_returns_none(self):
+        """Per the PGN spec a [FEN] tag alone does not establish a custom start."""
+        from app.services.normalization import extract_initial_fen
+
+        pgn = _pgn_with_headers(f'[FEN "{CUSTOM_START_FEN}"]')
+        assert extract_initial_fen(pgn) is None
+
+    def test_setup_naming_the_standard_start_returns_none(self):
+        """D-05: producers do emit this, and such a game is NOT custom-start.
+
+        It must stay eligible as an opening-transition sample representative,
+        which is exactly what `initial_fen IS NULL` gates.
+        """
+        from app.services.normalization import extract_initial_fen
+
+        pgn = _pgn_with_headers(f'[SetUp "1"]\n[FEN "{STANDARD_START_FEN}"]')
+        assert extract_initial_fen(pgn) is None
+
+    def test_standard_start_with_different_counters_still_returns_none(self):
+        """canonical_root_fen ignores the halfmove clock, fullmove number and the
+        inconsistently-emitted en-passant field, so those can't fake a custom start."""
+        from app.services.normalization import extract_initial_fen
+
+        variant = "rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq e3 7 12"
+        pgn = _pgn_with_headers(f'[SetUp "1"]\n[FEN "{variant}"]')
+        assert extract_initial_fen(pgn) is None
+
+    def test_malformed_fen_returns_none_rather_than_raising(self):
+        """A broken header must not fail an import (landmine 5)."""
+        from app.services.normalization import extract_initial_fen
+
+        pgn = _pgn_with_headers('[SetUp "1"]\n[FEN "not-a-fen"]')
+        assert extract_initial_fen(pgn) is None
+
+    def test_empty_fen_value_returns_none(self):
+        from app.services.normalization import extract_initial_fen
+
+        pgn = _pgn_with_headers('[SetUp "1"]\n[FEN ""]')
+        assert extract_initial_fen(pgn) is None
+
+    def test_tolerates_header_whitespace_variation(self):
+        from app.services.normalization import extract_initial_fen
+
+        pgn = _pgn_with_headers(f'[ SetUp  "1" ]\n[ FEN  "{CUSTOM_START_FEN}" ]')
+        assert extract_initial_fen(pgn) == CUSTOM_START_FEN
+
+
+class TestNormalizersPopulateInitialFen:
+    """All four NormalizedGame producers agree on the initial_fen contract."""
+
+    def _chesscom_game(self, pgn: str) -> dict:
+        return {
+            "rules": "chess",
+            "uuid": "abc-123",
+            "url": "https://chess.com/game/1",
+            "pgn": pgn,
+            "time_control": "600",
+            "time_class": "rapid",
+            "rated": True,
+            "end_time": 1700000000,
+            "white": {"username": "Alice", "rating": 1500, "result": "win"},
+            "black": {"username": "Bob", "rating": 1500, "result": "checkmated"},
+        }
+
+    def test_chesscom_custom_start_populates(self):
+        from app.services.normalization import normalize_chesscom_game
+
+        pgn = _pgn_with_headers(f'[SetUp "1"]\n[FEN "{CUSTOM_START_FEN}"]')
+        result = normalize_chesscom_game(self._chesscom_game(pgn), "Alice", user_id=1)
+        assert result is not None
+        assert result.initial_fen == CUSTOM_START_FEN
+
+    def test_chesscom_standard_start_stays_none(self):
+        from app.services.normalization import normalize_chesscom_game
+
+        result = normalize_chesscom_game(
+            self._chesscom_game(_pgn_with_headers('[Result "1-0"]')), "Alice", user_id=1
+        )
+        assert result is not None
+        assert result.initial_fen is None
+
+    def test_lichess_custom_start_populates(self):
+        from app.services.normalization import normalize_lichess_game
+
+        pgn = _pgn_with_headers(f'[SetUp "1"]\n[FEN "{CUSTOM_START_FEN}"]')
+        game = {
+            "id": "lichessid1",
+            "rated": True,
+            "variant": {"key": "standard", "name": "Standard"},
+            "speed": "blitz",
+            "perf": "blitz",
+            "createdAt": 1700000000000,
+            "lastMoveAt": 1700000600000,
+            "status": "mate",
+            "winner": "white",
+            "clock": {"initial": 300, "increment": 0, "totalTime": 300},
+            "players": {
+                "white": {"user": {"name": "Alice", "id": "alice"}, "rating": 1500},
+                "black": {"user": {"name": "Bob", "id": "bob"}, "rating": 1500},
+            },
+            "pgn": pgn,
+        }
+        result = normalize_lichess_game(game, "Alice", user_id=1)
+        assert result is not None
+        assert result.initial_fen == CUSTOM_START_FEN
+
+    def test_pasted_custom_start_populates_from_the_derived_root(self):
+        """normalize_pasted_game sources the root from game.board(), not the header
+        regex — but must land on the same value (D-06)."""
+        from app.services.normalization import normalize_pasted_game
+
+        # Bxb4 is the main Evans Gambit acceptance from CUSTOM_START_FEN; a
+        # concrete [Result] is required because a "*" with a non-terminal final
+        # board has no honest result and normalize_pasted_game returns None.
+        pgn = _pgn_with_headers(
+            f'[SetUp "1"]\n[FEN "{CUSTOM_START_FEN}"]\n[Result "1-0"]',
+            movetext="4... Bxb4 5. c3 Ba5 1-0",
+        )
+        result = normalize_pasted_game(pgn, user_id=1, user_color="black")
+        assert result is not None
+        assert result.initial_fen is not None
+        # python-chess re-emits the FEN, so compare on the identity-relevant
+        # prefix rather than byte equality.
+        from app.services.normalization import canonical_root_fen
+
+        assert canonical_root_fen(result.initial_fen) == canonical_root_fen(CUSTOM_START_FEN)
+
+    def test_pasted_standard_start_stays_none(self):
+        from app.services.normalization import normalize_pasted_game
+
+        pgn = _pgn_with_headers('[Result "1-0"]', movetext="1. e4 e5 2. Nf3 Nc6 1-0")
+        result = normalize_pasted_game(pgn, user_id=1, user_color="white")
+        assert result is not None
+        assert result.initial_fen is None
+
+
+class TestMigrationBackfillSqlMatchesPythonHelper:
+    """D-06: the Phase 210 migration's SQL backfill and extract_initial_fen must
+    agree, or existing rows and newly-imported rows get different answers.
+
+    The migration exports its own UPDATE as BACKFILL_SQL precisely so this test
+    can execute the exact statement that ran in production, rather than a
+    paraphrase that could silently drift from it.
+    """
+
+    @pytest.mark.asyncio
+    async def test_sql_and_python_agree_on_shared_fixtures(self, db_session) -> None:
+        import importlib.util
+        import pathlib
+
+        from sqlalchemy import select, text
+
+        from app.models.game import Game
+        from app.models.user import User
+        from app.services.normalization import extract_initial_fen
+
+        # alembic/versions is not an importable package (the filenames start with
+        # a digit), so load the revision module by path.
+        migration_path = (
+            pathlib.Path(__file__).parent.parent
+            / "alembic"
+            / "versions"
+            / "20260815_084711_0ac0176294fd_phase_210_games_initial_fen.py"
+        )
+        spec = importlib.util.spec_from_file_location("_phase_210_migration", migration_path)
+        assert spec is not None and spec.loader is not None
+        migration = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(migration)
+
+        # Each fixture is a PGN plus the answer extract_initial_fen gives; the
+        # SQL must land on the same value for every one of them.
+        pgns = [
+            _pgn_with_headers(f'[SetUp "1"]\n[FEN "{CUSTOM_START_FEN}"]'),
+            _pgn_with_headers(f'[SetUp "1"]\n[FEN "{STANDARD_START_FEN}"]'),
+            _pgn_with_headers(f'[FEN "{CUSTOM_START_FEN}"]'),
+            _pgn_with_headers('[Result "1-0"]'),
+            _pgn_with_headers(f'[ SetUp  "1" ]\n[ FEN  "{CUSTOM_START_FEN}" ]'),
+            # Malformed FEN: python-chess raises so the helper returns None. The
+            # SQL must reach the same answer, or a backfilled row would carry an
+            # unparseable root that `new Chess(fen)` throws on downstream.
+            _pgn_with_headers('[SetUp "1"]\n[FEN "not-a-fen"]'),
+            _pgn_with_headers('[SetUp "1"]\n[FEN ""]'),
+        ]
+
+        user = User(
+            email="migration-agreement@test.local",
+            hashed_password="",
+            is_active=True,
+            is_superuser=False,
+            is_verified=False,
+        )
+        db_session.add(user)
+        await db_session.flush()
+
+        game_ids: list[int] = []
+        for i, pgn in enumerate(pgns):
+            game = Game(
+                user_id=user.id,
+                platform="chess.com",
+                platform_game_id=f"migration-agreement-{i}",
+                pgn=pgn,
+                result="1-0",
+                user_color="white",
+                rated=True,
+                white_username="a",
+                black_username="b",
+                initial_fen=None,  # as an un-backfilled row would be
+            )
+            db_session.add(game)
+            await db_session.flush()
+            game_ids.append(game.id)
+
+        # Run the migration's own UPDATE against these rows.
+        await db_session.execute(text(migration.BACKFILL_SQL))
+
+        rows = (
+            await db_session.execute(
+                select(Game.id, Game.pgn, Game.initial_fen).where(Game.id.in_(game_ids))
+            )
+        ).all()
+        assert len(rows) == len(pgns)
+
+        for _, pgn, sql_result in rows:
+            assert sql_result == extract_initial_fen(pgn), (
+                "the migration's SQL and extract_initial_fen disagree on this PGN — "
+                "backfilled rows and freshly-imported rows would diverge"
+            )
+
+        # And the fixture set must actually exercise both outcomes, or the
+        # agreement above would be vacuous.
+        results = [r[2] for r in rows]
+        assert any(r is not None for r in results)
+        assert any(r is None for r in results)

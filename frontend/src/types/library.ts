@@ -95,6 +95,11 @@ export interface GameFlawCard {
   // ply i, so replaying moves[0..i] yields the position at eval_series[i].
   // Null for unanalyzed games. Drives the live miniboard on eval-chart hover.
   moves: string[] | null;
+  // Phase 210 (SEED-042): the position `moves` is replayed FROM. Null means the
+  // standard start (the overwhelming majority); non-null for chess.com
+  // thematic/custom-position games and pasted [SetUp] PGNs. Anything replaying
+  // `moves` must seed from this, not from STARTING_FEN.
+  initial_fen: string | null;
   // Active eval-job state for the on-demand analyze pill; null when no active job
   // (unanalyzed-and-unqueued, or already analyzed).
   active_eval_status: 'pending' | 'leased' | null;

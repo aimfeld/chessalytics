@@ -294,11 +294,17 @@ function replayToPly(
 ): { fen: string; lastMove: { from: string; to: string } | null } {
   const chess = new Chess();
   let lastMove: { from: string; to: string } | null = null;
+  // Phase 210 (SEED-042): unguarded chess.js 1.4 move() throws on illegal SAN,
+  // and moveHistory is restored from localStorage (the resume path), so a stale
+  // or corrupted payload would crash the Bots page on mount. Stop at the last
+  // legal ply and return that position.
   for (let i = 0; i < ply; i++) {
-    // safe: loop bound ensures i < ply <= moveHistory.length
-    const move = chess.move(moveHistory[i]!);
-    if (i === ply - 1) {
+    try {
+      // safe: loop bound ensures i < ply <= moveHistory.length
+      const move = chess.move(moveHistory[i]!);
       lastMove = { from: move.from, to: move.to };
+    } catch {
+      break;
     }
   }
   return { fen: chess.fen(), lastMove };
