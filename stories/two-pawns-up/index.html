@@ -35,6 +35,8 @@
   header.site .tag{color:var(--ink-3);font-size:15px;margin-left:auto;text-align:right}
   .hero{padding:26px 0 6px}
   .kicker{color:var(--brown);font-weight:700;text-transform:uppercase;letter-spacing:.12em;font-size:14px}
+  .kicker a{color:inherit;text-decoration:underline dotted;text-decoration-thickness:1.5px;text-underline-offset:4px}
+  .kicker a:hover{color:var(--brown-dark)}
   h1{font-size:clamp(32px,5.5vw,52px);line-height:1.12;letter-spacing:-.025em;margin:10px 0 14px;color:var(--ink)}
   h1 .accent{color:var(--brown)}
   .sub{font-size:clamp(17px,2.3vw,21px);color:var(--ink-2);max-width:44em}
@@ -131,7 +133,7 @@
 <div class="wrap">
 
 <div class="hero">
-  <div class="kicker">A FlawChess data story &middot; <time datetime="2026-08-15">August 15, 2026</time> &middot; 478,340 Lichess games</div>
+  <div class="kicker"><a href="../" data-testid="link-stories-index">A FlawChess data story</a> &middot; <time datetime="2026-08-15">August 15, 2026</time> &middot; 478,340 Lichess games</div>
   <h1>You're two pawns up.<br><span class="accent">Do you actually win?</span></h1>
   <p class="sub">We took every game in our benchmark database where a player reached the middlegame
   with a clear advantage (about <b>two pawns up</b> by Stockfish's count) and checked how those games
@@ -207,16 +209,19 @@
 
 <section class="card" id="s5">
   <div class="card-head"><div class="num">5</div>
-  <h2>A lead you never let slip is nearly unbeatable</h2></div>
-  <p class="lede">Here's the flip side. Among games where the advantage <b>never</b> dipped below two pawns
-  for even one move of the middlegame and endgame, the leader converted <b>95&ndash;99%</b> of the time.
-  The starting size of your lead matters far less than its journey: protect it move by move and the
-  point is essentially banked.</p>
-  <p class="ctitle">Win rate from an entry lead vs a lead that never slipped</p>
+  <h2>The biggest threat to your lead? You.</h2></div>
+  <p class="lede">So who actually throws leads away? Up to the moment the lead exists, the blunders are
+  mostly your opponent's: that's how leads are born. From that moment on, the picture flips. Counting only
+  blunders made <b>after</b> the middlegame starts two pawns up, the <b>leader blunders more</b> than the
+  opponent, about <b>1.2&times;</b> more, at every single rating.</p>
+  <p class="ctitle">Blunders per game after the middlegame starts with a two-pawn lead</p>
   <div class="legend" id="lg5"></div>
-  <figure aria-label="Dumbbell chart: win rate from a middlegame-entry lead vs a lead held on every move, by rating">
+  <figure aria-label="Paired bar chart: blunders per game after middlegame entry by the leader and the opponent, by rating">
     <div id="c5"></div>
   </figure>
+  <div class="callout"><span class="tk">Takeaway:</span> once you're ahead, your opponent is no longer the
+  main source of danger. <b>You are.</b> Winning positions don't defend themselves; they have to be played
+  as carefully as bad ones.</div>
   <details class="tbl"><summary>View the data</summary><div id="t5"></div></details>
 </section>
 
@@ -231,8 +236,9 @@
       <a href="https://github.com/flawchess/flawchess/blob/main/stories/two-pawns-up/two-pawns-up-report.md">Read the technical report</a>
     </p>
     <p class="fineprint">Data: Lichess games with server-side Stockfish analysis; ratings are Lichess ratings
-    at the time each game was played. Small samples: 800 and 2400 classical have the fewest games, so treat
-    those two cells as approximate.</p>
+    at the time each game was played. Blunder counts use Lichess's own definition (a move that loses at least
+    15 percentage points of winning chances), recomputed per move from the stored evaluations. Small samples:
+    800 and 2400 classical have the fewest games, so treat those two cells as approximate.</p>
   </div>
   <div class="promo">
     <div class="promo-head">
@@ -297,7 +303,13 @@ const TC={ // leader loses % of entry-lead games, per rating
   rapid:{v:[25.9,26.6,24.6,21.8,15.9],n:[4671,13832,11391,11676,8792],label:"Rapid"},
   classical:{v:[20.8,23.2,23.3,17.6,11.9],n:[662,6838,13443,7725,783],label:"Classical"}
 };
-const DUMBBELL={entry:[69.8,70.6,72.1,74.6,77.2],held:[95.1,97.0,97.5,98.5,98.7]};
+const BLUNDERS={ // Lichess-style blunders per entry-lead game, split at middlegame entry (report §3)
+  leaderAfter:[1.54,1.46,1.30,1.10,0.93],
+  oppAfter:[1.26,1.18,1.04,0.90,0.77],
+  leaderUpTo:[0.79,0.58,0.37,0.20,0.12],
+  oppUpTo:[1.68,1.42,1.15,0.87,0.71],
+  ratioAfter:["1.22","1.25","1.24","1.23","1.21"] // leader ÷ opponent, from unrounded rates
+};
 
 /* ---------- helpers ---------- */
 const NS="http://www.w3.org/2000/svg";
@@ -418,33 +430,32 @@ function renderC4(){
   applyTcSel();
 }
 
-/* ---------- chart 5: dumbbell entry-win vs held-win ---------- */
+/* ---------- chart 5: leader vs opponent blunders after middlegame entry (paired bars) ---------- */
 function renderC5(){
-  const W=chartWidth("c5"),L=W<560?56:88,R=W<560?44:40,T=34,B=44,H=366,min=60,max=100;
-  const svg=svgRoot("c5",W,H,"Win rate from a middlegame-entry lead vs a lead held on every move, by rating");
-  const xFor=v=>L+(W-L-R)*((v-min)/(max-min));
-  const yFor=i=>T+((H-T-B)/(RATINGS.length-1))*i;
-  for(const v of [60,70,80,90,100]){
-    el("line",{x1:xFor(v),x2:xFor(v),y1:T-8,y2:H-B+8,class:"gridline"},svg);
-    txt(svg,xFor(v),H-16,v+"%",{class:"axis","text-anchor":"middle"});
-  }
+  /* value labels are wider than the bars on narrow screens; below 560px the
+     tooltips and the data table carry the exact numbers instead */
+  const W=chartWidth("c5"),L=W<560?48:64,R=20,T=16,B=66,H=400,max=1.7,showLabels=W>=560;
+  const svg=svgRoot("c5",W,H,"Blunders per game after middlegame entry by the leader and the opponent, by rating");
+  const yFor=v=>T+(H-T-B)*(1-v/max);
+  grid(svg,L,W-R,yFor,[0,0.5,1,1.5],v=>v.toFixed(1));
+  const bw=(W-L-R)/RATINGS.length,barW=bw*0.30,gap=bw*0.06;
+  const series=[["leaderAfter","Leader",COL.loss,"the leader"],["oppAfter","Opponent",COL.draw,"the opponent"]];
   RATINGS.forEach((r,i)=>{
-    const y=yFor(i),a=DUMBBELL.entry[i],b=DUMBBELL.held[i];
-    el("line",{x1:xFor(a),x2:xFor(b),y1:y,y2:y,stroke:"#D8CDBB","stroke-width":3},svg);
-    const c1=el("circle",{cx:xFor(a),cy:y,r:8,fill:COL.brown,stroke:"#fff","stroke-width":2},svg);
-    const c2=el("circle",{cx:xFor(b),cy:y,r:8,fill:COL.win,stroke:"#fff","stroke-width":2},svg);
-    txt(svg,xFor(a)-14,y+5,a.toFixed(0)+"%",{class:"dlabel","text-anchor":"end",fill:COL.brown});
-    txt(svg,xFor(b)+14,y+5,b.toFixed(0)+"%",{class:"dlabel",fill:COL.win});
-    txt(svg,L-14,y+5,r,{class:"axis","text-anchor":"end","font-weight":"700"});
-    bindTip(c1,`<div class="t">Rating ${r}</div>Entering the middlegame two pawns up &rarr; wins <b>${a}%</b>.`);
-    bindTip(c2,`<div class="t">Rating ${r}</div>Lead held on every single move &rarr; wins <b>${b}%</b>.`);
+    series.forEach(([key,name,color,who],k)=>{
+      const v=BLUNDERS[key][i];
+      const x=L+bw*i+bw*0.17+k*(barW+gap),y=yFor(v);
+      const rect=el("rect",{x,y,width:barW,height:yFor(0)-y,rx:4,fill:color},svg);
+      if(showLabels)txt(svg,x+barW/2,y-8,v.toFixed(2),{class:"dlabel","text-anchor":"middle",fill:color});
+      bindTip(rect,`<div class="t">${name} &middot; rating ${r}</div>After the middlegame starts two pawns up, ${who} averages <b>${v.toFixed(2)}</b> blunders per game (Lichess's definition, recomputed per move).`);
+    });
+    txt(svg,L+bw*i+bw/2,H-38,r,{class:"axis","text-anchor":"middle"});
   });
-  txt(svg,L-14,T-18,"ELO",{class:"axis","text-anchor":"end"});
+  txt(svg,L+(W-L-R)/2,H-12,"ELO",{class:"axis","text-anchor":"middle"});
 }
 
 /* ---------- static setup: legends, tables, toggle buttons ---------- */
 legend("lg3",[["Sustained-lead win",COL.win],["Win after the lead slipped",COL.win2],["Draw",COL.draw],["Leader loses",COL.loss]]);
-legend("lg5",[["Win rate from an entry lead",COL.brown],["Win rate when the lead never slipped",COL.win]]);
+legend("lg5",[["Blunders by the leader",COL.loss],["Blunders by the opponent",COL.draw]]);
 table("t1",["Rating","Games with an entry lead","Leader loses"],
   RATINGS.map((r,i)=>[r,OUTCOME.n[i].toLocaleString("en-US"),OUTCOME.loss[i]+"%"]));
 table("t2",["Rating","Games entering with a big lead"],RATINGS.map((r,i)=>[r,PREVALENCE[i]+"%"]));
@@ -452,8 +463,9 @@ table("t3",["Rating","Sustained-lead win","Win after slip","Draw","Leader loses"
   RATINGS.map((r,i)=>[r,OUTCOME.sustained[i]+"%",OUTCOME.comeback[i]+"%",OUTCOME.draw[i]+"%",OUTCOME.loss[i]+"%"]));
 table("t4",["Rating","Blitz","Rapid","Classical"],
   RATINGS.map((r,i)=>[r,TC.blitz.v[i]+"%",TC.rapid.v[i]+"%",TC.classical.v[i]+"%"]));
-table("t5",["Rating","Win % from entry lead","Win % when lead never slipped"],
-  RATINGS.map((r,i)=>[r,DUMBBELL.entry[i]+"%",DUMBBELL.held[i]+"%"]));
+table("t5",["Rating","Leader blunders after entry","Opponent blunders after entry","Leader &divide; opponent","Leader blunders up to entry","Opponent blunders up to entry"],
+  RATINGS.map((r,i)=>[r,BLUNDERS.leaderAfter[i].toFixed(2),BLUNDERS.oppAfter[i].toFixed(2),BLUNDERS.ratioAfter[i]+"&times;",
+    BLUNDERS.leaderUpTo[i].toFixed(2),BLUNDERS.oppUpTo[i].toFixed(2)]));
 
 (function(){
   const tg=document.getElementById("tg4");

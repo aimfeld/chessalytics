@@ -4,10 +4,11 @@
 **Source:** Lichess games imported from the curated benchmark pool (players sampled across rating buckets and time controls). Engine evals come from Lichess server-side analysis; only games with ≥ 90% per-ply eval coverage are included.
 **Scope:** blitz, rapid, classical only (bullet excluded — Lichess almost never attaches analysis to bullet games).
 
-This report does two things:
+This report does three things:
 
 1. **Replicates Section 1** of `reports/benchmark/benchmark-eval-outcome-consistency-2026-05-25.md` (sustained ≥ 2-pawn advantage through the middlegame and endgame) on the current, larger benchmark DB.
 2. **New analysis:** of the games that **enter the middlegame with a ≥ 200 cp advantage** (eval at the first middlegame ply), how many end as a sustained-lead win, a win for the initial leader without a sustained lead, a draw, or a loss for the initial leader?
+3. **Blunder timing (Section 3):** splits each player's blunders at the middlegame-entry ply, separating the opening blunders that *create* a lead from the blunders that decide its fate.
 
 All definitions (cohort, inclusion rule, rating buckets, eval window, mate handling) are identical to the 2026-05-25 report. The benchmark DB has grown substantially since May — the analyzed cohort roughly **doubled** at every rating bucket (e.g. 800: 9,131 → 16,952; 2400: 74,525 → 154,533) — so absolute counts differ, but the derived rates are directly comparable.
 
@@ -86,6 +87,22 @@ Lichess-reported inaccuracies / mistakes / blunders committed in sustained-lead 
 
 Near-identical to May at every bucket (e.g. 800 leader blunders 0.205 in both runs; 2400 opponent blunders 0.054 → 0.056). The opponent still out-blunders the leader ~2.5× at 800 widening to ~7× at 2400.
 
+#### Blunders per sustained-lead game (derived)
+
+The table above uses joint rates (divided by all `n_games`). Dividing instead by the sustained-lead game counts (rate × n_games ÷ sustained-lead games) gives per-game blunder rates **within sustained-lead games**:
+
+| Rating | leader blunders / game | opponent blunders / game | opponent ÷ leader |
+|--------|-----------------------:|-------------------------:|------------------:|
+| **800**  | 0.78 | 1.92 | 2.5× |
+| **1200** | 0.62 | 1.76 | 2.8× |
+| **1600** | 0.41 | 1.49 | 3.6× |
+| **2000** | 0.24 | 1.21 | 5.0× |
+| **2400** | 0.14 | 1.00 | 7.0× |
+
+Even in games where the lead never dipped below two pawns, the trailing side keeps blundering: about twice per game at 800 and still once per game at 2400. The leader's own rate falls ~5.5× over the same range, widening the ratio from 2.5× to 7×. (Normalizing changes both columns by the same factor per bucket, so the ratios equal those of the joint rates.)
+
+**Read this table with care.** The leader-vs-opponent gap here is largely a selection artifact: opening blunders by the opponent are how these games qualified in the first place, and the sustained condition censors leader blunders (a leader blunder usually drops the eval below +200 cp, reclassifying the game out of this set). Section 3 removes both effects and reverses the after-entry picture.
+
 ---
 
 ## Section 2 — Games entering the middlegame with a ≥ 200 cp advantage (new)
@@ -160,6 +177,35 @@ Reading the TC axis:
 - **The initial leader loses outright in 27% of these games at 800, and still 18% at 2400.** This is the single most striking number: even experts, handed a two-pawn advantage at the start of the middlegame, go on to lose nearly one game in five. (Remember the opponent is rating-matched, and a +200 cp entry eval often reflects a sharp, double-edged position rather than a clean extra piece.)
 - **The "sustained win" share is nearly rating-invariant (~43–46%).** Conditional on entering with a lead, the probability of the wire-to-wire outcome (never dipping below +200 and winning) barely moves from 800 to 2400. Rating buys fewer entry leads but not a higher wire-to-wire rate; what improves with rating is recovering the win *after* the lead dips ("win, not sustained" 26.9% → 31.6%) and avoiding the full reversal (27.2% → 18.4%).
 - **Draws remain a minor outcome (3–4%), rising slightly with rating** — consistent with Section 1's finding that big-lead games rarely fizzle into draws; when a lead evaporates it usually swings all the way.
+
+## Section 3 — Who blunders once the lead exists? (new)
+
+Section 1's mistakes table invites a misreading: "the opponent out-blunders the leader 2.5–7×, so leads survive because opponents keep donating". That comparison carries two selection effects:
+
+1. **Opening blunders are baked into the condition.** To enter the middlegame two pawns down, the opponent must usually have blundered already; the leader's cleaner opening is part of how the game qualified.
+2. **The sustained condition censors leader blunders.** A leader blunder typically drops the eval below +200 cp, which reclassifies the game out of the sustained-lead set.
+
+This section removes both. Cohort: all Section 2 **entry-lead games**. Each player's blunders are split at the entry ply: **up to entry** (ply ≤ entry ply, i.e. including the move that produced the entry position) vs **after entry** (ply > entry ply).
+
+### Recomputed Lichess judgments
+
+`games.white_blunders` / `black_blunders` are whole-game totals, so per-phase counts are re-derived move by move from the stored per-ply evals (which are Lichess's own server evals), using Lichess's advice rule: win% = 50 + 50·(2/(1 + e^(−0.004·cp)) − 1) with cp clamped to ±1000 and mate-in-N as 100/0; a move is a **blunder** when the mover's win% drops ≥ 15 points (0.3 on Lichess's −1..1 winning-chances scale; mistake ≥ 10, inaccuracy ≥ 5). One storage quirk matters: eval rows in `game_positions` are shifted by one half-move (row *P* holds the eval of the position after half-move *P*+1), so the mover judged at row *P* is White when *P* is even.
+
+**Validation** on 300 games against the stored Lichess per-game totals: recomputed blunders match within 2.5% in aggregate (white 907 vs 930, black 914 vs 936) and within ±1 per color for 95% of games.
+
+### Results — blunders per entry-lead game
+
+| Rating | entry-lead games | opp up to entry | leader up to entry | opp ÷ leader (up to entry) | opp after entry | leader after entry | leader ÷ opp (after entry) |
+|--------|-----------------:|----------------:|-------------------:|---------------------------:|----------------:|-------------------:|---------------------------:|
+| **800**  |  9,849 | 1.68 | 0.79 | 2.1× | 1.26 | **1.54** | **1.22** |
+| **1200** | 30,137 | 1.42 | 0.58 | 2.4× | 1.18 | **1.46** | **1.25** |
+| **1600** | 32,940 | 1.15 | 0.37 | 3.1× | 1.04 | **1.30** | **1.24** |
+| **2000** | 25,712 | 0.87 | 0.20 | 4.4× | 0.90 | **1.10** | **1.23** |
+| **2400** | 18,674 | 0.71 | 0.12 | 6.1× | 0.77 | **0.93** | **1.21** |
+
+- **The Section 1 gap is an opening selection effect.** Up to the entry ply, the opponent out-blunders the future leader 2.1× at 800 widening to 6.1× at 2400. This widening is exactly what selection predicts: strong players rarely blunder in the opening, so at 2400 a two-pawn entry lead almost requires a one-sided opening donation, while at 800 both sides blunder early and someone merely nets worse.
+- **After entry, the ratio flips and flattens: the leader out-blunders the opponent by ~1.2× at every rating** (1.21–1.25, no trend). From the moment the lead exists, the leader is the more frequent blunderer: 1.54 vs 1.26 blunders per game at 800, and still 0.93 vs 0.77 at 2400.
+- **Caveat (floor asymmetry):** a blunder requires losing ≥ 15 win-percentage points, and the trailing side, often sitting at 5–25% winning chances, has less room left to lose. Some of the leader's after-entry excess reflects having more to give away rather than objectively worse moves. The result should be read as "after entry, the game-swinging mistakes come mostly from the leader", not as a statement about raw move quality.
 
 ## Method
 
@@ -279,3 +325,52 @@ ORDER BY elo_bucket;
 ```
 
 For the by-TC breakdown, add `i.tc_bucket` to the `entry` CTE's select list and group by `elo_bucket, tc_bucket`. The Game sample table is the `n_games` count from the Section 1 query grouped by `elo_bucket, tc_bucket`.
+
+Section 3 reuses the Section 2 CTEs through `first_mg` (with `p.ply AS entry_ply` added to `first_mg`'s select list), redefines `entry` to keep the game id and entry ply, and appends:
+
+```sql
+entry AS (
+  SELECT i.id, i.elo_bucket, f.entry_sign, f.entry_ply
+  FROM included i JOIN first_mg f ON f.game_id = i.id
+  WHERE f.entry_abs IS NOT NULL AND f.entry_abs >= 200 AND f.entry_sign <> 0
+),
+wp AS (
+  SELECT p.game_id, p.ply,
+    CASE WHEN p.eval_cp IS NOT NULL
+           THEN 50*(2/(1+exp(-0.004*LEAST(1000,GREATEST(-1000,p.eval_cp::int))))-1)+50
+         WHEN p.eval_mate IS NOT NULL
+           THEN CASE WHEN p.eval_mate>0 THEN 100.0 ELSE 0.0 END END AS w
+  FROM game_positions p JOIN entry e ON e.id = p.game_id
+),
+j AS (
+  SELECT game_id, ply, w, lag(w) OVER (PARTITION BY game_id ORDER BY ply) AS wprev
+  FROM wp
+),
+blun AS (
+  -- Eval rows are shifted one half-move (row P = eval after half-move P+1),
+  -- so the mover judged at row P is White when P is even.
+  SELECT game_id, ply,
+    CASE WHEN ply%2=0 AND ply>0 AND wprev-w>=15 THEN 1   -- white blundered
+         WHEN ply%2=1 AND w-wprev>=15 THEN -1            -- black blundered
+         ELSE 0 END AS by_side
+  FROM j
+  WHERE wprev IS NOT NULL AND w IS NOT NULL
+),
+per_game AS (
+  SELECT e.elo_bucket, e.id,
+    COUNT(*) FILTER (WHERE b.ply >  e.entry_ply AND b.by_side =  e.entry_sign) AS leader_after,
+    COUNT(*) FILTER (WHERE b.ply >  e.entry_ply AND b.by_side = -e.entry_sign) AS opp_after,
+    COUNT(*) FILTER (WHERE b.ply <= e.entry_ply AND b.by_side =  e.entry_sign) AS leader_open,
+    COUNT(*) FILTER (WHERE b.ply <= e.entry_ply AND b.by_side = -e.entry_sign) AS opp_open
+  FROM entry e LEFT JOIN blun b ON b.game_id = e.id AND b.by_side <> 0
+  GROUP BY e.elo_bucket, e.id
+)
+SELECT elo_bucket, COUNT(*) AS entry_lead_games,
+  round(AVG(leader_after),3) AS leader_blun_after_entry,
+  round(AVG(opp_after),3)    AS opp_blun_after_entry,
+  round(AVG(opp_after)/NULLIF(AVG(leader_after),0),2) AS ratio_after,
+  round(AVG(leader_open),3)  AS leader_blun_up_to_entry,
+  round(AVG(opp_open),3)     AS opp_blun_up_to_entry
+FROM per_game
+GROUP BY elo_bucket ORDER BY elo_bucket;
+```
