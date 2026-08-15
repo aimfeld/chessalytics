@@ -151,7 +151,7 @@
   @media (max-width:560px){
     header.site .tag{display:none}
     header.site .name,header.site .sect{font-size:19px}
-    .author{flex-direction:column;align-items:flex-start}
+    .author{align-items:flex-start;gap:14px}
   }
 </style>
 </head>
@@ -294,7 +294,7 @@
     Stockfish evaluations, across five rating groups from 800 to 2400. "Two pawns up" means the engine evaluation
     reached &ge; 200 centipawns for one side at the first move of the middlegame. Where the middlegame starts is
     decided by Lichess's own phase rules (the same division you see on its analysis board, based on piece counts,
-    back-rank development and how entangled the two sides' pieces are). Full methodology, exact queries
+    back-rank development, and how entangled the two sides' pieces are). Full methodology, exact queries,
     and every table are in the technical report.</p>
     <p style="margin-top:10px">
       <a href="https://github.com/flawchess/flawchess/blob/main/stories/two-pawns-up/two-pawns-up-report.md">Read the technical report</a>
@@ -341,9 +341,7 @@
     <img src="../author.jpg" alt="Portrait of Adrian Imfeld" width="72" height="72">
     <div>
       <div class="who">Adrian Imfeld</div>
-      <p class="bio">Data scientist and creator of FlawChess. These stories are built on the
-      <a href="https://github.com/flawchess/flawchess/blob/main/reports/benchmark/benchmarks-latest.md">FlawChess
-      benchmark database</a>: hundreds of thousands of Lichess games with full Stockfish evaluations.</p>
+      <p class="bio">Data scientist, software engineer, and creator of FlawChess. </p>
       <p class="links">
         <a href="https://www.linkedin.com/in/aimfeld/">LinkedIn</a> &middot;
         <a href="https://github.com/aimfeld">GitHub</a>
