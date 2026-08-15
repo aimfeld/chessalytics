@@ -1,7 +1,7 @@
 name: Deploy data stories to GitHub Pages
 
 # Publishes the stories/ directory (public data stories) to
-# https://flawchess.github.io/flawchess/ whenever it changes on main.
+# https://stories.flawchess.com/ whenever it changes on main.
 # Source of truth lives on main; there is no gh-pages branch.
 
 on:
