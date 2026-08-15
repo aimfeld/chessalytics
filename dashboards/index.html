@@ -1,0 +1,67 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>FlawChess Data Stories</title>
+<meta name="description" content="Interactive data stories from the FlawChess benchmark database: what hundreds of thousands of real chess games reveal about how humans actually play.">
+<link rel="icon" href="logo.png">
+<style>
+  :root{
+    --brown:#8B5E3C; --brown-dark:#6B4226; --cream:#FAF7F0; --card:#FFFFFF;
+    --ink:#2A2118; --ink-2:#5C5246; --ink-3:#8A7F71; --line:#E8E0D2; --hl:#F0DBB9;
+  }
+  *{box-sizing:border-box;margin:0;padding:0}
+  body{background:var(--cream);color:var(--ink);font-size:18px;line-height:1.6;
+    font-family:ui-sans-serif,system-ui,-apple-system,"Segoe UI",Roboto,Helvetica,Arial,sans-serif}
+  a{color:var(--brown-dark)}
+  .wrap{max-width:860px;margin:0 auto;padding:0 20px}
+  header.site{display:flex;align-items:center;gap:12px;padding:22px 0}
+  header.site img{width:44px;height:44px;border-radius:10px}
+  header.site .name{font-weight:800;font-size:22px;letter-spacing:-.02em}
+  header.site .tag{color:var(--ink-3);font-size:15px;margin-left:auto;text-align:right}
+  .kicker{color:var(--brown);font-weight:700;text-transform:uppercase;letter-spacing:.12em;font-size:14px;margin-top:20px}
+  h1{font-size:clamp(30px,5vw,46px);line-height:1.15;letter-spacing:-.025em;margin:8px 0 12px}
+  .sub{color:var(--ink-2);max-width:42em}
+  .story{display:block;background:var(--card);border:1px solid var(--line);border-radius:20px;
+    padding:26px clamp(18px,4vw,34px);margin:26px 0;text-decoration:none;color:var(--ink)}
+  .story:hover{border-color:var(--brown)}
+  .story .date{color:var(--ink-3);font-size:15px}
+  .story h2{font-size:clamp(21px,3vw,27px);letter-spacing:-.02em;margin:4px 0 8px;color:var(--brown-dark)}
+  .story p{color:var(--ink-2)}
+  .story .go{color:var(--brown-dark);font-weight:700;margin-top:10px;display:inline-block}
+  footer.site{padding:20px 0 60px;color:var(--ink-3);font-size:15px}
+  @media (max-width:560px){ header.site .tag{display:none} }
+</style>
+</head>
+<body>
+<div class="wrap">
+
+<header class="site">
+  <img src="logo.png" alt="FlawChess logo">
+  <span class="name">FlawChess</span>
+  <span class="tag">Engines are flawless,<br>humans play FlawChess.</span>
+</header>
+
+<div class="kicker">Data stories</div>
+<h1>What real games reveal about how humans actually play chess</h1>
+<p class="sub">Interactive analyses built on the FlawChess benchmark database: hundreds of thousands of
+Lichess games with full Stockfish evaluations, across every rating level and time control.</p>
+
+<a class="story" href="two-pawns-up/">
+  <div class="date">August 2026</div>
+  <h2>You're two pawns up. Do you actually win?</h2>
+  <p>478,340 games say a "winning position" is a promise you still have to keep: players who reach the
+  middlegame two pawns up lose roughly one game in four &mdash; and even masters blow it far more often
+  than the engine bar suggests.</p>
+  <span class="go">Read the story &rarr;</span>
+</a>
+
+<footer class="site">
+  <a href="https://flawchess.com">flawchess.com</a> &middot; free &amp; open source &middot;
+  <a href="https://github.com/flawchess/flawchess">GitHub</a>
+</footer>
+
+</div>
+</body>
+</html>
