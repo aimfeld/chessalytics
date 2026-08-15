@@ -219,7 +219,7 @@
   <div class="card-head"><div class="num">3</div>
   <h2>"Two pawns up" usually means more than two pawns</h2></div>
   <p class="lede">Two pawns is the <i>floor</i> of this group, not its typical member. Half of these leads are
-  bigger than <b>+3.6 pawns</b>, and roughly one in four is <b>+5 or more</b>, which is a whole piece.
+  bigger than <b>+3.6 pawns</b>, and roughly one in four is <b>+5 or more</b>, which is a whole rook.
   Size changes everything: a bare two-pawn lead is lost <b>30%</b> of the time, while a five-pawn lead is
   lost only <b>13.6%</b> of the time. The 24% headline is an average across all of them.</p>
   <p class="ctitle">Games LOST by the leader, by how big the lead was when the middlegame began</p>
@@ -384,6 +384,7 @@ const TC={
    Band counts sum exactly to the §2 totals (112,583 games). */
 const LEADSIZE={
   label:["+2 to +3","+3 to +5","+5 to +10","+10 or mate"],
+  shortLabel:["+2–3","+3–5","+5–10","+10/mate"], // narrow screens: full labels collide
   n:[40662,45745,23625,2551],
   share:[36.1,40.6,21.0,2.3],          // % of all entry-lead games
   sustained:[20.6,46.0,71.5,85.4],
@@ -452,7 +453,7 @@ function renderC1(){
     txt(svg,x+w/2,H-38,r,{class:"axis","text-anchor":"middle"});
     bindTip(rect,`<div class="t">Rating ${r}</div>Leader loses <b>${v}%</b> of the ${OUTCOME.n[i].toLocaleString("en-US")} games entered two pawns up.`);
   });
-  txt(svg,L+(W-L-R)/2,H-12,"ELO",{class:"axis","text-anchor":"middle"});
+  txt(svg,L+(W-L-R)/2,H-12,"Rating",{class:"axis","text-anchor":"middle"});
 }
 
 /* ---------- chart 2: prevalence bars ---------- */
@@ -469,7 +470,7 @@ function renderC2(){
     txt(svg,x+w/2,H-38,r,{class:"axis","text-anchor":"middle"});
     bindTip(rect,`<div class="t">Rating ${r}</div><b>${v}%</b> of all analyzed games already show a two-pawn advantage when the middlegame begins.`);
   });
-  txt(svg,L+(W-L-R)/2,H-12,"ELO",{class:"axis","text-anchor":"middle"});
+  txt(svg,L+(W-L-R)/2,H-12,"Rating",{class:"axis","text-anchor":"middle"});
 }
 
 /* ---------- chart 3: 100% stacked outcomes ---------- */
@@ -492,7 +493,7 @@ function renderC3(){
     });
     txt(svg,x+w/2,H-38,r,{class:"axis","text-anchor":"middle"});
   });
-  txt(svg,L+(W-L-R)/2,H-12,"ELO",{class:"axis","text-anchor":"middle"});
+  txt(svg,L+(W-L-R)/2,H-12,"Rating",{class:"axis","text-anchor":"middle"});
 }
 
 /* ---------- chart 4: two line panels — board losses vs clock losses ----------
@@ -510,7 +511,7 @@ function lossPanel(id,field,phrase){
   const xFor=i=>L+(W-L-R)*(i/(RATINGS.length-1));
   grid(svg,L,W-R,yFor,[0,10,20],v=>v+"%");
   RATINGS.forEach((r,i)=>txt(svg,xFor(i),H-36,r,{class:"axis","text-anchor":"middle"}));
-  txt(svg,L+(W-L-R)/2,H-10,"ELO",{class:"axis","text-anchor":"middle"});
+  txt(svg,L+(W-L-R)/2,H-10,"Rating",{class:"axis","text-anchor":"middle"});
   TC_KEYS.forEach(key=>{
     const s=TC[key],c=COL[key];
     const d=s[field].map((v,i)=>(i?"L":"M")+xFor(i)+","+yFor(v)).join(" ");
@@ -528,7 +529,9 @@ function renderC4(){lossPanel("c4a","board","on the board");lossPanel("c4b","clo
 
 /* ---------- chart 6: leader loses % by size of the entry lead (bars) ---------- */
 function renderC6(){
-  const W=chartWidth("c6"),L=W<560?48:64,R=20,T=16,B=76,H=372,max=34;
+  // Below 560px the "NN% of games" sublabels collide between bars — drop the
+  // row there (the share stays available in the tooltip and the data table).
+  const W=chartWidth("c6"),shareLabels=W>=560,L=W<560?48:64,R=20,T=16,B=shareLabels?76:56,H=shareLabels?372:352,max=34;
   const s=svgRoot("c6",W,H,"How often the leader loses, by size of the entry advantage");
   const yFor=v=>T+(H-T-B)*(1-v/max);
   grid(s,L,W-R,yFor,[0,10,20,30],v=>v+"%");
@@ -537,8 +540,8 @@ function renderC6(){
     const v=LEADSIZE.loss[i],x=L+bw*i+bw*0.2,w=bw*0.6,y=yFor(v);
     const rect=el("rect",{x,y,width:w,height:yFor(0)-y,rx:4,fill:COL.loss},s);
     txt(s,x+w/2,y-10,v.toFixed(1)+"%",{class:"dlabel","text-anchor":"middle",fill:COL.loss});
-    txt(s,x+w/2,yFor(0)+22,lab,{class:"axis","text-anchor":"middle"});
-    txt(s,x+w/2,yFor(0)+42,LEADSIZE.share[i]+"% of games",{class:"axis","text-anchor":"middle"});
+    txt(s,x+w/2,yFor(0)+22,shareLabels?lab:LEADSIZE.shortLabel[i],{class:"axis","text-anchor":"middle"});
+    if(shareLabels)txt(s,x+w/2,yFor(0)+42,LEADSIZE.share[i]+"% of games",{class:"axis","text-anchor":"middle"});
     bindTip(rect,`<div class="t">Lead of ${lab} pawns</div>Leader loses <b>${v}%</b> of the `+
       `${LEADSIZE.n[i].toLocaleString("en-US")} games entering the middlegame this far ahead `+
       `(${LEADSIZE.share[i]}% of all entry-lead games).<br>Sustained-lead wins: <b>${LEADSIZE.sustained[i]}%</b>.`);
@@ -554,7 +557,7 @@ function renderC7(){
   const xFor=i=>L+(W-L-R)*(i/(RATINGS.length-1));
   grid(svg,L,W-R,yFor,[0,25,50,75],v=>v+"%");
   RATINGS.forEach((r,i)=>txt(svg,xFor(i),H-38,r,{class:"axis","text-anchor":"middle"}));
-  txt(svg,L+(W-L-R)/2,H-12,"ELO",{class:"axis","text-anchor":"middle"});
+  txt(svg,L+(W-L-R)/2,H-12,"Rating",{class:"axis","text-anchor":"middle"});
   // the misleading aggregate, drawn faint and dashed for contrast
   const dAgg=SUSTAGG.map((v,i)=>(i?"L":"M")+xFor(i)+","+yFor(v)).join(" ");
   el("path",{d:dAgg,fill:"none",stroke:COL.draw,"stroke-width":2.5,"stroke-dasharray":"7 5"},svg);
