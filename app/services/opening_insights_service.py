@@ -476,14 +476,44 @@ def _wrap_transition_row(
     """Wrap a raw SQL row from query_opening_transitions into a typed _TransitionRow.
 
     Derives entry_san_sequence from the prefixes dict and resulting_full_hash by
-    replaying the SAN sequence on a fresh chess.Board. Returns None when replay
-    fails (custom-FEN survivor from a chess.com thematic tournament or custom-position
-    "Let's Play!" game — ~176 of 344k prod ply-0 rows). The drop is recorded to
-    Sentry once per occurrence so we can monitor the rate without crashing the endpoint.
+    replaying the SAN sequence on a fresh chess.Board.
+
+    Returns None on either of two distinct, deliberately separate drop reasons:
+
+    1. No standard-start sample. Phase 210 (SEED-042) filters the sample aggregate
+       to `initial_fen IS NULL`, so a group in which EVERY game is custom-start
+       yields a NULL `sample_pair`. There is no replayable SAN path to this
+       position, so the group cannot be rendered.
+    2. Replay failure. A defensive residual — with (1) filtered upstream the
+       prefix should always be reachable, so this firing means something else is
+       wrong (a corrupt PGN, an unmarked custom start).
+
+    Both are expected, handled conditions rather than errors, so both report at
+    warning level (D-07). Keeping them as separate messages matters: collapsing
+    them would make the Sentry payload lie about which one fired.
     """
-    # sample_pair is ARRAY[ply, game_id] from one real row in the group (paired
-    # aggregate — independent MIN(ply)/MIN(game_id) would de-correlate under
-    # transposition). asyncpg returns it as a 2-element list.
+    # sample_pair is ARRAY[ply, game_id] from one real STANDARD-START row in the
+    # group (paired aggregate — independent MIN(ply)/MIN(game_id) would
+    # de-correlate under transposition). asyncpg returns it as a 2-element list,
+    # and a NULL aggregate as None (NOT an empty list — the guard must be
+    # `is None`, not a falsiness check on length).
+    if raw_row.sample_pair is None:
+        sentry_sdk.set_context(
+            "opening_insights_drop",
+            {
+                "entry_hash": int(raw_row.entry_hash),
+                "move_san": raw_row.move_san,
+                "n": int(raw_row.n),
+                "reason": "all_games_custom_start",
+            },
+        )
+        sentry_sdk.set_tag("source", "opening_insights")
+        sentry_sdk.capture_message(
+            "Opening transition dropped: no standard-start sample game",
+            level="warning",
+        )
+        return None
+
     sample_ply = int(raw_row.sample_pair[0])
     sample_game_id = int(raw_row.sample_pair[1])
     entry_san_sequence = prefixes.get((sample_game_id, sample_ply), [])
@@ -495,8 +525,18 @@ def _wrap_transition_row(
         board.push_san(raw_row.move_san)
         resulting_full_hash = _signed_full_hash(board)
     except (chess.IllegalMoveError, chess.InvalidMoveError, ValueError, AssertionError) as exc:
-        # Custom-FEN survivor: SAN prefix is unreachable from chess.Board().
-        # Drop this row silently and capture to Sentry for monitoring.
+        # SAN prefix is unreachable from chess.Board(). Phase 210 (SEED-042)
+        # removed the systematic cause (custom-start games being preferred as the
+        # sample representative), so this is now a defensive residual rather than
+        # the common path.
+        #
+        # Demoted from capture_exception to a warning-level capture_message
+        # (D-07): this models a handled, expected drop, and as an exception it
+        # escalated a non-bug into the issue list 74 times (FLAWCHESS-5E) while
+        # the two genuinely actionable production issues sat below it. Rate
+        # visibility is preserved; the escalation is not. Per CLAUDE.md the
+        # message carries no variables — those stay in set_context so grouping
+        # doesn't fragment.
         sentry_sdk.set_context(
             "opening_insights_drop",
             {
@@ -504,10 +544,15 @@ def _wrap_transition_row(
                 "move_san": raw_row.move_san,
                 "sample_game_id": sample_game_id,
                 "sample_ply": sample_ply,
+                "reason": "san_prefix_unreplayable",
+                "error": str(exc),
             },
         )
         sentry_sdk.set_tag("source", "opening_insights")
-        sentry_sdk.capture_exception(exc)
+        sentry_sdk.capture_message(
+            "Opening transition dropped: SAN prefix unreplayable from the standard start",
+            level="warning",
+        )
         return None
 
     return _TransitionRow(

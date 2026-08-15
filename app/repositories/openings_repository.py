@@ -44,9 +44,12 @@ HASH_COLUMN_MAP = {
 # chess.com thematic tournaments and chess.com custom-position "Let's Play!" games
 # that carry [SetUp "1"][FEN ...] PGN headers. These are NOT puzzles, NOT themed
 # events, and NOT chess variants — variants are already filtered at import in
-# app/services/normalization.py. The flat query no longer pre-filters them; instead,
-# the Python try/except in opening_insights_service._wrap_transition_row drops the
-# rare survivors gracefully (one Sentry capture per drop, never a 500).
+# app/services/normalization.py. The flat query does not pre-filter them, because
+# they legitimately reached these positions and belong in the W/D/L counts.
+# Phase 210 (SEED-042) instead marks them at import (games.initial_fen) and
+# excludes them from the sample-representative aggregate only, so the SAN prefix
+# is always replayable. _wrap_transition_row's guards remain for the residual
+# all-custom group (warning-level Sentry message, never a 500).
 #
 # STARTING_POSITION_HASH is no longer used by the production query path after this
 # refactor but is retained here for potential future callers (e.g. custom tooling
@@ -609,15 +612,22 @@ async def query_opening_transitions(
 
     Custom-FEN games (chess.com thematic tournaments and custom-position "Let's
     Play!" games with [SetUp "1"][FEN ...] PGN headers — ~176 of 344k prod
-    ply-0 rows, 0.05%) are NOT pre-filtered here. They pass the SQL but are
-    dropped in the Python service layer (opening_insights_service._wrap_transition_row)
-    via try/except around _replay_san_sequence.
+    ply-0 rows, 0.05%) are NOT excluded here: they legitimately reached these
+    positions and must keep contributing to n/w/d/l. Phase 210 (SEED-042)
+    excludes them from the *sample representative* aggregate only, so the SAN
+    prefix handed to the service layer is always replayable from a standard
+    board. Before that fix they were preferred as the representative (shallower
+    ply) and took the whole transition down with them.
 
     Returns one Row per surviving (entry_hash, move_san) pair with attrs:
         entry_hash: int        (gp.full_hash, never NULL in output)
         move_san: str          (candidate move SAN, never NULL)
-        sample_pair: list[int] (paired [ply, game_id] from one real row in the group;
-                                see comment on sample_pair below — for prefix lookup)
+        sample_pair: list[int] | None
+                               (paired [ply, game_id] from one real STANDARD-START
+                                row in the group; see comment on sample_pair below
+                                — for prefix lookup. NULL when every game in the
+                                group is custom-start, which the service layer
+                                drops.)
         n: int                 (count of distinct games)
         w: int, d: int, l: int (filtered counts)
         last_played_at: datetime | None
@@ -664,7 +674,22 @@ async def query_opening_transitions(
             # real row. PG ARRAY MIN is lexicographic, so the smallest array IS
             # one of the input arrays. Sorted (ply, game_id) so smaller ply wins
             # the tiebreak — gives the shallowest reachable prefix.
-            func.min(pg_array([GamePosition.ply, GamePosition.game_id])).label("sample_pair"),
+            #
+            # Phase 210 (SEED-042): FILTER to standard-start games. A custom-FEN
+            # game reaches a shared entry position at a SHALLOWER ply than
+            # standard games (it skips the opening half-moves baked into its
+            # [SetUp]/[FEN] header), so an unfiltered MIN(ply) systematically
+            # preferred it as the representative — and its SAN prefix is
+            # unreplayable from chess.Board(), which dropped the ENTIRE
+            # transition, every game included (prod: a 50-game W34/D0/L16 Evans
+            # Gambit line, Sentry FLAWCHESS-5E). The filter is on THIS aggregate
+            # ONLY: custom-start games legitimately reached the position and must
+            # keep contributing to n/w/d/l below. Yields NULL when every game in
+            # the group is custom-start — handled explicitly in
+            # opening_insights_service._wrap_transition_row.
+            func.min(pg_array([GamePosition.ply, GamePosition.game_id]))
+            .filter(Game.initial_fen.is_(None))
+            .label("sample_pair"),
             n_games.label("n"),
             wins.label("w"),
             draws.label("d"),

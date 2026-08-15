@@ -129,6 +129,16 @@ class Game(Base):
 
     # Game content
     pgn: Mapped[str] = mapped_column(Text, nullable=False)
+    # Phase 210 (SEED-042): the game's starting position when it is NOT the
+    # standard one. NULL means the standard start, so `initial_fen IS NULL` is
+    # the canonical "safe to replay from chess.Board()" predicate — that is what
+    # query_opening_transitions filters its sample representative on, and what
+    # /analysis game mode reads to seed a custom-start game's board.
+    # Populated by normalization.extract_initial_fen (chess.com/lichess, from the
+    # [SetUp "1"][FEN ...] header pair) and by normalize_pasted_game (from the
+    # already-derived root). Deliberately NOT indexed: the IS NULL predicate
+    # matches ~99.95% of rows and Game is already joined in its only reader.
+    initial_fen: Mapped[str | None] = mapped_column(Text)
 
     # Result — PostgreSQL ENUM types enforce valid values at the DB level
     result: Mapped[str] = mapped_column(

@@ -39,7 +39,7 @@ Step 0) from **READ** (still inference from the source alone):
 | Requirement | Where | Status |
 |---|---|---|
 | Manifest `display: 'standalone'` (precondition for an iOS installed web app) | `frontend/vite.config.ts:65` | READ |
-| SW always calls `showNotification` on `push` (iOS enforces `userVisibleOnly` and revokes on silent pushes) | `frontend/public/push-sw.js` | **RUN** |
+| SW always calls `showNotification` on `push` (iOS enforces `userVisibleOnly` and revokes on silent pushes) | `../../../frontend/public/push-sw.js` | **RUN** |
 | VAPID JWT `aud = scheme://hostname` → `https://web.push.apple.com` | `app/services/push_crypto.py:149` | **RUN** |
 | `sub` is a `mailto:` (Apple rejects a missing/invalid `sub` with 400 BadJwtToken) | `push_crypto.py:151`, `VAPID_SUBJECT` default `push@flawchess.com` | **RUN** |
 | ES256, `exp` 12h (Apple rejects `exp` > 24h) | `push_crypto.py:154`, `_VAPID_EXPIRATION_SECONDS` | **RUN** |
@@ -78,8 +78,8 @@ Evidence chain, which is worth reusing because none of it depends on seeing the 
 | no `Train reminder tick` line in `docker compose logs` | absent over 45 min | `pruned == 0` **and** `failed == 0` |
 
 The third row is the load-bearing one and it is *inverted* logic, so it needs stating: the
-app configures no logging at all (`app/main.py` only calls `getLogger`; no `basicConfig`,
-no `dictConfig`, no `--log-level` in `deploy/`), so the root logger sits at uvicorn's
+app configures no logging at all (`../../../app/main.py` only calls `getLogger`; no `basicConfig`,
+no `dictConfig`, no `--log-level` in `../../../deploy`), so the root logger sits at uvicorn's
 default WARNING. App-level INFO never reaches docker logs. The tick summary logs at WARNING
 **iff** `pruned > 0 or failed > 0` (`train_reminder_service.py:276`). Its *absence* is
 therefore positive evidence of a clean fan-out, not evidence the job didn't run.
@@ -192,4 +192,4 @@ beyond the single gesture-driven one `push.ts` exists to guarantee.
   verification depends on.
 - Phase 202 `202-CONTEXT.md:158-164` — the original "accepted, known gap: an iPhone user sees
   no hint the feature exists" decision, which Phase 203's `ios-tabbed` state later closed.
-- `docs/push-vapid-rotation-runbook.md` — unrelated to iOS, but the same send path.
+- `../../../docs/push-vapid-rotation-runbook.md` — unrelated to iOS, but the same send path.

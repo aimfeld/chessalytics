@@ -69,6 +69,7 @@ async def _seed_game_with_positions(
     time_control_seconds: int = 600,
     force_ply0_hash: int | None = None,
     skip_auto_ply0: bool = False,
+    initial_fen: str | None = None,
 ) -> int:
     """Insert one Game and its GamePositions; return game_id.
 
@@ -80,8 +81,10 @@ async def _seed_game_with_positions(
     pass `skip_auto_ply0=True`.
 
     Note: the flat query_opening_transitions no longer pre-filters on ply-0 hash
-    (that was the Phase 71 CTE filter). Custom-FEN games pass the SQL and are
-    dropped later in the Python service layer.
+    (that was the Phase 71 CTE filter). Custom-FEN games pass the SQL and keep
+    contributing to the W/D/L counts; Phase 210 (SEED-042) excludes them from the
+    sample-representative aggregate only, keyed on `games.initial_fen`, which
+    tests set via the `initial_fen` argument.
     """
     if played_at is None:
         played_at = datetime.datetime.now(tz=datetime.timezone.utc)
@@ -100,6 +103,7 @@ async def _seed_game_with_positions(
         rated=True,
         white_username="testuser",
         black_username="opponent",
+        initial_fen=initial_fen,
     )
     game.played_at = played_at
     db_session.add(game)
@@ -1431,6 +1435,156 @@ async def test_query_handles_custom_fen_ply0_gracefully(db_session: AsyncSession
     sample_ply, sample_game_id = row.sample_pair
     assert sample_ply == 3
     assert sample_game_id is not None
+
+
+# ---------------------------------------------------------------------------
+# Phase 210 (SEED-042): custom-start games must not evict whole transitions
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_custom_start_game_does_not_win_the_sample_but_keeps_its_counts(
+    db_session: AsyncSession,
+) -> None:
+    """Regression for the production eviction (Sentry FLAWCHESS-5E).
+
+    A custom-start game reaches a shared entry position at a SHALLOWER ply than
+    standard games, because the opening half-moves are baked into its
+    [SetUp]/[FEN] header. `MIN(ARRAY[ply, game_id])` is therefore systematically
+    won by the custom-start game whenever one exists for that entry_hash — and
+    its SAN prefix is unreplayable from a standard board, so _wrap_transition_row
+    dropped the ENTIRE transition. In prod that silently deleted a 50-game
+    W34/D0/L16 Evans Gambit line from the user's insights.
+
+    Two independent things must hold, and the pairing is the point (landmine 3):
+
+    1. The sample representative is a STANDARD-START game, at the deeper ply.
+    2. The counts are UNCHANGED — the custom-start game legitimately reached this
+       position and still contributes to n/w/d/l. A fix that excluded the row
+       entirely would also pass assertion 1, which is why the counts are asserted
+       against the exact seeded totals rather than just "greater than zero".
+    """
+    user_id = 10
+    H_ENTRY = 610003
+    STANDARD_ENTRY_PLY = 5
+    CUSTOM_ENTRY_PLY = 1  # shallower — this is what used to win MIN()
+
+    # Seed the custom-start game FIRST so it also holds the smallest game_id.
+    # Both tiebreakers (ply, then game_id) therefore favour it: if the filter is
+    # missing or applied to the wrong aggregate, it wins the sample.
+    custom_game_id = await _seed_game_with_positions(
+        db_session,
+        user_id=user_id,
+        result="1-0",  # loss for black
+        user_color="black",
+        positions=[
+            (CUSTOM_ENTRY_PLY, H_ENTRY, "Nc6"),
+            (2, 610004, None),
+        ],
+        force_ply0_hash=610100,  # non-standard ply-0 position
+        initial_fen="r1bqkbnr/pppp1ppp/2n5/4p3/2B1P3/5N2/PPPP1PPP/RNBQK2R b KQkq - 0 4",
+    )
+
+    standard_game_ids: list[int] = []
+    for _ in range(OPENING_INSIGHTS_MIN_GAMES_PER_CANDIDATE):
+        gid = await _seed_game_with_positions(
+            db_session,
+            user_id=user_id,
+            result="1-0",  # loss for black
+            user_color="black",
+            positions=[
+                (1, 610001, "c5"),
+                (2, 610002, "Nf3"),
+                (3, 610005, "d6"),
+                (4, 610006, "d4"),
+                (STANDARD_ENTRY_PLY, H_ENTRY, "Nc6"),
+                (6, 610007, None),
+            ],
+        )
+        standard_game_ids.append(gid)
+
+    rows = await query_opening_transitions(
+        db_session,
+        user_id=user_id,
+        color="black",
+        **_default_call_args("black"),
+    )
+
+    target = [r for r in rows if r.entry_hash == H_ENTRY]
+    assert len(target) == 1, "the transition must survive, not be evicted"
+    row = target[0]
+
+    # (1) The representative is a standard-start game at the deeper ply.
+    assert row.sample_pair is not None, "a standard-start sample exists in this group"
+    sample_ply, sample_game_id = row.sample_pair
+    assert sample_ply == STANDARD_ENTRY_PLY, (
+        f"sample must come from a standard-start game at ply {STANDARD_ENTRY_PLY}, "
+        f"got ply {sample_ply} — the custom-start game won MIN() again"
+    )
+    assert sample_game_id != custom_game_id
+    assert sample_game_id == min(standard_game_ids)
+
+    # (2) The counts still include the custom-start game.
+    expected_n = OPENING_INSIGHTS_MIN_GAMES_PER_CANDIDATE + 1
+    assert row.n == expected_n, (
+        f"custom-start games must keep contributing to the counts: expected n={expected_n} "
+        f"({OPENING_INSIGHTS_MIN_GAMES_PER_CANDIDATE} standard + 1 custom), got {row.n}"
+    )
+    assert row.l == expected_n, "all seeded games are losses for black"
+    assert row.w == 0
+    assert row.d == 0
+
+
+@pytest.mark.asyncio
+async def test_all_custom_start_group_yields_null_sample_pair(
+    db_session: AsyncSession,
+) -> None:
+    """When EVERY game in a group is custom-start, the filtered aggregate is NULL.
+
+    Phase 210 (SEED-042) D-03. `MIN(...) FILTER (WHERE initial_fen IS NULL)`
+    evaluates to NULL when the filter excludes every row, and asyncpg surfaces
+    that as Python None rather than an empty list. This is the seed's stated
+    residual — the group has no replayable SAN path and cannot be rendered — so
+    the SQL contract is "NULL sample, counts intact", and dropping it is the
+    service layer's job (see
+    test_row_wrapping_drops_all_custom_group_without_raising).
+    """
+    user_id = 10
+    H_ENTRY = 620003
+
+    for _ in range(OPENING_INSIGHTS_MIN_GAMES_PER_CANDIDATE):
+        await _seed_game_with_positions(
+            db_session,
+            user_id=user_id,
+            result="1-0",  # loss for black
+            user_color="black",
+            positions=[
+                (1, 620001, "c5"),
+                (2, 620002, "Nf3"),
+                (3, H_ENTRY, "Nc6"),
+                (4, 620004, None),
+            ],
+            force_ply0_hash=620100,
+            initial_fen="r1bqkbnr/pppp1ppp/2n5/4p3/2B1P3/5N2/PPPP1PPP/RNBQK2R b KQkq - 0 4",
+        )
+
+    rows = await query_opening_transitions(
+        db_session,
+        user_id=user_id,
+        color="black",
+        **_default_call_args("black"),
+    )
+
+    target = [r for r in rows if r.entry_hash == H_ENTRY]
+    assert len(target) == 1
+    row = target[0]
+
+    assert row.sample_pair is None, (
+        "with no standard-start game in the group the filtered MIN must be NULL, "
+        f"got {row.sample_pair!r}"
+    )
+    # The counts are still computed — only the sample is unavailable.
+    assert row.n == OPENING_INSIGHTS_MIN_GAMES_PER_CANDIDATE
 
 
 # ---------------------------------------------------------------------------

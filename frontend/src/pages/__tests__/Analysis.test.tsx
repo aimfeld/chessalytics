@@ -857,6 +857,9 @@ function buildGame(overrides: Partial<GameFlawCard> = {}): GameFlawCard {
     ],
     phase_transitions: { middlegame_ply: null, endgame_ply: null },
     moves: ['e4'],
+    // Phase 210 (SEED-042): null = the standard start, which is what every
+    // fixture here except the custom-start test below wants.
+    initial_fen: null,
     active_eval_status: null,
     // Phase 172 (SEED-106 D-06): 0 = no known opening prefix — every ply is
     // eligible for the sweep/gem cascade by default. Every eval_series entry
@@ -2443,5 +2446,55 @@ describe('Analysis same-page game switch (Phase 208 CR-01)', () => {
 
     await waitFor(() => expect(moveListText()).toContain('d4'));
     expect(moveListText()).not.toContain('e4');
+  });
+});
+
+// ── Phase 210 (SEED-042): custom-start games seed from their own root ────────
+//
+// Game mode used to call loadMainLine(moves, STARTING_FEN) unconditionally. For a
+// chess.com thematic / custom-position game (or a pasted [SetUp] PGN) those SANs
+// are illegal from the standard start, so chess.js 1.4 threw and the whole
+// /analysis page unmounted through the ErrorBoundary (Sentry FLAWCHESS-96).
+describe('Custom-start games in game mode (Phase 210, SEED-042)', () => {
+  // Evans Gambit thematic position after 4. b4 — Black to move. This is the
+  // family of positions behind the production reports.
+  const EVANS_GAMBIT_FEN = 'r1bqk1nr/pppp1ppp/2n5/2b1p3/1PB1P3/5N2/P1PP1PPP/RNBQK2R b KQkq b3 0 4';
+
+  function moveListText(): string {
+    return screen.getByTestId('analysis-variation-tree').textContent ?? '';
+  }
+
+  beforeEach(() => {
+    libraryGameById.clear();
+    libraryGameState.data = undefined;
+  });
+
+  it('seeds from the game initial_fen so its mainline actually loads', async () => {
+    // Bxb4 and c3 are legal from EVANS_GAMBIT_FEN and illegal from the standard
+    // start — which is exactly what makes this a regression test rather than a
+    // tautology. Under the old hardcoded STARTING_FEN the move list is empty.
+    libraryGameState.data = buildGame({
+      moves: ['Bxb4', 'c3'],
+      ply_count: 2,
+      user_color: 'black',
+      initial_fen: EVANS_GAMBIT_FEN,
+    });
+
+    renderAnalysis('/analysis?game_id=1');
+
+    await waitFor(() => expect(moveListText()).toContain('Bxb4'));
+    expect(moveListText()).toContain('c3');
+  });
+
+  it('leaves standard-start games on the standard start (null initial_fen)', async () => {
+    // The 99.95% path: `initial_fen ?? STARTING_FEN` must be byte-identical to
+    // the old behavior, so this guards against "fixed the rare case, broke the
+    // common one".
+    libraryGameState.data = buildGame({ moves: ['e4', 'e5'], ply_count: 2 });
+
+    renderAnalysis('/analysis?game_id=1');
+
+    await waitFor(() => expect(moveListText()).toContain('e4'));
+    expect(moveListText()).toContain('e5');
   });
 });

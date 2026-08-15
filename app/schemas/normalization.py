@@ -49,6 +49,12 @@ class NormalizedGame(BaseModel):
     white_accuracy: float | None
     black_accuracy: float | None
     played_at: datetime.datetime | None
+    # Phase 210 (SEED-042): the game's starting position when it is NOT the
+    # standard one (chess.com thematic tournaments and custom-position "Let's
+    # Play!" games carry [SetUp "1"][FEN ...] but use standard rules, so the
+    # variant filter passes them). None means the standard start — see
+    # normalization.extract_initial_fen, which is the only producer.
+    initial_fen: str | None = None
     # per-game base clock fields (optional, default None)
     base_time_seconds: int | None = None
     increment_seconds: float | None = None

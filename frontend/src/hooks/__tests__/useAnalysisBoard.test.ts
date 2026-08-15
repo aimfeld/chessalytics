@@ -43,6 +43,7 @@
 
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { renderHook, act } from '@testing-library/react';
+import { Chess } from 'chess.js';
 import { useAnalysisBoard } from '../useAnalysisBoard';
 import type { MoveNode, NodeId, AnalysisBoardState } from '../useAnalysisBoard';
 import { playSound, unlockAudio } from '@/lib/sounds';
@@ -853,5 +854,94 @@ describe('useAnalysisBoard', () => {
     act(() => { result.current.makeMove(MOVE_NF6.from, MOVE_NF6.to); });
 
     expect(mockUnlockAudio).toHaveBeenCalledTimes(1); // still just once
+  });
+
+  // ── Phase 210 (SEED-042, CUSTOM-01): illegal-SAN replay containment ──────
+  //
+  // chess.js 1.4.0's move() THROWS on illegal SAN rather than returning null,
+  // so the old `if (!move) break` guards in loadMainLine/insertPvLine were dead
+  // code and the throw escaped into React. Confirmed in production as Sentry
+  // FLAWCHESS-96 ("Error: Invalid move: Nd3", transaction /analysis): a
+  // custom-start game's SANs, replayed from the standard start, unmounted the
+  // whole page via the ErrorBoundary.
+  //
+  // Both tests below assert two things at once: the throw is contained, AND the
+  // legal prefix is retained rather than discarded.
+
+  it('loadMainLine contains an illegal SAN: no throw, legal prefix retained', () => {
+    const { result } = renderHook(() => useAnalysisBoard(ROOT_FEN));
+
+    // 'Nf3' is legal from ROOT_FEN; 'Nd3' is not (no knight can reach d3) —
+    // the same SAN that crashed production.
+    expect(() => {
+      act(() => {
+        result.current.loadMainLine(['Nf3', 'Nd3', 'Bc4'], ROOT_FEN);
+      });
+    }).not.toThrow();
+
+    // The line stops at the last legal move rather than being empty or partial-
+    // then-corrupt: exactly one node, and the board sits on it.
+    expect(result.current.mainLine).toHaveLength(1);
+    const seededId: NodeId = result.current.mainLine[0]!;
+    expect(result.current.nodes.get(seededId)?.san).toBe('Nf3');
+    expect(result.current.currentNodeId).toBe(seededId);
+  });
+
+  it('loadMainLine contains an illegal SAN at index 0: no throw, empty line, hook still usable', () => {
+    const { result } = renderHook(() => useAnalysisBoard(ROOT_FEN));
+
+    // The full-eviction shape: NOTHING in the sequence is legal from this root.
+    expect(() => {
+      act(() => {
+        result.current.loadMainLine(['Nd3', 'Bxb4'], ROOT_FEN);
+      });
+    }).not.toThrow();
+
+    expect(result.current.mainLine).toHaveLength(0);
+
+    // Degraded, not broken — the board still accepts a legal move afterwards.
+    act(() => { result.current.makeMove(MOVE_NF3.from, MOVE_NF3.to); });
+    expect(result.current.currentNodeId).not.toBeNull();
+  });
+
+  it('loadMainLine falls back to the standard start when the root FEN is unparseable', () => {
+    const { result } = renderHook(() => useAnalysisBoard(ROOT_FEN));
+
+    // `new Chess(fen)` also throws, and it sits OUTSIDE the per-move guard. The
+    // root now arrives from games.initial_fen (nullable free-text), so a bad
+    // value there would crash the page exactly like the illegal-SAN bug.
+    expect(() => {
+      act(() => {
+        result.current.loadMainLine(['e4', 'e5'], 'not-a-fen');
+      });
+    }).not.toThrow();
+
+    // Fell back to the standard start, so the SANs replay normally from there,
+    // and the stored root is the one actually used — never the bad argument.
+    expect(result.current.mainLine).toHaveLength(2);
+    expect(result.current.rootFen).toBe(new Chess().fen());
+  });
+
+  it('insertPvLine contains an illegal SAN without throwing inside its setState updater', () => {
+    const { result } = renderHook(() => useAnalysisBoard(ROOT_FEN));
+
+    act(() => { result.current.loadMainLine(MAIN_LINE_SANS, ROOT_FEN); });
+    const mainLineBefore = [...result.current.mainLine];
+    const forkNode: NodeId = mainLineBefore[0]!; // after Nf3, black to move
+
+    // 'Nf6' is legal for black there; 'Qxq9' is not a parseable move at all.
+    // A throw here is worse than in loadMainLine: it escapes from inside a
+    // setState updater, so it corrupts React state rather than just the board.
+    expect(() => {
+      act(() => {
+        result.current.insertPvLine(['Nf6', 'Qxq9'], forkNode);
+      });
+    }).not.toThrow();
+
+    // The legal prefix was grafted and the main line is untouched.
+    expect(result.current.mainLine).toEqual(mainLineBefore);
+    const pvIds = [...result.current.pvNodeIds];
+    expect(pvIds).toHaveLength(1);
+    expect(result.current.nodes.get(pvIds[0]!)?.san).toBe('Nf6');
   });
 });

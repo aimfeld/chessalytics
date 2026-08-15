@@ -2,30 +2,39 @@
 gsd_state_version: 1.0
 milestone: v2.12
 milestone_name: Train Reliability & Grading Agreement
-current_phase: 209
-current_phase_name: traffic-surge-quick-wins
-status: executing
-stopped_at: Phase 209 added to ROADMAP.md — next /gsd-plan-phase 209
-last_updated: "2026-08-10T18:04:59.199Z"
-last_activity: 2026-08-10
-last_activity_desc: Added Phase 209 (Traffic-Surge Quick Wins, SEED-146 quick-win cut) to ROADMAP.md
+current_phase: 210
+current_phase_name: custom-start-games
+status: complete
+stopped_at: Phase 210 complete on branch phase-210-custom-start-games — full pre-merge gate green, ready to squash-merge to main
+last_updated: "2026-08-15T09:10:00.000Z"
+last_activity: 2026-08-15
+last_activity_desc: Closed Phase 209 (Cloudflare cutover verified live) and completed Phase 210 (SEED-042 Tier 1 + /analysis crash containment)
 progress:
-  total_phases: 4
-  completed_phases: 3
-  total_plans: 14
-  completed_plans: 10
+  total_phases: 5
+  completed_phases: 5
+  total_plans: 17
+  completed_plans: 17
 ---
 
 # Project State: FlawChess
 
 ## Current Position
 
-Phase: 209 (traffic-surge-quick-wins) — EXECUTING
-Plan: 1 of 4
-Status: Executing Phase 209
+Phase: 210 (custom-start-games) — COMPLETE, awaiting squash-merge
+Plan: 3 of 3
+Status: Full pre-merge gate green on branch `phase-210-custom-start-games` (backend 4319 passed / 19 skipped, frontend 3480 passed, ruff/ty/eslint/tsc/knip/build clean). Not yet merged to main, not yet deployed.
 
-Previous phase: 208 (analysis-fen-pgn-paste) — SHIPPED, squash-merged to main (432075a03), not yet deployed
-Last activity: 2026-08-13 — Completed quick task 260813-oae: Game-start sound when a bot game begins, plus re-picked Move/Capture clips
+Previous phase: 209 (traffic-surge-quick-wins) — COMPLETE 2026-08-15. The last open plan
+(209-04, the Cloudflare CDN cutover) was operator work; verified live: flawchess.com is on
+Cloudflare nameservers, `maia3_simplified.onnx` and `stockfish-18-lite-single.wasm` both
+return `cf-cache-status: HIT` while still carrying the origin's `max-age=2592000`, and
+`maia-worker.js` still returns `cache-control: no-cache`.
+
+Last activity: 2026-08-15 — Phase 210 (SEED-042 Tier 1 + the confirmed /analysis crash).
+`games.initial_fen` added and backfilled in-migration, the opening-transition sample
+representative filtered to standard-start games, four unguarded `chess.move()` replay sites
+contained, and `/analysis` game mode seeded from the game's real root. Every production
+change mutation-tested. See `phases/210-custom-start-games/210-SUMMARY.md`.
 
 Phase 208 shipped with the full pre-merge gate green (backend 4252 passed, frontend
 3411 passed, ruff/ty/eslint/tsc/knip clean). Verification is `human_needed`: 5 UAT

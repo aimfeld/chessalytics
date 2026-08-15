@@ -19,7 +19,7 @@ password hash in our own service code, a CDN in front of the vendored ML runtime
 and a semaphore on the post-import percentile computes.
 
 Survival, not throughput. No migration expected. The seed
-(`.planning/seeds/SEED-146-traffic-surge-readiness.md`) carries measured facts verified
+(`../../seeds/closed/SEED-146-traffic-surge-readiness.md`) carries measured facts verified
 2026-08-10 — do not re-derive them — plus one **correction block** (also dated 2026-08-10)
 that supersedes its item-2 funnel claim; see D-02.
 

@@ -334,6 +334,7 @@ def normalize_chesscom_game(game: dict, username: str, user_id: int) -> Normaliz
         white_accuracy=white_accuracy,
         black_accuracy=black_accuracy,
         played_at=played_at,
+        initial_fen=extract_initial_fen(pgn_str),
     )
 
 
@@ -488,6 +489,7 @@ def normalize_lichess_game(game: dict, username: str, user_id: int) -> Normalize
         white_blunders=white_analysis.get("blunder"),
         black_blunders=black_analysis.get("blunder"),
         played_at=played_at,
+        initial_fen=extract_initial_fen(pgn),
     )
 
 
@@ -712,6 +714,10 @@ def normalize_flawchess_game(
         white_accuracy=None,
         black_accuracy=None,
         played_at=datetime.datetime.now(datetime.timezone.utc),
+        # Phase 210 (SEED-042): bot games are always played from the standard
+        # start — the Bots page has no custom-position entry point — so this
+        # stays NULL rather than being derived from the generated PGN.
+        initial_fen=None,
     )
 
 
@@ -756,6 +762,72 @@ def canonical_root_fen(fen: str) -> str:
     """
     fields = fen.split()
     return " ".join(fields[:3])
+
+
+# Phase 210 (SEED-042): the [SetUp "1"]/[FEN "..."] header pair that marks a
+# PGN as starting from a non-standard position. Both are required — per the PGN
+# spec a [FEN] tag without [SetUp "1"] does not establish a custom start, and
+# some producers emit a stray [FEN] alongside a standard game.
+_PGN_SETUP_MARKER_RE = re.compile(r'\[\s*SetUp\s+"1"\s*\]')
+_PGN_FEN_HEADER_RE = re.compile(r'\[\s*FEN\s+"([^"]*)"\s*\]')
+
+
+def non_standard_root_fen(fen: str) -> str | None:
+    """Return *fen* if it is a genuinely non-standard start, else None (D-05).
+
+    Phase 210 (SEED-042). The single place that decides "is this root actually
+    custom?", shared by `extract_initial_fen` (header-sourced, chess.com and
+    lichess) and `normalize_pasted_game` (board-sourced, already parsed). An
+    unparseable FEN is treated as standard: NULL is the safe reading, since the
+    game still participates in position matching and only loses its eligibility
+    as a SAN-replay root.
+
+    Compares via `canonical_root_fen` so the halfmove clock, fullmove number and
+    the inconsistently-emitted en-passant field can't make a standard start look
+    custom.
+    """
+    try:
+        chess.Board(fen)
+    except ValueError:
+        return None
+
+    if canonical_root_fen(fen) == canonical_root_fen(chess.STARTING_FEN):
+        return None
+
+    return fen
+
+
+def extract_initial_fen(pgn: str) -> str | None:
+    """Return the game's non-standard starting FEN, or None for a standard start.
+
+    Phase 210 (SEED-042). `games.initial_fen IS NULL` is the canonical "this game
+    starts from the standard position" predicate, so this returns None for every
+    game that is *effectively* standard, not merely for games lacking the header:
+
+    - No `[SetUp "1"]` marker, or no `[FEN]` header → None.
+    - A `[SetUp "1"]`/`[FEN]` pair naming the standard starting position → None
+      (D-05). Producers do emit this, and such a game is not custom-start: it
+      must stay eligible as an opening-transition sample representative.
+    - An unparseable FEN → None rather than a raise (a malformed header is not
+      worth failing an import over, and NULL is the safe reading: the game keeps
+      contributing to position matching, it just isn't trusted as a SAN root).
+
+    Comparison uses `canonical_root_fen` so the halfmove clock, fullmove number
+    and the inconsistently-emitted en-passant field can't make a standard start
+    look custom.
+
+    This is the single source of truth for the header shape. The Phase 210
+    migration's SQL backfill mirrors it and is pinned by a test asserting the two
+    agree on the same inputs (D-06).
+    """
+    if not _PGN_SETUP_MARKER_RE.search(pgn):
+        return None
+
+    match = _PGN_FEN_HEADER_RE.search(pgn)
+    if match is None:
+        return None
+
+    return non_standard_root_fen(match.group(1).strip())
 
 
 def pasted_game_identity_hash(root_fen: str, sans: Sequence[str]) -> str:
@@ -977,4 +1049,10 @@ def normalize_pasted_game(
         # — a pasted historical game must carry its own date; today's date
         # would sort it wrongly in the Library and misrepresent the game.
         played_at=parse_pgn_played_at(game.headers),
+        # Phase 210 (SEED-042): root_fen is already derived from game.board()
+        # above (WR-02, honoring [SetUp]/[FEN]) for the identity hash — persist
+        # it here too, so a pasted custom-start game seeds /analysis from its own
+        # root. Board-sourced rather than header-sourced, so it only needs the
+        # standard-start check, not the header parse.
+        initial_fen=non_standard_root_fen(root_fen),
     )

@@ -169,6 +169,8 @@
 | 206. Train Warm-Up Sessions & Sharp Filler Pool (SEED-140, unassigned) | 3/3 | Complete    | 2026-08-07 |
 | 207. Self-Serve Password Reset (SEED-143, unassigned) | 3/3 | Complete    | 2026-08-08 |
 | 208. Paste a FEN or PGN on /analysis (SEED-144, unassigned) | 4/4 | Complete    | 2026-08-08 |
+| 209. Traffic-Surge Quick Wins (SEED-146, unassigned) | 4/4 | Complete    | 2026-08-15 |
+| 210. Custom-Start Games — Crash Containment & Insight Eviction (SEED-042, unassigned) | 3/3 | Complete    | 2026-08-15 |
 
 ## Active Phases (unassigned milestone)
 
@@ -402,7 +404,7 @@ Plans:
 
 **Requirements**: SURGE-01..SURGE-07 (minted at planning, one per Success Criterion below in order; traceability table in the phase's `-01-PLAN.md` § Requirements — this phase predates its milestone's REQUIREMENTS.md)
 
-**Source**: [SEED-146](../seeds/SEED-146-traffic-surge-readiness.md) — planted 2026-08-10 during `/gsd-explore` ("what happens if 100 users import simultaneously"). The seed carries **measured facts verified 2026-08-10 (do not re-derive)**: 65.9 ms Argon2id hash, 5.80 ms/game PGN processing, prod/dev core parity, the 1,111.7 ms `compute_stage_a` query, per-file asset sizes, and estimated ceilings. It also carries the ranked fix list, traps, and rejected alternatives (Web Push readiness signal, staging/load-test rig, vertical scaling) — all binding here.
+**Source**: [SEED-146](../seeds/closed/SEED-146-traffic-surge-readiness.md) — planted 2026-08-10 during `/gsd-explore` ("what happens if 100 users import simultaneously"). The seed carries **measured facts verified 2026-08-10 (do not re-derive)**: 65.9 ms Argon2id hash, 5.80 ms/game PGN processing, prod/dev core parity, the 1,111.7 ms `compute_stage_a` query, per-file asset sizes, and estimated ceilings. It also carries the ranked fix list, traps, and rejected alternatives (Web Push readiness signal, staging/load-test rig, vertical scaling) — all binding here.
 
 **Scope** (the quick-win cut, decided with the user 2026-08-10):
 
@@ -441,9 +443,101 @@ Plans:
 - [x] 209-01-PLAN.md — Guest-promotion `to_thread` + percentile-compute semaphore, plus the phase requirement traceability table and mutation-test ledger (wave 1)
 - [x] 209-02-PLAN.md — Global import concurrency cap, in-memory `QUEUED` state, `started_at` re-stamp for the reaper exemption, and the bare queued label (wave 1)
 - [x] 209-03-PLAN.md — `useReadiness` backoff ladder + 30-minute backoff budget, with the emitted interval sequence as the tested artifact (wave 1)
-- [ ] 209-04-PLAN.md — Cloudflare CDN cutover runbook + operator checkpoint (no executor DNS actions) (wave 1)
+- [x] 209-04-PLAN.md — Cloudflare CDN cutover runbook + operator checkpoint (no executor DNS actions) (wave 1) — operator executed the cutover; verified live 2026-08-15: `flawchess.com` NS are `tate`/`julissa.ns.cloudflare.com`, `maia3_simplified.onnx` and `stockfish-18-lite-single.wasm` both return `cf-cache-status: HIT` while still carrying the origin's `max-age=2592000`, and `maia-worker.js` still returns `cache-control: no-cache` (`cf-cache-status: EXPIRED` — stored but revalidated against origin on every request, never served stale)
 
 **UI hint**: minimal — a "queued" state on the existing import progress surface and whatever the poll backoff needs (likely nothing visible). No new pages or components.
+
+### Phase 210: Custom-Start Games — Crash Containment & Insight Eviction
+
+**Goal**: A game that does not start from the standard chess position stops breaking two
+unrelated surfaces. `/analysis` no longer white-screens when it tries to replay such a game
+(confirmed in prod, Sentry FLAWCHESS-96), and `/api/insights/openings` no longer drops whole
+aggregated transitions — 50-game lines vanishing because the one sample game picked to
+render the move path happened to be custom-start (Sentry FLAWCHESS-5E, 74 events).
+
+**Depends on**: nothing. Phase 208 (`normalize_pasted_game`) already derives a root FEN for
+pasted PGNs but never persists it — this phase is what gives it somewhere to live.
+
+**Requirements**: CUSTOM-01..CUSTOM-06 (minted at planning, one per Success Criterion below in
+order; traceability table in `210-01-PLAN.md` § Requirements — this phase predates its
+milestone's REQUIREMENTS.md)
+
+**Source**: [SEED-042](../seeds/SEED-042-custom-fen-games-evict-opening-transitions.md) —
+planted 2026-06-12, revised 2026-08-06 and 2026-08-15. The seed carries a **root cause
+confirmed in code, not inferred**, and locked design decisions that stand in for a research
+pass: `initial_fen TEXT NULL` over `has_custom_start BOOL`, an aggregate `FILTER` on the
+sample selection over whole-row exclusion, and a PGN-sourced backfill over re-import. Verified
+still accurate against the tree on 2026-08-15 (chess.js is 1.4.0; the repository aggregate and
+both dead guards are unchanged).
+
+**Scope** — the seed's **Tier 1 plus the containment fix**, in three independently shippable slices:
+
+- **Slice 1 — frontend containment (no backend dependency).** `chess.js` 1.4.0's `move()`
+  *throws* on illegal SAN; the `if (!move) break` guards at `useAnalysisBoard.ts:399`
+  (`loadMainLine`, the confirmed crash site) and `:474` (`insertPvLine`, which throws inside a
+  `setState` updater) are therefore dead code. Replace with try/catch + `break`, matching the
+  already-correct precedents in `treeCommon.ts:222` / `analysisUrl.ts:58`. Fold in the same
+  latent pattern at `useChessGame.ts:147` and `useBotGame.ts:299`.
+- **Slice 2 — `games.initial_fen` and the eviction fix.** Nullable `TEXT` column (metadata-only
+  add, no table rewrite), populated at import from the `[SetUp "1"]`/`[FEN ...]` header pair in
+  **all** normalizer paths that can carry one, backfilled from the stored `games.pgn` in the
+  same migration (~176 prod rows). Then filter the sample-representative aggregate in
+  `query_opening_transitions` to standard-start games only, leaving the W/D/L counts untouched.
+- **Slice 3 — plumb the real root through.** Carry `initial_fen` on the library game-detail
+  payload so `/analysis` game mode seeds from the game's actual starting position instead of
+  the hardcoded `STARTING_FEN`, upgrading slice 1's "degrade gracefully" to "actually works".
+
+**Locked constraints (do not re-open)**:
+
+1. **Do NOT exclude custom-start games from the aggregate.** They legitimately reached the
+   position and must keep contributing to W/D/L. Only their use as the SAN-path *sample
+   representative* is the bug. The counts before and after this phase must be identical.
+2. **Do NOT drop custom-FEN games at import.** They are valid standard-rules games that
+   correctly participate in position matching for openings and endgames.
+3. **Tier 2 stays deferred** (user decision 2026-08-15): threading a `rootFen` through
+   `useChessGame`'s five start-anchored sites, versioning its sessionStorage payload, and
+   migrating position bookmarks to carry a root. Phase-sized frontend refactor serving 0.05%
+   of positions; slices 1 and 3 remove the user-visible pain without it.
+4. **No new index on `initial_fen`.** The predicate matches ~99.95% of rows and `Game` is
+   already joined in the only query that reads it.
+
+**Success Criteria** (what must be TRUE):
+
+1. Seeding `/analysis` with a SAN sequence that is illegal from its root renders a partial or
+   empty board and leaves the page mounted — it never reaches the React ErrorBoundary. Proven
+   by a test that goes red when the try/catch is reverted to `if (!move) break`.
+2. `games.initial_fen` is non-NULL exactly for games whose PGN carries a `[SetUp "1"]`/`[FEN]`
+   pair naming a non-standard start, for chess.com, lichess and pasted imports alike, and the
+   migration backfills existing rows from the stored PGN without a re-import.
+3. An opening transition whose shallowest-ply game is custom-start is still returned, with its
+   full game count and W/D/L intact, and with a replayable `entry_san_sequence` sourced from a
+   standard-start game in the same group.
+4. A transition group in which *every* game is custom-start is dropped without raising — the
+   filtered aggregate yields a NULL sample, which `_wrap_transition_row` handles explicitly
+   rather than by `TypeError` on `sample_pair[0]`.
+5. That residual drop is reported to Sentry as a warning-level `capture_message` (keeping the
+   existing `set_context`/`set_tag`), not an escalating `capture_exception`.
+6. `/analysis` game mode seeds a custom-start library game from its own `initial_fen` and plays
+   through its real mainline.
+
+**Non-goals**: the seed's Tier 2 in full (opening-explorer custom roots, bookmark root FENs,
+`?fen=`+`?line=` combination); any change to which games are imported or to position-hash
+matching; the four unrelated Sentry-hygiene items in SEED-148.
+
+**Plans**: 3 plans in 2 waves
+
+Plans:
+**Wave 1** *(independent — slice 1 is frontend-only, slice 2 is backend-only, no shared files)*
+
+- [x] 210-01-PLAN.md — Frontend replay containment: try/catch at the four unguarded `chess.move()` replay sites, with the crash reproduced as a test first (wave 1)
+- [x] 210-02-PLAN.md — `games.initial_fen` migration + in-migration PGN backfill, normalizer population across all paths, the sample-representative `FILTER`, the NULL-sample guard, and the Sentry demotion (wave 1)
+
+**Wave 2** *(blocked on 210-02 — consumes the `initial_fen` column)*
+
+- [x] 210-03-PLAN.md — Carry `initial_fen` on the library game-detail payload and seed `/analysis` game mode from it instead of `STARTING_FEN` (wave 2)
+
+**UI hint**: none — no new components, no visual change. Slice 1 is a crash guard, slice 3 makes
+an existing board show the correct starting position.
 
 ## Backlog
 

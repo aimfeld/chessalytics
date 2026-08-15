@@ -144,17 +144,26 @@ export function useChessGame(): ChessGameState {
     const chess = new Chess();
     let fromSq: string | null = null;
     let toSq: string | null = null;
+    // Phase 210 (SEED-042): this loop was fully unguarded, and chess.js 1.4
+    // move() throws on illegal SAN. The history comes from sessionStorage, so a
+    // stale or hand-edited payload (or a line that never belonged to the
+    // standard start) would throw straight through the caller. Stop at the last
+    // legal ply and report that ply, rather than claiming one we never reached.
+    let replayedPly = 0;
     for (let i = 0; i < ply; i++) {
-      // safe: loop bound ensures i < ply <= history.length
-      const move = chess.move(history[i]!);
-      if (i === ply - 1 && move) {
+      try {
+        // safe: loop bound ensures i < ply <= history.length
+        const move = chess.move(history[i]!);
+        replayedPly = i + 1;
         fromSq = move.from;
         toSq = move.to;
+      } catch {
+        break;
       }
     }
     chessRef.current = chess;
     setPosition(chess.fen());
-    setCurrentPly(ply);
+    setCurrentPly(replayedPly);
     setHashes(computeHashes(chess));
     setLastMove(fromSq && toSq ? { from: fromSq, to: toSq } : null);
   }, []);
