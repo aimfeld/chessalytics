@@ -10,6 +10,13 @@ The blog is named **Chess Data Stories** (not "FlawChess Data Stories"): use tha
 - **Co-locate the technical report**: the report a story summarizes lives next to it as `stories/<slug>/<slug>-report.md` (short name, e.g. `two-pawns-up-report.md`), not under `reports/`. The story footer links to it via its GitHub blob URL.
 - Add a card for every new story to `stories/index.html`, including its publication date.
 
+## SEO & sharing (required for every story)
+
+- **Head tags**: unique `<title>`, `<meta name="description">`, `<link rel="canonical">`, full Open Graph set (`og:type=article`, `og:site_name`, `og:title`, `og:description`, `og:url`, `og:image` + width/height, `article:published_time`, `article:author`) and Twitter Card (`summary_large_image`), plus a JSON-LD `Article` block (`isPartOf` the Chess Data Stories `Blog`, author Adrian Imfeld, publisher FlawChess). Copy the block from `two-pawns-up/index.html`.
+- **Social card**: a 1200×630 `social-card.png` in the story directory, referenced with an **absolute** `https://stories.flawchess.com/...` URL (scrapers don't resolve relative og:image paths). Render it from a brand-styled HTML card via headless Chrome (`google-chrome --headless=new --window-size=1200,630 --screenshot=...`); show the story headline and its hero stat(s).
+- **Sitemap**: add the story URL to `stories/sitemap.xml` (and bump the landing page's `lastmod`). Update the landing page's JSON-LD `blogPost` list too.
+- **Landmarks**: page content lives in `<main class="wrap">`.
+
 ## Header (must match the flawchess.com homepage)
 
 - Logo + "FlawChess" label, with the tagline ("Engines are flawless, humans play FlawChess.") right-aligned.

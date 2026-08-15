@@ -368,7 +368,7 @@ per_game AS (
 SELECT elo_bucket, COUNT(*) AS entry_lead_games,
   round(AVG(leader_after),3) AS leader_blun_after_entry,
   round(AVG(opp_after),3)    AS opp_blun_after_entry,
-  round(AVG(opp_after)/NULLIF(AVG(leader_after),0),2) AS ratio_after,
+  round(AVG(leader_after)/NULLIF(AVG(opp_after),0),2) AS ratio_after,  -- leader ÷ opp, matching the results table
   round(AVG(leader_open),3)  AS leader_blun_up_to_entry,
   round(AVG(opp_open),3)     AS opp_blun_up_to_entry
 FROM per_game

@@ -17,8 +17,12 @@ via a CNAME file (that mechanism is for branch-based builds, not workflow deploy
 stories/
   index.html          # landing page listing all stories
   logo.png            # shared FlawChess logo (stories reference ../logo.png)
+  social-card.png     # 1200x630 Open Graph image for the landing page
+  sitemap.xml         # lists the landing page + every story URL
+  robots.txt          # allow-all + sitemap pointer
   two-pawns-up/       # one directory per story -> flawchess.github.io/flawchess/two-pawns-up/
     index.html        # self-contained page: inline CSS/JS, vanilla SVG charts, no CDNs
+    social-card.png   # 1200x630 Open Graph image for this story
     two-pawns-up-report.md  # the technical report the story summarizes
 ```
 

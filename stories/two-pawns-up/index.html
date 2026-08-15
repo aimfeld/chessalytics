@@ -7,6 +7,37 @@
 <meta name="description" content="What 478,340 Lichess games say about converting a two-pawn advantage, by rating and time control. A Chess Data Stories analysis.">
 <link rel="canonical" href="https://stories.flawchess.com/two-pawns-up/">
 <link rel="icon" href="../logo.png">
+<meta property="og:type" content="article">
+<meta property="og:site_name" content="Chess Data Stories">
+<meta property="og:title" content="You're two pawns up. Do you actually win?">
+<meta property="og:description" content="What 478,340 Lichess games say about converting a two-pawn advantage, by rating and time control.">
+<meta property="og:url" content="https://stories.flawchess.com/two-pawns-up/">
+<meta property="og:image" content="https://stories.flawchess.com/two-pawns-up/social-card.png">
+<meta property="og:image:width" content="1200">
+<meta property="og:image:height" content="630">
+<meta property="article:published_time" content="2026-08-15">
+<meta property="article:author" content="Adrian Imfeld">
+<meta name="twitter:card" content="summary_large_image">
+<meta name="twitter:title" content="You're two pawns up. Do you actually win?">
+<meta name="twitter:description" content="What 478,340 Lichess games say about converting a two-pawn advantage, by rating and time control.">
+<meta name="twitter:image" content="https://stories.flawchess.com/two-pawns-up/social-card.png">
+<script type="application/ld+json">
+{
+  "@context": "https://schema.org",
+  "@type": "Article",
+  "headline": "You're two pawns up. Do you actually win?",
+  "description": "What 478,340 Lichess games say about converting a two-pawn advantage, by rating and time control.",
+  "datePublished": "2026-08-15",
+  "url": "https://stories.flawchess.com/two-pawns-up/",
+  "image": "https://stories.flawchess.com/two-pawns-up/social-card.png",
+  "isPartOf": {"@type": "Blog", "name": "Chess Data Stories", "url": "https://stories.flawchess.com/"},
+  "author": {"@type": "Person", "name": "Adrian Imfeld", "url": "https://www.linkedin.com/in/aimfeld/"},
+  "publisher": {
+    "@type": "Organization", "name": "FlawChess", "url": "https://flawchess.com",
+    "logo": {"@type": "ImageObject", "url": "https://stories.flawchess.com/logo.png"}
+  }
+}
+</script>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Fredoka:wght@600&display=swap" rel="stylesheet">
@@ -135,10 +166,10 @@
   </div>
 </header>
 
-<div class="wrap">
+<main class="wrap">
 
 <div class="hero">
-  <div class="kicker"><a href="../" data-testid="link-stories-index">A Chess Data Story</a> &middot; <time datetime="2026-08-15">August 15, 2026</time> &middot; 478,340 Lichess games</div>
+  <div class="kicker"><a href="../" data-testid="link-stories-index">A Chess Data Story</a> &middot; <time datetime="2026-08-15">August 15, 2026</time> &middot; 478,340 Lichess games screened</div>
   <h1>You're two pawns up.<br><span class="accent">Do you actually win?</span></h1>
   <p class="sub">We took every game in our <a href="https://github.com/flawchess/flawchess/blob/main/reports/benchmark/benchmarks-latest.md">benchmark database</a> where a player reached the middlegame
   with a clear advantage (about <b>two pawns up</b> by Stockfish's count) and checked how those games
@@ -235,15 +266,20 @@
     <h2>About this analysis</h2>
     <p style="margin-top:8px">We analyzed <b>478,340 Lichess games</b> (blitz, rapid and classical) with full
     Stockfish evaluations, across five rating groups from 800 to 2400. "Two pawns up" means the engine evaluation
-    reached &ge; 200 centipawns for one side at the first move of the middlegame. Full methodology, exact queries
+    reached &ge; 200 centipawns for one side at the first move of the middlegame. Where the middlegame starts is
+    decided by Lichess's own phase rules (the same division you see on its analysis board, based on piece counts,
+    back-rank development and how entangled the two sides' pieces are). Full methodology, exact queries
     and every table are in the technical report.</p>
     <p style="margin-top:10px">
       <a href="https://github.com/flawchess/flawchess/blob/main/stories/two-pawns-up/two-pawns-up-report.md">Read the technical report</a>
     </p>
     <p class="fineprint">Data: Lichess games with server-side Stockfish analysis; ratings are Lichess ratings
-    at the time each game was played. Blunder counts use Lichess's own definition (a move that loses at least
-    15 percentage points of winning chances), recomputed per move from the stored evaluations. Small samples:
-    800 and 2400 classical have the fewest games, so treat those two cells as approximate.</p>
+    at the time each game was played, and opponents are rating-matched. Blunder counts use Lichess's own definition
+    (a move that loses at least 15 percentage points of winning chances), recomputed per move from the stored
+    evaluations. In section 5, part of the
+    leader's blunder excess is mechanical: the trailing side sits at low winning chances and simply has less left
+    to lose, so read it as "the game-swinging mistakes come mostly from the leader", not as a raw move-quality
+    comparison. </p>
   </div>
   <div class="promo">
     <div class="promo-head">
@@ -288,7 +324,7 @@
   </div>
 </footer>
 
-</div>
+</main>
 
 <script>
 "use strict";
