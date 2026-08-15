@@ -1,6 +1,6 @@
 name: Deploy data stories to GitHub Pages
 
-# Publishes the dashboards/ directory (public data stories) to
+# Publishes the stories/ directory (public data stories) to
 # https://flawchess.github.io/flawchess/ whenever it changes on main.
 # Source of truth lives on main; there is no gh-pages branch.
 
@@ -8,7 +8,7 @@ on:
   push:
     branches: [main]
     paths:
-      - "dashboards/**"
+      - "stories/**"
       - ".github/workflows/pages.yml"
   workflow_dispatch:
 
@@ -32,6 +32,6 @@ jobs:
       - uses: actions/configure-pages@v5
       - uses: actions/upload-pages-artifact@v4
         with:
-          path: dashboards
+          path: stories
       - id: deployment
         uses: actions/deploy-pages@v4
