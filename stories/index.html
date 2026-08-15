@@ -37,6 +37,8 @@
   .story p{color:var(--ink-2)}
   .story .go{color:var(--brown-dark);font-weight:700;margin-top:10px;display:inline-block}
   footer.site{padding:20px 0 60px;color:var(--ink-3);font-size:15px}
+  .byline{display:flex;align-items:center;gap:10px;color:var(--ink-2);margin-bottom:12px}
+  .byline img{width:36px;height:36px;border-radius:50%;flex:none}
   @media (max-width:560px){ header.site .tag{display:none} }
 </style>
 </head>
@@ -69,6 +71,11 @@ Lichess games with full Stockfish evaluations, across every rating level and tim
 </a>
 
 <footer class="site">
+  <div class="byline">
+    <img src="author.jpg" alt="Portrait of Adrian Imfeld" width="36" height="36">
+    <span>Data stories by <a href="https://www.linkedin.com/in/aimfeld/">Adrian Imfeld</a>,
+    data scientist and creator of FlawChess</span>
+  </div>
   <a href="https://flawchess.com">flawchess.com</a> &middot; free &amp; open source &middot;
   <a href="https://github.com/flawchess/flawchess">GitHub</a>
 </footer>

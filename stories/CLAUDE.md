@@ -22,10 +22,13 @@ Rules for the public data-story site (`stories/`, deployed to https://stories.fl
 - **Terminology must match the underlying technical report.** Don't invent story-side synonyms for defined terms (e.g. the report's "sustained lead" stays "sustained lead", not "wire-to-wire").
 - **Em-dashes very sparingly** — at most one per page section; prefer commas, parentheses, colons, or semicolons.
 - Every chart gets a `<details>` "View the data" table; all numbers live inline in the page (no fetches).
+- **Story footer, in order** (copy the markup from `two-pawns-up/index.html`): the "About this analysis" box (methodology, report link, data fineprint), then the **FlawChess card** (`.promo`: logo + Fredoka brand name + tagline, one-line pitch, feature bullets sourced from `frontend/src/pages/Home.tsx` copy, the flawchess.com CTA button, "All features free · no signup required · open source"), then the **author card** (`.author`: circular photo `stories/author.jpg` (shared asset, CSS `border-radius:50%`), name "Adrian Imfeld", short bio, LinkedIn (https://www.linkedin.com/in/aimfeld/) + GitHub (https://github.com/aimfeld) links). The CTA button lives in the FlawChess card only, not in the About box. The landing page keeps only the one-line footer byline, not the full cards.
 
 ## Visual style
 
 - FlawChess branding: brand brown `#8B5E3C`, cream background `#FAF7F0`, warm ink/line palette (see existing stories' `:root` tokens).
 - **WDL colors**: win = green, loss = red, **draw = grey** (`#8A7F71`, the `--ink-3` warm grey). Never violet/purple for draws.
-- Chart titles use a dedicated larger style (`.ctitle`, ~18px bold ink-2), clearly bigger than axis labels (14px `.axis`).
-- Colorblind-safe series palettes; charts scroll horizontally on small screens (`figure{overflow-x:auto}` with a min-width inner div).
+- **Chart anatomy, top to bottom: title → legend/controls → plot.** The title is an HTML element above the chart (`.ctitle`, ~18px bold ink-2, clearly bigger than 14px `.axis` labels), never drawn inside the SVG (HTML wraps natively on narrow screens). The legend (or toggle buttons acting as one) sits between the title and the `<figure>`, so readers get the color key before the marks. Captions/source notes go below the chart.
+- Prefer direct labeling over a legend where it fits (e.g. end-of-line series labels on wide screens); order legend items to match the visual order of the series.
+- Colorblind-safe series palettes.
+- **Charts must be mobile friendly with no horizontal scrolling**: re-render each SVG at the container width on resize (viewBox width = container width so font sizes stay true), and drop end-of-line series labels in favor of a legend below ~700px. Only the "View the data" tables may scroll horizontally.

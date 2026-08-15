@@ -45,14 +45,16 @@
   .tile.win .big{color:var(--win)} .tile.draw .big{color:var(--draw)} .tile.loss .big{color:var(--loss)}
   .hero-note{color:var(--ink-3);font-size:15px;margin-bottom:8px}
   section.card{background:var(--card);border:1px solid var(--line);border-radius:20px;padding:30px clamp(18px,4vw,38px);margin:26px 0}
-  .num{display:inline-flex;align-items:center;justify-content:center;width:34px;height:34px;border-radius:50%;
-       background:var(--hl);color:var(--brown-dark);font-weight:800;font-size:17px;margin-bottom:10px}
+  .card-head{display:flex;align-items:center;gap:12px;margin-bottom:10px}
+  .card-head h2{margin-bottom:0}
+  .num{display:inline-flex;flex:none;align-items:center;justify-content:center;width:34px;height:34px;border-radius:50%;
+       background:var(--hl);color:var(--brown-dark);font-weight:800;font-size:17px}
   h2{font-size:clamp(23px,3.4vw,31px);letter-spacing:-.02em;line-height:1.2;margin-bottom:10px}
   .lede{color:var(--ink-2);max-width:46em;margin-bottom:6px}
   .callout{background:var(--hl);border-radius:12px;padding:12px 16px;margin-top:16px;font-size:16.5px}
   .callout b{color:var(--brown-dark)}
-  figure{margin:22px 0 4px;overflow-x:auto}
-  figure > div{min-width:640px}
+  figure{margin:10px 0 4px}
+  .ctitle{color:var(--ink-2);font-size:18px;font-weight:700;line-height:1.35;margin:20px 0 6px}
   .callout .tk{color:var(--brown-dark);font-weight:800}
   .legend{display:flex;gap:18px;flex-wrap:wrap;margin:6px 0 10px;font-size:15px;color:var(--ink-2)}
   .legend .it{display:inline-flex;align-items:center;gap:7px}
@@ -60,18 +62,19 @@
   .chart-svg{width:100%;height:auto;display:block}
   .chart-svg text{font-family:inherit}
   .axis{fill:var(--ink-3);font-size:14px}
-  .ctitle{fill:var(--ink-2);font-size:18px;font-weight:700}
   .gridline{stroke:var(--line);stroke-width:1}
   .dlabel{font-size:15px;font-weight:700}
   .toggles{display:flex;gap:8px;flex-wrap:wrap;margin:4px 0 8px}
   .toggles button{
     font:inherit;font-size:15px;font-weight:600;padding:7px 16px;border-radius:999px;cursor:pointer;
+    display:inline-flex;align-items:center;gap:7px;
     border:1.5px solid var(--brown);background:transparent;color:var(--brown-dark)
   }
   .toggles button[aria-pressed="true"]{background:var(--brown);color:#fff}
   .toggles button:focus-visible{outline:2px solid var(--brown-dark);outline-offset:2px}
   details.tbl{margin-top:12px;font-size:15px}
   details.tbl summary{cursor:pointer;color:var(--ink-3)}
+  details.tbl > div{overflow-x:auto}
   details.tbl table{border-collapse:collapse;margin-top:10px;width:100%}
   details.tbl th,details.tbl td{border:1px solid var(--line);padding:6px 10px;text-align:right}
   details.tbl th:first-child,details.tbl td:first-child{text-align:left}
@@ -88,7 +91,28 @@
        font-weight:700;padding:12px 22px;border-radius:12px}
   .cta:hover{background:var(--brown-dark)}
   .fineprint{color:var(--ink-3);font-size:14.5px;margin-top:16px}
-  @media (max-width:560px){ header.site .tag{display:none} }
+  .promo{background:var(--card);border:1px solid var(--line);border-radius:20px;
+         padding:26px clamp(18px,4vw,38px);margin-top:18px}
+  .promo-head{display:flex;align-items:center;gap:14px}
+  .promo-head img{width:52px;height:52px;border-radius:12px}
+  .promo-head .pname{font-family:'Fredoka',sans-serif;font-weight:600;font-size:24px;letter-spacing:-.02em}
+  .promo-head .ptag{color:var(--ink-3);font-size:15px}
+  .promo .plede{color:var(--ink-2);margin-top:12px}
+  .pfeat{list-style:none;display:grid;grid-template-columns:1fr 1fr;gap:10px 26px;margin-top:14px;font-size:16px;color:var(--ink-2)}
+  .pfeat li{padding-left:22px;position:relative}
+  .pfeat li::before{content:"";position:absolute;left:0;top:.45em;width:10px;height:10px;border-radius:3px;background:var(--brown)}
+  .pfeat b{color:var(--ink)}
+  @media (max-width:700px){ .pfeat{grid-template-columns:1fr} }
+  .author{display:flex;align-items:center;gap:20px;background:var(--card);border:1px solid var(--line);
+          border-radius:20px;padding:20px clamp(18px,4vw,38px);margin-top:18px}
+  .author img{width:72px;height:72px;border-radius:50%;flex:none}
+  .author .who{font-weight:700;color:var(--ink)}
+  .author .bio{color:var(--ink-2);font-size:16px;margin-top:2px}
+  .author .links{font-size:15px;margin-top:6px}
+  @media (max-width:560px){
+    header.site .tag{display:none}
+    .author{flex-direction:column;align-items:flex-start}
+  }
 </style>
 </head>
 <body>
@@ -121,11 +145,12 @@
 </div>
 
 <section class="card" id="s1">
-  <div class="num">1</div>
-  <h2>A two-pawn lead is not a won game, at any level</h2>
+  <div class="card-head"><div class="num">1</div>
+  <h2>A two-pawn lead is not a won game, at any level</h2></div>
   <p class="lede">Players who start the middlegame two pawns up go on to <b>lose roughly one game in four</b>.
   And this is not just a beginner problem: even at master level (2400 Lichess), nearly one of these games in five
   still ends in defeat for the player who had the advantage.</p>
+  <p class="ctitle">Games LOST by the player who entered the middlegame two pawns up</p>
   <figure aria-label="Bar chart: how often the leader loses, by rating">
     <div id="c1"></div>
   </figure>
@@ -135,11 +160,12 @@
 </section>
 
 <section class="card" id="s2">
-  <div class="num">2</div>
-  <h2>Big leads are everywhere at club level, rare among masters</h2>
+  <div class="card-head"><div class="num">2</div>
+  <h2>Big leads are everywhere at club level, rare among masters</h2></div>
   <p class="lede">At 800, a majority of games (<b>58%</b>) already have a two-pawn advantage
   for someone when the middlegame starts: openings decide games early. By 2400 that collapses to <b>12%</b>.
   Strong players simply don't hand over (or receive) free material in the opening.</p>
+  <p class="ctitle">Share of ALL games that begin the middlegame with someone two pawns up</p>
   <figure aria-label="Bar chart: share of games entering the middlegame with a two-pawn advantage, by rating">
     <div id="c2"></div>
   </figure>
@@ -147,12 +173,13 @@
 </section>
 
 <section class="card" id="s3">
-  <div class="num">3</div>
-  <h2>What rating actually buys you</h2>
+  <div class="card-head"><div class="num">3</div>
+  <h2>What rating actually buys you</h2></div>
   <p class="lede">Split every one of these games into four endings and something surprising appears:
   the share of <b>sustained-lead wins</b> (the lead never dips below two pawns and converts) barely moves with
   rating: about 43% everywhere. What improves with strength is everything else: winning anyway
   <b>after the lead slips</b>, and above all, <b>not losing outright</b>.</p>
+  <p class="ctitle">Four outcomes of a two-pawn middlegame lead</p>
   <div class="legend" id="lg3"></div>
   <figure aria-label="Stacked bar chart: four outcomes of a two-pawn middlegame lead, by rating">
     <div id="c3"></div>
@@ -163,11 +190,12 @@
 </section>
 
 <section class="card" id="s4">
-  <div class="num">4</div>
-  <h2>Want to keep your lead? Slow down.</h2>
+  <div class="card-head"><div class="num">4</div>
+  <h2>Want to keep your lead? Slow down.</h2></div>
   <p class="lede">The same advantage survives very differently depending on the clock. At <b>every</b> rating,
   leads die most often in blitz and least often in classical. The gap is brutal at the top:
   a 2400 loses a two-pawn lead <b>almost twice as often in blitz (22%) as in classical (12%)</b>.</p>
+  <p class="ctitle">Games LOST by the leader, from a two-pawn middlegame lead</p>
   <div class="toggles" id="tg4" role="group" aria-label="Highlight a time control"></div>
   <figure aria-label="Line chart: how often the leader loses, by rating and time control">
     <div id="c4"></div>
@@ -178,12 +206,13 @@
 </section>
 
 <section class="card" id="s5">
-  <div class="num">5</div>
-  <h2>A lead you never let slip is nearly unbeatable</h2>
+  <div class="card-head"><div class="num">5</div>
+  <h2>A lead you never let slip is nearly unbeatable</h2></div>
   <p class="lede">Here's the flip side. Among games where the advantage <b>never</b> dipped below two pawns
   for even one move of the middlegame and endgame, the leader converted <b>95&ndash;99%</b> of the time.
   The starting size of your lead matters far less than its journey: protect it move by move and the
   point is essentially banked.</p>
+  <p class="ctitle">Win rate from an entry lead vs a lead that never slipped</p>
   <div class="legend" id="lg5"></div>
   <figure aria-label="Dumbbell chart: win rate from a middlegame-entry lead vs a lead held on every move, by rating">
     <div id="c5"></div>
@@ -201,10 +230,49 @@
     <p style="margin-top:10px">
       <a href="https://github.com/flawchess/flawchess/blob/main/stories/two-pawns-up/two-pawns-up-report.md">Read the technical report</a>
     </p>
+    <p class="fineprint">Data: Lichess games with server-side Stockfish analysis; ratings are Lichess ratings
+    at the time each game was played. Small samples: 800 and 2400 classical have the fewest games, so treat
+    those two cells as approximate.</p>
+  </div>
+  <div class="promo">
+    <div class="promo-head">
+      <img src="../logo.png" alt="FlawChess logo">
+      <div>
+        <div class="pname">FlawChess</div>
+        <div class="ptag">Engines are flawless, humans play FlawChess.</div>
+      </div>
+    </div>
+    <p class="plede">Find and fix the flaws in your game: free full-game analysis of every chess.com
+    and lichess game you've played.</p>
+    <ul class="pfeat">
+      <li><b>Your best practical move</b>: the FlawChess Engine (Stockfish + Maia) scores each move by
+      how likely you are to find it and convert the position, not by perfect play.</li>
+      <li><b>Game and tactic analysis</b>: Stockfish runs over your entire game history and tags your
+      blunders with the tactic behind them (fork, pin, skewer, and 20+ more).</li>
+      <li><b>Personalized puzzle training</b>: your own blunders come back as puzzles on a
+      spaced-repetition schedule until the patterns stick.</li>
+      <li><b>Human-like bots</b>: play against 24 named opponents with different ELO ratings and
+      playing styles, then analyze the game like any other.</li>
+      <li><b>Opening explorer and insights</b>: win/draw/loss stats for every move
+      you've played.</li>
+      <li><b>Endgame analytics</b>: conversion and recovery rates, and your Endgame ELO over time.</li>
+      <li><b>Time management stats</b>: find out if you crack under time pressure more than your
+      opponents.</li>
+    </ul>
     <a class="cta" href="https://flawchess.com">Analyze your own games free at flawchess.com &rarr;</a>
-    <p class="fineprint">FlawChess is free and open source. Data: Lichess games with server-side Stockfish analysis;
-    ratings are Lichess ratings at the time each game was played. Small samples: 800 and 2400 classical have the
-    fewest games, so treat those two cells as approximate.</p>
+    <p class="fineprint">All features free &middot; no signup required &middot; open source</p>
+  </div>
+  <div class="author">
+    <img src="../author.jpg" alt="Portrait of Adrian Imfeld" width="72" height="72">
+    <div>
+      <div class="who">Adrian Imfeld</div>
+      <p class="bio">Data scientist and creator of FlawChess. These stories are built on the FlawChess
+      benchmark database: hundreds of thousands of Lichess games with full Stockfish evaluations.</p>
+      <p class="links">
+        <a href="https://www.linkedin.com/in/aimfeld/">LinkedIn</a> &middot;
+        <a href="https://github.com/aimfeld">GitHub</a>
+      </p>
+    </div>
   </div>
 </footer>
 
@@ -214,7 +282,7 @@
 "use strict";
 /* ---------- data ---------- */
 const RATINGS=[800,1200,1600,2000,2400];
-const COL={win:"#166534",win2:"#5F901A",draw:"#7D6BB8",loss:"#B02A2A",
+const COL={win:"#166534",win2:"#5F901A",draw:"#8A7F71",loss:"#B02A2A",
            blitz:"#C97A00",rapid:"#3B82F6",classical:"#166534",brown:"#8B5E3C"};
 const OUTCOME={ // % of entry-lead games per rating
   sustained:[42.8,42.7,42.9,42.9,45.6],
@@ -236,7 +304,10 @@ const NS="http://www.w3.org/2000/svg";
 function el(n,attrs,parent){const e=document.createElementNS(NS,n);
   for(const k in attrs)e.setAttribute(k,attrs[k]); if(parent)parent.appendChild(e); return e;}
 function txt(parent,x,y,s,attrs){const t=el("text",Object.assign({x,y},attrs||{}),parent);t.textContent=s;return t;}
+function chartWidth(id){const w=document.getElementById(id).getBoundingClientRect().width;
+  return Math.max(320,Math.min(900,Math.round(w)||900));}
 function svgRoot(id,w,h,label){const host=document.getElementById(id);
+  host.innerHTML="";
   const s=el("svg",{viewBox:`0 0 ${w} ${h}`,class:"chart-svg",role:"img","aria-label":label});
   host.appendChild(s);return s;}
 const tip=document.getElementById("tip");
@@ -261,8 +332,8 @@ function legend(id,items){document.getElementById(id).innerHTML=
   items.map(i=>`<span class="it"><span class="chip" style="background:${i[1]}"></span>${i[0]}</span>`).join("");}
 
 /* ---------- chart 1: leader loses % by rating (bars) ---------- */
-(function(){
-  const W=900,H=360,L=64,R=20,T=26,B=44,max=32;
+function renderC1(){
+  const W=chartWidth("c1"),L=W<560?48:64,R=20,T=16,B=66,H=372,max=32;
   const svg=svgRoot("c1",W,H,"How often the leader loses, by rating");
   const yFor=v=>T+(H-T-B)*(1-v/max);
   grid(svg,L,W-R,yFor,[0,10,20,30],v=>v+"%");
@@ -271,17 +342,15 @@ function legend(id,items){document.getElementById(id).innerHTML=
     const v=OUTCOME.loss[i],x=L+bw*i+bw*0.2,w=bw*0.6,y=yFor(v);
     const rect=el("rect",{x,y,width:w,height:yFor(0)-y,rx:4,fill:COL.loss},svg);
     txt(svg,x+w/2,y-10,v.toFixed(0)+"%",{class:"dlabel","text-anchor":"middle",fill:COL.loss});
-    txt(svg,x+w/2,H-16,r,{class:"axis","text-anchor":"middle"});
+    txt(svg,x+w/2,H-38,r,{class:"axis","text-anchor":"middle"});
     bindTip(rect,`<div class="t">Rating ${r}</div>Leader loses <b>${v}%</b> of the ${OUTCOME.n[i].toLocaleString("en-US")} games entered two pawns up.`);
   });
-  txt(svg,L,18,"Games LOST by the player who entered the middlegame two pawns up",{class:"ctitle"});
-  table("t1",["Rating","Games with an entry lead","Leader loses"],
-    RATINGS.map((r,i)=>[r,OUTCOME.n[i].toLocaleString("en-US"),OUTCOME.loss[i]+"%"]));
-})();
+  txt(svg,L+(W-L-R)/2,H-12,"ELO",{class:"axis","text-anchor":"middle"});
+}
 
 /* ---------- chart 2: prevalence bars ---------- */
-(function(){
-  const W=900,H=360,L=64,R=20,T=26,B=44,max=65;
+function renderC2(){
+  const W=chartWidth("c2"),L=W<560?48:64,R=20,T=16,B=66,H=372,max=65;
   const svg=svgRoot("c2",W,H,"Share of games entering the middlegame with a two-pawn advantage, by rating");
   const yFor=v=>T+(H-T-B)*(1-v/max);
   grid(svg,L,W-R,yFor,[0,20,40,60],v=>v+"%");
@@ -290,17 +359,15 @@ function legend(id,items){document.getElementById(id).innerHTML=
     const v=PREVALENCE[i],x=L+bw*i+bw*0.2,w=bw*0.6,y=yFor(v);
     const rect=el("rect",{x,y,width:w,height:yFor(0)-y,rx:4,fill:COL.brown},svg);
     txt(svg,x+w/2,y-10,v.toFixed(0)+"%",{class:"dlabel","text-anchor":"middle",fill:COL.brown});
-    txt(svg,x+w/2,H-16,r,{class:"axis","text-anchor":"middle"});
+    txt(svg,x+w/2,H-38,r,{class:"axis","text-anchor":"middle"});
     bindTip(rect,`<div class="t">Rating ${r}</div><b>${v}%</b> of all analyzed games already show a two-pawn advantage when the middlegame begins.`);
   });
-  txt(svg,L,18,"Share of ALL games that begin the middlegame with someone two pawns up",{class:"ctitle"});
-  table("t2",["Rating","Games entering with a big lead"],RATINGS.map((r,i)=>[r,PREVALENCE[i]+"%"]));
-})();
+  txt(svg,L+(W-L-R)/2,H-12,"ELO",{class:"axis","text-anchor":"middle"});
+}
 
 /* ---------- chart 3: 100% stacked outcomes ---------- */
-(function(){
-  legend("lg3",[["Sustained-lead win",COL.win],["Win after the lead slipped",COL.win2],["Draw",COL.draw],["Leader loses",COL.loss]]);
-  const W=900,H=420,L=64,R=20,T=26,B=44;
+function renderC3(){
+  const W=chartWidth("c3"),L=W<560?48:64,R=20,T=10,B=66,H=426;
   const svg=svgRoot("c3",W,H,"Four outcomes of a two-pawn middlegame lead, by rating");
   const yFor=v=>T+(H-T-B)*(1-v/100);
   grid(svg,L,W-R,yFor,[0,25,50,75,100],v=>v+"%");
@@ -316,22 +383,25 @@ function legend(id,items){document.getElementById(id).innerHTML=
       bindTip(rect,`<div class="t">Rating ${r} &middot; ${name}</div><b>${v}%</b> of ${OUTCOME.n[i].toLocaleString("en-US")} entry-lead games.`);
       acc+=v;
     });
-    txt(svg,x+w/2,H-16,r,{class:"axis","text-anchor":"middle"});
+    txt(svg,x+w/2,H-38,r,{class:"axis","text-anchor":"middle"});
   });
-  table("t3",["Rating","Sustained-lead win","Win after slip","Draw","Leader loses"],
-    RATINGS.map((r,i)=>[r,OUTCOME.sustained[i]+"%",OUTCOME.comeback[i]+"%",OUTCOME.draw[i]+"%",OUTCOME.loss[i]+"%"]));
-})();
+  txt(svg,L+(W-L-R)/2,H-12,"ELO",{class:"axis","text-anchor":"middle"});
+}
 
 /* ---------- chart 4: TC lines with toggle ---------- */
-(function(){
-  const W=900,H=420,L=64,R=120,T=26,B=44,max=32;
+let tcSel="all",tcSeries={};
+function applyTcSel(){for(const k in tcSeries)tcSeries[k].setAttribute("opacity",(tcSel==="all"||tcSel===k)?1:0.15);}
+function renderC4(){
+  /* end-of-line labels need ~120px of right margin; on narrow screens the
+     color-chipped toggle buttons act as the legend instead */
+  const W=chartWidth("c4"),L=W<560?48:64,endLabels=W>=700,R=endLabels?120:24,T=16,B=66,H=432,max=32;
   const svg=svgRoot("c4",W,H,"How often the leader loses, by rating and time control");
   const yFor=v=>T+(H-T-B)*(1-v/max);
   const xFor=i=>L+ (W-L-R)*(i/(RATINGS.length-1));
   grid(svg,L,W-R,yFor,[0,10,20,30],v=>v+"%");
-  RATINGS.forEach((r,i)=>txt(svg,xFor(i),H-16,r,{class:"axis","text-anchor":"middle"}));
-  txt(svg,L,18,"Games LOST by the leader, from a two-pawn middlegame lead",{class:"ctitle"});
-  const series={};
+  RATINGS.forEach((r,i)=>txt(svg,xFor(i),H-38,r,{class:"axis","text-anchor":"middle"}));
+  txt(svg,L+(W-L-R)/2,H-12,"ELO",{class:"axis","text-anchor":"middle"});
+  tcSeries={};
   for(const key of ["blitz","rapid","classical"]){
     const s=TC[key],g=el("g",{opacity:1},svg);
     const d=s.v.map((v,i)=>(i?"L":"M")+xFor(i)+","+yFor(v)).join(" ");
@@ -342,29 +412,15 @@ function legend(id,items){document.getElementById(id).innerHTML=
       bindTip(hit,`<div class="t">${s.label} &middot; rating ${RATINGS[i]}</div>Leader loses <b>${v}%</b> of ${s.n[i].toLocaleString("en-US")} entry-lead games.`+
         ((key==="classical"&&(i===0||i===4))?"<br><i>Small sample; approximate.</i>":""));
     });
-    txt(svg,xFor(4)+14,yFor(s.v[4])+5,s.label,{class:"dlabel",fill:COL[key]});
-    series[key]=g;
+    if(endLabels)txt(svg,xFor(4)+14,yFor(s.v[4])+5,s.label,{class:"dlabel",fill:COL[key]});
+    tcSeries[key]=g;
   }
-  const tg=document.getElementById("tg4");
-  const opts=[["all","All"],["blitz","Blitz"],["rapid","Rapid"],["classical","Classical"]];
-  opts.forEach(([k,label])=>{
-    const b=document.createElement("button");
-    b.textContent=label; b.setAttribute("aria-pressed",k==="all"?"true":"false");
-    b.addEventListener("click",()=>{
-      tg.querySelectorAll("button").forEach(x=>x.setAttribute("aria-pressed","false"));
-      b.setAttribute("aria-pressed","true");
-      for(const key in series)series[key].setAttribute("opacity",(k==="all"||k===key)?1:0.15);
-    });
-    tg.appendChild(b);
-  });
-  table("t4",["Rating","Blitz","Rapid","Classical"],
-    RATINGS.map((r,i)=>[r,TC.blitz.v[i]+"%",TC.rapid.v[i]+"%",TC.classical.v[i]+"%"]));
-})();
+  applyTcSel();
+}
 
 /* ---------- chart 5: dumbbell entry-win vs held-win ---------- */
-(function(){
-  legend("lg5",[["Win rate from an entry lead",COL.brown],["Win rate when the lead never slipped",COL.win]]);
-  const W=900,H=380,L=88,R=40,T=30,B=44,min=60,max=100;
+function renderC5(){
+  const W=chartWidth("c5"),L=W<560?56:88,R=W<560?44:40,T=34,B=44,H=366,min=60,max=100;
   const svg=svgRoot("c5",W,H,"Win rate from a middlegame-entry lead vs a lead held on every move, by rating");
   const xFor=v=>L+(W-L-R)*((v-min)/(max-min));
   const yFor=i=>T+((H-T-B)/(RATINGS.length-1))*i;
@@ -383,9 +439,53 @@ function legend(id,items){document.getElementById(id).innerHTML=
     bindTip(c1,`<div class="t">Rating ${r}</div>Entering the middlegame two pawns up &rarr; wins <b>${a}%</b>.`);
     bindTip(c2,`<div class="t">Rating ${r}</div>Lead held on every single move &rarr; wins <b>${b}%</b>.`);
   });
-  table("t5",["Rating","Win % from entry lead","Win % when lead never slipped"],
-    RATINGS.map((r,i)=>[r,DUMBBELL.entry[i]+"%",DUMBBELL.held[i]+"%"]));
+  txt(svg,L-14,T-18,"ELO",{class:"axis","text-anchor":"end"});
+}
+
+/* ---------- static setup: legends, tables, toggle buttons ---------- */
+legend("lg3",[["Sustained-lead win",COL.win],["Win after the lead slipped",COL.win2],["Draw",COL.draw],["Leader loses",COL.loss]]);
+legend("lg5",[["Win rate from an entry lead",COL.brown],["Win rate when the lead never slipped",COL.win]]);
+table("t1",["Rating","Games with an entry lead","Leader loses"],
+  RATINGS.map((r,i)=>[r,OUTCOME.n[i].toLocaleString("en-US"),OUTCOME.loss[i]+"%"]));
+table("t2",["Rating","Games entering with a big lead"],RATINGS.map((r,i)=>[r,PREVALENCE[i]+"%"]));
+table("t3",["Rating","Sustained-lead win","Win after slip","Draw","Leader loses"],
+  RATINGS.map((r,i)=>[r,OUTCOME.sustained[i]+"%",OUTCOME.comeback[i]+"%",OUTCOME.draw[i]+"%",OUTCOME.loss[i]+"%"]));
+table("t4",["Rating","Blitz","Rapid","Classical"],
+  RATINGS.map((r,i)=>[r,TC.blitz.v[i]+"%",TC.rapid.v[i]+"%",TC.classical.v[i]+"%"]));
+table("t5",["Rating","Win % from entry lead","Win % when lead never slipped"],
+  RATINGS.map((r,i)=>[r,DUMBBELL.entry[i]+"%",DUMBBELL.held[i]+"%"]));
+
+(function(){
+  const tg=document.getElementById("tg4");
+  const opts=[["all","All"],["blitz","Blitz"],["rapid","Rapid"],["classical","Classical"]];
+  opts.forEach(([k,label])=>{
+    const b=document.createElement("button");
+    if(k!=="all"){
+      const chip=document.createElement("span");
+      chip.className="chip"; chip.style.background=COL[k];
+      b.appendChild(chip);
+    }
+    b.appendChild(document.createTextNode(label));
+    b.setAttribute("aria-pressed",k==="all"?"true":"false");
+    b.addEventListener("click",()=>{
+      tg.querySelectorAll("button").forEach(x=>x.setAttribute("aria-pressed","false"));
+      b.setAttribute("aria-pressed","true");
+      tcSel=k; applyTcSel();
+    });
+    tg.appendChild(b);
+  });
 })();
+
+/* ---------- responsive render: redraw at container width ---------- */
+function renderAll(){renderC1();renderC2();renderC3();renderC4();renderC5();}
+renderAll();
+let resizeTimer=null,lastVW=window.innerWidth;
+window.addEventListener("resize",()=>{
+  if(window.innerWidth===lastVW)return; // mobile URL-bar show/hide fires height-only resizes
+  lastVW=window.innerWidth;
+  clearTimeout(resizeTimer);
+  resizeTimer=setTimeout(renderAll,150);
+});
 </script>
 </body>
 </html>
