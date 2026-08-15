@@ -18,7 +18,7 @@ scope: deferred phase (Tier 2 only — Tier 1 shipped in Phase 210)
 > the opening *explorer*, root FENs on position bookmarks, and combining `?fen=` with
 > `?line=`. Everything above that section is retained as the historical root-cause record —
 > the "Related" and "Related Quick Fix" sections are both DONE. See
-> `.planning/phases/210-custom-start-games/210-SUMMARY.md`.
+> `../../phases/210-custom-start-games/210-SUMMARY.md`.
 >
 > One finding from execution worth carrying into any Tier 2 work: `initial_fen` is nullable
 > free-text, and `new Chess(fen)` throws on an unparseable value. `loadMainLine` validates
@@ -195,7 +195,7 @@ Backend:
 - `app/services/opening_insights_service.py:491-511` — `_wrap_transition_row` replay + drop + Sentry capture
 - `app/services/zobrist.py:170` — `board = game.board()` honors SetUp/FEN header
 - `app/services/normalization.py:198` — chess.com variant filter (`rules == "chess"` only)
-- `app/models/game.py:131` — `pgn` column (backfill source); `app/models/game.py` overall — no `initial_fen` today
+- `app/models/game.py:131` — `pgn` column (backfill source); `../../../app/models/game.py` overall — no `initial_fen` today
 
 Frontend:
 - `frontend/src/hooks/useAnalysisBoard.ts:390` — `loadMainLine(sans, newRootFen)`, already root-FEN aware
@@ -205,9 +205,9 @@ Frontend:
 - `frontend/src/lib/engine/treeCommon.ts:218` — the correctly-contained precedent ("chess.js's `.move()` THROWS")
 - `frontend/src/pages/Analysis.tsx:971` — game mode hardcodes `STARTING_FEN` (confirmed bug, was line 919)
 - `frontend/src/pages/Analysis.tsx:532-545` — `?fen=` entry point (SEED-094), fen-beats-line precedence
-- `frontend/src/hooks/useChessGame.ts` — explorer board, start-anchored in 5 places + sessionStorage persistence
+- `../../../frontend/src/hooks/useChessGame.ts` — explorer board, start-anchored in 5 places + sessionStorage persistence
 - `frontend/src/pages/openings/useOpeningsHandlers.ts:96,114` — insights deep-link into the explorer via `loadMoves`
-- `frontend/src/types/position_bookmarks.ts` — bookmarks store bare `moves: string[]`, no root
+- `../../../frontend/src/types/position_bookmarks.ts` — bookmarks store bare `moves: string[]`, no root
 
 Other:
 - Sentry: FLAWCHESS-5E (issue 126278993) — the insights eviction (74 events)
