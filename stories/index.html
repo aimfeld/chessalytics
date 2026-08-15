@@ -7,6 +7,9 @@
 <meta name="description" content="Interactive data stories from the FlawChess benchmark database: what hundreds of thousands of real chess games reveal about how humans actually play.">
 <link rel="canonical" href="https://stories.flawchess.com/">
 <link rel="icon" href="logo.png">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Fredoka:wght@600&display=swap" rel="stylesheet">
 <style>
   :root{
     --brown:#8B5E3C; --brown-dark:#6B4226; --cream:#FAF7F0; --card:#FFFFFF;
@@ -17,9 +20,11 @@
     font-family:ui-sans-serif,system-ui,-apple-system,"Segoe UI",Roboto,Helvetica,Arial,sans-serif}
   a{color:var(--brown-dark)}
   .wrap{max-width:860px;margin:0 auto;padding:0 20px}
-  header.site{display:flex;align-items:center;gap:12px;padding:22px 0}
+  header.site{border-bottom:1px solid var(--line)}
+  header.site .wrap{display:flex;align-items:center;gap:12px;padding-top:16px;padding-bottom:16px}
+  header.site .brand{display:flex;align-items:center;gap:12px;text-decoration:none;color:inherit}
   header.site img{width:44px;height:44px;border-radius:10px}
-  header.site .name{font-weight:800;font-size:22px;letter-spacing:-.02em}
+  header.site .name{font-family:'Fredoka',sans-serif;font-weight:600;font-size:22px;letter-spacing:-.02em}
   header.site .tag{color:var(--ink-3);font-size:15px;margin-left:auto;text-align:right}
   .kicker{color:var(--brown);font-weight:700;text-transform:uppercase;letter-spacing:.12em;font-size:14px;margin-top:20px}
   h1{font-size:clamp(30px,5vw,46px);line-height:1.15;letter-spacing:-.025em;margin:8px 0 12px}
@@ -36,13 +41,18 @@
 </style>
 </head>
 <body>
-<div class="wrap">
 
 <header class="site">
-  <img src="logo.png" alt="FlawChess logo">
-  <span class="name">FlawChess</span>
-  <span class="tag">Engines are flawless,<br>humans play FlawChess.</span>
+  <div class="wrap">
+    <a class="brand" href="https://flawchess.com">
+      <img src="logo.png" alt="FlawChess logo">
+      <span class="name">FlawChess</span>
+    </a>
+    <span class="tag">Engines are flawless,<br>humans play FlawChess.</span>
+  </div>
 </header>
+
+<div class="wrap">
 
 <div class="kicker">Data stories</div>
 <h1>What real games reveal about how humans actually play chess</h1>
@@ -50,10 +60,10 @@
 Lichess games with full Stockfish evaluations, across every rating level and time control.</p>
 
 <a class="story" href="two-pawns-up/">
-  <div class="date">August 2026</div>
+  <div class="date">August 15, 2026</div>
   <h2>You're two pawns up. Do you actually win?</h2>
   <p>478,340 games say a "winning position" is a promise you still have to keep: players who reach the
-  middlegame two pawns up lose roughly one game in four &mdash; and even masters blow it far more often
+  middlegame two pawns up lose roughly one game in four, and even masters blow it far more often
   than the engine bar suggests.</p>
   <span class="go">Read the story &rarr;</span>
 </a>

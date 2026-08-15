@@ -3,15 +3,18 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Two Pawns Up — Do You Actually Win? | FlawChess</title>
+<title>Two Pawns Up: Do You Actually Win? | FlawChess</title>
 <meta name="description" content="What 478,340 Lichess games say about converting a two-pawn advantage, by rating and time control. A FlawChess analysis.">
 <link rel="canonical" href="https://stories.flawchess.com/two-pawns-up/">
 <link rel="icon" href="../logo.png">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Fredoka:wght@600&display=swap" rel="stylesheet">
 <style>
   :root{
     --brown:#8B5E3C; --brown-dark:#6B4226; --brown-light:#A07850; --cream:#FAF7F0;
     --card:#FFFFFF; --ink:#2A2118; --ink-2:#5C5246; --ink-3:#8A7F71; --line:#E8E0D2;
-    --win:#166534; --win2:#5F901A; --draw:#7D6BB8; --loss:#B02A2A;
+    --win:#166534; --win2:#5F901A; --draw:#8A7F71; --loss:#B02A2A;
     --blitz:#C97A00; --rapid:#3B82F6; --classical:#166534;
     --hl:#F0DBB9;
   }
@@ -24,9 +27,11 @@
   }
   a{color:var(--brown-dark)}
   .wrap{max-width:960px;margin:0 auto;padding:0 20px}
-  header.site{display:flex;align-items:center;gap:12px;padding:22px 0}
+  header.site{border-bottom:1px solid var(--line)}
+  header.site .wrap{display:flex;align-items:center;gap:12px;padding-top:16px;padding-bottom:16px}
+  header.site .brand{display:flex;align-items:center;gap:12px;text-decoration:none;color:inherit}
   header.site img{width:44px;height:44px;border-radius:10px}
-  header.site .name{font-weight:800;font-size:22px;letter-spacing:-.02em}
+  header.site .name{font-family:'Fredoka',sans-serif;font-weight:600;font-size:22px;letter-spacing:-.02em}
   header.site .tag{color:var(--ink-3);font-size:15px;margin-left:auto;text-align:right}
   .hero{padding:26px 0 6px}
   .kicker{color:var(--brown);font-weight:700;text-transform:uppercase;letter-spacing:.12em;font-size:14px}
@@ -55,6 +60,7 @@
   .chart-svg{width:100%;height:auto;display:block}
   .chart-svg text{font-family:inherit}
   .axis{fill:var(--ink-3);font-size:14px}
+  .ctitle{fill:var(--ink-2);font-size:18px;font-weight:700}
   .gridline{stroke:var(--line);stroke-width:1}
   .dlabel{font-size:15px;font-weight:700}
   .toggles{display:flex;gap:8px;flex-wrap:wrap;margin:4px 0 8px}
@@ -87,19 +93,24 @@
 </head>
 <body>
 <div id="tip" role="tooltip"></div>
-<div class="wrap">
 
 <header class="site">
-  <img src="../logo.png" alt="FlawChess logo">
-  <span class="name">FlawChess</span>
-  <span class="tag">Engines are flawless,<br>humans play FlawChess.</span>
+  <div class="wrap">
+    <a class="brand" href="https://flawchess.com">
+      <img src="../logo.png" alt="FlawChess logo">
+      <span class="name">FlawChess</span>
+    </a>
+    <span class="tag">Engines are flawless,<br>humans play FlawChess.</span>
+  </div>
 </header>
 
+<div class="wrap">
+
 <div class="hero">
-  <div class="kicker">A FlawChess data story &middot; 478,340 Lichess games</div>
+  <div class="kicker">A FlawChess data story &middot; <time datetime="2026-08-15">August 15, 2026</time> &middot; 478,340 Lichess games</div>
   <h1>You're two pawns up.<br><span class="accent">Do you actually win?</span></h1>
   <p class="sub">We took every game in our benchmark database where a player reached the middlegame
-  with a clear advantage &mdash; about <b>two pawns up</b> by Stockfish's count &mdash; and checked how those games
+  with a clear advantage (about <b>two pawns up</b> by Stockfish's count) and checked how those games
   actually ended. The answer should change how you think about "winning positions".</p>
   <div class="hero-stats" aria-label="Overall outcomes from a two-pawn middlegame lead">
     <div class="tile win"><div class="big">73%</div><div class="lbl">the leader wins</div></div>
@@ -111,7 +122,7 @@
 
 <section class="card" id="s1">
   <div class="num">1</div>
-  <h2>A two-pawn lead is not a won game &mdash; at any level</h2>
+  <h2>A two-pawn lead is not a won game, at any level</h2>
   <p class="lede">Players who start the middlegame two pawns up go on to <b>lose roughly one game in four</b>.
   And this is not just a beginner problem: even at master level (2400 Lichess), nearly one of these games in five
   still ends in defeat for the player who had the advantage.</p>
@@ -126,7 +137,7 @@
 <section class="card" id="s2">
   <div class="num">2</div>
   <h2>Big leads are everywhere at club level, rare among masters</h2>
-  <p class="lede">At 800, a majority of games &mdash; <b>58%</b> &mdash; already have a two-pawn advantage
+  <p class="lede">At 800, a majority of games (<b>58%</b>) already have a two-pawn advantage
   for someone when the middlegame starts: openings decide games early. By 2400 that collapses to <b>12%</b>.
   Strong players simply don't hand over (or receive) free material in the opening.</p>
   <figure aria-label="Bar chart: share of games entering the middlegame with a two-pawn advantage, by rating">
@@ -139,14 +150,14 @@
   <div class="num">3</div>
   <h2>What rating actually buys you</h2>
   <p class="lede">Split every one of these games into four endings and something surprising appears:
-  the share of <b>wire-to-wire wins</b> (the lead never dips below two pawns and converts) barely moves with
-  rating &mdash; about 43% everywhere. What improves with strength is everything else: winning anyway
+  the share of <b>sustained-lead wins</b> (the lead never dips below two pawns and converts) barely moves with
+  rating: about 43% everywhere. What improves with strength is everything else: winning anyway
   <b>after the lead slips</b>, and above all, <b>not losing outright</b>.</p>
   <div class="legend" id="lg3"></div>
   <figure aria-label="Stacked bar chart: four outcomes of a two-pawn middlegame lead, by rating">
     <div id="c3"></div>
   </figure>
-  <div class="callout"><span class="tk">Takeaway:</span> masters aren't better at cruising &mdash; they're better at
+  <div class="callout"><span class="tk">Takeaway:</span> masters aren't better at cruising; they're better at
   <b>fighting when the cruise fails</b>.</div>
   <details class="tbl"><summary>View the data</summary><div id="t3"></div></details>
 </section>
@@ -188,12 +199,12 @@
     reached &ge; 200 centipawns for one side at the first move of the middlegame. Full methodology, exact queries
     and every table are in the technical report.</p>
     <p style="margin-top:10px">
-      <a href="https://github.com/flawchess/flawchess/blob/main/reports/noel/benchmark-sustained-lead-and-middlegame-entry-2026-08-15.md">Read the technical report</a>
+      <a href="https://github.com/flawchess/flawchess/blob/main/stories/two-pawns-up/two-pawns-up-report.md">Read the technical report</a>
     </p>
     <a class="cta" href="https://flawchess.com">Analyze your own games free at flawchess.com &rarr;</a>
     <p class="fineprint">FlawChess is free and open source. Data: Lichess games with server-side Stockfish analysis;
     ratings are Lichess ratings at the time each game was played. Small samples: 800 and 2400 classical have the
-    fewest games &mdash; treat those two cells as approximate.</p>
+    fewest games, so treat those two cells as approximate.</p>
   </div>
 </footer>
 
@@ -263,7 +274,7 @@ function legend(id,items){document.getElementById(id).innerHTML=
     txt(svg,x+w/2,H-16,r,{class:"axis","text-anchor":"middle"});
     bindTip(rect,`<div class="t">Rating ${r}</div>Leader loses <b>${v}%</b> of the ${OUTCOME.n[i].toLocaleString("en-US")} games entered two pawns up.`);
   });
-  txt(svg,L,16,"Games LOST by the player who entered the middlegame two pawns up",{class:"axis"});
+  txt(svg,L,18,"Games LOST by the player who entered the middlegame two pawns up",{class:"ctitle"});
   table("t1",["Rating","Games with an entry lead","Leader loses"],
     RATINGS.map((r,i)=>[r,OUTCOME.n[i].toLocaleString("en-US"),OUTCOME.loss[i]+"%"]));
 })();
@@ -282,18 +293,18 @@ function legend(id,items){document.getElementById(id).innerHTML=
     txt(svg,x+w/2,H-16,r,{class:"axis","text-anchor":"middle"});
     bindTip(rect,`<div class="t">Rating ${r}</div><b>${v}%</b> of all analyzed games already show a two-pawn advantage when the middlegame begins.`);
   });
-  txt(svg,L,16,"Share of ALL games that begin the middlegame with someone two pawns up",{class:"axis"});
+  txt(svg,L,18,"Share of ALL games that begin the middlegame with someone two pawns up",{class:"ctitle"});
   table("t2",["Rating","Games entering with a big lead"],RATINGS.map((r,i)=>[r,PREVALENCE[i]+"%"]));
 })();
 
 /* ---------- chart 3: 100% stacked outcomes ---------- */
 (function(){
-  legend("lg3",[["Wire-to-wire win",COL.win],["Win after the lead slipped",COL.win2],["Draw",COL.draw],["Leader loses",COL.loss]]);
+  legend("lg3",[["Sustained-lead win",COL.win],["Win after the lead slipped",COL.win2],["Draw",COL.draw],["Leader loses",COL.loss]]);
   const W=900,H=420,L=64,R=20,T=26,B=44;
   const svg=svgRoot("c3",W,H,"Four outcomes of a two-pawn middlegame lead, by rating");
   const yFor=v=>T+(H-T-B)*(1-v/100);
   grid(svg,L,W-R,yFor,[0,25,50,75,100],v=>v+"%");
-  const keys=[["sustained","Wire-to-wire win",COL.win],["comeback","Win after the lead slipped",COL.win2],
+  const keys=[["sustained","Sustained-lead win",COL.win],["comeback","Win after the lead slipped",COL.win2],
               ["draw","Draw",COL.draw],["loss","Leader loses",COL.loss]];
   const bw=(W-L-R)/RATINGS.length;
   RATINGS.forEach((r,i)=>{
@@ -302,12 +313,12 @@ function legend(id,items){document.getElementById(id).innerHTML=
       const v=OUTCOME[k][i],y1=yFor(acc+v),hgt=yFor(acc)-yFor(acc+v);
       const rect=el("rect",{x,y:y1,width:w,height:Math.max(hgt-2,1),rx:3,fill:c},svg);
       if(v>=8)txt(svg,x+w/2,y1+hgt/2+5,v.toFixed(0)+"%",{"text-anchor":"middle",fill:"#fff","font-size":"15","font-weight":"700"});
-      bindTip(rect,`<div class="t">Rating ${r} &mdash; ${name}</div><b>${v}%</b> of ${OUTCOME.n[i].toLocaleString("en-US")} entry-lead games.`);
+      bindTip(rect,`<div class="t">Rating ${r} &middot; ${name}</div><b>${v}%</b> of ${OUTCOME.n[i].toLocaleString("en-US")} entry-lead games.`);
       acc+=v;
     });
     txt(svg,x+w/2,H-16,r,{class:"axis","text-anchor":"middle"});
   });
-  table("t3",["Rating","Wire-to-wire win","Win after slip","Draw","Leader loses"],
+  table("t3",["Rating","Sustained-lead win","Win after slip","Draw","Leader loses"],
     RATINGS.map((r,i)=>[r,OUTCOME.sustained[i]+"%",OUTCOME.comeback[i]+"%",OUTCOME.draw[i]+"%",OUTCOME.loss[i]+"%"]));
 })();
 
@@ -319,7 +330,7 @@ function legend(id,items){document.getElementById(id).innerHTML=
   const xFor=i=>L+ (W-L-R)*(i/(RATINGS.length-1));
   grid(svg,L,W-R,yFor,[0,10,20,30],v=>v+"%");
   RATINGS.forEach((r,i)=>txt(svg,xFor(i),H-16,r,{class:"axis","text-anchor":"middle"}));
-  txt(svg,L,16,"Games LOST by the leader, from a two-pawn middlegame lead",{class:"axis"});
+  txt(svg,L,18,"Games LOST by the leader, from a two-pawn middlegame lead",{class:"ctitle"});
   const series={};
   for(const key of ["blitz","rapid","classical"]){
     const s=TC[key],g=el("g",{opacity:1},svg);
@@ -329,7 +340,7 @@ function legend(id,items){document.getElementById(id).innerHTML=
       el("circle",{cx:xFor(i),cy:yFor(v),r:5,fill:COL[key],stroke:"#fff","stroke-width":2},g);
       const hit=el("circle",{cx:xFor(i),cy:yFor(v),r:14,fill:"transparent"},g);
       bindTip(hit,`<div class="t">${s.label} &middot; rating ${RATINGS[i]}</div>Leader loses <b>${v}%</b> of ${s.n[i].toLocaleString("en-US")} entry-lead games.`+
-        ((key==="classical"&&(i===0||i===4))?"<br><i>Small sample &mdash; approximate.</i>":""));
+        ((key==="classical"&&(i===0||i===4))?"<br><i>Small sample; approximate.</i>":""));
     });
     txt(svg,xFor(4)+14,yFor(s.v[4])+5,s.label,{class:"dlabel",fill:COL[key]});
     series[key]=g;

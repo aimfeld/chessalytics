@@ -19,6 +19,7 @@ stories/
   logo.png            # shared FlawChess logo (stories reference ../logo.png)
   two-pawns-up/       # one directory per story -> flawchess.github.io/flawchess/two-pawns-up/
     index.html        # self-contained page: inline CSS/JS, vanilla SVG charts, no CDNs
+    two-pawns-up-report.md  # the technical report the story summarizes
 ```
 
 ## Adding a story
@@ -27,10 +28,10 @@ stories/
    Keep it self-contained: inline styles/scripts, no external dependencies, and put
    the underlying numbers in the page (plus a `<details>` data table per chart).
 2. Add a card for it in `stories/index.html`.
-3. Link the technical report it summarizes (usually under `reports/`) in its footer.
+3. Co-locate the technical report it summarizes as `stories/<slug>/<slug>-report.md`
+   and link it (GitHub blob URL) in the story footer.
 4. Iterate locally by opening the file in a browser, then commit and push to `main` —
    the Pages workflow deploys it (~1 min). Check the run with `gh run list`.
 
-Conventions: FlawChess branding (brand brown `#8B5E3C`, cream background), plain-language
-copy for a non-technical audience ("two pawns up", not "200 cp"), validated
-colorblind-safe chart palettes, and a link back to the technical report for details.
+Conventions: see `stories/CLAUDE.md` for the full ruleset (branding/header, publication
+dates, terminology, chart styling, report co-location).
