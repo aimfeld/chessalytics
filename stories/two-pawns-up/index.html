@@ -3,8 +3,8 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Two Pawns Up: Do You Actually Win? | FlawChess</title>
-<meta name="description" content="What 478,340 Lichess games say about converting a two-pawn advantage, by rating and time control. A FlawChess analysis.">
+<title>Two Pawns Up: Do You Actually Win? | Chess Data Stories</title>
+<meta name="description" content="What 478,340 Lichess games say about converting a two-pawn advantage, by rating and time control. A Chess Data Stories analysis.">
 <link rel="canonical" href="https://stories.flawchess.com/two-pawns-up/">
 <link rel="icon" href="../logo.png">
 <link rel="preconnect" href="https://fonts.googleapis.com">
@@ -32,6 +32,9 @@
   header.site .brand{display:flex;align-items:center;gap:12px;text-decoration:none;color:inherit}
   header.site img{width:44px;height:44px;border-radius:10px}
   header.site .name{font-family:'Fredoka',sans-serif;font-weight:600;font-size:22px;letter-spacing:-.02em}
+  header.site .sect{font-family:'Fredoka',sans-serif;font-weight:600;font-size:22px;letter-spacing:-.02em;
+    color:var(--brown);text-decoration:none;border-left:1px solid var(--line);padding-left:12px;line-height:1.15}
+  header.site .sect:hover{color:var(--brown-dark)}
   header.site .tag{color:var(--ink-3);font-size:15px;margin-left:auto;text-align:right}
   .hero{padding:26px 0 6px}
   .kicker{color:var(--brown);font-weight:700;text-transform:uppercase;letter-spacing:.12em;font-size:14px}
@@ -113,6 +116,7 @@
   .author .links{font-size:15px;margin-top:6px}
   @media (max-width:560px){
     header.site .tag{display:none}
+    header.site .name,header.site .sect{font-size:19px}
     .author{flex-direction:column;align-items:flex-start}
   }
 </style>
@@ -126,6 +130,7 @@
       <img src="../logo.png" alt="FlawChess logo">
       <span class="name">FlawChess</span>
     </a>
+    <a class="sect" href="../">Chess Data Stories</a>
     <span class="tag">Engines are flawless,<br>humans play FlawChess.</span>
   </div>
 </header>
@@ -133,7 +138,7 @@
 <div class="wrap">
 
 <div class="hero">
-  <div class="kicker"><a href="../" data-testid="link-stories-index">A FlawChess data story</a> &middot; <time datetime="2026-08-15">August 15, 2026</time> &middot; 478,340 Lichess games</div>
+  <div class="kicker"><a href="../" data-testid="link-stories-index">A Chess Data Story</a> &middot; <time datetime="2026-08-15">August 15, 2026</time> &middot; 478,340 Lichess games</div>
   <h1>You're two pawns up.<br><span class="accent">Do you actually win?</span></h1>
   <p class="sub">We took every game in our <a href="https://github.com/flawchess/flawchess/blob/main/reports/benchmark/benchmarks-latest.md">benchmark database</a> where a player reached the middlegame
   with a clear advantage (about <b>two pawns up</b> by Stockfish's count) and checked how those games

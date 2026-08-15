@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>FlawChess Data Stories</title>
+<title>Chess Data Stories</title>
 <meta name="description" content="Interactive data stories from the FlawChess benchmark database: what hundreds of thousands of real chess games reveal about how humans actually play.">
 <link rel="canonical" href="https://stories.flawchess.com/">
 <link rel="icon" href="logo.png">
@@ -25,9 +25,11 @@
   header.site .brand{display:flex;align-items:center;gap:12px;text-decoration:none;color:inherit}
   header.site img{width:44px;height:44px;border-radius:10px}
   header.site .name{font-family:'Fredoka',sans-serif;font-weight:600;font-size:22px;letter-spacing:-.02em}
+  header.site .sect{font-family:'Fredoka',sans-serif;font-weight:600;font-size:22px;letter-spacing:-.02em;
+    color:var(--brown);text-decoration:none;border-left:1px solid var(--line);padding-left:12px;line-height:1.15}
+  header.site .sect:hover{color:var(--brown-dark)}
   header.site .tag{color:var(--ink-3);font-size:15px;margin-left:auto;text-align:right}
-  .kicker{color:var(--brown);font-weight:700;text-transform:uppercase;letter-spacing:.12em;font-size:14px;margin-top:20px}
-  h1{font-size:clamp(30px,5vw,46px);line-height:1.15;letter-spacing:-.025em;margin:8px 0 12px}
+  h1{font-size:clamp(30px,5vw,46px);line-height:1.15;letter-spacing:-.025em;margin:28px 0 12px}
   .sub{color:var(--ink-2);max-width:42em}
   .story{display:block;background:var(--card);border:1px solid var(--line);border-radius:20px;
     padding:26px clamp(18px,4vw,34px);margin:26px 0;text-decoration:none;color:var(--ink)}
@@ -39,7 +41,10 @@
   footer.site{padding:20px 0 60px;color:var(--ink-3);font-size:15px}
   .byline{display:flex;align-items:center;gap:10px;color:var(--ink-2);margin-bottom:12px}
   .byline img{width:36px;height:36px;border-radius:50%;flex:none}
-  @media (max-width:560px){ header.site .tag{display:none} }
+  @media (max-width:560px){
+    header.site .tag{display:none}
+    header.site .name,header.site .sect{font-size:19px}
+  }
 </style>
 </head>
 <body>
@@ -50,13 +55,13 @@
       <img src="logo.png" alt="FlawChess logo">
       <span class="name">FlawChess</span>
     </a>
+    <a class="sect" href="./">Chess Data Stories</a>
     <span class="tag">Engines are flawless,<br>humans play FlawChess.</span>
   </div>
 </header>
 
 <div class="wrap">
 
-<div class="kicker">Data stories</div>
 <h1>What real games reveal about how humans actually play chess</h1>
 <p class="sub">Interactive analyses built on the <a href="https://github.com/flawchess/flawchess/blob/main/reports/benchmark/benchmarks-latest.md">FlawChess benchmark database</a>: hundreds of thousands of
 Lichess games with full Stockfish evaluations, across every rating level and time control.</p>
@@ -73,7 +78,7 @@ Lichess games with full Stockfish evaluations, across every rating level and tim
 <footer class="site">
   <div class="byline">
     <img src="author.jpg" alt="Portrait of Adrian Imfeld" width="36" height="36">
-    <span>Data stories by <a href="https://www.linkedin.com/in/aimfeld/">Adrian Imfeld</a>,
+    <span>Chess Data Stories by <a href="https://www.linkedin.com/in/aimfeld/">Adrian Imfeld</a>,
     data scientist and creator of FlawChess</span>
   </div>
   <a href="https://flawchess.com">flawchess.com</a> &middot; free &amp; open source &middot;

@@ -1,6 +1,8 @@
-# Data Stories — Rules
+# Chess Data Stories — Rules
 
 Rules for the public data-story site (`stories/`, deployed to https://stories.flawchess.com/ by `.github/workflows/pages.yml`). See `stories/README.md` for deployment/DNS details.
+
+The blog is named **Chess Data Stories** (not "FlawChess Data Stories"): use that name in page `<title>`s, the header label, and bylines.
 
 ## Structure
 
@@ -13,6 +15,7 @@ Rules for the public data-story site (`stories/`, deployed to https://stories.fl
 - Logo + "FlawChess" label, with the tagline ("Engines are flawless, humans play FlawChess.") right-aligned.
 - The label uses the homepage brand font: **Fredoka, weight 600**, `letter-spacing:-.02em` (load via Google Fonts).
 - Logo and label are wrapped in a single `<a href="https://flawchess.com">`.
+- After the brand link, a "Chess Data Stories" blog-title label (`.sect`: same Fredoka style, brand brown, thin left border) linking to the stories index (`./` from the landing page, `../` from a story page). Below 560px, `.name` and `.sect` shrink to 19px and the tagline hides.
 - Full-width fine grey bottom border: `border-bottom:1px solid var(--line)` on the header, with the flex content in an inner `.wrap` (header sits outside the page's `.wrap` so the line spans the viewport).
 
 ## Content & copy
