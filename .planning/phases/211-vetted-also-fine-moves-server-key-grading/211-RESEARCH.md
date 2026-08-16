@@ -597,9 +597,16 @@ export function classifyLiveSeverity(esBefore: number, esAfter: number): FlawSev
 | A3 | `SolveResponse` needs new `graded_es_before`/`graded_es_after` fields to fix the `playedMoveQuality` divergence identified in the Critical Design Decision section | Critical Design Decision | If the planner instead decides the visible mistake/blunder distinction on the board doesn't matter enough to plumb through (e.g. collapse to the existing `move_quality` 3-way tier and lose the mistake/blunder arrow-color distinction for key moves only), this assumption is moot — but the divergence itself is `[VERIFIED]`, only the fix is a recommendation |
 | A4 | The 409-race between `TrainReveal`'s reveal `useQuery` firing and the solve POST resolving is not reachable in the normal flow | Post-attempt delivery surface | Low risk — worth one explicit test rather than trusting the code-reading inference |
 
-## Open Questions
+## Open Questions (RESOLVED)
 
-1. **Exact wire shape for the vetted-move list.**
+> Both questions were resolved at plan time — see `211-01-PLAN.md` § Background.
+> Q1: pre-classify server-side, realized as `VettedMove{uci, quality}` (matches the
+> recommendation below). Q2: `reveal_for_puzzle` already outer-joins `HerringPool` and
+> undefers the blob; `record_solve` has neither, so the herring lookup is NEW there
+> (with the D-10 IDOR note: scoping rides the user-scoped `DrillSolve` row). Coverage
+> audit row `R13 | COVERED (resolved at plan time, see Background)`.
+
+1. **RESOLVED — Exact wire shape for the vetted-move list.**
    - What we know: server has UCI + white-POV cp/mate for both the soft `su` and each
      qualifying herring ladder entry.
    - What's unclear: whether to also pre-classify each entry's `quality: 'good'|'inaccuracy'`
@@ -612,8 +619,8 @@ export function classifyLiveSeverity(esBefore: number, esAfter: number): FlawSev
      (`{uci, quality}`) is already exactly what `trainArrows.ts` expects, minimizing frontend
      churn.
 
-2. **Where does the server look up which `HerringPool` row backs a given solve at
-   solve/reveal time?**
+2. **RESOLVED — Where does the server look up which `HerringPool` row backs a given solve at
+   solve/reveal time?** (See resolution note above: new join in `record_solve` only.)
    - What we know: `DrillSolve.herring_pool_id` is the FK (`[VERIFIED: app/services/train_pool.py:858-864]`
      shows it used in `herring_stmt`'s `exclude_served` exists-clause).
    - What's unclear: whether `reveal_for_puzzle`/`record_solve` already load this column on

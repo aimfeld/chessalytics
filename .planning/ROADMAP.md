@@ -171,7 +171,7 @@
 | 208. Paste a FEN or PGN on /analysis (SEED-144, unassigned) | 4/4 | Complete    | 2026-08-08 |
 | 209. Traffic-Surge Quick Wins (SEED-146, unassigned) | 4/4 | Complete    | 2026-08-15 |
 | 210. Custom-Start Games — Crash Containment & Insight Eviction (SEED-042, unassigned) | 3/3 | Complete    | 2026-08-15 |
-| 211. Vetted "Also Fine" Moves & Server-Key Grading (SEED-150, unassigned) | 0/? | Not started | - |
+| 211. Vetted "Also Fine" Moves & Server-Key Grading (SEED-150, unassigned) | 0/3 | Planned | - |
 
 ## Active Phases (unassigned milestone)
 
