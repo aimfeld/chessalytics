@@ -78,6 +78,22 @@ Phase 191 Plan 01 (PROG-01/PROG-04, D-18) — GET /train/progress:
 - test_progress_returns_200_with_all_seven_fields : an authenticated non-guest
                                                      account gets a full payload
 - test_progress_403_guest                         : the D-05 guest gate applies here too
+
+Phase 211 (VETFINE-02/VETFINE-03, D-01/D-03/D-07) — server-vetted moves +
+key-move grading on the solve response:
+- test_solve_response_key_set_is_exactly_the_wire_contract : EQUALITY key-set
+  assertion for the solve body (the pre-211 nine fields plus
+  vetted_moves/graded_es_before/graded_es_after) — a future widening fails loudly
+- test_solve_key_move_override_at_http_boundary : a deliberately-wrong client
+  tier for the certified key move loses to the server at the HTTP boundary
+  (server tier, one-entry vetted_moves, non-null graded ES)
+- test_vetted_move_material_absent_from_request_and_pre_attempt_schemas :
+  the request body and pre-attempt payload stay free of key material in both
+  directions (schema-level, beside the P-01/P-02 field assertions)
+- test_reveal_key_set_excludes_stored_answer_key_fields (extended) : the
+  reveal body's key set stays byte-identical to its pre-211 nine fields —
+  no vetted-move material moves through the reveal GET (discharges RESEARCH
+  Assumption A4: the 409 race stays moot)
 """
 
 from __future__ import annotations
@@ -103,7 +119,7 @@ from app.models.game_flaw import GameFlaw
 from app.models.game_position import GamePosition
 from app.models.herring_pool import HerringPool
 from app.repositories import train_repository
-from app.schemas.train import SolveRequest
+from app.schemas.train import SolveRequest, TrainPuzzle
 from app.services import sharp_filler
 from app.services.sharp_filler import SharpPuzzle
 
@@ -1475,6 +1491,84 @@ async def test_correct_guess_computed_server_side(
 
 
 @pytest.mark.asyncio
+async def test_solve_response_key_set_is_exactly_the_wire_contract(test_engine) -> None:
+    """Phase 211: the solve body's key set is EXACTLY the pre-211 nine fields
+    plus vetted_moves/graded_es_before/graded_es_after.
+
+    Equality, not membership (`set(...) == {...}`, never `in`) — mirroring
+    test_pre_attempt_payload_shape's rationale: a future answer-key widening
+    of this response must fail this test, not silently pass it.
+    """
+    email = f"train-solvekeys-{uuid.uuid4().hex[:8]}@example.com"
+    user_id, token = await _register_and_login(email)
+    game_id = await _seed_game_with_blunder(test_engine, user_id)
+    await _seed_drill_item(test_engine, user_id, game_id, _FLAW_PLY_WHITE)
+    session_id = await _seed_session(
+        test_engine, user_id, [(game_id, _FLAW_PLY_WHITE, int(DrillSource.SR_ITEM))]
+    )
+
+    try:
+        resp = await _solve(token, session_id, 0, guess="several", move_quality="good")
+        assert resp.status_code == 200
+        assert set(resp.json().keys()) == {
+            "correct_guess",
+            "correct_move",
+            "move_quality",
+            "puzzle_type",
+            "source",
+            "item_status",
+            "streak",
+            "due_date",
+            "session_complete",
+            "vetted_moves",
+            "graded_es_before",
+            "graded_es_after",
+        }
+    finally:
+        await _delete_games(test_engine, [game_id])
+
+
+@pytest.mark.asyncio
+async def test_solve_key_move_override_at_http_boundary(test_engine) -> None:
+    """Phase 211 (D-03/D-07): a solve POST asserting the WRONG tier for the
+    certified key move (`_MISSED_PV_LINES`'s `su` "g8f6") comes back with the
+    SERVER's tier, a one-entry vetted_moves, and a non-null graded-ES pair —
+    the override is observable at the HTTP boundary, not just in the
+    repository layer."""
+    email = f"train-keyoverride-{uuid.uuid4().hex[:8]}@example.com"
+    user_id, token = await _register_and_login(email)
+    game_id = await _seed_game_with_blunder(test_engine, user_id)
+    await _seed_drill_item(test_engine, user_id, game_id, _FLAW_PLY_WHITE)
+    session_id = await _seed_session(
+        test_engine, user_id, [(game_id, _FLAW_PLY_WHITE, int(DrillSource.SR_ITEM))]
+    )
+
+    try:
+        resp = await _solve(
+            token, session_id, 0, guess="several", played_move="g8f6", move_quality="wrong"
+        )
+        assert resp.status_code == 200
+        body = resp.json()
+        assert body["move_quality"] == "good"  # the server's tier, not "wrong"
+        assert body["correct_move"] is True
+        assert body["vetted_moves"] == [{"uci": "g8f6", "quality": "good"}]
+        assert body["graded_es_before"] is not None
+        assert body["graded_es_after"] is not None
+    finally:
+        await _delete_games(test_engine, [game_id])
+
+
+def test_vetted_move_material_absent_from_request_and_pre_attempt_schemas() -> None:
+    """Phase 211 (P-01/P-02 both directions): the request body and the
+    pre-attempt payload must stay free of vetted-move material — beside the
+    existing `correct_guess`/`puzzle_type` field assertions in
+    test_correct_guess_computed_server_side."""
+    for field in ("vetted_moves", "graded_es_before", "graded_es_after"):
+        assert field not in SolveRequest.model_fields
+        assert field not in TrainPuzzle.model_fields
+
+
+@pytest.mark.asyncio
 async def test_solve_is_idempotent_per_position(test_engine) -> None:
     """Re-submitting the same (session_id, position) returns the first recorded result."""
     email = f"train-idem-{uuid.uuid4().hex[:8]}@example.com"
@@ -1825,6 +1919,13 @@ async def test_reveal_key_set_excludes_stored_answer_key_fields(test_engine) -> 
     """190.1-03 T-190.1-12: the reveal response's key set is the standing assertion
     that no stored engine line/eval (best_move/best_move_san/pv) ever creeps
     back in — the client grading engine is the sole source of those numbers.
+
+    Phase 211 (VETFINE-02): the same equality assertion now ALSO proves the
+    reveal body stays byte-identical to its pre-211 nine fields — no
+    vetted-move material moves through this endpoint (the solve response is
+    the only carrier), which is what discharges RESEARCH Assumption A4: the
+    reveal GET's 409 race stays moot because there is no key material here
+    to race for.
     """
     email = f"train-reveal-keyset-{uuid.uuid4().hex[:8]}@example.com"
     user_id, token = await _register_and_login(email)

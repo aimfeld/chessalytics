@@ -260,7 +260,13 @@ export function FlawsTab() {
   }, [analyzedCount, queryClient]);
 
   // ── Derived state ────────────────────────────────────────────────────────────
-  const totalGames = totalImported;
+  // Bug fix: this used to be totalImported alone, which omits platform='flawchess'
+  // bot games and platform='pgn' pasted games (it is an import-gate quantity, not a
+  // game total — see the matching comment in GamesTab.tsx), so a bot-games-only user
+  // saw "No games imported yet" above populated content. totalCount from
+  // eval-coverage is account-wide; max keeps the profile fallback while that query
+  // is loading or errored.
+  const totalGames = Math.max(totalCount, totalImported);
   const matchedCount = flawsData?.matched_count ?? 0;
   const flaws = flawsData?.flaws ?? [];
 

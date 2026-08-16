@@ -40,6 +40,10 @@ in `YYYY-MM-DD` (Europe/Zurich).
 
 - Losing a bot game (and a zero-score Train result) now plays a short sad cello phrase instead of the previous synthetic defeat tone. It is level-matched to the sound it replaces, so nothing else in the mix changes.
 
+- Train's "Also fine" alternatives are now certified by the server's deep analysis instead of being derived from a short in-browser search: soft puzzles show the deep engine's best and second-best moves, red herrings show their verified good moves, and sharp puzzles and warm-ups correctly show none. When the deep engine's best move differs from the one you played, it now appears in the row too. (Phase 211)
+
+- Playing a listed alternative in Train is now graded from the server's own deep evaluations, instantly and with no engine search. The reveal row, the board arrows, the verdict badge, and the first free-play move from the puzzle position all read the same certified answer key. (Phase 211)
+
 ### Fixed
 
 - Opening a game that did not start from the standard chess position — a chess.com thematic tournament, a custom-position "Let's Play!" game, or a pasted PGN with a set-up position — no longer crashes the analysis page. The board now opens such a game from its own starting position and plays through it normally. (Phase 210)
@@ -51,6 +55,10 @@ in `YYYY-MM-DD` (Europe/Zurich).
 - A chess.com month that temporarily fails to load is now retried on the next sync instead of being silently skipped and forgotten forever.
 
 - Guests who open Train now get a sign-up prompt instead of a page that silently fails.
+
+- On devices where the browser's GPU backend drops the Maia session mid-analysis, Maia now restarts on the CPU backend and keeps working instead of failing that position's human-move prediction. (SEED-148)
+
+- A Train puzzle can no longer advertise a move as "Also fine" that deep analysis grades a blunder. The old list came from ranks 2–4 of a quick browser search on deliberately sharp positions, which sometimes promoted moves the source game's own analysis board correctly marked as mistakes. (Phase 211)
 
 ### Security
 

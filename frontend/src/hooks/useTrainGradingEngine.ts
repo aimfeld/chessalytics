@@ -14,15 +14,25 @@
  * puzzle — 190-RESEARCH.md Pattern 4 / Pitfall 2).
  *
  * Grading rule (190-RESEARCH.md Pattern 2 — TrainPuzzle carries no answer key,
- * P-01, so the client's own search IS the source of truth):
+ * P-01, so the client's own search grades the attempt; two regimes as of
+ * Phase 211):
  *   mover = sideToMoveFromFen(fen)
  *   esBefore = evalToExpectedScore(bestSearch.evalCp, bestSearch.evalMate, mover)
  *   playedMoveUci === bestSearch.bestMoveUci -> esAfter = esBefore, no 2nd search
- *   playedMoveUci is a mount-search rank -> esAfter from that rank's eval, no
- *     2nd search (190.1 UAT round 9 — see gradeMoveInner's rank-match comment)
- *   else -> run a 2nd search on the post-move FEN, esAfter with the SAME mover
+ *     (the exact-match fast path, unchanged)
+ *   else -> run ONE full-budget width-1 search on the post-move FEN, esAfter
+ *     with the SAME mover
  *   severity = classifyLiveSeverity(esBefore, esAfter)
  *   moveTier = moveTierFromSeverity(severity)  (SEED-119: good/inaccuracy/wrong)
+ * The mount search itself is width 1 (Phase 211 D-05): this hook proposes NO
+ * alternative moves — the "Also fine" set is certified SERVER-side from the
+ * stored deep answer key, and when the played move is one of the server's
+ * certified key moves, record_solve OVERRIDES the tier this hook computed
+ * (Phase 211 D-07).
+ * Accepted residual (Phase 211 D-04): an OFF-KEY played move is graded
+ * best-effort by this live engine and can still disagree with the analysis
+ * board's deeper verdict; the top-K deep-eval blob extension that would close
+ * that gap is explicitly out of scope.
  * Never re-derive the sigmoid/threshold locally — both come from
  * `@/lib/liveFlaw` (CI-drift-checked against app/services/flaws_service.py).
  */
@@ -35,7 +45,6 @@ import { classifyLiveSeverity, evalToExpectedScore, sideToMoveFromFen } from '@/
 import type { MoverColor } from '@/lib/liveFlaw';
 import { moveTierFromSeverity } from '@/lib/trainScore';
 import type { TrainMoveTier } from '@/lib/trainScore';
-import type { TrainFineMove } from '@/lib/trainArrows';
 
 // ─── Constants ──────────────────────────────────────────────────────────────
 
@@ -69,31 +78,21 @@ export const TRAIN_GRADING_MOVETIME_MS = 1500;
 export const TRAIN_GRADING_MAX_NODES = 2000000;
 
 /**
- * MultiPV mount-search width and movetime (190.1-02 Task 1/D-01 point 1) —
- * MEASURED 2026-07-26 via
- * `node scripts/measure-train-movetime.mjs --multipv=<width> --movetimes=1500,2500`,
- * sweeping widths 1/3/4/5 at movetimes 1500/2500ms against the same 10 real
- * sharp-blunder FENs TRAIN_GRADING_MOVETIME_MS's own measurement used (see
- * that constant's comment for FEN provenance). Full table in
- * 190.1-02-SUMMARY.md.
+ * Mount-search width and movetime. Width 1 as of Phase 211 (D-05):
+ * alternatives ("Also fine" moves) are now certified SERVER-side from the
+ * stored deep answer key (soft `su`, herring good-band ladder), so the mount
+ * search no longer proposes any — the only consumers of this search are the
+ * best move, `esBefore`, and the displayed solution PV. The full
+ * `TRAIN_GRADING_MOUNT_MOVETIME_MS` budget therefore goes to ONE line instead
+ * of being split four ways, which is the accuracy argument for the change: a
+ * deeper best line and steadier esBefore from the same wall-clock budget.
  *
- * Width: every FEN in the set returned the FULL requested rank count at
- * width 3 (3/3), 4 (4/4) and 5 (5/5) — none had fewer legal moves than the
- * requested width in this sample. 4 is the smallest width satisfying the
- * "at least 4 ranks" requirement (up to 3 good-move arrows plus headroom).
- *
- * Movetime: at width 4, one FEN (game 238467 ply 22 — a middlegame position
- * around +2.2 to +2.9 pawns) sat right at the ES_STABILITY_TOLERANCE (0.025)
- * boundary at BOTH 1500ms and 2500ms across repeated runs — same best move
- * every time, but the eval (roughly cp 220-290) shifted just enough between
- * runs to occasionally cross the tolerance either way. This is the SAME
- * accepted, bounded search-timing noise the measurement script's own header
- * already documents (project_eval_nondeterminism); raising the movetime to
- * 2500ms did not remove it, so there is no stability gain to justify a
- * larger budget. Per the plan: kept TRAIN_GRADING_MOUNT_MOVETIME_MS equal to
- * the existing TRAIN_GRADING_MOVETIME_MS rather than inventing a new number.
+ * The width-4 sweep that previously justified this constant (measured
+ * 2026-07-26 via `node scripts/measure-train-movetime.mjs`) is retained in
+ * 190.1-02-SUMMARY.md and is no longer the reason for this value. The
+ * movetime constants are unchanged — no new number is invented by Phase 211.
  */
-export const TRAIN_GRADING_MULTIPV_WIDTH = 4;
+export const TRAIN_GRADING_MULTIPV_WIDTH = 1;
 export const TRAIN_GRADING_MOUNT_MOVETIME_MS = TRAIN_GRADING_MOVETIME_MS;
 
 /**
@@ -123,16 +122,20 @@ interface RawSearchResult {
   pv: string[];
   /**
    * Every rank the engine returned for this search, sorted by `multipv`
-   * ascending and white-POV sign-normalized (190.1-02 D-01 point 1). A
-   * width-1 search (after-move grading, reveal-time searches) still
-   * populates this with exactly one entry — callers needing "just the top
-   * line" read `evalCp`/`evalMate`/`pv` above (rank 1's convenience values,
-   * unchanged shape from before this plan). Never assume `lines.length`
-   * equals the requested width: the engine returns only as many ranks as
-   * there are legal moves and never pads — nor that every rank holds a
-   * DISTINCT move before `dedupePvLinesByFirstMove` runs at commit time (see
-   * that helper for the cross-iteration staleness this drops); after it, every
-   * entry's first move is unique.
+   * ascending and white-POV sign-normalized (190.1-02 D-01 point 1). As of
+   * Phase 211 (D-05) EVERY search this hook dispatches — mount, after-move,
+   * reveal-time — is width 1, so this normally holds exactly one entry
+   * (rank 1, whose convenience values are `evalCp`/`evalMate`/`pv` above).
+   * The array shape is kept because the commit path is width-agnostic and
+   * `startGameMoveSearch`'s reveal-time exact-UCI lookup (211-02 consumer
+   * ledger row 4) still reads it; it no longer leaves this hook — Plan
+   * 211-03 deleted `GradeResult`'s rank-lines field once the free-play seed
+   * seam switched to the served vetted list (D-06). Never assume
+   * `lines.length` equals the requested width: the engine returns only as
+   * many ranks as there are legal moves and never pads — nor that every
+   * rank holds a DISTINCT move before `dedupePvLinesByFirstMove` runs at
+   * commit time (see that helper for the cross-iteration staleness this
+   * drops); after it, every entry's first move is unique.
    */
   lines: PvLine[];
 }
@@ -167,44 +170,13 @@ export interface GradeResult {
    * without any additional search. */
   bestLine: TrainEngineLine;
   /**
-   * Phase 205 (D-04): the settled mount search's own MultiPV ranks,
-   * white-POV sign-normalized exactly like `bestLine` — carried so the
-   * free-play board can grade its root ply from the SAME search that
-   * produced the reveal's "Also fine" alternatives row, instead of a
-   * second, independent search that can disagree with it (SEED-137
-   * case 2). OPTIONAL: a reveal restored from a `trainRevealCache` entry
-   * written by an older bundle genuinely carries no such key at runtime,
-   * even though the compiler sees the field (D-10) — every consumer must
-   * treat a missing/empty array as "fall back to today's behavior", never
-   * throw.
-   */
-  lines?: PvLine[];
-  /**
    * The played move's own line. On the exact-match fast path this is exactly
-   * `bestLine` — rank 1 IS the played move's line. When the played move is
-   * any OTHER mount-search rank, it's that rank's line — same search as
-   * `bestLine`, so the two evals are mutually consistent by construction
-   * (190.1 UAT round 9). Only when the played move is outside the returned
-   * ranks does it come from the after-move grading search
-   * (`[playedMoveUci, ...afterSearch.pv]`, 190.1-02 D-01 point 2), with the
-   * displayed eval clamped to never read better than `bestLine`'s.
+   * `bestLine` — rank 1 IS the played move's line. Otherwise it comes from
+   * the after-move grading search (`[playedMoveUci, ...afterSearch.pv]`,
+   * 190.1-02 D-01 point 2), with the displayed eval clamped to never read
+   * better than `bestLine`'s.
    */
   playedLine: TrainEngineLine;
-  /**
-   * Fine moves (one per returned mount-search rank) — every rank whose
-   * expected-score drop against rank 1 the verdict itself would grade
-   * CORRECT: severity `null` (quality 'good') or `'inaccuracy'` (quality
-   * 'inaccuracy'), via the project's existing `classifyLiveSeverity` — never
-   * a new cutoff. Bug fix (quick 260726-fma): the original 190.1-02
-   * predicate kept only severity-null ranks (drop < INACCURACY_DROP), which
-   * contradicted both the verdict rule (`correctMove` accepts inaccuracies)
-   * and the backend's soft-puzzle definition (second-best gap <
-   * MISTAKE_DROP) — ~1/3 of soft puzzles rendered no alternative arrow at
-   * all. Ordered by rank; rank 1 is always included (its own drop against
-   * itself is 0). Uncapped — puzzle-type capping is the board consumer's
-   * job, not this hook's.
-   */
-  fineMoves: TrainFineMove[];
 }
 
 /**
@@ -269,50 +241,14 @@ function bestLineFrom(best: BestSearchResult): TrainEngineLine {
   return { moves, evalCp: best.evalCp, evalMate: best.evalMate };
 }
 
-/** For each mount-search rank actually returned, include its move iff the
- * verdict itself would grade it correct: severity `null` (quality 'good') or
- * `'inaccuracy'` (quality 'inaccuracy') against rank 1 (`esRank1`) — the
- * project's existing live-flaw severity function, never a new cutoff. The
- * predicate deliberately matches `gradeMoveInner`'s own correct-move rule and
- * the backend's soft-puzzle gap (`SHARP_GAP_ES = MISTAKE_DROP`) — see the
- * `GradeResult.fineMoves` doc comment for the 260726-fma bug this alignment
- * fixed. Iterates `lines` as returned (never a fixed loop to the requested
- * width) so a partial rank count never throws.
- *
- * A mistake-level rank is deliberately NOT a fine move (191 UAT): the two
- * sides measure the shared MISTAKE_DROP threshold with different searches —
- * the backend from a deep stored answer-key blob, this hook from a 1.5s
- * MultiPV-4 WASM search (`project_eval_nondeterminism`) — so over 30 real
- * server-classified SOFT puzzles from the dev DB, ~7% had their runner-up land
- * just the wrong side here (drops of 0.102 / 0.107 against 0.10) and drew a
- * single arrow under a "Several fine moves ✓" verdict. Showing that runner-up
- * anyway, colored as the mistake this search measured, was rejected: a move
- * this engine grades a mistake must never be presented as a viable
- * alternative. The lone-arrow case stays, as the honest reading of our own
- * search. */
-function deriveFineMoves(lines: PvLine[], esRank1: number, mover: MoverColor): TrainFineMove[] {
-  const fine: TrainFineMove[] = [];
-  for (const line of lines) {
-    const move = line.moves[0];
-    if (move === undefined) continue;
-    const esRankK = evalToExpectedScore(line.evalCp, line.evalMate, mover);
-    const severity = classifyLiveSeverity(esRank1, esRankK);
-    if (severity === null) {
-      fine.push({ uci: move, quality: 'good' });
-    } else if (severity === 'inaccuracy') {
-      fine.push({ uci: move, quality: 'inaccuracy' });
-    }
-  }
-  return fine;
-}
-
 /**
- * Bug fix (190.1 UAT round 9): a played/game move evaluated by its own
- * width-1 after-move search occasionally READS better than the best move
- * (e.g. your Ke4 −4.5 vs best Ke5 −4.0) — the mount search splits its node
- * budget across TRAIN_GRADING_MULTIPV_WIDTH lines while the after-move
- * search spends the full budget one ply deeper, and cp readings in decided
- * positions swing across searches (project_eval_nondeterminism). The verdict
+ * Bug fix (190.1 UAT round 9; rationale narrowed by Phase 211): a played/game
+ * move evaluated by its own after-move search occasionally READS better than
+ * the best move (e.g. your Ke4 −4.5 vs best Ke5 −4.0). With the mount search
+ * at width 1 (Phase 211 D-05) the node budget is no longer split across
+ * ranks, so the surviving causes are the after-move search spending its
+ * budget one ply DEEPER than the mount search, and ordinary cross-search cp
+ * variance in decided positions (project_eval_nondeterminism). The verdict
  * already treats "better than best" as correct; this clamp only stops the
  * DISPLAYED eval from contradicting the "best move" label. From the mover's
  * POV the shown eval is capped at the best line's eval; the line's moves are
@@ -660,9 +596,10 @@ export function useTrainGradingEngine({
       // this exact promise, propagating the failure through its own reject path.
       readyPromise.catch(() => {});
       bestSearchReadyRef.current = readyPromise;
-      // 190.1-02 D-01 point 1: the mount search widens to
-      // TRAIN_GRADING_MULTIPV_WIDTH so this ONE search yields the best move,
-      // the best line, AND the good-moves set — no second mount search.
+      // Phase 211 (D-05): the mount search is width 1 — the whole
+      // TRAIN_GRADING_MOUNT_MOVETIME_MS budget goes to the single best line
+      // (best move, esBefore, and the displayed solution PV). Alternatives
+      // are server-certified; this search proposes none.
       search(fen, generation, TRAIN_GRADING_MULTIPV_WIDTH, TRAIN_GRADING_MOUNT_MOVETIME_MS)
         .then((raw) => {
           // Superseded by a later startGrading/abortGrading — discard silently
@@ -704,9 +641,7 @@ export function useTrainGradingEngine({
         // Defensive fallback (should not happen when startGrading was called
         // for this exact fen) — never crash the solve loop. Resolves the GOOD
         // tier (SEED-119): a defensive path must never silently cost the
-        // user move points. No settled search is in scope here, so `lines`
-        // is the empty array — the one path per Phase 205 D-04 that does NOT
-        // carry the mount search's own ranks.
+        // user move points.
         return {
           moveTier: 'good',
           bestMoveUci: null,
@@ -714,14 +649,11 @@ export function useTrainGradingEngine({
           esAfter: 0.5,
           bestLine: emptyLine,
           playedLine: emptyLine,
-          lines: [],
-          fineMoves: [],
         };
       }
 
       const esBefore = evalToExpectedScore(best.evalCp, best.evalMate, mover);
       const bestLine = bestLineFrom(best);
-      const fineMoves = deriveFineMoves(best.lines, esBefore, mover);
 
       if (playedMoveUci === best.bestMoveUci) {
         // D-06 fast path: exact match to the engine's own top move — no
@@ -735,33 +667,17 @@ export function useTrainGradingEngine({
           esAfter: esBefore,
           bestLine,
           playedLine: bestLine,
-          lines: best.lines,
-          fineMoves,
         };
       }
 
-      // 190.1 UAT round 9: when the played move is any mount-search rank,
-      // grade AND display from that rank — same search as rank 1, so the
-      // your-move eval can never invert against the best-move eval, the
-      // verdict agrees with the good-move arrows by construction (both use
-      // classifyLiveSeverity on same-search rank ES), and the second search
-      // (the "Checking your move…" wait) is skipped entirely.
-      const rankLine = rankLineForMove(best.lines, playedMoveUci);
-      if (rankLine !== null) {
-        const esAfter = evalToExpectedScore(rankLine.evalCp, rankLine.evalMate, mover);
-        const severity = classifyLiveSeverity(esBefore, esAfter);
-        return {
-          moveTier: moveTierFromSeverity(severity),
-          bestMoveUci: best.bestMoveUci,
-          esBefore,
-          esAfter,
-          bestLine,
-          playedLine: { moves: rankLine.moves, evalCp: rankLine.evalCp, evalMate: rankLine.evalMate },
-          lines: best.lines,
-          fineMoves,
-        };
-      }
-
+      // Phase 211 (D-05): the 190.1-round-9 mount-rank shortcut is GONE — a
+      // played move that is neither the engine's own top move (exact-match
+      // fast path above) nor a server-certified key is graded by the ONE
+      // full-budget width-1 after-move search below. Its replacement is not a
+      // client branch at all: a key move's tier is overridden by the SERVER
+      // in record_solve (Plan 211-01, D-07). Accepted cost (SEED-150): a
+      // non-best played move now ALWAYS incurs the second "Checking your
+      // move…" search, where a mount-rank hit used to skip it.
       const afterFen = fenAfterUciMove(fen, playedMoveUci);
       if (afterFen === null) {
         // Defensive fallback (illegal/unparseable played move — should not
@@ -774,18 +690,14 @@ export function useTrainGradingEngine({
           esAfter: esBefore,
           bestLine,
           playedLine: bestLine,
-          lines: best.lines,
-          fineMoves,
         };
       }
 
-      // 190.1-02 D-01 point 2: this after-move search already ran before
-      // this plan; its PV is now captured into playedLine instead of being
-      // discarded. Single-line width — the mount search above is the one
-      // MultiPV search per puzzle. Reached only when the played move is
-      // outside the mount ranks (rank-match branch above), i.e. at least
-      // TRAIN_GRADING_MULTIPV_WIDTH moves scored above it at mount depth —
-      // so the display clamp below is a rare-case backstop.
+      // 190.1-02 D-01 point 2: the after-move search's PV is captured into
+      // playedLine instead of being discarded. Reached for EVERY played move
+      // that is not the engine's own top move (Phase 211 D-05 — the
+      // mount-rank shortcut that used to skip this is gone); the display
+      // clamp below is a backstop for the occasional deeper-search inversion.
       const afterRaw = await search(afterFen, generation, 1, TRAIN_GRADING_MOVETIME_MS);
       const esAfter = evalToExpectedScore(afterRaw.evalCp, afterRaw.evalMate, mover);
       const severity = classifyLiveSeverity(esBefore, esAfter);
@@ -806,8 +718,6 @@ export function useTrainGradingEngine({
         esAfter,
         bestLine,
         playedLine,
-        lines: best.lines,
-        fineMoves,
       };
     },
     [search],
@@ -873,13 +783,17 @@ export function useTrainGradingEngine({
       if (afterFen === null) {
         return Promise.reject(new Error('Illegal or malformed game move'));
       }
-      // 190.1 UAT round 9: same consistency treatment as gradeMove's played
-      // move — if the game move is a mount-search rank, resolve its line
-      // straight from that (settled) search: no dispatch at all, and an eval
-      // that cannot invert against the best move's. The mount search is
-      // guaranteed settled here in practice (the reveal only opens after
-      // gradeMove resolved, which awaited it); the fen/generation guard is
-      // purely defensive.
+      // 190.1 UAT round 9, narrowed by Phase 211 (D-05): at width 1 the
+      // settled mount search holds only rank 1, so the ONLY move this
+      // exact-UCI lookup can match is the engine's own top move — the branch
+      // now means "the move played in the game IS the engine's best move",
+      // which still legitimately skips a redundant search (rank 1's line IS
+      // that move's line, and its eval cannot invert against the best
+      // move's). This is a deliberately RETAINED consumer of the rank lookup
+      // (211-02 consumer ledger row 4), not an overlooked one. The mount
+      // search is guaranteed settled here in practice (the reveal only opens
+      // after gradeMove resolved, which awaited it); the fen/generation
+      // guard is purely defensive.
       const best = bestSearchRef.current;
       const bestMatches =
         best !== null && best.generation === generation && best.fen === puzzleFen;

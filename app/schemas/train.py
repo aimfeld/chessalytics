@@ -2,7 +2,10 @@
 
 POOL-10 / P-01: `TrainPuzzle` is the pre-attempt payload and carries no
 answer key — see its class docstring for the exact-equality contract this
-schema exists to enforce.
+schema exists to enforce. Phase 211: vetted-move material (`VettedMove`,
+`SolveResponse.vetted_moves`, the graded-ES pair) lives on `SolveResponse`
+— produced only once the attempt is already recorded — and never on
+`TrainPuzzle`.
 """
 
 from __future__ import annotations
@@ -128,6 +131,18 @@ class SolveRequest(BaseModel):
     client before the attempt (T-189-18/T-189-11). The server derives the
     spaced-repetition ladder's pass/fail boolean from `move_quality`
     (`!= "wrong"`) — see `app.repositories.train_repository.record_solve`.
+
+    Phase 211 (D-03/D-07) narrows the sentence above: as of this phase the
+    backend DOES grade the move for the one case where it owns the truth —
+    a `played_move` matching the server-certified key (the soft blob's `su`,
+    or a qualifying herring ladder entry). The client's assertion is still
+    required in every request and still authoritative for every OFF-key move
+    (D-04's accepted residual); for a key move the server recomputes the
+    tier from its own stored evals and discards the client's value. This is
+    the same shape as the pre-existing `_compute_correct_guess` override —
+    the client can never assert a verdict it does not own. The request
+    schema itself is unchanged (P-01 intact: the client cannot know the key
+    before attempting).
     """
 
     position: int
@@ -135,6 +150,32 @@ class SolveRequest(BaseModel):
     # UCI move string: 4 chars normal (e.g. "e2e4"), 5 chars promotion (e.g. "e7e8q").
     played_move: str = Field(min_length=4, max_length=5)
     move_quality: Literal["good", "inaccuracy", "wrong"]
+
+
+class VettedMove(BaseModel):
+    """One server-certified "also fine" alternative move (Phase 211, D-01).
+
+    The wire twin of `app.services.train_pool.VettedMove` (same name,
+    different module — mapped field-by-field at the router). Deliberately
+    thin: only the UCI and its pre-classified quality tier cross the wire;
+    the underlying expected scores stay server-side (the graded-ES pair on
+    `SolveResponse` covers the one move that needs numbers client-side).
+
+    POST-ATTEMPT-ONLY material: this model appears exclusively on
+    `SolveResponse`, which is produced solely by `record_solve` after the
+    attempt row is resolved. Never add it to `TrainPuzzle` (P-01) or
+    `SolveRequest`.
+
+    D-01 amendment (2026-08-16): quality "best" marks the deep best move
+    itself, served first on a soft puzzle alongside the certified
+    second-best (`game_positions.best_move` supplies the UCI; su-only when
+    unavailable) so the "several fine moves" copy is always backed by a
+    displayable alternative after the client filters its own best/played
+    arrows out of the row.
+    """
+
+    uci: str
+    quality: Literal["best", "good", "inaccuracy"]
 
 
 class SolveResponse(BaseModel):
@@ -155,6 +196,20 @@ class SolveResponse(BaseModel):
     your-game predicates read `verdict.source`, never the separate,
     asynchronously-fetched `PuzzleRevealResponse.source`, to avoid a
     post-solve window where a real SR puzzle misrenders as suppressed.
+
+    Phase 211 (D-01/D-03/D-07, amended 2026-08-16): `vetted_moves` is the
+    server's certified "also fine" set for this puzzle — the deep best plus
+    the blob's `su` for a soft puzzle (best-first; su-only when
+    `game_positions.best_move` is unavailable), the good-band ladder entries
+    for a herring, always empty for sharp/sharp-filler — and is what the
+    reveal's legend row + green arrows render (never the client engine's own
+    alternatives). `graded_es_before`
+    / `graded_es_after` are non-null EXACTLY when this call claimed the row
+    AND the played move matched a vetted entry (the server override): they
+    carry the same mover-POV expected scores the overridden `move_quality`
+    was computed from, so the client can re-classify the board badge from
+    the SAME numbers the score came from — display and recorded verdict can
+    never diverge for a key move.
     """
 
     correct_guess: bool
@@ -166,6 +221,9 @@ class SolveResponse(BaseModel):
     streak: int | None
     due_date: date | None
     session_complete: bool
+    vetted_moves: list[VettedMove]
+    graded_es_before: float | None
+    graded_es_after: float | None
 
 
 class PuzzleRevealResponse(BaseModel):
@@ -348,4 +406,5 @@ __all__ = [
     "TrainSessionResponse",
     "TrainSettingsResponse",
     "TrainSettingsUpdate",
+    "VettedMove",
 ]

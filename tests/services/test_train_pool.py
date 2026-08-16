@@ -65,6 +65,8 @@ from app.services.train_pool import (
     pick_one_per_game,
     pool_entry_stmt,
     second_best_not_winning_admissible,
+    vetted_moves_from_ladder,
+    vetted_moves_from_pv_node,
 )
 
 # A real, legal Ruy Lopez opening PGN, long enough (14 half-moves) to cover
@@ -201,6 +203,211 @@ class TestClassifyPuzzleType:
         soft_node = {"b": 50, "bm": None, "s": 50, "sm": None, "su": "e2e4"}
         assert classify_puzzle_type([sharp_node, soft_node], "white") == "sharp"
         assert classify_puzzle_type([soft_node, sharp_node], "white") == "soft"
+
+
+# ---------------------------------------------------------------------------
+# TestVettedMoves (Phase 211, D-01) — server-side "also fine" certification
+# from the SR blob node and the herring ladder, both through the shared
+# `_vetted_move` good-band predicate (strict `< INACCURACY_DROP`).
+# ---------------------------------------------------------------------------
+
+
+class TestVettedMovesFromPvNode:
+    """vetted_moves_from_pv_node — soft certification: the deep best (when its
+    UCI is known) plus the second-best `su`, best-first (D-01 as amended
+    2026-08-16)."""
+
+    def test_gap_just_below_band_certifies_su_as_good(self) -> None:
+        best_cp = _boundary_best_cp(INACCURACY_DROP) - 1.0
+        node: dict[str, Any] = {"b": best_cp, "bm": None, "s": 0, "sm": None, "su": "g8f6"}
+        vetted = vetted_moves_from_pv_node(node, "white")
+        assert [v.uci for v in vetted] == ["g8f6"]
+        assert vetted[0].quality == "good"
+        # The ES pair carries the blob-derived expected scores.
+        assert vetted[0].es_before == expected_score_for(best_cp, None, "white")  # ty: ignore[invalid-argument-type]
+        assert vetted[0].es_after == expected_score_for(0, None, "white")
+
+    def test_best_uci_prepends_deep_best_entry(self) -> None:
+        """The operator's exact Task 3 checkpoint scenario (2026-08-16, round
+        2): a soft blob whose certified `su` coincided with the client's
+        best/played move left the "several fine moves" copy with an EMPTY
+        "Also fine" row. D-01 amendment: when `game_positions.best_move` is
+        known, the deep best is served as a vetted entry too — quality
+        "best", first in the list (best-first order is a documented contract
+        of the vetted list), its ES pair being the best eval against itself.
+        """
+        node: dict[str, Any] = {"b": 4, "bm": None, "s": 0, "sm": None, "su": "d1a4"}
+        vetted = vetted_moves_from_pv_node(node, "white", best_uci="d1e2")
+        best_es = expected_score_for(4, None, "white")
+        second_es = expected_score_for(0, None, "white")
+        assert best_es is not None and second_es is not None
+        assert [(v.uci, v.quality) for v in vetted] == [("d1e2", "best"), ("d1a4", "good")]
+        assert vetted[0].es_before == best_es
+        assert vetted[0].es_after == best_es  # the best move against itself: drop 0
+        assert vetted[1].es_before == best_es
+        assert vetted[1].es_after == second_es
+
+    def test_missing_best_uci_degrades_to_su_only(self) -> None:
+        """`game_positions.best_move` NULL/unavailable → today's behavior
+        (su only), never a failure (D-01 amendment degrade rule)."""
+        node: dict[str, Any] = {"b": 4, "bm": None, "s": 0, "sm": None, "su": "d1a4"}
+        assert [(v.uci, v.quality) for v in vetted_moves_from_pv_node(node, "white")] == [
+            ("d1a4", "good")
+        ]
+        assert [
+            (v.uci, v.quality) for v in vetted_moves_from_pv_node(node, "white", best_uci=None)
+        ] == [("d1a4", "good")]
+
+    def test_best_uci_equal_to_su_dedupes_to_one_entry(self) -> None:
+        """Shouldn't happen (best_move is the move whose eval is `b`; `su` is
+        the second-best), but data is data: a stored best_move equal to `su`
+        yields ONE entry — the su certification, exactly today's behavior."""
+        node: dict[str, Any] = {"b": 4, "bm": None, "s": 0, "sm": None, "su": "d1a4"}
+        vetted = vetted_moves_from_pv_node(node, "white", best_uci="d1a4")
+        assert [(v.uci, v.quality) for v in vetted] == [("d1a4", "good")]
+
+    def test_sharp_node_stays_empty_even_with_best_uci(self) -> None:
+        """Sharp certification is UNCHANGED by the D-01 amendment and the
+        WR-01 fix: a sharp node's `su` never clears the band, and the WR-01
+        lone-best fallback re-applies classify_puzzle_type's exact sharp gate
+        (`>= SHARP_GAP_ES`), so the list stays empty and no lone best entry
+        appears."""
+        node: dict[str, Any] = {"b": 300, "bm": None, "s": 0, "sm": None, "su": "e2e4"}
+        assert vetted_moves_from_pv_node(node, "white", best_uci="d2d4") == []
+
+    def test_degenerate_node_stays_empty_even_with_best_uci(self) -> None:
+        assert vetted_moves_from_pv_node("not-a-dict", "white", best_uci="d2d4") == []
+        no_su: dict[str, Any] = {"b": 4, "bm": None, "s": 0, "sm": None, "su": ""}
+        assert vetted_moves_from_pv_node(no_su, "white", best_uci="d2d4") == []
+
+    def test_soft_node_uncertified_su_serves_lone_best_entry(self) -> None:
+        """WR-01 regression (code review 2026-08-16): a live `su` gap in
+        `[INACCURACY_DROP, SHARP_GAP_ES)` is still classified "soft" by
+        classify_puzzle_type (strict `< SHARP_GAP_ES`) but fails
+        `_vetted_move`'s strict good band (`< INACCURACY_DROP`). The known
+        deep best is trivially certifiable (drop 0 against itself) and must
+        be served ALONE — never an empty vetted list under the "several fine
+        moves" copy."""
+        mid_gap = (INACCURACY_DROP + SHARP_GAP_ES) / 2
+        best_cp = _boundary_best_cp(mid_gap)
+        node: dict[str, Any] = {"b": best_cp, "bm": None, "s": 0, "sm": None, "su": "g8f6"}
+        # Prove the exact WR-01 combination: soft classification + a su gap
+        # that fails certification.
+        assert classify_puzzle_type([node], "white") == "soft"
+        best_es = expected_score_for(best_cp, None, "white")  # ty: ignore[invalid-argument-type]
+        second_es = expected_score_for(0, None, "white")
+        assert best_es is not None and second_es is not None
+        assert INACCURACY_DROP <= best_es - second_es < SHARP_GAP_ES
+        vetted = vetted_moves_from_pv_node(node, "white", best_uci="d2d4")
+        assert [(v.uci, v.quality) for v in vetted] == [("d2d4", "best")]
+        assert vetted[0].es_before == best_es
+        assert vetted[0].es_after == best_es  # the best move against itself: drop 0
+
+    def test_soft_node_uncertified_su_without_best_uci_stays_empty(self) -> None:
+        """The unchanged WR-01 degradation: same `[INACCURACY_DROP,
+        SHARP_GAP_ES)` gap window, but with no known best UCI there is
+        nothing servable — `[]` exactly as before the fix."""
+        mid_gap = (INACCURACY_DROP + SHARP_GAP_ES) / 2
+        best_cp = _boundary_best_cp(mid_gap)
+        node: dict[str, Any] = {"b": best_cp, "bm": None, "s": 0, "sm": None, "su": "g8f6"}
+        assert vetted_moves_from_pv_node(node, "white") == []
+        assert vetted_moves_from_pv_node(node, "white", best_uci=None) == []
+        assert vetted_moves_from_pv_node(node, "white", best_uci="") == []
+
+    def test_gap_exactly_at_band_is_excluded(self) -> None:
+        """STRICT `<` boundary: a `su` exactly INACCURACY_DROP below the best
+        is already an inaccuracy by classify_severity and must not be
+        advertised."""
+        best_cp = _boundary_best_cp(INACCURACY_DROP)
+        node: dict[str, Any] = {"b": best_cp, "bm": None, "s": 0, "sm": None, "su": "g8f6"}
+        # Confirm the construction lands at/just above the boundary first.
+        best_es = expected_score_for(best_cp, None, "white")  # ty: ignore[invalid-argument-type]
+        second_es = expected_score_for(0, None, "white")
+        assert best_es is not None and second_es is not None
+        assert best_es - second_es >= INACCURACY_DROP
+        assert vetted_moves_from_pv_node(node, "white") == []
+
+    def test_empty_su_sentinel_yields_empty(self) -> None:
+        node = {"b": 50, "bm": None, "s": 50, "sm": None, "su": ""}
+        assert vetted_moves_from_pv_node(node, "white") == []
+
+    def test_missing_second_eval_yields_empty(self) -> None:
+        node = {"b": 50, "bm": None, "su": "g8f6"}  # s and sm both absent
+        assert vetted_moves_from_pv_node(node, "white") == []
+
+    def test_non_dict_node_yields_empty(self) -> None:
+        assert vetted_moves_from_pv_node("not-a-dict", "white") == []
+
+
+class TestVettedMovesFromLadder:
+    """vetted_moves_from_ladder — herring good-band certification, ladder order."""
+
+    def test_good_band_prefix_in_ladder_order(self) -> None:
+        """Entries 0 and 1 inside the band, 2-4 outside — exactly two vetted
+        entries, in stored (best-first) order, index 0 included."""
+        ladder: list[dict[str, object]] = [
+            {"move_uci": "e2e4", "cp": 60, "mate": None},
+            {"move_uci": "d2d4", "cp": 45, "mate": None},  # gap ~0.014 — in
+            {"move_uci": "g1f3", "cp": -10, "mate": None},  # gap ~0.064 — out
+            {"move_uci": "c2c4", "cp": -40, "mate": None},
+            {"move_uci": "b1c3", "cp": -80, "mate": None},
+        ]
+        vetted = vetted_moves_from_ladder(ladder, "white")
+        assert [v.uci for v in vetted] == ["e2e4", "d2d4"]
+        assert all(v.quality == "good" for v in vetted)
+        # Index 0 certifies against itself: es_before == es_after.
+        assert vetted[0].es_before == vetted[0].es_after
+
+    def test_entry_exactly_at_band_is_excluded(self) -> None:
+        """STRICT `<` boundary, mirroring herring_stmt's serve-time predicate."""
+        best_cp = _boundary_best_cp(INACCURACY_DROP)
+        ladder: list[dict[str, object]] = [
+            {"move_uci": "e2e4", "cp": best_cp, "mate": None},
+            {"move_uci": "d2d4", "cp": 0, "mate": None},  # exactly at the bound
+        ]
+        vetted = vetted_moves_from_ladder(ladder, "white")
+        assert [v.uci for v in vetted] == ["e2e4"]  # the best only
+
+    def test_mate_entry_resolves_via_option_b(self) -> None:
+        """A mate-carrying entry maps to ±MATE_CP_EQUIVALENT before the shared
+        sigmoid (Option B) rather than raising — a mate-in-3 best with a
+        near-mate cp runner-up keeps both in the band."""
+        ladder: list[dict[str, object]] = [
+            {"move_uci": "e2e4", "cp": None, "mate": 3},
+            {"move_uci": "d2d4", "cp": 900, "mate": None},
+        ]
+        vetted = vetted_moves_from_ladder(ladder, "white")
+        assert [v.uci for v in vetted] == ["e2e4", "d2d4"]
+
+    def test_black_mover_inverts_sign(self) -> None:
+        """White-POV cp with a BLACK mover: negative cp is good for black, so
+        a -60/-45 pair is in-band while +10 is out — the exact inverse of the
+        white-mover reading."""
+        ladder: list[dict[str, object]] = [
+            {"move_uci": "e7e5", "cp": -60, "mate": None},
+            {"move_uci": "d7d5", "cp": -45, "mate": None},
+            {"move_uci": "g8f6", "cp": 10, "mate": None},
+        ]
+        vetted = vetted_moves_from_ladder(ladder, "black")
+        assert [v.uci for v in vetted] == ["e7e5", "d7d5"]
+
+    def test_degenerate_shapes_yield_empty(self) -> None:
+        assert vetted_moves_from_ladder(None, "white") == []
+        assert vetted_moves_from_ladder([], "white") == []
+        assert vetted_moves_from_ladder(["not-a-dict"], "white") == []
+
+    def test_unresolvable_entries_are_skipped(self) -> None:
+        """An entry with an empty/absent move_uci or no resolvable eval is
+        skipped without affecting its siblings."""
+        ladder: list[dict[str, object]] = [
+            {"move_uci": "e2e4", "cp": 60, "mate": None},
+            {"move_uci": "", "cp": 55, "mate": None},  # empty uci — skipped
+            {"cp": 50, "mate": None},  # absent uci — skipped
+            {"move_uci": "d2d4", "cp": None, "mate": None},  # no eval — skipped
+            {"move_uci": "g1f3", "cp": 45, "mate": None},
+        ]
+        vetted = vetted_moves_from_ladder(ladder, "white")
+        assert [v.uci for v in vetted] == ["e2e4", "g1f3"]
 
 
 # ---------------------------------------------------------------------------

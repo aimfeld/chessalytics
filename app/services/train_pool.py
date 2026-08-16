@@ -28,6 +28,7 @@ import io
 import math
 import random
 from collections.abc import Sequence
+from dataclasses import dataclass
 from typing import Any, Literal, TypeVar
 
 import chess.pgn
@@ -63,6 +64,7 @@ from app.services.flaws_service import (
     INACCURACY_DROP,
     MATE_CP_EQUIVALENT,
     MISTAKE_DROP,
+    classify_severity,
 )
 
 # P-05: low end of the seed's ~20-25% expected-score band. Planner discretion
@@ -304,6 +306,157 @@ def classify_puzzle_type(
     if best_es is None or second_es is None:
         return "soft"
     return "sharp" if best_es - second_es >= SHARP_GAP_ES else "soft"
+
+
+@dataclass(frozen=True)
+class VettedMove:
+    """One server-certified "also fine" alternative move (Phase 211, D-01).
+
+    This is the DOMAIN value; its wire twin is `app.schemas.train.VettedMove`
+    (deliberately the same name in a different module, mapped field-by-field
+    at the router exactly as `RecordedSolve` maps to `SolveResponse`). The
+    wire twin carries only `uci`/`quality`: `es_before`/`es_after` exist
+    solely so `record_solve` can emit `graded_es_before`/`graded_es_after`
+    for a key-move override without recomputing the expected scores.
+
+    `es_before` is the BEST move's mover-POV expected score (the score the
+    mover could have achieved); `es_after` is this move's own — both through
+    the shared sigmoid (`expected_score_for`), never a second derivation.
+
+    D-01 amendment (2026-08-16, Task 3 checkpoint round 2): quality "best"
+    marks the deep BEST move itself, served on a soft puzzle alongside the
+    certified second-best so the "several fine moves" copy is always backed
+    by at least one displayable alternative (the client filters entries that
+    coincide with its own best/played arrows). For a "best" entry
+    `es_before == es_after` — the best move against itself, drop 0.
+    """
+
+    uci: str
+    quality: Literal["best", "good", "inaccuracy"]
+    es_before: float
+    es_after: float
+
+
+def _vetted_move(uci: str, best_es: float, move_es: float) -> VettedMove | None:
+    """Certify one candidate move against the good band, or return None.
+
+    The band is `best_es - move_es < INACCURACY_DROP` — STRICT `<`, the exact
+    direction and constant `herring_stmt`'s qualifying subquery uses at serve
+    time: `classify_severity` grades a drop as an inaccuracy at
+    `drop >= INACCURACY_DROP` (boundary-inclusive), so a move exactly
+    `INACCURACY_DROP` below the best is already an inaccuracy and must not be
+    advertised as "also fine". No numeric threshold literal is declared here —
+    both the band and the quality tier flow through the shared severity
+    ladder's constants.
+
+    `quality` comes from `classify_severity(best_es - move_es)`: a None
+    severity maps to `"good"`, an `"inaccuracy"` severity maps to
+    `"inaccuracy"`, any other severity returns None. Under today's strict
+    band only `"good"` is reachable (the band excludes the whole inaccuracy
+    range); the two-member Literal exists so the wire shape mirrors the
+    client's `TrainFineMove` and so the band stays retunable without a wire
+    change.
+    """
+    if best_es - move_es >= INACCURACY_DROP:
+        return None
+    severity = classify_severity(best_es - move_es)
+    if severity is None:
+        return VettedMove(uci=uci, quality="good", es_before=best_es, es_after=move_es)
+    if severity == "inaccuracy":
+        return VettedMove(uci=uci, quality="inaccuracy", es_before=best_es, es_after=move_es)
+    return None
+
+
+def vetted_moves_from_pv_node(
+    node: Any, mover_color: Literal["white", "black"], best_uci: str | None = None
+) -> list[VettedMove]:
+    """Server-certified "also fine" moves from one `missed_pv_lines` node (D-01,
+    amended 2026-08-16).
+
+    A pure-Python reader of an ALREADY-LOADED blob node — no SQL, and in
+    particular no `jsonb_typeof` shape guard paired with an array function
+    (the documented live crash `answer_key_present`'s docstring describes);
+    shape tolerance is handled with plain `isinstance`/`get` below.
+
+    Asymmetry with the ladder path (`vetted_moves_from_ladder`, Task 2):
+    `PvNode` stores no UCI for the BEST move (only `b`/`bm` evals) — which is
+    why the best entry's UCI is supplied by the CALLER, from the already-
+    stored `game_positions.best_move` for the flaw's own ply (decision-keyed:
+    row `ply`'s OWN best move for the pre-move position). No blob/worker-
+    pipeline change (D-04 stays intact). A SHARP puzzle falls out EMPTY
+    through this same predicate with no `puzzle_type` branch anywhere:
+    `classify_puzzle_type`'s sharp gate (`>= SHARP_GAP_ES`, which aliases
+    `MISTAKE_DROP`) is strictly outside the good band, so a sharp node's `su`
+    can never clear `_vetted_move` — and the lone-best fallback (WR-01, see
+    the fix-site comment below) re-applies that exact same sharp gate, so a
+    sharp node never serves a lone best entry either.
+
+    Returns `[]` — never raises — for every degenerate shape: a non-dict
+    node, `su` absent or the empty-string sentinel (no legal second move),
+    or either expected score resolving to None (missing cp/mate on either
+    side).
+
+    Args:
+        node: `missed_pv_lines[0]` (a `PvNode`-shaped dict), or anything —
+            degenerate shapes yield `[]`.
+        mover_color: The flaw-maker's color — ply parity via
+            `mover_color_for_ply(ply)` for an SR blob, NEVER a stored color
+            column (see `pool_entry_stmt`'s parity rationale).
+        best_uci: The deep best move's UCI (`game_positions.best_move` at the
+            flaw ply), or None when unavailable (not yet backfilled, orphaned
+            game link) — the list then degrades to today's su-only shape.
+
+    Returns:
+        Zero, one or two `VettedMove`s in the server's best-first order (a
+        DOCUMENTED CONTRACT of the vetted list — callers must not re-sort):
+        `[best, su]` when both are available, `[su]` when the best UCI is
+        unknown, `[best]` when the `su` fails the good band but the node is
+        still soft-shaped (gap `< SHARP_GAP_ES`) and the best UCI is known
+        (WR-01 — a "soft" puzzle must never advertise "several fine moves"
+        with zero servable alternatives), `[]` otherwise (sharp node, or an
+        uncertified `su` with no known best UCI).
+    """
+    if not isinstance(node, dict):
+        return []
+    su = node.get("su")
+    if not isinstance(su, str) or su == "":
+        return []
+    best_es = expected_score_for(node.get("b"), node.get("bm"), mover_color)
+    second_es = expected_score_for(node.get("s"), node.get("sm"), mover_color)
+    if best_es is None or second_es is None:
+        return []
+    vetted = _vetted_move(su, best_es, second_es)
+    if vetted is None:
+        # Bug-fix comment (WR-01 code review, 2026-08-16): the best_uci
+        # fallback below used to be gated behind su certification, but
+        # `classify_puzzle_type`'s soft band (gap < SHARP_GAP_ES = 0.10) is
+        # WIDER than `_vetted_move`'s good band (gap < INACCURACY_DROP =
+        # 0.05) — a live su gap in [0.05, 0.10) (reachable when a background
+        # reclassification rewrites the blob between session composition and
+        # solve submission) left a puzzle still served as "soft" ("several
+        # fine moves") with an EMPTY vetted list even when the deep best was
+        # known. The best move is trivially certifiable (drop 0 against
+        # itself), so serve it ALONE whenever the node is still soft-shaped.
+        # The gate mirrors classify_puzzle_type's split exactly (strict
+        # `< SHARP_GAP_ES`), keeping sharp nodes byte-identical: never a
+        # lone best entry.
+        if best_es - second_es < SHARP_GAP_ES and best_uci is not None and best_uci != "":
+            return [VettedMove(uci=best_uci, quality="best", es_before=best_es, es_after=best_es)]
+        return []
+    # Bug-fix comment (Task 3 checkpoint round 2, 2026-08-16): with only the
+    # `su` served, a soft puzzle whose `su` coincided with the client's own
+    # best/played move rendered an EMPTY "Also fine" row under the "several
+    # fine moves" copy — the client display filter absorbed the sole entry.
+    # Serving the deep best too guarantees at least one fine alternative is
+    # displayable (or both fine moves are already on screen as the best and
+    # played arrows). Best-first order; es_before == es_after for the best
+    # move (drop 0 against itself). A stored best_move equal to `su` (data
+    # inconsistency — best_move is the move whose eval is `b`) dedupes to the
+    # su entry alone, today's exact behavior.
+    if best_uci is not None and best_uci != "" and best_uci != su:
+        best_entry = VettedMove(uci=best_uci, quality="best", es_before=best_es, es_after=best_es)
+        return [best_entry, vetted]
+    return [vetted]
 
 
 def answer_key_present(col: Any) -> ColumnElement[bool]:
@@ -713,6 +866,65 @@ def _ladder_element_es(ladder_element: Any, mover_color_col: Any) -> ColumnEleme
     )
 
 
+def vetted_moves_from_ladder(
+    ladder: list[Any] | None, mover_color: Literal["white", "black"]
+) -> list[VettedMove]:
+    """Server-certified "also fine" moves from a `HerringPool.ladder` (Phase 211, D-01).
+
+    Reuses `herring_stmt`'s exact serve-time predicate
+    (`best_es - element_es < INACCURACY_DROP`, STRICT `<`) via the shared
+    `_vetted_move`, so the set of moves a herring ADVERTISES can never be
+    wider than the set its serve-time qualifying count was built on.
+
+    Index 0 (`_PV_BEST_INDEX`) is DELIBERATELY included: its gap against
+    itself is 0, so it always certifies — and it is genuinely a vetted
+    alternative from the client's point of view whenever the client's own
+    width-1 search picked a different move (`buildTrainRevealOverlay`
+    already filters out any entry equal to the client's best before drawing
+    green arrows).
+
+    A pure-Python reader of an ALREADY-LOADED ladder list — no SQL, and no
+    `jsonb_typeof` shape guard: shape is enforced at write time by
+    `ck_herring_pool_ladder_shape` (see `herring_stmt`'s docstring for why a
+    read-time guard is a documented live crash, not defense in depth).
+
+    Args:
+        ladder: The loaded `HerringPool.ladder` value (5 best-first
+            `{"move_uci", "cp", "mate"}` dicts, white POV), or None.
+        mover_color: The STORED `HerringPool.mover_color` — the side to move
+            on the generator's own board. NEVER ply parity for a herring
+            (SEED-120 Pitfall 1).
+
+    Returns:
+        The qualifying entries in ladder (best-first) order — `[]` for a
+        None/empty ladder, a non-dict best entry, or a best entry whose
+        expected score resolves to None. Entries with an absent/empty
+        `move_uci` or an unresolvable expected score are skipped.
+    """
+    if not ladder:
+        return []
+    best_entry = ladder[_PV_BEST_INDEX]
+    if not isinstance(best_entry, dict):
+        return []
+    best_es = expected_score_for(best_entry.get("cp"), best_entry.get("mate"), mover_color)
+    if best_es is None:
+        return []
+    vetted: list[VettedMove] = []
+    for entry in ladder:
+        if not isinstance(entry, dict):
+            continue
+        move_uci = entry.get("move_uci")
+        if not isinstance(move_uci, str) or move_uci == "":
+            continue
+        entry_es = expected_score_for(entry.get("cp"), entry.get("mate"), mover_color)
+        if entry_es is None:
+            continue
+        candidate = _vetted_move(move_uci, best_es, entry_es)
+        if candidate is not None:
+            vetted.append(candidate)
+    return vetted
+
+
 def herring_stmt(user_id: int, *, exclude_served: bool = True) -> Select[tuple[HerringPool]]:
     """Red-herring source candidates for `user_id` (POOL-03, amended Phase 192).
 
@@ -744,7 +956,7 @@ def herring_stmt(user_id: int, *, exclude_served: bool = True) -> Select[tuple[H
       predicate (gap 0.0 to itself), so a count of 2 means "the best plus one
       genuinely fine alternative" — not "two alternatives besides the best".
       The comparison is STRICT (`<`, not `<=`), and that direction is
-      load-bearing: `flaws_service._classify_severity` classifies a drop as
+      load-bearing: `flaws_service.classify_severity` classifies a drop as
       an inaccuracy at `drop >= INACCURACY_DROP`, so a move exactly
       `INACCURACY_DROP` below the best is already an inaccuracy and must not
       count as one of the "several fine moves" this gate exists to certify.
@@ -1080,6 +1292,7 @@ __all__ = [
     "SHARP_GAP_ES",
     "WINNABILITY_FLOOR_ES",
     "PuzzleType",
+    "VettedMove",
     "answer_key_pending",
     "answer_key_present",
     "blob_pending_stmt",
@@ -1094,4 +1307,6 @@ __all__ = [
     "pick_one_per_game",
     "pool_entry_stmt",
     "second_best_not_winning_admissible",
+    "vetted_moves_from_ladder",
+    "vetted_moves_from_pv_node",
 ]

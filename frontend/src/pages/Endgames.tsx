@@ -400,7 +400,7 @@ export function EndgamesPage() {
                       and time control buckets, used to calibrate the typical range for each metric. The latest
                       run is published as the {' '}
                       <a
-                        href="https://github.com/flawchess/flawchess/blob/main/reports/benchmarks-latest.md"
+                        href="https://github.com/flawchess/flawchess/blob/main/reports/benchmark/benchmarks-latest.md"
                         className="text-primary underline-offset-4 hover:underline"
                         target="_blank"
                         rel="noopener noreferrer"

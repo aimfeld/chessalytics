@@ -7,9 +7,13 @@
  * marks the engine's best move (the app-wide "engine pointer" hue), the
  * user's PLAYED move is colored by its own move quality (good/mistake/
  * blunder — inaccuracy is PRESENTATION-collapsed into good, see
- * `toDisplayQuality`), alternative fine moves are dark green regardless of
- * whether the grading engine classified them good or inaccuracy, and the
- * thin white on-top arrow still marks the move played in the original game.
+ * `toDisplayQuality`), alternative fine moves — the SERVER's vetted "Also
+ * fine" list as of Phase 211 (D-01), no longer the client engine's MultiPV
+ * ranks — are dark green regardless of whether the server classified them
+ * best, good or inaccuracy (a 'best'-quality alternative keeps its blue
+ * best-star BADGE, though — the deep engine's endorsement is real
+ * information), and the thin white on-top arrow still marks the move
+ * played in the original game.
  * Every arrow additionally gets the matching move-quality badge (the shared
  * SquareMarker corner glyphs) on its target square. Accepted cost: the
  * reveal board can no longer visually distinguish good from inaccuracy — by
@@ -51,30 +55,62 @@ export type TrainPuzzleType = 'sharp' | 'soft' | 'herring';
 export type TrainMoveQuality = 'best' | 'good' | FlawSeverity;
 
 /**
- * One "fine move" from the grading engine's MultiPV mount search — a move the
- * verdict itself would grade correct (quick 260726-fma). `quality` mirrors the
- * verdict's own two correct tiers: 'good' (drop not even an inaccuracy) or
- * 'inaccuracy' (drop within [INACCURACY_DROP, MISTAKE_DROP), still a correct
- * move by SOLV-03's rule AND still within the backend's soft-puzzle gap).
+ * One server-certified alternative ("Also fine" move). Phase 211 (D-01): the
+ * list is the verdict's `vetted_moves` — soft deep-best + `su`, herring
+ * good-band ladder — no longer derived from the client engine's MultiPV mount
+ * search. 'good' (drop not even an inaccuracy) and 'inaccuracy' (drop within
+ * [INACCURACY_DROP, MISTAKE_DROP), still a correct move by SOLV-03's rule)
+ * are retained because the wire shape mirrors them and Phase 200 D-05 already
+ * renders them identically. D-01 amendment (2026-08-16): 'best' marks the
+ * deep best move itself, served FIRST on a soft puzzle — usually filtered out
+ * below (it coincides with the client's best arrow), but displayable when the
+ * two engines disagree, which is exactly the case that used to strand the
+ * "several fine moves" copy with an empty row.
  */
 export interface TrainFineMove {
   uci: string;
-  quality: 'good' | 'inaccuracy';
+  quality: 'best' | 'good' | 'inaccuracy';
+}
+
+/**
+ * Phase 211 (D-06): find the served vetted move whose UCI starts at `from`
+ * and ends at `to`, or null. The free-play ROOT ply's key lookup — this is
+ * the squares-only twin of `uciParser.ts`'s exact-UCI `rankLineForMove`, and
+ * it carries forward the contract of the retired squares-only rank matcher
+ * (formerly beside `rankLineForMove` in uciParser.ts) verbatim in substance:
+ * - The four-character slice exists because the move tree (`MoveNode` in
+ *   `useAnalysisBoard.ts`) stores only `from`/`to` and no promotion piece —
+ *   a full-string compare would miss a promotion (the same reason
+ *   `useTrainFreePlay`'s `isBest` check slices its UCI to four characters).
+ * - Ties (two entries naming the same squares — a promotion-variant pair)
+ *   resolve by ARRAY ORDER, which is the server's own best-first order:
+ *   the first match wins. Callers must NOT re-sort `moves` — the ordering
+ *   IS the tie rule.
+ * - A malformed/short UCI simply does not match and never throws (a short
+ *   slice can never equal a four-character `from + to`).
+ *
+ * Lives here rather than in the UCI parser because it matches the
+ * server-certified move type (`TrainFineMove`, declared above), not an
+ * engine PV line; putting it in a hook would create a hook-to-hook
+ * dependency instead.
+ */
+export function vettedMoveForSquares(
+  moves: readonly TrainFineMove[],
+  from: string,
+  to: string,
+): TrainFineMove | null {
+  const fromTo = `${from}${to}`;
+  return moves.find((move) => move.uci.slice(0, 4) === fromTo) ?? null;
 }
 
 /**
  * Arrow caps, counted in ALTERNATIVES (Phase 200 UAT round 4) — not in total
- * arrows as the original D-02 constants were.
- *
- * The old total-based cap silently spent slots on moves that never render as
- * a green alternative anyway: `fineMoves` always includes rank 1 (the best
- * move, drawn blue), and the played move is drawn in its own quality color
- * when it happens to be a fine alternative. Under a total cap of 3 a soft
- * puzzle therefore showed 2 alternatives normally, and only 1 whenever the
- * user had played one of them — which is exactly the "several fine moves but
- * only one is shown" the UAT reported. Capping the alternatives directly (and
- * filtering out the best/played moves BEFORE slicing) makes the cap mean what
- * it reads like.
+ * arrows as the original D-02 constants were: the filter runs BEFORE the
+ * slice in `buildTrainRevealOverlay`, so the best move and a played
+ * alternative never consume a slot. Phase 211 (D-01) split the former shared
+ * non-sharp cap into THREE independent per-puzzle-type budgets — the
+ * alternatives are now the server's certified list, whose upper bound
+ * differs per type, not slices of one client MultiPV array.
  */
 /** A sharp puzzle has exactly one right move by definition (D-02), so it
  * draws NO alternative arrows at all, regardless of how many entries the
@@ -85,13 +121,26 @@ export interface TrainFineMove {
  * teach the wrong lesson and contradict the critical-vs-several guess the
  * user just scored on. */
 export const TRAIN_SHARP_ALT_MOVE_ARROWS = 0;
-/** A soft or herring puzzle may have several fine moves, so every alternative
- * the MultiPV mount search can possibly return is drawable. Equals
- * `TRAIN_GRADING_MULTIPV_WIDTH - 1` (rank 1 is the best move) — not imported
- * from `useTrainGradingEngine` because the dependency runs the other way
- * (that hook imports `TrainFineMove` from here), and a cycle is a worse
- * trade than this comment. */
-export const TRAIN_SOFT_ALT_MOVE_ARROWS = 3;
+/** A soft puzzle draws at most ONE green alternative. The served list holds
+ * up to TWO entries since the D-01 amendment (2026-08-16) — the deep best
+ * (quality 'best', first) plus the second-best `su` — and when the client's
+ * own best arrow coincides with neither (the two engines disagree AND the
+ * played move is off-key), both survive the filter below. The cap of 1 then
+ * deliberately truncates to the FIRST survivor: the server's best-first
+ * order is a documented contract of the vetted list, so the drawn entry is
+ * always the STRONGEST new fine move, and a soft board never shows more
+ * than one green arrow. Phase 211 (D-01): no longer derived from the
+ * retired MultiPV mount-search width; the server list's own shape is the
+ * authority. */
+export const TRAIN_SOFT_ALT_MOVE_ARROWS = 1;
+/** A red herring's certified list comes from the stored 5-entry ladder
+ * (`app/services/train_pool.py` `HERRING_LADDER_SIZE`), whose top entry is
+ * drawn as the best-move arrow — leaving at most 4 alternatives. A DISPLAY
+ * bound only, kept as defence in depth: the server already caps the list it
+ * serves (only good-band ladder entries qualify), and the server-side ladder
+ * length is the authority — this constant is deliberately NOT imported from
+ * the backend. */
+export const TRAIN_HERRING_ALT_MOVE_ARROWS = 4;
 
 /** Normal engine-arrow width (matches Analysis.tsx's
  * STOCKFISH_ENGINE_ARROW_WIDTH) — used for the green good-move arrows. */
@@ -258,8 +307,18 @@ export function toDisplayQuality(quality: TrainMoveQuality): TrainMoveQuality {
   return quality === 'inaccuracy' ? 'good' : quality;
 }
 
+/** Phase 211 (D-01): branches on ALL THREE puzzle types explicitly — the old
+ * two-way sharp/non-sharp shape is exactly what would silently cap a herring
+ * at the soft budget now that the two budgets differ (RESEARCH Pitfall 6). */
 function alternativeArrowCap(puzzleType: TrainPuzzleType): number {
-  return puzzleType === 'sharp' ? TRAIN_SHARP_ALT_MOVE_ARROWS : TRAIN_SOFT_ALT_MOVE_ARROWS;
+  switch (puzzleType) {
+    case 'sharp':
+      return TRAIN_SHARP_ALT_MOVE_ARROWS;
+    case 'soft':
+      return TRAIN_SOFT_ALT_MOVE_ARROWS;
+    case 'herring':
+      return TRAIN_HERRING_ALT_MOVE_ARROWS;
+  }
 }
 
 /** UCI ("e2e4"/"e7e8q") -> {startSquare, endSquare}, or null for a null,

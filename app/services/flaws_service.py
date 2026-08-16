@@ -274,10 +274,16 @@ def _classify_mate_ladder(
     return None
 
 
-def _classify_severity(drop: float) -> FlawSeverity | None:
+def classify_severity(drop: float) -> FlawSeverity | None:
     """Map a mover-POV ES drop to a severity label, or None if below threshold.
 
     Highest band wins (CONTEXT.md §Severity). All thresholds are boundary-inclusive.
+
+    Public since Phase 211 (previously a private helper): `train_pool`'s
+    vetted-move certification consumes this same ladder — one severity
+    ladder server-side, never a second local band (the client twin is
+    `frontend/src/lib/liveFlaw.ts`'s `classifyLiveSeverity`, CI-drift-checked
+    via the generated thresholds file).
     """
     if drop >= BLUNDER_DROP:
         return "blunder"
@@ -385,7 +391,7 @@ def _run_all_moves_pass(
         if positions[n - 1].eval_mate is not None or positions[n].eval_mate is not None:
             severity = _classify_mate_ladder(positions[n - 1], positions[n], mover)
         else:
-            severity = _classify_severity(es_before - es_after)
+            severity = classify_severity(es_before - es_after)
         all_moves[n] = (mover, severity, es_before, es_after)
     return all_moves
 

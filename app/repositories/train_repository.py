@@ -45,6 +45,7 @@ from app.services.sharp_filler import (
 )
 from app.services.train_pool import (
     MAX_ITEMS_PER_GAME_PER_SESSION,
+    VettedMove,
     answer_key_present,
     blob_pending_stmt,
     classify_puzzle_type,
@@ -56,6 +57,8 @@ from app.services.train_pool import (
     pick_one_per_game,
     pool_entry_stmt,
     second_best_not_winning_admissible,
+    vetted_moves_from_ladder,
+    vetted_moves_from_pv_node,
 )
 from app.services.train_scheduler import (
     DEFAULT_PUZZLES_PER_SESSION,
@@ -2065,6 +2068,15 @@ class RecordedSolve:
     synchronously with the solve mutation (RESEARCH Pitfall 1) so the three
     D-19 frontend predicates never depend on the separate, asynchronous
     reveal fetch.
+
+    Phase 211 (D-01/D-03/D-07): `vetted_moves` is the server-certified
+    "also fine" set — a property of the PUZZLE, populated on every return
+    path (claimed and lost-claim alike). `graded_es_before`/`graded_es_after`
+    are ATTEMPT-scoped: non-null only when THIS call claimed the row AND the
+    played move matched a vetted entry (the key-move override), None on
+    every other path including a lost-claim re-submit — the first recorded
+    outcome wins, and this call's graded numbers would describe a move that
+    was never recorded.
     """
 
     correct_guess: bool
@@ -2076,28 +2088,90 @@ class RecordedSolve:
     streak: int | None
     due_date: datetime.date | None
     session_complete: bool
+    vetted_moves: list[VettedMove]
+    graded_es_before: float | None
+    graded_es_after: float | None
 
 
-async def _classify_solve_puzzle_type(
+@dataclass(frozen=True)
+class SolveClassification:
+    """`_classify_and_certify_solve`'s result: the puzzle type and the
+    server-certified "also fine" set, computed from ONE read of the live
+    blob/ladder so the two can never disagree (Phase 211)."""
+
+    puzzle_type: Literal["sharp", "soft", "herring"]
+    vetted_moves: list[VettedMove]
+
+
+async def _classify_and_certify_solve(
     session: AsyncSession, *, solve: DrillSolve
-) -> Literal["sharp", "soft", "herring"]:
-    """Server-side puzzle-type classification at solve/reveal time (D-01).
+) -> SolveClassification:
+    """Server-side puzzle-type classification AND key certification at solve
+    time (D-01, Phase 211 — replaces `_classify_solve_puzzle_type`).
 
-    A red herring is always `"herring"` (no `game_flaws` row exists for it).
-    A sharp filler is always `"sharp"` (D-15 — D-13's offline MultiPV-5
+    A red herring is always `"herring"` (no `game_flaws` row exists for it);
+    its vetted set is the good-band subset of its `herring_pool` ladder. A
+    sharp filler is always `"sharp"` (D-15 — D-13's offline MultiPV-5
     verification pass at authoring time is what makes this constant
     assertion provably true rather than assumed; no `game_flaws` row exists
-    for it either). Both early returns sit above the `game_flaws` read so
-    the "no blob read for a non-SR source" invariant reads as one visual
+    for it either), and its vetted set is empty by the same rule as any
+    other sharp puzzle. Both early returns sit above the `game_flaws` read
+    so the "no blob read for a non-SR source" invariant reads as one visual
     block. An SR-source row reads the LIVE `game_flaws.missed_pv_lines` blob
     — never a snapshot — so a reclassified-away flaw naturally falls through
     `classify_puzzle_type`'s None-blob default of `"soft"` rather than
     failing the solve.
+
+    The point of merging classification and certification into one function
+    is that ONE blob/ladder read now feeds both — the puzzle type and the
+    certified key can never be computed from two different reads of a live
+    blob.
     """
     if solve.source == DrillSource.RED_HERRING:
-        return "herring"
+        if solve.herring_pool_id is None:
+            return SolveClassification(puzzle_type="herring", vetted_moves=[])
+        pool_row = (
+            await session.execute(
+                select(HerringPool)
+                .options(undefer(HerringPool.ladder))
+                .where(HerringPool.id == solve.herring_pool_id)
+            )
+        ).scalar_one_or_none()
+        if pool_row is None:
+            # A pool row can legitimately have been pruned/regenerated —
+            # `drill_solves.herring_pool_id` is ON DELETE SET NULL, but a
+            # not-yet-nulled stale pointer is the same shape
+            # (test_completion_ignores_herring_with_missing_pool_row covers
+            # this elsewhere). Serve no vetted moves rather than failing.
+            return SolveClassification(puzzle_type="herring", vetted_moves=[])
+        # V4 IDOR note: `HerringPool` carries no user scoping BY DESIGN
+        # (D-10 — the pool is identity-blind at serve time), so the guard is
+        # that `solve.herring_pool_id` was read from a `DrillSolve` row
+        # already filtered by `DrillSolve.user_id == user_id` in
+        # `record_solve`'s own SELECT — a foreign `(session_id, position)`
+        # returns None from that SELECT and `record_solve` returns 404
+        # before this function is ever called.
+        #
+        # Mover color is the STORED `HerringPool.mover_color` column, NEVER
+        # ply parity (SEED-120 Pitfall 1: the generator's own board is
+        # authoritative; a pool row's ply does not reconcile with the
+        # parity convention). The SR branch below does the opposite — parity,
+        # never a stored color — for the opposite reason (see
+        # `pool_entry_stmt`'s parity rationale).
+        # cast, not a ternary (IN-02): the CHECK-constrained column is trusted
+        # verbatim, matching `_ReconstructedPuzzle.side_to_move`'s pattern —
+        # a ternary would silently map a corrupt value to "black".
+        mover = cast(Literal["white", "black"], pool_row.mover_color)
+        return SolveClassification(
+            puzzle_type="herring",
+            vetted_moves=vetted_moves_from_ladder(pool_row.ladder, mover),
+        )
     if solve.source == DrillSource.SHARP_FILLER:
-        return "sharp"
+        # The SAME empty-list outcome the SR sharp path produces through
+        # `vetted_moves_from_pv_node`'s band predicate — a warm-up puzzle
+        # needs no stored data and no special-cased predicate (Phase 206
+        # D-15: the offline MultiPV-5 authoring pass certifies sharpness).
+        return SolveClassification(puzzle_type="sharp", vetted_moves=[])
     flaw_row = (
         await session.execute(
             select(GameFlaw)
@@ -2110,7 +2184,46 @@ async def _classify_solve_puzzle_type(
         )
     ).scalar_one_or_none()
     missed_pv_lines = flaw_row.missed_pv_lines if flaw_row is not None else None
-    return classify_puzzle_type(missed_pv_lines, mover_color_for_ply(solve.ply))
+    mover_color = mover_color_for_ply(solve.ply)
+    puzzle_type = classify_puzzle_type(missed_pv_lines, mover_color)
+    # D-01 amendment (2026-08-16, Task 3 checkpoint round 2): the deep best
+    # move's UCI, read from the already-stored game_positions.best_move at the
+    # flaw's OWN ply (decision-keyed, un-shifted — row `ply`'s best move for
+    # the pre-move position; see eval_apply's tier-4b reader for the same
+    # convention). No blob/worker-pipeline change (D-04 intact). NULL / no
+    # row / nulled game link (Phase 192 D-05) all degrade to the su-only
+    # list inside vetted_moves_from_pv_node — never a failed solve.
+    best_uci: str | None = None
+    if missed_pv_lines and solve.game_id is not None:
+        best_uci = (
+            await session.execute(
+                select(GamePosition.best_move).where(
+                    GamePosition.user_id == solve.user_id,
+                    GamePosition.game_id == solve.game_id,
+                    GamePosition.ply == solve.ply,
+                )
+            )
+        ).scalar_one_or_none()
+    vetted_moves = (
+        vetted_moves_from_pv_node(missed_pv_lines[0], mover_color, best_uci=best_uci)
+        if missed_pv_lines
+        else []
+    )
+    return SolveClassification(puzzle_type=puzzle_type, vetted_moves=vetted_moves)
+
+
+def _override_for_key_move(played_move: str, vetted: list[VettedMove]) -> VettedMove | None:
+    """The vetted entry the played move matches, or None for an off-key move.
+
+    A plain first-match lookup by exact UCI equality — the D-07 override's
+    predicate, decomposed as a sibling of `_compute_correct_guess` (the
+    pre-existing server-override-of-client-assertion this phase extends to
+    `move_quality`).
+    """
+    for entry in vetted:
+        if entry.uci == played_move:
+            return entry
+    return None
 
 
 def _compute_correct_guess(
@@ -2438,8 +2551,14 @@ async def record_solve(
        invented `session_id` resolves to nothing, so this returns None and
        the router raises 404.
     2. Compute `correct_guess` server-side from the LIVE blob
-       (`_classify_solve_puzzle_type`) — the client can never assert either
-       verdict it does not own (P-02).
+       (`_classify_and_certify_solve`) — the client can never assert either
+       verdict it does not own (P-02). Phase 211 (D-03/D-07): the SAME blob
+       read also certifies the vetted "also fine" set; when `played_move`
+       matches a vetted entry, the server recomputes `move_quality` from its
+       own stored evals and DISCARDS the client's asserted tier (the
+       key-move override — `move_quality` joins `correct_guess` on the list
+       of verdicts the client does not own). Off-key moves keep the client's
+       assertion unchanged (D-04's accepted residual).
     3. Claim the row with a conditional UPDATE carrying `solved_at IS NULL`
        in its WHERE clause. This is the WHOLE concurrency guarantee
        (T-189-19): under READ COMMITTED, a second concurrent UPDATE blocks on
@@ -2475,10 +2594,13 @@ async def record_solve(
         played_move: The move the user actually played (UCI).
         move_quality: The three-way move-quality tier asserted by the client
             (T-189-18, accepted per SEED-037; SEED-119 widened the boolean to
-            a tier). `correct_move` — what feeds `apply_result` and the SR
-            ladder — is derived here as `move_quality != "wrong"`, keeping
-            the ladder's pass/fail semantics byte-identical to pre-SEED-119
-            (an inaccuracy passed then and passes now).
+            a tier). Phase 211 (D-07): for a key move this assertion is
+            DISCARDED in favor of the server's own tier — see step 2 above.
+            `correct_move` — what feeds `apply_result` and the SR ladder — is
+            derived from the post-override `effective_quality` as
+            `!= "wrong"`, keeping the ladder's pass/fail semantics
+            byte-identical to pre-SEED-119 for off-key moves (an inaccuracy
+            passed then and passes now).
         now_utc: The current UTC instant.
 
     Returns:
@@ -2497,14 +2619,36 @@ async def record_solve(
     if solve_row is None:
         return None
 
-    puzzle_type = await _classify_solve_puzzle_type(session, solve=solve_row)
+    classification = await _classify_and_certify_solve(session, solve=solve_row)
+    puzzle_type = classification.puzzle_type
     correct_guess = _compute_correct_guess(guess, puzzle_type)
     guess_int = int(DrillGuess.CRITICAL if guess == "critical" else DrillGuess.SEVERAL)
+    # Phase 211 (D-03/D-07): the key-move override. When the played move is
+    # one of the server-certified vetted entries, the server's own tier (from
+    # the stored evals through the shared severity ladder) replaces the
+    # client's asserted `move_quality` — the client cannot assert a verdict
+    # the server owns the truth for. Off-key moves keep the client's tier
+    # verbatim (D-04).
+    key_move = _override_for_key_move(played_move, classification.vetted_moves)
+    # D-01 amendment (2026-08-16): a vetted "best" entry (the played move IS
+    # the deep best) collapses to the recorded "good" tier — the score ladder
+    # and DrillMoveQuality have no best tier, and the client itself has always
+    # asserted "good" for a played engine-best move (moveTierFromSeverity).
+    effective_quality: Literal["good", "inaccuracy", "wrong"]
+    if key_move is None:
+        effective_quality = move_quality
+    elif key_move.quality == "best":
+        effective_quality = "good"
+    else:
+        effective_quality = key_move.quality
     # SEED-119: correct_move is DERIVED from move_quality — this is what
     # keeps the SR ladder's semantics identical to pre-SEED-119 (an
     # inaccuracy passed then and passes now, since it derives to True here).
-    correct_move = move_quality != "wrong"
-    move_quality_int = int(_MOVE_QUALITY_ENUM[move_quality])
+    # Phase 211: both derivations read `effective_quality` (the value AFTER
+    # the key-move override above), never the raw client argument — an
+    # overridden key move must pass the SR ladder on the server's tier.
+    correct_move = effective_quality != "wrong"
+    move_quality_int = int(_MOVE_QUALITY_ENUM[effective_quality])
 
     claim_result = await session.execute(
         update(DrillSolve)
@@ -2528,14 +2672,21 @@ async def record_solve(
     item_status: Literal["active", "mastered", "parked"] | None = None
     streak: int | None = None
     due_date: datetime.date | None = None
+    # Phase 211: attempt-scoped graded evals — set only on the claimed path
+    # below, and only for a key-move override (see RecordedSolve's docstring).
+    graded_es_before: float | None = None
+    graded_es_after: float | None = None
     is_sr = solve_row.source == DrillSource.SR_ITEM
 
     if claimed:
         stored_correct_guess, stored_correct_move, stored_move_quality = (
             correct_guess,
             correct_move,
-            move_quality,
+            effective_quality,
         )
+        if key_move is not None:
+            graded_es_before = key_move.es_before
+            graded_es_after = key_move.es_after
         # Phase 192 (D-05): `solve_row.game_id` is `int | None` now that the
         # column is nullable. `DrillItem.game_id` stays NOT NULL + CASCADE
         # (SR items are always sourced from the user's own live or lazily
@@ -2609,6 +2760,9 @@ async def record_solve(
         streak=streak,
         due_date=due_date,
         session_complete=session_complete,
+        vetted_moves=classification.vetted_moves,
+        graded_es_before=graded_es_before,
+        graded_es_after=graded_es_after,
     )
 
 

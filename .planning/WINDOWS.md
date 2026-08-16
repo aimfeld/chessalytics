@@ -2,9 +2,9 @@
 schema_version: 1
 open_count: 4
 waived_count: 0
-fixed_count: 1
-total_count: 5
-last_updated: 2026-08-08T17:58:51.847Z
+fixed_count: 2
+total_count: 6
+last_updated: 2026-08-16T14:55:04.258Z
 ---
 
 # Broken Windows Ledger
@@ -20,6 +20,7 @@ last_updated: 2026-08-08T17:58:51.847Z
 | 3 | 200 | unrun-verify | frontend/src/components/train/TrainReveal.tsx |  | Phase 200 end-of-phase Human Verification Required browser pass (375px mobile + desktop, 15 steps) not yet run — non-blocking for execution per plan 200-04, but a mandatory pre-squash-merge item covering EXPLORE-07/LEGEND-06's pixel half that jsdom cannot verify | fixed |  | 2026-08-01T13:26:38.534Z | 2026-08-02T15:21:00.103Z |
 | 4 | 207 | unrun-verify | .planning/phases/207-self-serve-password-reset/207-03-SUMMARY.md |  | RESET-05 real-mailbox eligibility observation (plan step 9: no-password account produces zero sends with identical confirmation copy) was NOT PERFORMED at the Task 2 checkpoint; automated coverage (TestPasswordResetEligibility) stands in its place | open |  | 2026-08-08T13:27:04.997Z |  |
 | 5 | 208 | stub | frontend/src/components/analysis/PasteModal.tsx |  | Analyze full game button is a no-op click handler; wiring to POST /imports/paste + tier-1 enqueue is intentionally deferred to Plan 03 per this plan's own action text | open |  | 2026-08-08T17:58:51.847Z |  |
+| 6 | 211 | skipped-test | frontend/src/components/train/__tests__/TrainSolveScreen.test.tsx |  | ORACLE-01 free-play root-ply test skipped: Phase 205 guarantee transiently degraded at width 1 (211-02 Known transient); Plan 211-03 re-points the seam at the server key and must unskip/re-express this test | fixed |  | 2026-08-16T14:34:50.766Z | 2026-08-16T14:55:04.258Z |
 
 ````json
 [
@@ -82,6 +83,18 @@ last_updated: 2026-08-08T17:58:51.847Z
     "reason": "",
     "recorded_at": "2026-08-08T17:58:51.847Z",
     "resolved_at": null
+  },
+  {
+    "id": 6,
+    "kind": "skipped-test",
+    "phase": "211",
+    "file": "frontend/src/components/train/__tests__/TrainSolveScreen.test.tsx",
+    "line": null,
+    "description": "ORACLE-01 free-play root-ply test skipped: Phase 205 guarantee transiently degraded at width 1 (211-02 Known transient); Plan 211-03 re-points the seam at the server key and must unskip/re-express this test",
+    "status": "fixed",
+    "reason": "",
+    "recorded_at": "2026-08-16T14:34:50.766Z",
+    "resolved_at": "2026-08-16T14:55:04.258Z"
   }
 ]
 ````

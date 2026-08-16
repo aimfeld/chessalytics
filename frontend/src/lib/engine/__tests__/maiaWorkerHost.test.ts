@@ -233,6 +233,59 @@ describe('maiaWorkerHost', () => {
     await expect(p1).resolves.toBeDefined();
   });
 
+  it('a mid-inference webgpu error rejects in-flight, respawns pinned to wasm, and services the queue (FLAWCHESS-9D)', async () => {
+    const lease = acquireMaiaWorker({ source: 'maia-worker', priority: true });
+    const p1 = lease.analyze(TEST_FEN, [1500]);
+    const worker1 = createdWorkers[0]!;
+    driveReady(worker1, 'webgpu');
+    const p2 = lease.analyze(TEST_FEN_2, [1200]);
+
+    // Only the in-flight request has been dispatched to worker #1.
+    expect(analyzeMessages(worker1)).toHaveLength(1);
+
+    worker1.simulateMessage({ type: 'error', message: 'WebGPU buffer already released' });
+
+    await expect(p1).rejects.toThrow();
+    expect(worker1.terminated).toBe(true);
+    expect(createdWorkers).toHaveLength(2);
+    const replacement = createdWorkers[1]!;
+    expect(replacement.messages).toContainEqual({ type: 'init', backend: 'wasm' });
+
+    expect(Sentry.captureException).toHaveBeenCalledWith(
+      expect.any(Error),
+      expect.objectContaining({
+        tags: expect.objectContaining({ backend: 'webgpu', maia_failure: 'inference' }),
+      }),
+    );
+
+    // The still-queued request survives the respawn.
+    driveReady(replacement, 'wasm');
+    expect(analyzeMessages(replacement)).toHaveLength(1);
+    expect(analyzeMessages(replacement)[0]?.fen).toBe(TEST_FEN_2);
+    replacement.simulateMessage(buildResultMessage(TEST_FEN_2, [1200]));
+    await expect(p2).resolves.toBeDefined();
+  });
+
+  it('a mid-inference error on a wasm-backed worker rejects only the in-flight request — no respawn', async () => {
+    const lease = acquireMaiaWorker({ source: 'maia-worker', priority: true });
+    const p1 = lease.analyze(TEST_FEN, [1500]);
+    const worker1 = createdWorkers[0]!;
+    driveReady(worker1, 'wasm');
+    const p2 = lease.analyze(TEST_FEN_2, [1200]);
+
+    worker1.simulateMessage({ type: 'error', message: 'inference failed' });
+
+    await expect(p1).rejects.toThrow();
+    expect(worker1.terminated).toBe(false);
+    expect(createdWorkers).toHaveLength(1);
+
+    // Worker #1 stays alive and serves the next queued request.
+    expect(analyzeMessages(worker1)).toHaveLength(2);
+    expect(analyzeMessages(worker1)[1]?.fen).toBe(TEST_FEN_2);
+    worker1.simulateMessage(buildResultMessage(TEST_FEN_2, [1200]));
+    await expect(p2).resolves.toBeDefined();
+  });
+
   it('getBackend() reflects the active backend once ready, null before', () => {
     const lease = acquireMaiaWorker({ source: 'maia-worker', priority: true });
     expect(lease.getBackend()).toBeNull();

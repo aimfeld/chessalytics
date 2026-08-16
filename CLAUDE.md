@@ -331,6 +331,10 @@ Sentry is initialized in both backend (`app/main.py`) and frontend (`frontend/sr
 - chess.com requires `User-Agent` header; fetch archives sequentially with 100-300ms delays
 - API responses never expose internal hashes — return FEN for display
 
+## Data Stories
+
+Public data stories (blog-style pages at stories.flawchess.com) live in `stories/`. All story-specific rules (header/branding, publication dates, terminology, chart styling, report co-location) are in `stories/CLAUDE.md` — read it before creating or editing anything under `stories/`.
+
 ## Frontend
 
 Rules specific to `frontend/` (React + TypeScript + Vite). Shared cross-stack rules live in [Coding Guidelines](#coding-guidelines).

@@ -9,7 +9,6 @@ const PAGE_SIZE = 20;
 interface LibraryGameCardListProps {
   games: GameFlawCard[];
   matchedCount: number;
-  total: number;
   offset: number;
   limit: number;
   onPageChange: (offset: number) => void;
@@ -30,9 +29,16 @@ interface LibraryGameCardListProps {
 /**
  * Paginated list of LibraryGameCard for the Library Games subtab.
  *
- * Renders a matched-count row ("{matchedCount} of {total} games"), the card stack,
+ * Renders a matched-count row ("{matchedCount} games matched"), the card stack,
  * and the shared Pagination control. Page changes convert the 1-based Pagination
  * page number back to an offset and scroll the list container into view.
+ *
+ * The row deliberately carries NO "of {total}" denominator: the account-wide game
+ * total belongs to EvalCoverageBadge on the right of the same row, which is
+ * account-scoped by design (global backlog progress, filter-independent). Mixing a
+ * filter-scoped numerator with an account-scoped denominator on the left made the
+ * two halves of the row silently answer different questions. Matches the Flaws
+ * tab's "{n} flaws matched" row.
  *
  * The empty-games case renders nothing in the card stack — GamesTab owns the
  * full empty-state UI (no-games-imported, no-matches, no-analyzed-games copy).
@@ -40,7 +46,6 @@ interface LibraryGameCardListProps {
 export function LibraryGameCardList({
   games,
   matchedCount,
-  total,
   offset,
   limit,
   onPageChange,
@@ -72,7 +77,7 @@ export function LibraryGameCardList({
       {/* Matched-count row with coverage badge top-right */}
       <div className="flex items-center justify-between gap-3">
         <p className="text-sm text-muted-foreground">
-          {matchedCount} of {total} games
+          {matchedCount} game{matchedCount === 1 ? '' : 's'} matched
         </p>
         <EvalCoverageBadge
           analyzedN={analyzedN}

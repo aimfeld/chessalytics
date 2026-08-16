@@ -2,27 +2,30 @@
 gsd_state_version: 1.0
 milestone: v2.12
 milestone_name: Train Reliability & Grading Agreement
-current_phase: 210
-current_phase_name: custom-start-games
-status: complete
-stopped_at: Phase 210 complete on branch phase-210-custom-start-games — full pre-merge gate green, ready to squash-merge to main
-last_updated: "2026-08-15T09:10:00.000Z"
-last_activity: 2026-08-15
-last_activity_desc: Closed Phase 209 (Cloudflare cutover verified live) and completed Phase 210 (SEED-042 Tier 1 + /analysis crash containment)
+current_phase: 211
+status: completed
+stopped_at: Phase 211 shipped — squash-merged to main (d67998a8d)
+last_updated: "2026-08-16T17:49:00.000Z"
+last_activity: 2026-08-16
+last_activity_desc: Phase 211 shipped — squash-merged to main (d67998a8d)
 progress:
-  total_phases: 5
-  completed_phases: 5
-  total_plans: 17
-  completed_plans: 17
+  total_phases: 6
+  completed_phases: 4
+  total_plans: 20
+  completed_plans: 16
+current_phase_name: vetted-also-fine-moves-server-key-grading
 ---
 
 # Project State: FlawChess
 
 ## Current Position
 
-Phase: 210 (custom-start-games) — COMPLETE, awaiting squash-merge
-Plan: 3 of 3
-Status: Full pre-merge gate green on branch `phase-210-custom-start-games` (backend 4319 passed / 19 skipped, frontend 3480 passed, ruff/ty/eslint/tsc/knip/build clean). Not yet merged to main, not yet deployed.
+Phase: 211
+Plan: Not started
+rounds — round 2 shipped the D-01 amendment: soft puzzles serve [deep best, second-best su])
+Status: All phases complete
+backend 4348 passed / 19 skipped, frontend 3497 passed, ruff/ty/tsc/lint/knip clean;
+WINDOWS.md #6 fixed — ORACLE-01 unskipped)
 
 Previous phase: 209 (traffic-surge-quick-wins) — COMPLETE 2026-08-15. The last open plan
 (209-04, the Cloudflare CDN cutover) was operator work; verified live: flawchess.com is on
@@ -30,7 +33,7 @@ Cloudflare nameservers, `maia3_simplified.onnx` and `stockfish-18-lite-single.wa
 return `cf-cache-status: HIT` while still carrying the origin's `max-age=2592000`, and
 `maia-worker.js` still returns `cache-control: no-cache`.
 
-Last activity: 2026-08-15 — Phase 210 (SEED-042 Tier 1 + the confirmed /analysis crash).
+Last activity: 2026-08-16 — Phase 211 complete
 `games.initial_fen` added and backfilled in-migration, the opening-transition sample
 representative filtered to standard-start games, four unguarded `chess.move()` replay sites
 contained, and `/analysis` game mode seeded from the game's real root. Every production
@@ -666,6 +669,12 @@ v1.29 Live-Engine Analysis Page shipped 2026-06-29 — 5 phases (136–140), 14 
 - [Phase ?]: 207-02 checkpoint: operator additionally verified a real end-to-end send via a live Resend account to a real mailbox over a Tailscale tunnel, exceeding this plan's scope; formal RESET-01/RESET-07 verdict remains Plan 03's, pending apex-domain DKIM/DMARC (not the resend.dev sandbox sender used here)
 - [Phase ?]: Phase 207 Step 0 complete 2026-08-08: DKIM landed at apex, RESET-01/RESET-07 PASSED with live Resend evidence against the verified flawchess.com apex domain; RESET-05 real-mailbox observation logged NOT PERFORMED to WINDOWS.md, automated coverage stands in its place
 - [Phase ?]: 260809-iq1: D-01/D-02/D-03 — shared frontend/backend regex normalizer strips chess.com/lichess profile URLs to bare username on paste/blur/submit and API validation
+- [Phase 211]: 211-01: P-02 narrowed per D-07 — server overrides move_quality for a played vetted key move; off-key keeps client grading (D-04)
+- [Phase 211]: 211-01: vetted moves delivered on SolveResponse (not the reveal GET) — one blob/ladder read feeds classification, certification, and wire
+- [Phase ?]: 211-02: ORACLE-01 skipped as the documented width-1 Known Transient (WINDOWS.md #6); Plan 211-03 must unskip after re-pointing the free-play seam at the server key
+- [Phase ?]: 211-02: cap-dependent tests recast onto the herring budget — soft's true alternative bound is one (the blob's single su)
+- [Phase 211]: D-01 amended (operator, 211-03 Task 3 round 2): soft puzzles serve [deep best (quality 'best'), second-best su] best-first from game_positions.best_move — the 'several fine moves' copy is always backed by displayable evidence; D-04 intact (no blob/worker change)
+- [Phase 211]: Free-play root-ply precedence (D-06, 211-03): terminal > engine-is-best > served-key quality > engine ES classification — a key move's badge is the server tier, never re-derived from mixed-source evals; soft arrow cap stays 1 (best-first order, test-pinned); played deep best records tier 'good' (D-07, no 'best' tier in the score ladder) with a drop-0 graded-ES pair
 
 ### Pending Todos
 
@@ -742,6 +751,7 @@ None active.
 | 260811-u11 | Current-strength estimate for opponent matching (SEED-147): the Bots page showed prod user 3 ~1370 when their real lichess blitz rating was ~1560, because `PersonaGrid` rendered the `user_rating_anchors` blitz anchor — a median over the most recent 3000 games per TC in a 36-month window, the right input for the percentile chip and the wrong one for "who should I play now". New `app/repositories/current_strength_repository.py` (`fetch_recent_rungs`, sourced exclusively through `apply_game_filters(rated=True, opponent_type="human", platform=None)` so FlawChess's own bot-game rating stamps can never be read back) + `app/services/current_strength_service.py` holding the whole policy: ≥20 qualifying games / 90 days per (platform, TC) rung, median of the last 20, every rung normalized to the Lichess-blitz scale via `normalize_to_lichess_blitz`, ranked by recency, with a native-Lichess-blitz tiebreak (≤7 days lag) and a blitz-anchor fallback. New nested `current_strength` wire field replaces `lichess_blitz_equivalent_rating`, which is deleted outright (all three consumers repointed, so leaving it would recreate the `current_rating` orphan trap). All three opponent-matching surfaces now read it — PersonaGrid's displayed rating, the custom-bot ELO default, and the free-play ELO default — plus a popover naming which rung the number came from. Percentile surfaces untouched. No migration. Post-execution the planned 50-point tiebreak agreement bound was removed after verification against the real prod snapshot showed it inverted the tiebreak's purpose (published a converted 1467 over a natively-readable 1554); user 3 now resolves to 1554. Full gate green: 4300 backend tests, 3468 frontend, ruff/ty/eslint/knip/tsc clean | 2026-08-11 | 07d1ef33 | [260811-u11-current-strength-estimate-for-opponent-m](./quick/260811-u11-current-strength-estimate-for-opponent-m/) |
 | 260813-o4s | Swap the two most-heard bot-play clips and correct the README's now-false blanket licensing claim. The vendored lila `sfx` clips ran far longer and brighter than lichess's own default set, which is what made them feel muddy: Move 96.7ms/2764Hz and Capture 330.7ms/5053Hz against a 40.2ms/889Hz and 62.9ms/1344Hz reference (effective duration = first/last sample above -40dB of peak; spectral centroid). `frontend/public/sound/Move.mp3` and `Capture.mp3` replaced with one-shots (64.8ms/1263Hz, 67.0ms/1717Hz) cut by onset detection from sounddino.com chess field recordings, which ship as 0.5-27.8s multi-hit takes rather than game-ready clips. Filenames unchanged, so `sounds.ts` `SOUND_FILES` and `sounds.test.ts` needed no edit (13 tests pass). README `## Sound Assets` rewritten from one blanket "all Enigmahack AGPLv3+" claim into the three provenances that actually exist (sounddino Move/Capture, lila `sfx` remainder, self-authored CC0 WinChime), recording source URLs and retrieval date and deliberately asserting no license for the sounddino pair - that site publishes no license or terms page, and the user made an explicit risk-based call to accept the category-page royalty-free claim given a two-file remedy. Left open: `Checkmate.mp3` is byte-identical to `Check.mp3` (faithful to lila's symlink), so checkmate still sounds like a check | 2026-08-13 | e31190d9 | [260813-o4s-swap-move-and-capture-sound-clips-for-so](./quick/260813-o4s-swap-move-and-capture-sound-clips-for-so/) |
 | 260813-oae | Two sound changes. (1) Re-picked Move/Capture after splitting every individual hit out of both multi-hit sounddino recordings for audition: both now come from the horse-walks take, Move = hit 6 (5.16s, 67.0ms/1717Hz) and Capture = hit 2 (0.77s, 72.7ms/1931Hz), both bleed-free. `sd_moving_series.mp3` was split too (36 hits) but contributed nothing - only 8 were bleed-free (dense take, 90ms cut window overlaps the next attack) and all 36 ran 3731-8061Hz against an 889/1344Hz reference. (2) New `game-start` SoundEvent -> `GameStart.mp3` (uncut ~0.78s `there-is-such-an-option-small-figures.mp3`), fired from `BotsPage.handleStart` - the single start path (T-183-11) shared by SetupScreen's Start, PersonaDetailSurface's Play and Rematch. Placed there rather than in a `BotsGame` mount effect because it runs inside the click gesture, satisfying the iOS autoplay policy (Pitfall 4) without depending on `unlockAudio` having run. That clip's length created a hazard: `unlockAudio` play/pauses every clip, so the first pointerdown inside the game view can cut it off mid-play. `unlockAudio` now skips already-playing clips, guarded as `audio.paused === false` and NOT `!audio.paused` - the test MockAudio has no `paused` property, so the naive form evaluates `!undefined` -> true and would silently skip every clip, turning unlockAudio into a no-op and breaking iOS audio. Both guard halves mutation-verified (one failing test each). A first attempt at the `paused`-undefined test was bogus (`delete MockAudio.prototype.paused` is a no-op against an instance field) and was replaced with a per-instance stub helper. Full frontend gate green: build/eslint/knip/3471 tests | 2026-08-13 | 6b2272bf | [260813-oae-play-a-game-start-sound-when-a-bot-game-](./quick/260813-oae-play-a-game-start-sound-when-a-bot-game-/) |
+| 260816-i4m | SEED-148 Sentry signal hygiene, frontend-only. (1) Item 2: `sentryBeforeSend` now attaches the failing axios request's `config.url` + uppercased `config.method` to `event.request`, so FLAWCHESS-64 (429, 55 events, the highest-volume unresolved issue) can finally be attributed to an endpoint — guest-create (5/h per IP) vs feedback (5/h per user). Instrumentation only: no rate limit touched, no fix guessed. **Follow-up: re-triage FLAWCHESS-64 once this is deployed and has collected events.** (2) Item 3: `/Failed to update a ServiceWorker/` added to `ignoreErrors`; the existing foreground+online axios filter at `instrument.ts:19-49` left byte-identical on purpose (it is the only signal that would catch a real Caddy/host outage — verified untouched by diff). (3) Folded-in adjacent: `denyUrls: [/beacon\.min\.js/]` for Cloudflare Web Analytics frames (FLAWCHESS-9R/9Q). (4) Item 4 premise was WRONG: the seed proposed optional-chaining a `destroy()` call in the Maia worker teardown, but our code has zero `destroy()` calls (teardown already optional-chains `session?.release?.()` and `t.dispose?.()`); the real throw is inside the vendored onnxruntime-web WebGPU bundle, which we do not patch. Fixed instead via the seed's second clause: `maiaWorkerHost.ts` now extends its existing wasm-pinned respawn machinery to a post-ready branch, so a mid-inference WebGPU death respawns on wasm instead of leaving a dead GPU session. Self-limiting by construction (gated on `backend === 'webgpu'`, replacement reports `wasm`), so a respawn loop is impossible; the Sentry capture still fires tagged `backend=webgpu`. **Item 1 (gate Sentry init on ENVIRONMENT) was DROPPED by operator decision** — dev reporting is kept deliberately and disabled by unsetting `SENTRY_DSN`; zero backend files changed. Consequence accepted: FLAWCHESS-8X/8N (Ctrl-C `InvalidStateError`, 24 events) will keep recurring from the local worker box. Frontend gate green: lint, 3487 tests, tsc+vite build, knip | 2026-08-16 | 931c3368 | [260816-i4m-sentry-signal-hygiene-and-small-prod-fix](./quick/260816-i4m-sentry-signal-hygiene-and-small-prod-fix/) |
 
 ## Deferred Items
 
@@ -794,9 +804,9 @@ Items acknowledged and deferred at **v1.29 milestone close on 2026-06-29** (user
 
 ## Session Continuity
 
-**Stopped at:** Completed 260809-iq1-01-PLAN.md
+**Stopped at:** Completed 211-03-PLAN.md — Phase 211 complete (3/3 plans), Task 3 operator-approved
 
-**Last session:** 2026-08-09T11:39:52.116Z
+**Last session:** 2026-08-16T17:10:20.215Z
 
 **Resume file:**
 
@@ -938,6 +948,9 @@ None
 | Phase 207 P02 | 25min | 3 tasks | 8 files |
 | Phase 207 P03 | 15min | 2 tasks | 4 files |
 | Phase 260809-iq1 P01 | 25min | 2 tasks | 8 files |
+| Phase 211 P01 | 22 min | 3 tasks | 12 files |
+| Phase 211 P02 | 19 min | 3 tasks | 8 files |
+| Phase 211 P03 | 105 min | 3 tasks | 15 files |
 
 ## Performance Metrics
 

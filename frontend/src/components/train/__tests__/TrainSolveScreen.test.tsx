@@ -24,7 +24,7 @@ import { TrainSolveScreen } from '@/components/train/TrainSolveScreen';
 import { useMobileBoardControls } from '@/lib/mobileBoardControls';
 import { TooltipProvider } from '@/components/ui/tooltip';
 import { TRAIN_STEP_HIGHLIGHT } from '@/lib/trainArrows';
-import { TRAIN_BEST_MOVE_ARROW } from '@/lib/theme';
+import { MOVE_QUALITY_BLUNDER, MOVE_QUALITY_GOOD, TRAIN_BEST_MOVE_ARROW } from '@/lib/theme';
 import { buildGameAnalysisUrl } from '@/lib/analysisUrl';
 import { useTrainSession } from '@/hooks/useTrainSession';
 import { useTrainGradingEngine } from '@/hooks/useTrainGradingEngine';
@@ -1034,15 +1034,30 @@ describe('TrainSolveScreen — progress, last move, grading state, engine failur
     }
   }
 
-  it('a soft puzzle with three drawn alternatives lists all three SANs in the guess card; the alternatives are OFF the pristine board and appear only while that card is hovered (Phase 200 UAT)', async () => {
+  it('a herring puzzle with three drawn alternatives lists all three SANs in the guess card; the alternatives are OFF the pristine board and appear only while that card is hovered (Phase 200 UAT)', async () => {
     stubWorker(() => new MultiRankFakeWorker());
-    solvePuzzle.mockResolvedValueOnce({ ...SOLVE_RESPONSE, puzzle_type: 'soft' });
+    // Phase 211 (D-01): the alternatives come from the SERVER's vetted_moves
+    // on the solve response — the client engine's own ranks no longer feed
+    // the overlay. `e2e4` (the best move) is included to prove the overlay
+    // still filters it out before drawing alternatives. The puzzle type is
+    // HERRING because three alternatives fit only its own cap
+    // (TRAIN_HERRING_ALT_MOVE_ARROWS = 4); the soft budget is 1 as of 211-02.
+    solvePuzzle.mockResolvedValueOnce({
+      ...SOLVE_RESPONSE,
+      puzzle_type: 'herring',
+      vetted_moves: [
+        { uci: 'e2e4', quality: 'good' },
+        { uci: 'd2d4', quality: 'good' },
+        { uci: 'g1f3', quality: 'good' },
+        { uci: 'c2c4', quality: 'good' },
+      ],
+    });
     await renderScreen(makePuzzle());
     fireEvent.click(screen.getByTestId('btn-train-guess-several'));
-    // Exact match to the mount search's rank-1 move (e2e4): merges into the
-    // single blue best arrow. UAT round 4 — rank 1 no longer consumes an
-    // alternative slot, so ALL of ranks 2/3/4 (d2d4/g1f3/c2c4) draw, matching
-    // TRAIN_SOFT_ALT_MOVE_ARROWS = the mount search's full alternative width.
+    // Exact match to the mount search's top move (e2e4): merges into the
+    // single blue best arrow. UAT round 4 — the vetted entry equal to the
+    // best move no longer consumes an alternative slot, so ALL of
+    // d2d4/g1f3/c2c4 draw within the herring cap.
     await act(async () => {
       fireEvent.click(screen.getByTestId('drop-e2e4'));
     });
@@ -1069,21 +1084,100 @@ describe('TrainSolveScreen — progress, last move, grading state, engine failur
     await waitFor(() => expect(board().getAttribute('data-arrows-count')).toBe('1'));
   });
 
-  // ─── Phase 205 (D-04, ORACLE-01/ORACLE-02): free-play root grade agrees ──
-  // with the reveal's "Also fine" row — this plan's tracer, SEED-137 case 2.
+  // ─── Phase 211 (D-03/D-07): the board badge follows the server's graded ES ─
 
-  it('ORACLE-01: playing an "Also fine" mount rank as the FIRST free-play move is graded from that rank\'s own eval, never a fresh (worse) free-play-engine search', async () => {
-    // The position reached after white's rank-2 mount move (d2d4) — scripted
-    // to a CATASTROPHIC white-POV score (-900cp), far below BLUNDER_DROP, so
-    // a build that consulted the free-play engine's own search here would
-    // badge this move a blunder. The mount ranks themselves stay within a
-    // couple of centipawns of each other (see ScriptedFenFakeWorker: 19/18/
-    // 17/16cp for ranks 1-4).
+  it('VETFINE-03: the played-move badge derives from the verdict\'s graded_es_* pair even when the client engine\'s own search implies a blunder (the server override wins on the board)', async () => {
+    // b1c3 (Nc3) is legal but OUTSIDE every mount rank (e2e4/d2d4/g1f3/c2c4),
+    // so the 190.1 rank-match fast path cannot serve it — the client runs a
+    // real after-move search, scripted catastrophic (-900 white-POV), so
+    // gradeResult.esBefore/esAfter imply a BLUNDER.
+    const afterB1C3 = new Chess(START_FEN);
+    afterB1C3.move('Nc3');
+    const fenAfterB1C3 = afterB1C3.fen();
+    stubWorker(() => new ScriptedFenFakeWorker(START_FEN, { [fenAfterB1C3]: -900 }));
+    // The SERVER's verdict: b1c3 is a certified key move, graded good from
+    // the stored evals (a sub-inaccuracy ES drop), with g1f3 as a second
+    // vetted alternative for the legend row.
+    solvePuzzle.mockResolvedValueOnce({
+      ...SOLVE_RESPONSE,
+      puzzle_type: 'soft',
+      move_quality: 'good',
+      vetted_moves: [
+        { uci: 'b1c3', quality: 'good' },
+        { uci: 'g1f3', quality: 'good' },
+      ],
+      graded_es_before: 0.52,
+      graded_es_after: 0.51,
+    });
+
+    await renderScreen(makePuzzle());
+    fireEvent.click(screen.getByTestId('btn-train-guess-several'));
+    await act(async () => {
+      fireEvent.click(screen.getByTestId('drop-b1c3')); // off-rank -> real after-move search
+    });
+    await waitFor(() => expect(screen.getByTestId('train-verdict-guess')).not.toBeNull());
+
+    // (a) The board followed the SERVER, not the client engine: the played
+    // arrow is good-green, and no blunder-colored arrow exists anywhere.
+    const board = () => screen.getByTestId('chessboard');
+    await waitFor(() =>
+      expect(board().getAttribute('data-arrow-colors') ?? '').toContain(MOVE_QUALITY_GOOD),
+    );
+    expect(board().getAttribute('data-arrow-colors') ?? '').not.toContain(MOVE_QUALITY_BLUNDER);
+
+    // (b) The vetted alternative (g1f3, not played, not best) reaches the
+    // "Also fine" legend row.
+    const list = await waitFor(() => screen.getByTestId('train-reveal-also-fine'));
+    expect(list.textContent).toContain('Nf3');
+  });
+
+  it('VETFINE-03 (pre-211 cache shape): a verdict with NO vetted_moves key draws zero alternative arrows and nothing throws', async () => {
+    // MultiRankFakeWorker still derives client-side ranks 2-4 — if the
+    // overlay ever fell back to the client engine's alternatives, this test
+    // would see them. SOLVE_RESPONSE carries no vetted_moves key at all (the
+    // exact shape a trainRevealCache entry written by a pre-211 bundle
+    // restores).
+    stubWorker(() => new MultiRankFakeWorker());
+    solvePuzzle.mockResolvedValueOnce({ ...SOLVE_RESPONSE, puzzle_type: 'soft' });
+    await renderScreen(makePuzzle());
+    fireEvent.click(screen.getByTestId('btn-train-guess-several'));
+    await act(async () => {
+      fireEvent.click(screen.getByTestId('drop-e2e4'));
+    });
+    await waitFor(() => expect(screen.getByTestId('train-verdict-guess')).not.toBeNull());
+
+    // No "Also fine" list, and hovering the guess card surfaces no
+    // alternative arrows — the pristine single blue best/played arrow stays.
+    expect(screen.queryByTestId('train-reveal-also-fine')).toBeNull();
+    const board = () => screen.getByTestId('chessboard');
+    await waitFor(() => expect(board().getAttribute('data-arrows-count')).toBe('1'));
+    fireEvent.pointerEnter(screen.getByTestId('train-verdict-guess'));
+    // Deliberately re-assert after the hover settles — still exactly one.
+    await waitFor(() => expect(board().getAttribute('data-arrows-count')).toBe('1'));
+  });
+
+  // ─── Phase 205 (ORACLE-01/ORACLE-02) → Phase 211 (D-06): free-play root ──
+  // grade agrees with the reveal's "Also fine" row — SEED-137 case 2.
+
+  // Re-expressed by Plan 211-03 (unskipped — was the 211-02 Known Transient,
+  // WINDOWS.md #6): the guarantee's source is no longer the mount search's
+  // own rank lines (dead at width 1, D-05) but the SERVED vetted list on the
+  // solve response — the same key the "Also fine" row reads (D-06).
+  it('ORACLE-01: playing a served "Also fine" vetted move as the FIRST free-play move is badged with the server\'s own quality, never a fresh (worse) free-play-engine search', async () => {
+    // The position reached after white's served alternative (d2d4) —
+    // scripted to a CATASTROPHIC white-POV score (-900cp), far below
+    // BLUNDER_DROP, so a build that consulted the free-play engine's own
+    // search here would badge this move a blunder. The SERVER's key says
+    // d2d4 is good; the badge must read the key.
     const afterD2D4 = new Chess(START_FEN);
     afterD2D4.move('d4');
     const fenAfterD2D4 = afterD2D4.fen();
     stubWorker(() => new ScriptedFenFakeWorker(START_FEN, { [fenAfterD2D4]: -900 }));
-    solvePuzzle.mockResolvedValueOnce({ ...SOLVE_RESPONSE, puzzle_type: 'soft' });
+    solvePuzzle.mockResolvedValueOnce({
+      ...SOLVE_RESPONSE,
+      puzzle_type: 'soft',
+      vetted_moves: [{ uci: 'd2d4', quality: 'good' }],
+    });
 
     await renderScreen(makePuzzle());
     fireEvent.click(screen.getByTestId('btn-train-guess-several'));
@@ -1092,8 +1186,8 @@ describe('TrainSolveScreen — progress, last move, grading state, engine failur
     });
     await waitFor(() => expect(screen.getByTestId('train-verdict-guess')).not.toBeNull());
 
-    // Post-verdict: the FIRST free-play move, from the root, is the mount
-    // search's own rank-2 ("Also fine") move.
+    // Post-verdict: the FIRST free-play move, from the root, is the served
+    // vetted ("Also fine") move.
     fireEvent.click(screen.getByTestId('drop-d2d4'));
     const board = () => screen.getByTestId('chessboard');
     await waitFor(() => expect(board().getAttribute('data-last-move-color')).not.toBe(''));
@@ -1392,7 +1486,6 @@ describe('TrainSolveScreen — progress, last move, grading state, engine failur
           esAfter: 0.5,
           bestLine: { moves: ['e2e4'], evalCp: 19, evalMate: null },
           playedLine: { moves: ['e2e4'], evalCp: 19, evalMate: null },
-          fineMoves: [],
         },
       }),
     ) as CachedTrainReveal;

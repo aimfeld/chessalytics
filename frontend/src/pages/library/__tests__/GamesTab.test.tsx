@@ -68,11 +68,26 @@ vi.mock('@/components/results/LibraryGameCardList', () => ({
   LibraryGameCardList: () => <div data-testid="stub-game-card-list" />,
 }));
 
-// Stub useUserProfile
+// Stub useUserProfile — mutable so a test can model an account with zero IMPORTED
+// games (the profile counters only cover chess.com + lichess) but non-zero games
+// overall (bot / pasted games).
+let mockProfile: { chess_com_game_count: number; lichess_game_count: number } = {
+  chess_com_game_count: 5,
+  lichess_game_count: 10,
+};
+
 vi.mock('@/hooks/useUserProfile', () => ({
-  useUserProfile: () => ({
-    data: { chess_com_game_count: 5, lichess_game_count: 10 },
-  }),
+  useUserProfile: () => ({ data: mockProfile }),
+}));
+
+// Stub useEvalCoverage — totalCount is the account-wide game count across all four
+// platforms and is what the empty-state gate must key off. Defaults to 0/0, which
+// matches the unresolved-query shape the real hook returned in this suite before.
+let mockCoverage = { analyzedCount: 0, totalCount: 0, isError: false };
+
+vi.mock('@/hooks/useEvalCoverage', () => ({
+  useEvalCoverage: () => mockCoverage,
+  LIBRARY_GAMES_POLL_INTERVAL_MS: 3_000,
 }));
 
 // ── Controlled useLibraryGames mock ───────────────────────────────────────────
@@ -155,6 +170,8 @@ beforeEach(() => {
     isLoading: false,
     isError: false,
   };
+  mockProfile = { chess_com_game_count: 5, lichess_game_count: 10 };
+  mockCoverage = { analyzedCount: 0, totalCount: 0, isError: false };
 });
 
 afterEach(() => {
@@ -240,6 +257,43 @@ describe('GamesTab', () => {
       mockGamesResult = { data: undefined, isLoading: false, isError: true };
       renderGamesTab();
       expect(screen.queryAllByTestId('stub-game-card-list')).toHaveLength(0);
+    });
+  });
+
+  describe('empty-state gate uses the account-wide game count', () => {
+    // The profile counters cover chess.com + lichess ONLY — they are an import-gate
+    // quantity (App.tsx IMPORT_EXEMPT_ROUTES) and exclude platform='flawchess' bot
+    // games and platform='pgn' pasted games. Keying the empty state off them showed
+    // "No games imported yet" above a populated list for a bot-games-only user.
+    it('does NOT show "No games imported yet" when the only games are bot/pasted games', () => {
+      mockProfile = { chess_com_game_count: 0, lichess_game_count: 0 };
+      mockCoverage = { analyzedCount: 0, totalCount: 14, isError: false };
+      mockGamesResult = {
+        data: { games: [{ game_id: 1 }], matched_count: 14, offset: 0, limit: 20 },
+        isLoading: false,
+        isError: false,
+      };
+      renderGamesTab();
+
+      expect(screen.queryAllByText('No games imported yet')).toHaveLength(0);
+      expect(screen.queryAllByTestId('stub-game-card-list').length).toBeGreaterThanOrEqual(1);
+    });
+
+    it('still shows "No games imported yet" for a genuinely empty account', () => {
+      mockProfile = { chess_com_game_count: 0, lichess_game_count: 0 };
+      mockCoverage = { analyzedCount: 0, totalCount: 0, isError: false };
+      renderGamesTab();
+
+      expect(screen.getAllByText('No games imported yet').length).toBeGreaterThanOrEqual(1);
+    });
+
+    it('falls back to the profile count while eval-coverage is unavailable', () => {
+      // totalCount 0 (loading or errored) must not erase a known-imported account.
+      mockProfile = { chess_com_game_count: 5, lichess_game_count: 10 };
+      mockCoverage = { analyzedCount: 0, totalCount: 0, isError: true };
+      renderGamesTab();
+
+      expect(screen.queryAllByText('No games imported yet')).toHaveLength(0);
     });
   });
 });

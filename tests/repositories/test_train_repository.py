@@ -62,7 +62,14 @@ from app.models.train_settings import TrainSettings
 from app.repositories import train_repository
 from app.services import sharp_filler
 from app.services.sharp_filler import SharpPuzzle
-from app.services.train_pool import MAX_ITEMS_PER_GAME_PER_SESSION, compose_slots, pick_one_per_game
+from app.services.flaws_service import classify_severity
+from app.services.train_pool import (
+    MAX_ITEMS_PER_GAME_PER_SESSION,
+    VettedMove,
+    compose_slots,
+    expected_score_for,
+    pick_one_per_game,
+)
 from app.services.train_scheduler import ALL_WEEKDAYS_MASK, SHIELD_CAP
 from tests.conftest import ensure_test_user
 
@@ -3952,6 +3959,439 @@ async def test_record_solve_resubmit_returns_first_recorded_tier(
     assert first.move_quality == "good"
     assert second.move_quality == "good"  # first recorded tier wins, not "wrong"
     assert second.correct_move == first.correct_move
+
+
+@pytest.mark.asyncio
+async def test_record_solve_overrides_key_move_grade(db_session: AsyncSession) -> None:
+    """Phase 211 (D-03/D-07): playing the certified key move (the soft blob's
+    `su`, "g8f6" in `_MISSED_PV_LINES`) records and returns the SERVER's tier
+    even when the client deliberately asserts "wrong" — and the graded-ES pair
+    carries the exact blob-derived expected scores the override used."""
+    await ensure_test_user(db_session, _USER_ID)
+    drill_session = await _seed_open_session_with_sr_item(db_session, _USER_ID, "vet-override")
+
+    recorded = await train_repository.record_solve(
+        db_session,
+        user_id=_USER_ID,
+        session_id=drill_session.id,
+        position=0,
+        guess="several",
+        played_move="g8f6",  # the blob's `su` — the certified key move
+        move_quality="wrong",  # deliberately wrong client assertion
+        now_utc=_NOW,
+    )
+    assert recorded is not None
+    # _MISSED_PV_LINES gap (~0.0092) is inside the good band, so the server
+    # certifies g8f6 as "good" and its tier wins over the client's "wrong".
+    assert recorded.move_quality == "good"
+    assert recorded.correct_move is True
+    # The blob-derived expected scores the override used (b=40, s=30, white
+    # mover at ply 2).
+    blob_best_es = expected_score_for(40, None, "white")
+    blob_second_es = expected_score_for(30, None, "white")
+    assert blob_best_es is not None and blob_second_es is not None
+    assert recorded.vetted_moves == [
+        VettedMove(uci="g8f6", quality="good", es_before=blob_best_es, es_after=blob_second_es)
+    ]
+    assert recorded.graded_es_before == blob_best_es
+    assert recorded.graded_es_after == blob_second_es
+
+    # The PERSISTED row carries the server's tier too — the override happens
+    # before the claim UPDATE, not just on the wire.
+    row = (
+        await db_session.execute(
+            select(DrillSolve).where(
+                DrillSolve.session_id == drill_session.id, DrillSolve.position == 0
+            )
+        )
+    ).scalar_one()
+    assert row.move_quality == int(DrillMoveQuality.GOOD)
+    assert row.correct_move is True
+
+
+@pytest.mark.asyncio
+async def test_record_solve_leaves_off_key_grade_untouched(db_session: AsyncSession) -> None:
+    """Phase 211 (D-04, P-02's remaining half): an OFF-key played move's tier
+    stays byte-identical to the client's assertion, and no graded-ES pair is
+    returned — the server has no basis to grade a move outside its key."""
+    await ensure_test_user(db_session, _USER_ID)
+    drill_session = await _seed_open_session_with_sr_item(db_session, _USER_ID, "vet-offkey")
+
+    recorded = await train_repository.record_solve(
+        db_session,
+        user_id=_USER_ID,
+        session_id=drill_session.id,
+        position=0,
+        guess="several",
+        played_move="d2d4",  # not the blob's `su`
+        move_quality="inaccuracy",
+        now_utc=_NOW,
+    )
+    assert recorded is not None
+    assert recorded.move_quality == "inaccuracy"  # the client's tier, verbatim
+    assert recorded.graded_es_before is None
+    assert recorded.graded_es_after is None
+    # The vetted list is a property of the PUZZLE — served regardless of what
+    # was played.
+    assert [v.uci for v in recorded.vetted_moves] == ["g8f6"]
+
+    row = (
+        await db_session.execute(
+            select(DrillSolve).where(
+                DrillSolve.session_id == drill_session.id, DrillSolve.position == 0
+            )
+        )
+    ).scalar_one()
+    assert row.move_quality == int(DrillMoveQuality.INACCURACY)
+
+
+@pytest.mark.asyncio
+async def test_key_move_grade_matches_its_own_vetted_entry(db_session: AsyncSession) -> None:
+    """Phase 211 assumption-delta invariant: for a key-move solve, the
+    recorded `move_quality`, the matching vetted entry's own `quality`, and
+    the tier implied by `classify_severity(graded_es_before - graded_es_after)`
+    all agree — the verdict can never contradict the "Also fine" list."""
+    await ensure_test_user(db_session, _USER_ID)
+    drill_session = await _seed_open_session_with_sr_item(db_session, _USER_ID, "vet-invariant")
+
+    recorded = await train_repository.record_solve(
+        db_session,
+        user_id=_USER_ID,
+        session_id=drill_session.id,
+        position=0,
+        guess="several",
+        played_move="g8f6",
+        move_quality="wrong",
+        now_utc=_NOW,
+    )
+    assert recorded is not None
+    entry = next(v for v in recorded.vetted_moves if v.uci == "g8f6")
+    assert recorded.move_quality == entry.quality
+    assert recorded.graded_es_before is not None
+    assert recorded.graded_es_after is not None
+    severity = classify_severity(recorded.graded_es_before - recorded.graded_es_after)
+    implied_tier = "good" if severity is None else severity
+    assert recorded.move_quality == implied_tier
+
+
+async def _add_flaw_ply_position(
+    db_session: AsyncSession, user_id: int, game_id: int, *, best_move: str | None
+) -> None:
+    """Add the game_positions row AT the flaw ply (2) carrying the stored deep
+    best-move UCI — the source of the D-01-amendment vetted "best" entry.
+    (`_seed_flaw_game` only seeds ply-1 for the prior eval, so pre-amendment
+    fixtures exercise the no-row degrade path by construction.)"""
+    db_session.add(
+        GamePosition(
+            user_id=user_id,
+            game_id=game_id,
+            ply=2,
+            full_hash=7_000_000 + game_id,
+            white_hash=8_000_000 + game_id,
+            black_hash=9_000_000 + game_id,
+            best_move=best_move,
+        )
+    )
+    await db_session.flush()
+
+
+@pytest.mark.asyncio
+async def test_soft_vetted_list_serves_deep_best_first(db_session: AsyncSession) -> None:
+    """D-01 amendment (2026-08-16, Task 3 checkpoint round 2): a soft puzzle
+    whose flaw-ply game_positions row carries a best_move serves TWO vetted
+    entries, best-first — [deep best (quality "best"), su (quality "good")] —
+    so the "several fine moves" copy is always backed by at least one
+    displayable alternative after the client filters out its own best/played
+    move."""
+    await ensure_test_user(db_session, _USER_ID)
+    drill_session = await _seed_open_session_with_sr_item(db_session, _USER_ID, "vet-best-list")
+    solve_row = (
+        await db_session.execute(
+            select(DrillSolve).where(DrillSolve.session_id == drill_session.id)
+        )
+    ).scalar_one()
+    assert solve_row.game_id is not None
+    await _add_flaw_ply_position(db_session, _USER_ID, solve_row.game_id, best_move="e2e4")
+
+    recorded = await train_repository.record_solve(
+        db_session,
+        user_id=_USER_ID,
+        session_id=drill_session.id,
+        position=0,
+        guess="several",
+        played_move="d2d4",  # off-key — the list is a property of the puzzle
+        move_quality="inaccuracy",
+        now_utc=_NOW,
+    )
+    assert recorded is not None
+    blob_best_es = expected_score_for(40, None, "white")
+    blob_second_es = expected_score_for(30, None, "white")
+    assert blob_best_es is not None and blob_second_es is not None
+    assert recorded.vetted_moves == [
+        VettedMove(uci="e2e4", quality="best", es_before=blob_best_es, es_after=blob_best_es),
+        VettedMove(uci="g8f6", quality="good", es_before=blob_best_es, es_after=blob_second_es),
+    ]
+
+
+@pytest.mark.asyncio
+async def test_played_deep_best_gets_key_move_override(db_session: AsyncSession) -> None:
+    """D-07 consequence of the D-01 amendment: playing the deep best matches
+    the certified key, so the server override fires — the recorded tier is
+    "good" (the score ladder has no "best" tier; the client itself asserts
+    "good" for a played engine-best move) and the graded-ES pair is the best
+    eval against itself (drop 0), even against a deliberately wrong client
+    assertion."""
+    await ensure_test_user(db_session, _USER_ID)
+    drill_session = await _seed_open_session_with_sr_item(db_session, _USER_ID, "vet-best-play")
+    solve_row = (
+        await db_session.execute(
+            select(DrillSolve).where(DrillSolve.session_id == drill_session.id)
+        )
+    ).scalar_one()
+    assert solve_row.game_id is not None
+    await _add_flaw_ply_position(db_session, _USER_ID, solve_row.game_id, best_move="e2e4")
+
+    recorded = await train_repository.record_solve(
+        db_session,
+        user_id=_USER_ID,
+        session_id=drill_session.id,
+        position=0,
+        guess="several",
+        played_move="e2e4",  # the deep best — now a certified key move
+        move_quality="wrong",  # deliberately wrong client assertion
+        now_utc=_NOW,
+    )
+    assert recorded is not None
+    assert recorded.move_quality == "good"
+    assert recorded.correct_move is True
+    blob_best_es = expected_score_for(40, None, "white")
+    assert blob_best_es is not None
+    assert recorded.graded_es_before == blob_best_es
+    assert recorded.graded_es_after == blob_best_es
+
+    row = (
+        await db_session.execute(
+            select(DrillSolve).where(
+                DrillSolve.session_id == drill_session.id, DrillSolve.position == 0
+            )
+        )
+    ).scalar_one()
+    assert row.move_quality == int(DrillMoveQuality.GOOD)
+    assert row.correct_move is True
+
+
+@pytest.mark.asyncio
+async def test_null_best_move_degrades_to_su_only(db_session: AsyncSession) -> None:
+    """A flaw-ply game_positions row whose best_move is NULL (not yet
+    backfilled) degrades to today's su-only list — never a failed solve
+    (D-01 amendment degrade rule; the no-row case is covered by every
+    pre-amendment fixture in this file)."""
+    await ensure_test_user(db_session, _USER_ID)
+    drill_session = await _seed_open_session_with_sr_item(db_session, _USER_ID, "vet-best-null")
+    solve_row = (
+        await db_session.execute(
+            select(DrillSolve).where(DrillSolve.session_id == drill_session.id)
+        )
+    ).scalar_one()
+    assert solve_row.game_id is not None
+    await _add_flaw_ply_position(db_session, _USER_ID, solve_row.game_id, best_move=None)
+
+    recorded = await train_repository.record_solve(
+        db_session,
+        user_id=_USER_ID,
+        session_id=drill_session.id,
+        position=0,
+        guess="several",
+        played_move="d2d4",
+        move_quality="inaccuracy",
+        now_utc=_NOW,
+    )
+    assert recorded is not None
+    assert [(v.uci, v.quality) for v in recorded.vetted_moves] == [("g8f6", "good")]
+
+
+async def _seed_open_session_with_herring(
+    db_session: AsyncSession, user_id: int, label: str
+) -> tuple[DrillSession, int]:
+    """Seed one open session with a single unsolved RED_HERRING drill_solves
+    row at position 0, backed by a `_DEFAULT_LADDER` herring_pool row.
+    Returns `(drill_session, herring_pool_id)`."""
+    game_id, pool_id = await _seed_herring_pool_row(db_session, user_id, label)
+    drill_session = DrillSession(
+        user_id=user_id,
+        session_date=_TODAY,
+        status="open",
+        puzzle_count=1,
+        expires_on=_TODAY + datetime.timedelta(days=1),
+    )
+    db_session.add(drill_session)
+    await db_session.flush()
+    db_session.add(
+        DrillSolve(
+            session_id=drill_session.id,
+            position=0,
+            user_id=user_id,
+            game_id=game_id,
+            ply=8,
+            source=DrillSource.RED_HERRING,
+            herring_pool_id=pool_id,
+            solved_at=None,
+        )
+    )
+    await db_session.flush()
+    return drill_session, pool_id
+
+
+@pytest.mark.asyncio
+async def test_record_solve_herring_key_move_gets_server_tier(db_session: AsyncSession) -> None:
+    """Phase 211 (D-01/D-03): a herring solve playing a GOOD-BAND ladder entry
+    ("d2d4", `_DEFAULT_LADDER` index 1 — gap ~0.014 ES vs the best) gets the
+    server's tier and the non-null graded-ES pair, overriding the client's
+    deliberately-wrong assertion. The vetted set is the good-band prefix
+    (indices 0-2), index 0 included, in ladder order."""
+    await ensure_test_user(db_session, _USER_ID)
+    drill_session, _pool_id = await _seed_open_session_with_herring(
+        db_session, _USER_ID, "vet-herring-key"
+    )
+
+    recorded = await train_repository.record_solve(
+        db_session,
+        user_id=_USER_ID,
+        session_id=drill_session.id,
+        position=0,
+        guess="several",
+        played_move="d2d4",
+        move_quality="wrong",
+        now_utc=_NOW,
+    )
+    assert recorded is not None
+    assert recorded.puzzle_type == "herring"
+    assert recorded.move_quality == "good"
+    assert recorded.correct_move is True
+    # _DEFAULT_LADDER (white mover): 60/45/20 cp are within INACCURACY_DROP
+    # of the best; -10 and -40 are not.
+    assert [v.uci for v in recorded.vetted_moves] == ["e2e4", "d2d4", "g1f3"]
+    assert recorded.graded_es_before == expected_score_for(60, None, "white")
+    assert recorded.graded_es_after == expected_score_for(45, None, "white")
+
+
+@pytest.mark.asyncio
+async def test_record_solve_herring_off_band_ladder_move_keeps_client_tier(
+    db_session: AsyncSession,
+) -> None:
+    """Phase 211 (D-04): ladder index 4 ("b1c3", gap ~0.092 ES — outside the
+    good band) is NOT a key move: the client's asserted tier stands and no
+    graded-ES pair is returned."""
+    await ensure_test_user(db_session, _USER_ID)
+    drill_session, _pool_id = await _seed_open_session_with_herring(
+        db_session, _USER_ID, "vet-herring-offband"
+    )
+
+    recorded = await train_repository.record_solve(
+        db_session,
+        user_id=_USER_ID,
+        session_id=drill_session.id,
+        position=0,
+        guess="several",
+        played_move="b1c3",
+        move_quality="wrong",
+        now_utc=_NOW,
+    )
+    assert recorded is not None
+    assert recorded.move_quality == "wrong"  # the client's tier, verbatim
+    assert recorded.graded_es_before is None
+    assert recorded.graded_es_after is None
+    assert "b1c3" not in [v.uci for v in recorded.vetted_moves]
+
+
+@pytest.mark.asyncio
+async def test_record_solve_sharp_filler_returns_empty_vetted_moves(
+    db_session: AsyncSession,
+) -> None:
+    """Phase 211 / Phase 206 D-15: a sharp-filler solve serves NO vetted moves
+    — the same empty outcome as any other sharp puzzle, with no stored data
+    and no special-cased predicate."""
+    await ensure_test_user(db_session, _USER_ID)
+    drill_session = DrillSession(
+        user_id=_USER_ID,
+        session_date=_TODAY,
+        status="open",
+        puzzle_count=1,
+        expires_on=_TODAY + datetime.timedelta(days=1),
+    )
+    db_session.add(drill_session)
+    await db_session.flush()
+    db_session.add(
+        DrillSolve(
+            session_id=drill_session.id,
+            position=0,
+            user_id=_USER_ID,
+            game_id=None,
+            ply=0,
+            source=DrillSource.SHARP_FILLER,
+            sharp_puzzle_id="sharp-test-00",
+            solved_at=None,
+        )
+    )
+    await db_session.flush()
+
+    recorded = await train_repository.record_solve(
+        db_session,
+        user_id=_USER_ID,
+        session_id=drill_session.id,
+        position=0,
+        guess="critical",
+        played_move="d2d4",
+        move_quality="good",
+        now_utc=_NOW,
+    )
+    assert recorded is not None
+    assert recorded.puzzle_type == "sharp"
+    assert recorded.vetted_moves == []
+    assert recorded.graded_es_before is None
+    assert recorded.graded_es_after is None
+
+
+@pytest.mark.asyncio
+async def test_record_solve_foreign_user_returns_none_before_herring_read(
+    db_session: AsyncSession, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """V4/IDOR (T-211-02): a second user's `(session_id, position)` resolves
+    to nothing in `record_solve`'s own user-scoped SELECT — the router 404s —
+    and the herring ladder is never read (the certification function is
+    patched to prove it is not reached)."""
+    await ensure_test_user(db_session, _USER_ID)
+    await ensure_test_user(db_session, _OTHER_USER_ID)
+    drill_session, _pool_id = await _seed_open_session_with_herring(
+        db_session, _USER_ID, "vet-herring-idor"
+    )
+
+    def _must_not_be_called(*args: object, **kwargs: object) -> object:
+        raise AssertionError("ladder certification reached for a foreign user's solve")
+
+    monkeypatch.setattr(train_repository, "vetted_moves_from_ladder", _must_not_be_called)
+
+    recorded = await train_repository.record_solve(
+        db_session,
+        user_id=_OTHER_USER_ID,  # not the session owner
+        session_id=drill_session.id,
+        position=0,
+        guess="several",
+        played_move="d2d4",
+        move_quality="good",
+        now_utc=_NOW,
+    )
+    assert recorded is None  # the router maps this to 404
+
+    # The owner's row is untouched — still unsolved.
+    row = (
+        await db_session.execute(
+            select(DrillSolve).where(
+                DrillSolve.session_id == drill_session.id, DrillSolve.position == 0
+            )
+        )
+    ).scalar_one()
+    assert row.solved_at is None
 
 
 @pytest.mark.asyncio
