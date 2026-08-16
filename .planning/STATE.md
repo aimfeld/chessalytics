@@ -4,10 +4,10 @@ milestone: v2.12
 milestone_name: Train Reliability & Grading Agreement
 current_phase: 211
 status: completed
-stopped_at: Completed 211-03-PLAN.md — Phase 211 complete (3/3 plans), Task 3 operator-approved
-last_updated: "2026-08-16T17:39:04.928Z"
+stopped_at: Phase 211 shipped — squash-merged to main (d67998a8d)
+last_updated: "2026-08-16T17:49:00.000Z"
 last_activity: 2026-08-16
-last_activity_desc: Phase 211 complete — 3/3 plans, operator checkpoint approved
+last_activity_desc: Phase 211 shipped — squash-merged to main (d67998a8d)
 progress:
   total_phases: 6
   completed_phases: 4
