@@ -52,6 +52,8 @@ in `YYYY-MM-DD` (Europe/Zurich).
 
 - Guests who open Train now get a sign-up prompt instead of a page that silently fails.
 
+- On devices where the browser's GPU backend drops the Maia session mid-analysis, Maia now restarts on the CPU backend and keeps working instead of failing that position's human-move prediction. (SEED-148)
+
 ### Security
 
 - Cleared 11 build-toolchain vulnerability advisories (`fast-uri`, `ip-address`, `postcss`, `undici`, `@hono/node-server`, `hono`, `brace-expansion`, `js-yaml`) by pinning patched versions of transitive dependencies. All were development- and build-time only; none were reachable from the shipped app.
