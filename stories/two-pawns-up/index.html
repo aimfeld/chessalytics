@@ -118,7 +118,7 @@
   details.tbl th,details.tbl td{border:1px solid var(--line);padding:6px 10px;text-align:right}
   details.tbl th:first-child,details.tbl td:first-child{text-align:left}
   #tip{
-    position:fixed;pointer-events:none;z-index:10;display:none;max-width:280px;
+    position:fixed;pointer-events:none;z-index:10;display:none;max-width:min(280px,calc(100vw - 24px));
     background:var(--ink);color:#FFF;border-radius:10px;padding:9px 12px;font-size:14.5px;line-height:1.45;
     box-shadow:0 6px 24px rgba(0,0,0,.25)
   }
@@ -419,13 +419,31 @@ function svgRoot(id,w,h,label){const host=document.getElementById(id);
   const s=el("svg",{viewBox:`0 0 ${w} ${h}`,class:"chart-svg",role:"img","aria-label":label});
   host.appendChild(s);return s;}
 const tip=document.getElementById("tip");
+/* Place the tooltip beside the pointer, then clamp it fully inside the viewport.
+   Bug: the old version only checked the right edge, so on a phone the "flip to
+   the left" fallback ran the tooltip off the LEFT edge instead, and a tap low on
+   the screen pushed it below the fold. Flip first, then hard-clamp both axes. */
+const TIP_PAD=14,TIP_MARGIN=8;
+function placeTip(cx,cy){
+  const tw=tip.offsetWidth,th=tip.offsetHeight;
+  let x=cx+TIP_PAD; if(x+tw>window.innerWidth-TIP_MARGIN)x=cx-tw-TIP_PAD;
+  x=Math.min(Math.max(x,TIP_MARGIN),Math.max(TIP_MARGIN,window.innerWidth-tw-TIP_MARGIN));
+  let y=cy+TIP_PAD; if(y+th>window.innerHeight-TIP_MARGIN)y=cy-th-TIP_PAD;
+  y=Math.min(Math.max(y,TIP_MARGIN),Math.max(TIP_MARGIN,window.innerHeight-th-TIP_MARGIN));
+  tip.style.left=x+"px"; tip.style.top=y+"px";
+}
+function hideTip(){tip.style.display="none";}
 function bindTip(node,html){
   node.addEventListener("mousemove",ev=>{tip.innerHTML=html;tip.style.display="block";
-    const pad=14,tw=tip.offsetWidth;
-    let x=ev.clientX+pad; if(x+tw>window.innerWidth-8)x=ev.clientX-tw-pad;
-    tip.style.left=x+"px"; tip.style.top=(ev.clientY+pad)+"px";});
-  node.addEventListener("mouseleave",()=>tip.style.display="none");
+    placeTip(ev.clientX,ev.clientY);});
+  node.addEventListener("mouseleave",hideTip);
 }
+/* Touch has no mouseleave, so a tapped tooltip used to stay pinned to the
+   viewport (position:fixed) and drift away from its chart while scrolling.
+   touchstart runs before the emulated mousemove, so a tap on another data point
+   hides the old tooltip and then re-shows the new one. */
+document.addEventListener("touchstart",hideTip,{passive:true,capture:true});
+window.addEventListener("scroll",hideTip,{passive:true});
 function grid(svg,x0,x1,yFor,ticks,fmt){
   for(const v of ticks){const y=yFor(v);
     el("line",{x1:x0,x2:x1,y1:y,y2:y,class:"gridline"},svg);
