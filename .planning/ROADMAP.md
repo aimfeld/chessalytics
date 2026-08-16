@@ -595,7 +595,21 @@ explicitly out of scope).
    mechanism (a vetted move played in free-play at the root is never badged worse than
    the list claims).
 
-**Plans**: TBD
+**Requirements**: VETFINE-01, VETFINE-02, VETFINE-03, VETFINE-04, VETFINE-05, VETFINE-06
+(minted at planning time, one per Success Criterion above — this phase predates its
+milestone's `REQUIREMENTS.md`, same convention as Phases 206–210; the traceability table
+lives in `211-01-PLAN.md`).
+
+**Plans**: 3 plans
+
+Plans:
+
+- [ ] 211-01-PLAN.md — Server key: certify the vetted alternatives from the stored answer
+  key, override the client's tier for a played key move, lock the P-01 surface (tracer, wave 1)
+- [ ] 211-02-PLAN.md — Width 1: retire the client's own "also fine" derivation and split the
+  alternative-arrow cap per puzzle type (wave 2)
+- [ ] 211-03-PLAN.md — Re-establish Phase 205's free-play root-ply guarantee on the server
+  key; operator check (wave 3)
 
 ## Backlog
 

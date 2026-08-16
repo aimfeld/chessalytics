@@ -40,7 +40,15 @@ created: 2026-08-16
 
 | Task ID | Plan | Wave | Requirement | Threat Ref | Secure Behavior | Test Type | Automated Command | File Exists | Status |
 |---------|------|------|-------------|------------|-----------------|-----------|-------------------|-------------|--------|
-| (filled by planner) | — | — | VETFINE-XX | — | P-01: no key material pre-attempt | unit/integration | see plans | ✅ | ⬜ pending |
+| 01/1 | 211-01 | 1 | VETFINE-01, VETFINE-03 | T-211-01, T-211-03 | Key material only on `SolveResponse`; server overrides the client tier for a key move | integration (mutation-proved) | `uv run pytest -n auto tests/repositories/test_train_repository.py tests/services/test_flaws_service.py -x` | ✅ | ⬜ pending |
+| 01/2 | 211-01 | 1 | VETFINE-01 | T-211-02 | Herring/blob reads stay scoped to the `DrillSolve` row the user owns | unit + integration | `uv run pytest -n auto tests/services/test_train_pool.py tests/repositories/test_train_repository.py -x` | ✅ | ⬜ pending |
+| 01/3 | 211-01 | 1 | VETFINE-02, VETFINE-04 | T-211-01 | Pre-attempt payload, solve request and reveal response all provably free of key material | integration + component | `uv run pytest -n auto tests/routers/test_train.py -x` · `(cd frontend && npm test -- --run src/components/train/__tests__/TrainSolveScreen.test.tsx)` | ✅ | ⬜ pending |
+| 02/1 | 211-02 | 2 | VETFINE-04, VETFINE-05 | T-211-07, T-211-08 | Width-1 mount search; no client-derived alternative set | unit (mutation-proved) | `(cd frontend && npm test -- --run src/hooks/__tests__/useTrainGradingEngine.test.ts)` | ✅ | ⬜ pending |
+| 02/2 | 211-02 | 2 | VETFINE-01 | — | Sharp/soft/herring draw 0/≤1/≤4 alternatives from three named budgets | unit | `(cd frontend && npm test -- --run src/lib/__tests__/trainArrows.test.ts)` | ✅ | ⬜ pending |
+| 02/3 | 211-02 | 2 | VETFINE-05 | T-211-06 | A pre-211 sessionStorage entry restores and degrades to no alternatives | unit | `(cd frontend && npx tsc -b && npm test -- --run && npm run knip)` | ✅ | ⬜ pending |
+| 03/1 | 211-03 | 3 | VETFINE-06 | T-211-09, T-211-11 | SEED-137 case 2 reproduced against the new seam (RED before 03/2) | unit | `(cd frontend && npm test -- --run src/hooks/__tests__/useTrainFreePlay.test.ts)` | ❌ new file, Task 03/1 creates it | ⬜ pending |
+| 03/2 | 211-03 | 3 | VETFINE-05, VETFINE-06 | T-211-09, T-211-10 | Free-play root ply reads the served key; no dead rank matcher remains | unit (mutation-proved) | `(cd frontend && npm test -- --run && npx tsc -b && npm run knip)` | ✅ | ⬜ pending |
+| 03/3 | 211-03 | 3 | VETFINE-01, VETFINE-03 | — | Operator confirmation across soft/sharp/herring/warm-up at both viewports | manual | n/a — `checkpoint:human-verify` | n/a | ⬜ pending |
 
 *Status: ⬜ pending · ✅ green · ❌ red · ⚠️ flaky*
 
@@ -48,8 +56,11 @@ created: 2026-08-16
 
 ## Wave 0 Requirements
 
-Existing infrastructure covers all phase requirements (backend train router/pool suites and
-frontend train hook/component suites already exist; new tests slot into them).
+Existing infrastructure covers all phase requirements except one: `frontend/src/hooks/__tests__/useTrainFreePlay.test.ts`
+does not exist (verified at plan time). Plan 211-03 Task 1 is the Wave-0 task that creates
+it, and it must be RED before Task 2 makes it green — that red/green transition is the D-06
+mutation proof. Every other new test slots into an existing file (backend train
+router/pool/repository suites, frontend train hook/lib/component suites).
 
 ---
 
