@@ -1,6 +1,8 @@
 ---
 id: SEED-148
-status: active
+status: closed
+closed: 2026-08-16
+closed_by: quick task 260816-i4m (.planning/quick/260816-i4m-sentry-signal-hygiene-and-small-prod-fix/)
 planted: 2026-08-15
 planted_during: Sentry unresolved-issue triage (15 open issues reviewed against code)
 trigger_when: any milestone with appetite for a small observability/cleanup track, or the
@@ -166,6 +168,38 @@ Frontend:
 Other:
 - Sentry issues: FLAWCHESS-8X, 8N, 8Y, 8Z (item 1) · 64 (item 2) · 24, 54 (item 3) · 9D (item 4)
 - `deploy/Caddyfile` — confirmed no edge rate limiting, so every client 429 is one of ours (item 2)
+
+## Resolution (2026-08-16, quick task 260816-i4m)
+
+Commits `10f51601`, `754b3631`, `931c3368`. Frontend-only, zero backend files changed.
+
+- **Item 1 — DROPPED by operator decision, not implemented.** Dev-environment reporting is kept
+  deliberately; it is disabled by unsetting `SENTRY_DSN` in the dev `.env` when not wanted. No
+  `ENVIRONMENT` gate and no `before_send` dev-drop was added to `app/main.py` or
+  `scripts/remote_eval_worker.py`. Accepted consequence: FLAWCHESS-8X / 8N (Ctrl-C
+  `InvalidStateError`, 24 events) keep recurring from the local worker box. If that becomes
+  annoying, the fix that preserves dev signal is to skip capture in the worker when the chained
+  cause is `KeyboardInterrupt` / `CancelledError` — deliberately not done here.
+- **Item 2 — done as specified, instrumentation only.** `AxiosLikeError` gained
+  `config?: { url?: string; method?: string }`; `sentryBeforeSend` attaches url + uppercased
+  method to `event.request`. No rate limit touched. **Open follow-up: re-triage FLAWCHESS-64
+  once this is deployed and has collected events** — the actual fix (if any) depends on whether
+  the 429s are guest-create (5/h per IP, an acquisition bug behind CGNAT) or feedback
+  (5/h per user, benign).
+- **Item 3 — done as specified.** `/Failed to update a ServiceWorker/` added to `ignoreErrors`.
+  The axios offline filter and its "keep the outage signal" rationale were left byte-identical,
+  as the seed required. FLAWCHESS-24 still needs the Sentry-console archive action.
+- **Item 4 — premise was wrong; fixed via the seed's second clause instead.** There is no
+  `destroy()` call anywhere in our Maia code to optional-chain: `maia-worker.js` teardown already
+  guards `session?.release?.()` (:208) and `t.dispose?.()` (:274-275). The throw originates inside
+  the vendored onnxruntime-web WebGPU bundle (`ort-wasm-simd-threaded.asyncify.mjs`), which we do
+  not patch. Fixed by extending `maiaWorkerHost.ts`'s existing wasm-pinned respawn machinery to a
+  post-ready branch: a mid-inference WebGPU death now respawns pinned to wasm. Self-limiting
+  (gated on `backend === 'webgpu'`, the replacement reports `wasm`), so no respawn loop is
+  possible; the Sentry capture still fires tagged `backend=webgpu`.
+- **Folded in from "Adjacent":** `denyUrls: [/beacon\.min\.js/]` (FLAWCHESS-9R / 9Q).
+- **Still open, console actions not code:** archive FLAWCHESS-66, 9N, 24 in the Sentry UI;
+  keep watching FLAWCHESS-9G.
 
 ## Notes
 
