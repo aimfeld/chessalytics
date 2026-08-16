@@ -6,6 +6,7 @@ interface AxiosLikeError {
   isAxiosError: true;
   response?: { status: number };
   code?: string;
+  config?: { url?: string; method?: string };
 }
 
 function isAxiosLikeError(err: unknown): err is AxiosLikeError {
@@ -70,6 +71,19 @@ function sentryBeforeSend(
     ) {
       return null;
     }
+    // FLAWCHESS-64: the event previously recorded only the page transaction,
+    // never the endpoint that failed (55 events, no attributable route).
+    // This attachment is diagnostic only — it changes neither event grouping
+    // nor any rate limit.
+    if (error.config?.url !== undefined || error.config?.method !== undefined) {
+      event.request = {
+        ...event.request,
+        ...(error.config.url !== undefined ? { url: error.config.url } : {}),
+        ...(error.config.method !== undefined
+          ? { method: error.config.method.toUpperCase() }
+          : {}),
+      };
+    }
     if (error.response?.status === 500) {
       event.fingerprint = ["api-server-error"];
     } else if (error.code === "ECONNABORTED") {
@@ -94,5 +108,11 @@ Sentry.init({
   ignoreErrors: [
     /Failed to execute 'removeChild' on 'Node'/,
     /Failed to execute 'insertBefore' on 'Node'/,
+    // A sw.js revalidation failing means the network is gone — unactionable
+    // by construction, and the sampled events share a trace id with the
+    // offline XHR failure that produced them.
+    /Failed to update a ServiceWorker/,
   ],
+  // These frames are entirely inside Cloudflare Web Analytics, not our code.
+  denyUrls: [/beacon\.min\.js/],
 });

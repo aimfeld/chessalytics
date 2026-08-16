@@ -22,6 +22,7 @@ interface AxiosLikeErrorInput {
   isAxiosError: true;
   code?: string;
   response?: { status: number };
+  config?: { url?: string; method?: string };
 }
 
 function makeHint(error: AxiosLikeErrorInput): { originalException: unknown } {
@@ -182,5 +183,71 @@ describe('sentryBeforeSend (FLAWCHESS-24)', () => {
       { originalException: new Error('boom') } as never,
     );
     expect(result).toBe(plainEvent);
+    expect((result as unknown as { request?: unknown }).request).toBeUndefined();
+  });
+});
+
+describe('sentryBeforeSend request attachment (FLAWCHESS-64)', () => {
+  it("attaches config.url and the uppercased config.method to event.request", async () => {
+    const { sentryBeforeSend } = await import('@/instrument');
+
+    const event = sentryBeforeSend(
+      makeEvent() as never,
+      makeHint({
+        isAxiosError: true,
+        config: { url: '/auth/guest', method: 'post' },
+      }) as never,
+    );
+    expect((event as unknown as { request: { url: string; method: string } }).request).toEqual({
+      url: '/auth/guest',
+      method: 'POST',
+    });
+  });
+
+  it('leaves event.request undefined when the axios error carries no config', async () => {
+    const { sentryBeforeSend } = await import('@/instrument');
+
+    const event = sentryBeforeSend(
+      makeEvent() as never,
+      makeHint({ isAxiosError: true, code: 'ERR_NETWORK' }) as never,
+    );
+    expect((event as unknown as { request?: unknown }).request).toBeUndefined();
+  });
+
+  it('still drops a 401 that also carries a config — the drop wins', async () => {
+    const { sentryBeforeSend } = await import('@/instrument');
+
+    const result = sentryBeforeSend(
+      makeEvent() as never,
+      makeHint({
+        isAxiosError: true,
+        response: { status: 401 },
+        config: { url: '/auth/me', method: 'get' },
+      }) as never,
+    );
+    expect(result).toBeNull();
+  });
+});
+
+describe('Sentry.init config (FLAWCHESS-24 / SEED-148 items 3)', () => {
+  it('ignoreErrors matches the real prod ServiceWorker-update-failure string', async () => {
+    const Sentry = await import('@sentry/react');
+    await import('@/instrument');
+
+    const initCall = vi.mocked(Sentry.init).mock.calls[0]?.[0];
+    const ignoreErrors = (initCall?.ignoreErrors ?? []) as RegExp[];
+    const prodMessage =
+      "Failed to update a ServiceWorker for scope ('https://flawchess.com/'), script ('https://flawchess.com/sw.js')";
+    expect(ignoreErrors.some((p) => p.test(prodMessage))).toBe(true);
+  });
+
+  it('denyUrls matches a Cloudflare beacon.min.js frame URL', async () => {
+    const Sentry = await import('@sentry/react');
+    await import('@/instrument');
+
+    const initCall = vi.mocked(Sentry.init).mock.calls[0]?.[0];
+    const denyUrls = (initCall?.denyUrls ?? []) as RegExp[];
+    const beaconUrl = 'https://static.cloudflareinsights.com/beacon.min.js/xyz';
+    expect(denyUrls.some((p) => p.test(beaconUrl))).toBe(true);
   });
 });
