@@ -45,6 +45,7 @@
   :root{
     --brown:#8B5E3C; --brown-dark:#6B4226; --brown-light:#A07850; --cream:#FAF7F0;
     --card:#FFFFFF; --ink:#2A2118; --ink-2:#5C5246; --ink-3:#8A7F71; --line:#E8E0D2;
+    --ink-mid:#6E6355; /* between ink-2 and ink-3: small text needs >=4.5:1 on white, ink-3 is 3.9:1 */
     --win:#166534; --win2:#5F901A; --draw:#8A7F71; --loss:#B02A2A;
     --blitz:#C97A00; --rapid:#3B82F6; --classical:#166534;
     --hl:#F0DBB9;
@@ -79,7 +80,7 @@
   .tile .big{font-size:clamp(30px,4.5vw,44px);font-weight:800;letter-spacing:-.03em;line-height:1.1}
   .tile .lbl{color:var(--ink-2);font-size:15px;margin-top:2px}
   .tile.win .big{color:var(--win)} .tile.draw .big{color:var(--draw)} .tile.loss .big{color:var(--loss)}
-  .hero-note{color:var(--ink-3);font-size:15px;margin-bottom:8px}
+  .hero-note{color:var(--ink-mid);font-size:15px;margin-bottom:8px}
   section.card{background:var(--card);border:1px solid var(--line);border-radius:20px;padding:30px clamp(18px,4vw,38px);margin:26px 0}
   .card-head{display:flex;align-items:center;gap:12px;margin-bottom:10px}
   .card-head h2{margin-bottom:0}
@@ -100,7 +101,7 @@
   .chip{width:13px;height:13px;border-radius:4px;display:inline-block}
   .chart-svg{width:100%;height:auto;display:block}
   .chart-svg text{font-family:inherit}
-  .axis{fill:var(--ink-3);font-size:14px}
+  .axis{fill:var(--ink-mid);font-size:14px}
   .gridline{stroke:var(--line);stroke-width:1}
   .dlabel{font-size:15px;font-weight:700}
   .toggles{display:flex;gap:8px;flex-wrap:wrap;margin:4px 0 8px}
@@ -112,7 +113,7 @@
   .toggles button[aria-pressed="true"]{background:var(--brown);color:#fff}
   .toggles button:focus-visible{outline:2px solid var(--brown-dark);outline-offset:2px}
   details.tbl{margin-top:12px;font-size:15px}
-  details.tbl summary{cursor:pointer;color:var(--ink-3)}
+  details.tbl summary{cursor:pointer;color:var(--ink-mid)}
   details.tbl > div{overflow-x:auto}
   details.tbl table{border-collapse:collapse;margin-top:10px;width:100%}
   details.tbl th,details.tbl td{border:1px solid var(--line);padding:6px 10px;text-align:right}
@@ -129,7 +130,7 @@
   .cta{display:inline-block;margin-top:14px;background:var(--brown);color:#fff;text-decoration:none;
        font-weight:700;padding:12px 22px;border-radius:12px}
   .cta:hover{background:var(--brown-dark)}
-  .fineprint{color:var(--ink-3);font-size:14.5px;margin-top:16px}
+  .fineprint{color:var(--ink-mid);font-size:14.5px;margin-top:16px}
   .promo{background:var(--card);border:1px solid var(--line);border-radius:20px;
          padding:26px clamp(18px,4vw,38px);margin-top:18px}
   .promo-head{display:flex;align-items:center;gap:14px}
@@ -148,6 +149,7 @@
   .author .who{font-weight:700;color:var(--ink)}
   .author .bio{color:var(--ink-2);font-size:16px;margin-top:2px}
   .author .links{font-size:15px;margin-top:6px}
+  .num.bulb{background:var(--brown-dark);color:#FFD34D}
   .adv{list-style:none;margin-top:14px;display:grid;gap:14px}
   .adv li{padding-left:26px;position:relative;color:var(--ink-2)}
   .adv li::before{content:"";position:absolute;left:0;top:.5em;width:11px;height:11px;border-radius:3px;background:var(--brown)}
@@ -293,9 +295,9 @@
 
 <section class="card" id="takeaways">
   <div class="card-head">
-    <div class="num" aria-hidden="true"><svg width="19" height="19" viewBox="0 0 24 24" fill="none"
+    <div class="num bulb" aria-hidden="true"><svg width="19" height="19" viewBox="0 0 24 24" fill="none"
       stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path
-      d="M15 14c.2-1 .7-1.7 1.5-2.5 1-.9 1.5-2.2 1.5-3.5A6 6 0 0 0 6 8c0 1 .2 2.2 1.5 3.5.7.7 1.3 1.5 1.5 2.5"/><path
+      fill="currentColor" d="M15 14c.2-1 .7-1.7 1.5-2.5 1-.9 1.5-2.2 1.5-3.5A6 6 0 0 0 6 8c0 1 .2 2.2 1.5 3.5.7.7 1.3 1.5 1.5 2.5"/><path
       d="M9 18h6"/><path d="M10 22h4"/></svg></div>
     <h2>What to take to your next game</h2>
   </div>
@@ -642,7 +644,7 @@ table("t4",["Rating","Time control","Lost on the board","Lost on the clock","Dis
   RATINGS.flatMap((r,i)=>TC_KEYS.map(k=>[r,TC[k].label,TC[k].board[i]+"%",TC[k].clock[i]+"%",
     TC[k].aband[i]+"%",TC[k].total[i]+"%",TC[k].boardOnly[i]+"%"])));
 document.getElementById("t4").insertAdjacentHTML("beforeend",
-  '<p style="margin-top:10px;color:var(--ink-3)">* Share of losses among games that were actually decided on the '+
+  '<p style="margin-top:10px;color:var(--ink-mid)">* Share of losses among games that were actually decided on the '+
   'board, with clock-decided games removed from the count entirely. The three loss columns are shares of all '+
   'entry-lead games and add up to "Total lost", to rounding. The chart shows the board and clock components; '+
   'disconnects (at most 2.2% in any cell) appear only in this table.</p>');
