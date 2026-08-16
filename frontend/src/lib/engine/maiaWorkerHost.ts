@@ -215,6 +215,36 @@ function spawn(source: MaiaErrorSource, mode: 'auto' | 'wasm'): void {
   w.postMessage(mode === 'wasm' ? { type: 'init', backend: 'wasm' } : { type: 'init' });
 }
 
+/**
+ * Detaches handlers on the dead worker, terminates it, resets the module-level
+ * worker state, and spawns a fresh replacement pinned to the wasm backend
+ * (`mode: 'wasm'`, never re-probing WebGPU). Shared by the pre-ready
+ * `webgpu-unavailable` path and the post-ready mid-inference WebGPU-death
+ * fallback (Task 2) — both are "this worker's GPU session is unusable,
+ * reclaim its heap and keep going on wasm" situations. `queue` is
+ * deliberately left untouched: `spawn()` never touches it, and
+ * `dispatchNext()` runs on the replacement's `ready`, servicing whatever was
+ * already queued.
+ */
+function respawnPinnedToWasm(rawMessage: string, breadcrumbMessage: string): void {
+  const source = spawnSource ?? 'maia-worker';
+  if (worker) {
+    worker.onmessage = null;
+    worker.onerror = null;
+    worker.terminate();
+  }
+  worker = null;
+  isReady = false;
+  backend = null;
+  Sentry.addBreadcrumb({
+    category: 'maia',
+    level: 'info',
+    message: breadcrumbMessage,
+    data: { rawMessage },
+  });
+  spawn(source, 'wasm');
+}
+
 function handleMessage(msg: WorkerMessage): void {
   if (msg.type === 'ready') {
     isReady = true;
@@ -250,22 +280,7 @@ function handleMessage(msg: WorkerMessage): void {
     // here — dispatchNext() never sends analyze before `ready`): the fresh
     // worker services every already-queued request, unlike `worker death`
     // below where nothing will ever run again.
-    const source = spawnSource ?? 'maia-worker';
-    if (worker) {
-      worker.onmessage = null;
-      worker.onerror = null;
-      worker.terminate();
-    }
-    worker = null;
-    isReady = false;
-    backend = null;
-    Sentry.addBreadcrumb({
-      category: 'maia',
-      level: 'info',
-      message: 'Maia worker WebGPU session failed — respawning worker pinned to wasm',
-      data: { rawMessage: msg.message },
-    });
-    spawn(source, 'wasm');
+    respawnPinnedToWasm(msg.message, 'Maia worker WebGPU session failed — respawning worker pinned to wasm');
     return;
   }
 
@@ -281,6 +296,29 @@ function handleMessage(msg: WorkerMessage): void {
     // Pre-ready init failure (e.g. onnx session/model-load): nothing will
     // ever service this worker — settle everything as worker death.
     failAllLeasesAndDropWorker(new Error(msg.message));
+    return;
+  }
+
+  // FLAWCHESS-9D: a mid-inference WebGPU session death (observed on the
+  // Android 10 / Chrome Mobile population). The vendored ORT WebGPU bundle
+  // throws when it looks up a GPU buffer handle it had already released —
+  // that's third-party code we don't patch, so the fix lives at the host
+  // level instead of in maia-worker.js. Gated on the active backend only,
+  // with no message-pattern match: the branch is self-limiting because the
+  // replacement worker is pinned to wasm and reports `backend: 'wasm'`, so
+  // it can fire at most once per worker lifetime — a respawn loop is
+  // structurally impossible. A false positive here only costs a slower wasm
+  // session for the rest of the tab, while a too-narrow pattern list would
+  // both leave the bug in place and duplicate classification logic that
+  // already lives in maiaWorkerErrors.ts.
+  if (backend === 'webgpu') {
+    const req = inFlight;
+    inFlight = null;
+    if (req) req.reject(new Error(msg.message));
+    // No ready worker exists at this moment — dispatchNext() runs once the
+    // wasm-pinned replacement reports `ready` (same contract as the
+    // pre-ready webgpu-unavailable path above).
+    respawnPinnedToWasm(msg.message, 'Maia worker WebGPU session died mid-inference — respawning worker pinned to wasm');
     return;
   }
 
