@@ -288,7 +288,16 @@ export function GamesTab() {
     profile != null ? profile.chess_com_game_count + profile.lichess_game_count : 0;
 
   // ── Derived state for empty-state decisions ───────────────────────────────────
-  const totalGames = totalImported;
+  // Bug fix: this used to be totalImported alone. The profile's chess.com+lichess
+  // sum is an IMPORT-GATE quantity (App.tsx IMPORT_EXEMPT_ROUTES / Phase 208 D-10 —
+  // a bot or pasted game must not unlock the import-gated nav), so it omits
+  // platform='flawchess' bot games and platform='pgn' pasted games. Using it as a
+  // game total made a user whose only games are bot games see "No games imported
+  // yet" rendered ABOVE their populated game list. eval-coverage's totalCount is
+  // the account-wide count across all four platforms. Max, not a straight swap:
+  // totalCount is 0 while the coverage query is loading or errored, and falling
+  // back to the profile sum there keeps the empty state from flashing.
+  const totalGames = Math.max(totalCount, totalImported);
   const matchedCount = gamesData?.matched_count ?? 0;
   const games = gamesData?.games ?? [];
 
@@ -410,7 +419,6 @@ export function GamesTab() {
         <LibraryGameCardList
           games={games}
           matchedCount={matchedCount}
-          total={totalGames}
           offset={offset}
           limit={PAGE_SIZE}
           onPageChange={setOffset}
