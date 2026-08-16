@@ -171,6 +171,7 @@
 | 208. Paste a FEN or PGN on /analysis (SEED-144, unassigned) | 4/4 | Complete    | 2026-08-08 |
 | 209. Traffic-Surge Quick Wins (SEED-146, unassigned) | 4/4 | Complete    | 2026-08-15 |
 | 210. Custom-Start Games — Crash Containment & Insight Eviction (SEED-042, unassigned) | 3/3 | Complete    | 2026-08-15 |
+| 211. Vetted "Also Fine" Moves & Server-Key Grading (SEED-150, unassigned) | 0/? | Not started | - |
 
 ## Active Phases (unassigned milestone)
 
@@ -538,6 +539,63 @@ Plans:
 
 **UI hint**: none — no new components, no visual change. Slice 1 is a crash guard, slice 3 makes
 an existing board show the correct starting position.
+
+### Phase 211: Vetted "Also Fine" Moves & Server-Key Grading
+
+**Goal**: The Train reveal can no longer advertise a move as "Also fine" that deep analysis
+would call a blunder. Today the list is derived client-side from ranks 2–4 of a 1.5s
+MultiPV-4 WASM search whose node budget is split four ways, on positions selected to be
+tactically sharp — while the server's deep guarantee only ever covers the top two moves
+(`missed_pv_lines` node 0) or the herring MultiPV-5 ladder. Observed in prod: "Bxf4 also
+fine" on a puzzle whose source-game analysis board correctly grades Bxf4 a blunder. After
+this phase, every displayed alternative is server-vetted (soft → at most the deep
+second-best, sharp → none, herring → good-band ladder moves), playing a vetted move is
+graded from the server's own evals (instant, no search), and the mount search drops to
+width 1, concentrating the full budget on the main line.
+
+**Depends on**: nothing new. Builds on Phase 205's dead band (which guarantees the soft
+second-best is certified *good*) and Phase 192's `herring_pool.ladder`.
+
+**Source**: [SEED-150](../seeds/SEED-150-vetted-also-fine-moves.md) — planted 2026-08-16
+after a `/gsd-explore` session; carries the verified blob/ladder shapes, the post-attempt
+delivery design that keeps POOL-10 / P-01's pre-attempt lock intact, and the locked
+residual decision (off-key played moves stay best-effort live-engine; top-K blob extension
+explicitly out of scope).
+
+**Planning notes** (interactions the planner must resolve, from the seed):
+
+- **P-01 (LOCKED)**: vetted moves and their evals reach the client **post-attempt only**
+  (solve-recording POST response, or an attempt-gated fetch). The pre-attempt
+  `TrainPuzzle` schema stays byte-identical.
+- **Phase 205 interaction**: ORACLE-0x made the free-play root ply grade from the mount
+  search's rank lines — that mechanism dies with MultiPV-4. Its *guarantee* ("an Also
+  fine move can never be badged a mistake when played") must be re-established the new
+  way: both the list and the root-ply grading read the same server key. Deeper free-play
+  plies stay engine-only, as today.
+- **Before removing width 4**: trace remaining consumers of the `lines` array passed
+  through `GradeResult` (the reveal exploration surface passes it around).
+- Grading regimes: key move → both ES ends from server evals via the shared sigmoid
+  (agrees with the list by construction); off-key move → existing full-budget width-1
+  after-move search, same-engine ES delta against client rank 1.
+
+**Success Criteria** (what must be TRUE):
+
+1. The "Also fine" list (legend row + board arrows, desktop and mobile) shows only
+   server-vetted moves: at most one on a soft puzzle (the blob's `su`), none on a sharp
+   puzzle, and only good-band ladder moves on a herring.
+2. The pre-attempt puzzle payload is unchanged; vetted moves are delivered only after an
+   attempt is recorded (P-01 held, verified by schema/API test).
+3. Playing a server-vetted move yields a verdict computed from the server's deep evals
+   with no engine search, and that verdict can never contradict the "Also fine" list.
+4. Playing an off-key move is graded by a full-budget width-1 after-move search; the
+   accepted residual (shallow grading of off-key moves) is documented, not "fixed".
+5. `TRAIN_GRADING_MULTIPV_WIDTH` is 1; `deriveFineMoves` and the rank-match fast path are
+   retired, with all former `lines` consumers accounted for.
+6. Phase 205's free-play root-ply agreement guarantee still holds under the new
+   mechanism (a vetted move played in free-play at the root is never badged worse than
+   the list claims).
+
+**Plans**: TBD
 
 ## Backlog
 
