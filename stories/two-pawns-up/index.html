@@ -148,6 +148,10 @@
   .author .who{font-weight:700;color:var(--ink)}
   .author .bio{color:var(--ink-2);font-size:16px;margin-top:2px}
   .author .links{font-size:15px;margin-top:6px}
+  .adv{list-style:none;margin-top:14px;display:grid;gap:14px}
+  .adv li{padding-left:26px;position:relative;color:var(--ink-2)}
+  .adv li::before{content:"";position:absolute;left:0;top:.5em;width:11px;height:11px;border-radius:3px;background:var(--brown)}
+  .adv b{color:var(--ink)}
   @media (max-width:560px){
     header.site .tag{display:none}
     header.site .name,header.site .sect{font-size:19px}
@@ -285,6 +289,28 @@
   eliminates them. Only above 2000 does speed also start costing games on the board: at 2400, blitz board losses are
   <b>14.4%</b> against <b>10.6%</b> in classical.</div>
   <details class="tbl"><summary>View the data</summary><div id="t4"></div></details>
+</section>
+
+<section class="card" id="takeaways">
+  <div class="card-head">
+    <div class="num" aria-hidden="true"><svg width="19" height="19" viewBox="0 0 24 24" fill="none"
+      stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path
+      d="M15 14c.2-1 .7-1.7 1.5-2.5 1-.9 1.5-2.2 1.5-3.5A6 6 0 0 0 6 8c0 1 .2 2.2 1.5 3.5.7.7 1.3 1.5 1.5 2.5"/><path
+      d="M9 18h6"/><path d="M10 22h4"/></svg></div>
+    <h2>What to take to your next game</h2>
+  </div>
+  <ul class="adv">
+    <li><b>A lead is a promise, not a result.</b> Players who reach the middlegame two pawns up still lose
+    one game in four, and at exactly two pawns the risk is closer to one in three. Keep playing as if the
+    game were undecided, because it is.</li>
+    <li><b>Holding a lead is its own skill.</b> Given the same size of lead, sustained-lead wins climb
+    steadily with rating (17% at 800 to 27% at 2400 for a two-to-three-pawn lead). Winning the material
+    was only half the work; the other half is the unglamorous part, trading down and shutting off
+    counterplay.</li>
+    <li><b>Losing won blitz games? The fix may be a slower time control, not more tactics.</b> Blitz
+    leaders flag away 7&ndash;9% of these games at every rating, and getting stronger barely helps.
+    Playing rapid instead cuts that to about 2.5%, and classical nearly eliminates it.</li>
+  </ul>
 </section>
 
 <footer class="site">
