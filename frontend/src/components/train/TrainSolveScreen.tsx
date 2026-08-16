@@ -46,7 +46,7 @@ import { TRAIN_BUTTON_CLASS } from '@/components/train/buttonStyles';
 import { TrainReveal } from '@/components/train/TrainReveal';
 import type { TrainRevealStep } from '@/components/train/TrainReveal';
 import { EvalBar } from '@/components/analysis/EvalBar';
-import type { SolveResponse, TrainPuzzle } from '@/types/train';
+import type { SolveResponse, TrainPuzzle, VettedMove } from '@/types/train';
 import type { UseTrainSessionResult } from '@/hooks/useTrainSession';
 import { useFitBoardToViewport } from '@/hooks/useFitBoardToViewport';
 import { useTrainFreePlay, uciFromDrop } from '@/hooks/useTrainFreePlay';
@@ -266,9 +266,45 @@ export function TrainSolveScreen({
   // engine instance — never a repurposed grading engine) and grades every
   // freely played move from it. See useTrainFreePlay's docstring.
   //
+  // 190.1 UAT round 5: a restored reveal's verdict comes from the cache (the
+  // solve mutation belongs to the unmounted prior page visit) — but a LIVE
+  // solve response always wins, and the restored fallback disappears the
+  // moment the puzzle transitions (restoredSolve nulls together with it).
+  //
+  // Bug fix (FLAWCHESS-64): the live verdict counts only when it belongs to
+  // the puzzle currently on screen. `resetSolve()` runs in the puzzle-keyed
+  // effect below, which React fires AFTER the child TrainReveal's own effects,
+  // so a bare `lastSolveResponse` left one commit where the next puzzle was
+  // already rendered while the previous puzzle's verdict was still set —
+  // TrainReveal's query key flipped to the new position and fetched the reveal
+  // for a puzzle that had never been attempted (a guaranteed 409). Pairing the
+  // verdict with `lastSolvedPosition` closes that window at the source, and
+  // also stops the reveal panel from rendering the old solution for one frame.
+  //
+  // Phase 211 (Plan 03): derived HERE, above the free-play seed memo, so the
+  // hoisted `vettedMoves` memo below can feed BOTH the reveal overlay and the
+  // free-play seed from one place.
+  const liveVerdict =
+    trainSession.lastSolvedPosition === puzzle.position ? trainSession.lastSolveResponse : null;
+  const verdict = liveVerdict ?? restoredSolve?.verdict ?? null;
+
+  // Phase 211 (D-01/D-06): the server's certified "also fine" set — the
+  // single source BOTH consumers read: the reveal overlay's green alternative
+  // arrows AND the free-play seed's root-ply key (do not inline the default
+  // at either call site). The `?? []` here is the ONE nullish default for
+  // the served list on this whole screen: a `trainRevealCache` entry written
+  // by a pre-211 bundle restores a verdict with no `vetted_moves` key at
+  // runtime even though the compiler sees the optional field — keeping
+  // exactly one default is what makes the D-10 mutation test meaningful.
+  const vettedMoves = useMemo<VettedMove[]>(() => verdict?.vetted_moves ?? [], [verdict]);
+
   // `seedEval` hands it the grading engine's verdict for the puzzle position,
   // so the FIRST free move is graded without waiting for the free-play engine
-  // to re-search a position the solve loop already searched.
+  // to re-search a position the solve loop already searched. Phase 211
+  // (D-06): the seed also carries the SAME served vetted list the reveal
+  // overlay draws (the hoisted `vettedMoves` memo above — the single
+  // stale-cache default site), so the free-play ROOT ply and the "Also fine"
+  // row can never read different keys.
   const freePlaySeedEval = useMemo(
     () =>
       gradeResult === null
@@ -277,19 +313,9 @@ export function TrainSolveScreen({
             cp: gradeResult.bestLine.evalCp,
             mate: gradeResult.bestLine.evalMate,
             bestUci: gradeResult.bestMoveUci,
-            // Phase 205 (D-10): the single graceful-fallback default for the
-            // whole D-04 seam. A reveal restored from a `trainRevealCache`
-            // entry written by an OLDER bundle carries a `gradeResult` with
-            // no `lines` key at runtime even though the compiler sees the
-            // (optional) field — this `?? []` is what turns that into
-            // "fall back to today's free-play-engine grade" instead of a
-            // thrown error. This is the ONLY nullish default anywhere on
-            // this seam (see useTrainFreePlay's `seedLines` derivation,
-            // which must not add a second one — exactly one load-bearing
-            // default keeps the D-10 mutation test meaningful).
-            lines: gradeResult.lines ?? [],
+            vettedMoves,
           },
-    [gradeResult],
+    [gradeResult, vettedMoves],
   );
   const freePlay = useTrainFreePlay({ startFen: puzzle.fen, seedEval: freePlaySeedEval });
   // Phase 200 (LEGEND-02/D-09): the single active legend spotlight entry —
@@ -602,24 +628,9 @@ export function TrainSolveScreen({
   // T-190-12: the verdict/Next/solve-error row only appears once the local
   // grade+solve pipeline has settled (moveApplied && !isGrading && no
   // grading-level error) — it then distinguishes success (lastSolveResponse
-  // set) from a solve-POST failure (isSolveError) via the SAME row.
-  // 190.1 UAT round 5: a restored reveal's verdict comes from the cache (the
-  // solve mutation belongs to the unmounted prior page visit) — but a LIVE
-  // solve response always wins, and the restored fallback disappears the
-  // moment the puzzle transitions (restoredSolve nulls together with it).
-  //
-  // Bug fix (FLAWCHESS-64): the live verdict counts only when it belongs to
-  // the puzzle currently on screen. `resetSolve()` runs in the puzzle-keyed
-  // effect below, which React fires AFTER the child TrainReveal's own effects,
-  // so a bare `lastSolveResponse` left one commit where the next puzzle was
-  // already rendered while the previous puzzle's verdict was still set —
-  // TrainReveal's query key flipped to the new position and fetched the reveal
-  // for a puzzle that had never been attempted (a guaranteed 409). Pairing the
-  // verdict with `lastSolvedPosition` closes that window at the source, and
-  // also stops the reveal panel from rendering the old solution for one frame.
-  const liveVerdict =
-    trainSession.lastSolvedPosition === puzzle.position ? trainSession.lastSolveResponse : null;
-  const verdict = liveVerdict ?? restoredSolve?.verdict ?? null;
+  // set) from a solve-POST failure (isSolveError) via the SAME row. The
+  // `verdict` itself is derived above the free-play seed memo (Phase 211
+  // moved it up so the seed can carry the served vetted list).
   const showResultRow =
     moveApplied && !isGrading && !gradingError && (verdict !== null || trainSession.isSolveError);
 
@@ -647,14 +658,22 @@ export function TrainSolveScreen({
   // 190.1 UAT: the played move's classified quality — derived once here and
   // shared by the board overlay below AND the reveal's line-box header icons
   // (threaded down as a prop), so the two surfaces can never drift.
+  //
+  // Phase 211 (D-03/D-07): when the verdict carries the server's graded-ES
+  // pair (a key-move override), the badge derives from THOSE numbers through
+  // the same classifier — before this phase the board badge and the score
+  // chip were always equal only because the server echoed the client's own
+  // assertion; now the server can legitimately disagree with the client
+  // engine's search, and the display must follow the server. Off-key moves
+  // (graded_es_* null/absent) keep the client-engine derivation.
   const playedMoveQuality = useMemo<TrainMoveQuality | null>(() => {
     if (gradeResult === null || lastPlayedUci === null) return null;
-    return classifyTrainMoveQuality(
-      gradeResult.esBefore,
-      gradeResult.esAfter,
-      lastPlayedUci === gradeResult.bestMoveUci,
-    );
-  }, [gradeResult, lastPlayedUci]);
+    const isBest = lastPlayedUci === gradeResult.bestMoveUci;
+    if (verdict?.graded_es_before != null && verdict?.graded_es_after != null) {
+      return classifyTrainMoveQuality(verdict.graded_es_before, verdict.graded_es_after, isBest);
+    }
+    return classifyTrainMoveQuality(gradeResult.esBefore, gradeResult.esAfter, isBest);
+  }, [gradeResult, lastPlayedUci, verdict]);
 
   // The game move's quality: derived from the coinciding best/played move
   // when no reveal-time search ran, else from the searched line's eval via
@@ -681,16 +700,16 @@ export function TrainSolveScreen({
         : null;
     return buildTrainRevealOverlay(
       verdict?.puzzle_type ?? 'sharp',
-      // `?? []` also covers a stale sessionStorage reveal-cache entry written
-      // before fineMoves replaced goodMoveUcis (quick 260726-fma) — the cache's
-      // shallow shape check does not validate this field.
-      gradeResult?.fineMoves ?? [],
+      // Phase 211 (D-01): the server's certified vetted list — the client
+      // engine no longer contributes alternatives to this overlay. The
+      // hoisted `vettedMoves` memo above owns the stale-cache default.
+      vettedMoves,
       gradeResult?.bestMoveUci ?? null,
       playedMove,
       gameMoveUci !== null ? { uci: gameMoveUci, quality: gameMoveQuality } : null,
       verdict !== null,
     );
-  }, [verdict, gradeResult, lastPlayedUci, playedMoveQuality, gameMoveUci, gameMoveQuality]);
+  }, [verdict, vettedMoves, gradeResult, lastPlayedUci, playedMoveQuality, gameMoveUci, gameMoveQuality]);
 
   /**
    * Phase 200 UAT: the moves the PRISTINE (un-spotlit) reveal board draws —

@@ -2,27 +2,30 @@
 gsd_state_version: 1.0
 milestone: v2.12
 milestone_name: Train Reliability & Grading Agreement
-current_phase: 210
-current_phase_name: custom-start-games
-status: complete
-stopped_at: Phase 210 complete on branch phase-210-custom-start-games — full pre-merge gate green, ready to squash-merge to main
-last_updated: "2026-08-15T09:10:00.000Z"
-last_activity: 2026-08-15
-last_activity_desc: Closed Phase 209 (Cloudflare cutover verified live) and completed Phase 210 (SEED-042 Tier 1 + /analysis crash containment)
+current_phase: 211
+status: completed
+stopped_at: Completed 211-03-PLAN.md — Phase 211 complete (3/3 plans), Task 3 operator-approved
+last_updated: "2026-08-16T17:39:04.928Z"
+last_activity: 2026-08-16
+last_activity_desc: Phase 211 complete — 3/3 plans, operator checkpoint approved
 progress:
-  total_phases: 5
-  completed_phases: 5
-  total_plans: 17
-  completed_plans: 17
+  total_phases: 6
+  completed_phases: 4
+  total_plans: 20
+  completed_plans: 16
+current_phase_name: vetted-also-fine-moves-server-key-grading
 ---
 
 # Project State: FlawChess
 
 ## Current Position
 
-Phase: 210 (custom-start-games) — COMPLETE, awaiting squash-merge
-Plan: 3 of 3
-Status: Full pre-merge gate green on branch `phase-210-custom-start-games` (backend 4319 passed / 19 skipped, frontend 3480 passed, ruff/ty/eslint/tsc/knip/build clean). Not yet merged to main, not yet deployed.
+Phase: 211
+Plan: Not started
+rounds — round 2 shipped the D-01 amendment: soft puzzles serve [deep best, second-best su])
+Status: All phases complete
+backend 4348 passed / 19 skipped, frontend 3497 passed, ruff/ty/tsc/lint/knip clean;
+WINDOWS.md #6 fixed — ORACLE-01 unskipped)
 
 Previous phase: 209 (traffic-surge-quick-wins) — COMPLETE 2026-08-15. The last open plan
 (209-04, the Cloudflare CDN cutover) was operator work; verified live: flawchess.com is on
@@ -30,7 +33,7 @@ Cloudflare nameservers, `maia3_simplified.onnx` and `stockfish-18-lite-single.wa
 return `cf-cache-status: HIT` while still carrying the origin's `max-age=2592000`, and
 `maia-worker.js` still returns `cache-control: no-cache`.
 
-Last activity: 2026-08-16 — Completed quick task 260816-i4m: SEED-148 Sentry signal hygiene (axios request context, ServiceWorker + beacon noise drops, Maia WebGPU→wasm fallback).
+Last activity: 2026-08-16 — Phase 211 complete
 `games.initial_fen` added and backfilled in-migration, the opening-transition sample
 representative filtered to standard-start games, four unguarded `chess.move()` replay sites
 contained, and `/analysis` game mode seeded from the game's real root. Every production
@@ -666,6 +669,12 @@ v1.29 Live-Engine Analysis Page shipped 2026-06-29 — 5 phases (136–140), 14 
 - [Phase ?]: 207-02 checkpoint: operator additionally verified a real end-to-end send via a live Resend account to a real mailbox over a Tailscale tunnel, exceeding this plan's scope; formal RESET-01/RESET-07 verdict remains Plan 03's, pending apex-domain DKIM/DMARC (not the resend.dev sandbox sender used here)
 - [Phase ?]: Phase 207 Step 0 complete 2026-08-08: DKIM landed at apex, RESET-01/RESET-07 PASSED with live Resend evidence against the verified flawchess.com apex domain; RESET-05 real-mailbox observation logged NOT PERFORMED to WINDOWS.md, automated coverage stands in its place
 - [Phase ?]: 260809-iq1: D-01/D-02/D-03 — shared frontend/backend regex normalizer strips chess.com/lichess profile URLs to bare username on paste/blur/submit and API validation
+- [Phase 211]: 211-01: P-02 narrowed per D-07 — server overrides move_quality for a played vetted key move; off-key keeps client grading (D-04)
+- [Phase 211]: 211-01: vetted moves delivered on SolveResponse (not the reveal GET) — one blob/ladder read feeds classification, certification, and wire
+- [Phase ?]: 211-02: ORACLE-01 skipped as the documented width-1 Known Transient (WINDOWS.md #6); Plan 211-03 must unskip after re-pointing the free-play seam at the server key
+- [Phase ?]: 211-02: cap-dependent tests recast onto the herring budget — soft's true alternative bound is one (the blob's single su)
+- [Phase 211]: D-01 amended (operator, 211-03 Task 3 round 2): soft puzzles serve [deep best (quality 'best'), second-best su] best-first from game_positions.best_move — the 'several fine moves' copy is always backed by displayable evidence; D-04 intact (no blob/worker change)
+- [Phase 211]: Free-play root-ply precedence (D-06, 211-03): terminal > engine-is-best > served-key quality > engine ES classification — a key move's badge is the server tier, never re-derived from mixed-source evals; soft arrow cap stays 1 (best-first order, test-pinned); played deep best records tier 'good' (D-07, no 'best' tier in the score ladder) with a drop-0 graded-ES pair
 
 ### Pending Todos
 
@@ -795,9 +804,9 @@ Items acknowledged and deferred at **v1.29 milestone close on 2026-06-29** (user
 
 ## Session Continuity
 
-**Stopped at:** Completed 260809-iq1-01-PLAN.md
+**Stopped at:** Completed 211-03-PLAN.md — Phase 211 complete (3/3 plans), Task 3 operator-approved
 
-**Last session:** 2026-08-09T11:39:52.116Z
+**Last session:** 2026-08-16T17:10:20.215Z
 
 **Resume file:**
 
@@ -939,6 +948,9 @@ None
 | Phase 207 P02 | 25min | 3 tasks | 8 files |
 | Phase 207 P03 | 15min | 2 tasks | 4 files |
 | Phase 260809-iq1 P01 | 25min | 2 tasks | 8 files |
+| Phase 211 P01 | 22 min | 3 tasks | 12 files |
+| Phase 211 P02 | 19 min | 3 tasks | 8 files |
+| Phase 211 P03 | 105 min | 3 tasks | 15 files |
 
 ## Performance Metrics
 

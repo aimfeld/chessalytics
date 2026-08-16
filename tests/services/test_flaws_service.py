@@ -37,7 +37,7 @@ from app.services.flaws_service import (
     GameNotAnalyzed,
     _classify_impact,
     _classify_mate_ladder,
-    _classify_severity,
+    classify_severity,
     _classify_tempo,
     _classify_tactic_gated,
     _compute_eval_coverage,
@@ -202,43 +202,43 @@ class TestTypeContract:
 
 
 class TestSeverityClassification:
-    """Boundary tests for _classify_severity — halved Lichess thresholds on [0,1] ES."""
+    """Boundary tests for classify_severity — halved Lichess thresholds on [0,1] ES."""
 
     def test_below_inaccuracy_threshold_returns_none(self) -> None:
         """A drop of 0.04 is below all thresholds — returns None."""
-        assert _classify_severity(0.04) is None
+        assert classify_severity(0.04) is None
 
     def test_exactly_zero_drop_returns_none(self) -> None:
         """A drop of 0.0 (no worsening) returns None."""
-        assert _classify_severity(0.0) is None
+        assert classify_severity(0.0) is None
 
     def test_inaccuracy_threshold_boundary_inclusive(self) -> None:
         """A drop of exactly 0.05 (INACCURACY_DROP) classifies as 'inaccuracy'."""
-        assert _classify_severity(0.05) == "inaccuracy"
+        assert classify_severity(0.05) == "inaccuracy"
 
     def test_inaccuracy_just_above_threshold(self) -> None:
         """A drop of 0.051 classifies as 'inaccuracy' (below MISTAKE_DROP)."""
-        assert _classify_severity(0.051) == "inaccuracy"
+        assert classify_severity(0.051) == "inaccuracy"
 
     def test_mistake_threshold_boundary_inclusive(self) -> None:
         """A drop of exactly 0.10 (MISTAKE_DROP) classifies as 'mistake'."""
-        assert _classify_severity(0.10) == "mistake"
+        assert classify_severity(0.10) == "mistake"
 
     def test_mistake_just_above_threshold(self) -> None:
         """A drop of 0.101 classifies as 'mistake' (below BLUNDER_DROP)."""
-        assert _classify_severity(0.101) == "mistake"
+        assert classify_severity(0.101) == "mistake"
 
     def test_blunder_threshold_boundary_inclusive(self) -> None:
         """A drop of exactly 0.15 (BLUNDER_DROP) classifies as 'blunder'."""
-        assert _classify_severity(0.15) == "blunder"
+        assert classify_severity(0.15) == "blunder"
 
     def test_blunder_large_drop(self) -> None:
         """A large drop (0.50) classifies as 'blunder' (highest band wins)."""
-        assert _classify_severity(0.50) == "blunder"
+        assert classify_severity(0.50) == "blunder"
 
     def test_highest_band_wins(self) -> None:
         """A drop of 0.20 classifies as 'blunder', not 'mistake' or 'inaccuracy'."""
-        assert _classify_severity(0.20) == "blunder"
+        assert classify_severity(0.20) == "blunder"
 
 
 class TestPlyToEs:
@@ -313,7 +313,7 @@ class TestMateOptionB:
             f"Same-sign mate-to-mate drop should be near zero, got {drop}"
         )
         # Classify the drop — should NOT be classified as blunder
-        severity = _classify_severity(drop) if drop >= 0 else None
+        severity = classify_severity(drop) if drop >= 0 else None
         assert severity is None or severity == "inaccuracy"
 
 

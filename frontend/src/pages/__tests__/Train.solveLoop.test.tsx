@@ -536,7 +536,6 @@ describe('Train solve loop (end-to-end tracer)', () => {
         esAfter: 0.48,
         bestLine: { moves: ['e2e4', 'e7e5'], evalCp: 30, evalMate: null },
         playedLine: { moves: ['g1f3', 'd7d5'], evalCp: -10, evalMate: null },
-        fineMoves: [{ uci: 'e2e4', quality: 'good' }],
       },
     };
   }

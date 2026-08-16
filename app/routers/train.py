@@ -35,6 +35,7 @@ from app.schemas.train import (
     TrainSessionResponse,
     TrainSettingsResponse,
     TrainSettingsUpdate,
+    VettedMove,
 )
 from app.users import current_active_user
 
@@ -157,6 +158,11 @@ async def solve_puzzle(
         streak=recorded.streak,
         due_date=recorded.due_date,
         session_complete=recorded.session_complete,
+        # Phase 211 (D-01/D-03): the domain VettedMove maps field-by-field
+        # onto its wire twin — only uci/quality cross the wire.
+        vetted_moves=[VettedMove(uci=v.uci, quality=v.quality) for v in recorded.vetted_moves],
+        graded_es_before=recorded.graded_es_before,
+        graded_es_after=recorded.graded_es_after,
     )
 
 

@@ -28,7 +28,7 @@ import {
   TRAIN_GRADING_MULTIPV_WIDTH,
 } from '../useTrainGradingEngine';
 import { MISTAKE_DROP, BLUNDER_DROP, INACCURACY_DROP } from '@/generated/flawThresholds';
-import { evalToExpectedScore, expectedScoreToWhitePovCp } from '@/lib/liveFlaw';
+import { evalToExpectedScore } from '@/lib/liveFlaw';
 
 // ─── Mock Worker ─────────────────────────────────────────────────────────────
 
@@ -626,9 +626,9 @@ describe('useTrainGradingEngine — startGameMoveSearch (190.1-01 Task 2)', () =
   });
 });
 
-// ─── 190.1-02 Task 2: MultiPV mount search, kept PV, good-moves set ────────
+// ─── 211-02 Task 1: width-1 mount search, kept PV, no client alternatives ──
 
-describe('useTrainGradingEngine — MultiPV mount search (190.1-02 Task 2)', () => {
+describe('useTrainGradingEngine — width-1 mount search (211-02 Task 1)', () => {
   beforeEach(() => {
     vi.useFakeTimers({ now: 0 });
     mockWorker = new MockWorker();
@@ -645,7 +645,12 @@ describe('useTrainGradingEngine — MultiPV mount search (190.1-02 Task 2)', () 
     vi.unstubAllGlobals();
   });
 
-  it('the FIRST message posted for a mount search is the setoption line carrying TRAIN_GRADING_MULTIPV_WIDTH, and the after-move search posts width 1', async () => {
+  it('the mount search is width 1 (D-05) and its setoption line carries the exported constant; the after-move search also posts width 1', async () => {
+    // The mutation proof VETFINE-05 asks for: restoring the width to 4 turns
+    // this assertion red. The message assertion below stays symbolic (the
+    // exported constant), so THIS line is the one that pins the value.
+    expect(TRAIN_GRADING_MULTIPV_WIDTH).toBe(1);
+
     const { result } = renderHook(() => useTrainGradingEngine({ enabled: true }));
     driveInit(mockWorker);
 
@@ -670,8 +675,11 @@ describe('useTrainGradingEngine — MultiPV mount search (190.1-02 Task 2)', () 
       await vi.advanceTimersByTimeAsync(0);
     });
 
+    // EVERY dispatched search in this session requested width 1 — the whole
+    // 1.5s budget goes to one line (D-05).
     const setoptionMessages = mockWorker.messages.filter((m) => m.startsWith('setoption name MultiPV value '));
-    expect(setoptionMessages[setoptionMessages.length - 1]).toBe('setoption name MultiPV value 1');
+    expect(setoptionMessages).toHaveLength(2);
+    expect(setoptionMessages.every((m) => m === 'setoption name MultiPV value 1')).toBe(true);
 
     act(() => {
       mockWorker.simulateMessage('info depth 12 multipv 1 score cp -30 nodes 1000 pv d7d5');
@@ -682,146 +690,100 @@ describe('useTrainGradingEngine — MultiPV mount search (190.1-02 Task 2)', () 
     await gradePromise;
   });
 
-  it('a mount search emitting 4 ranks yields fineMoves containing rank 1 first and preserving rank order', async () => {
+  it('a played move that is NOT the top move dispatches exactly TWO searches (mount + after-move) and grades from the after-move eval (211-02)', async () => {
     const { result } = renderHook(() => useTrainGradingEngine({ enabled: true }));
     driveInit(mockWorker);
 
     act(() => {
       result.current.startGrading(FEN);
     });
-    // All four ranks are close (small drops well under INACCURACY_DROP) —
-    // every one should classify as "good".
     act(() => {
-      mockWorker.simulateMessage('info depth 12 multipv 1 score cp 40 nodes 1000 pv e2e4');
-    });
-    act(() => {
-      mockWorker.simulateMessage('info depth 12 multipv 2 score cp 38 nodes 1000 pv d2d4');
-    });
-    act(() => {
-      mockWorker.simulateMessage('info depth 12 multipv 3 score cp 36 nodes 1000 pv g1f3');
-    });
-    act(() => {
-      mockWorker.simulateMessage('info depth 12 multipv 4 score cp 34 nodes 1000 pv b1c3');
+      mockWorker.simulateMessage('info depth 12 multipv 1 score cp 230 nodes 1000 pv e2e4');
     });
     act(() => {
       mockWorker.simulateMessage('bestmove e2e4');
     });
 
-    const grade = await result.current.gradeMove(FEN, 'e2e4');
-    expect(grade.fineMoves).toEqual([
-      { uci: 'e2e4', quality: 'good' },
-      { uci: 'd2d4', quality: 'good' },
-      { uci: 'g1f3', quality: 'good' },
-      { uci: 'b1c3', quality: 'good' },
-    ]);
+    const gradePromise = result.current.gradeMove(FEN, 'd2d4');
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(0);
+    });
+    // Raw UCI cp -110 (post-move fen is black to move, whitePovSign -1) ->
+    // stored white-POV evalCp +110: a mistake-sized drop from 230.
+    act(() => {
+      mockWorker.simulateMessage('info depth 12 multipv 1 score cp -110 nodes 1000 pv d7d5');
+    });
+    act(() => {
+      mockWorker.simulateMessage('bestmove d7d5');
+    });
+
+    const grade = await gradePromise;
+    expect(mockWorker.messages.filter((m) => m.startsWith('go ')).length).toBe(2);
+    // The tier comes from the AFTER-MOVE eval (esAfter = ES of +110), never
+    // from a mount rank.
+    expect(grade.esAfter).toBe(evalToExpectedScore(110, null, 'white'));
+    expect(grade.moveTier).toBe('wrong');
   });
 
-  it('a partial final iteration that leaves the same move at two ranks yields it ONCE in fineMoves, from the deeper (fresh) rank (2026-08-03 "Also fine: Be2, Bd3, Bd3")', async () => {
+  it('the retired mount-rank shortcut must not resurrect: a played move present as an extra rank in the settled lines STILL runs the after-move search (211-02 mutation guard)', async () => {
+    // The mutation proof VETFINE-05 asks for: re-adding gradeMoveInner's
+    // rank-match branch makes this grade from the (spurious) rank-2 entry
+    // with ONE go dispatched and moveTier 'good' — turning both assertions
+    // below red. The extra multipv-2 line stands in for any stale rank the
+    // commit path might retain; production width-1 searches don't emit one,
+    // but the grading rule must not depend on that.
     const { result } = renderHook(() => useTrainGradingEngine({ enabled: true }));
     driveInit(mockWorker);
 
     act(() => {
       result.current.startGrading(FEN);
     });
-    // Depth 12 completes for all four ranks...
     act(() => {
-      mockWorker.simulateMessage('info depth 12 multipv 1 score cp 40 nodes 1000 pv e2e4');
+      mockWorker.simulateMessage('info depth 12 multipv 1 score cp 230 nodes 1000 pv e2e4');
     });
     act(() => {
-      mockWorker.simulateMessage('info depth 12 multipv 2 score cp 38 nodes 1000 pv d2d4');
-    });
-    act(() => {
-      mockWorker.simulateMessage('info depth 12 multipv 3 score cp 36 nodes 1000 pv g1f3');
-    });
-    act(() => {
-      mockWorker.simulateMessage('info depth 12 multipv 4 score cp 34 nodes 1000 pv b1c3');
-    });
-    // ...then depth 13 runs out of movetime after only two ranks, and b1c3 has
-    // climbed from rank 4 to rank 2. Rank 4 still holds its stale depth-12
-    // copy: without the commit-time dedupe, b1c3 is committed TWICE.
-    act(() => {
-      mockWorker.simulateMessage('info depth 13 multipv 1 score cp 41 nodes 2000 pv e2e4');
-    });
-    act(() => {
-      mockWorker.simulateMessage('info depth 13 multipv 2 score cp 39 nodes 2000 pv b1c3');
+      mockWorker.simulateMessage('info depth 12 multipv 2 score cp 225 nodes 1000 pv d2d4');
     });
     act(() => {
       mockWorker.simulateMessage('bestmove e2e4');
     });
 
-    const grade = await result.current.gradeMove(FEN, 'e2e4');
-    expect(grade.fineMoves.map((m) => m.uci)).toEqual(['e2e4', 'b1c3', 'g1f3']);
+    const gradePromise = result.current.gradeMove(FEN, 'd2d4');
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(0);
+    });
+    // The after-move search grades d2d4 a genuine blunder — the rank-2 entry
+    // (cp 225, a "good" reading) must play no part in the verdict.
+    act(() => {
+      mockWorker.simulateMessage('info depth 12 multipv 1 score cp -54 nodes 1000 pv d7d5');
+    });
+    act(() => {
+      mockWorker.simulateMessage('bestmove d7d5');
+    });
+
+    const grade = await gradePromise;
+    expect(mockWorker.messages.filter((m) => m.startsWith('go ')).length).toBe(2);
+    expect(grade.esBefore - grade.esAfter).toBeGreaterThanOrEqual(BLUNDER_DROP);
+    expect(grade.moveTier).toBe('wrong');
   });
 
-  it('ranks straddling the two verdict boundaries: under INACCURACY_DROP is good, between the boundaries is an inaccuracy fine move, at/beyond MISTAKE_DROP is excluded (quick 260726-fma)', async () => {
-    const { result } = renderHook(() => useTrainGradingEngine({ enabled: true }));
-    driveInit(mockWorker);
-
-    const rank1Cp = 200;
-    const esRank1 = evalToExpectedScore(rank1Cp, null, 'white');
-    // A small margin (well above per-integer-cp rounding noise, well below
-    // the tier width) on each side of the two severity boundaries.
-    const margin = 0.004;
-    const goodCp = Math.round(expectedScoreToWhitePovCp(esRank1 - (INACCURACY_DROP - margin), 'white'));
-    // Squarely in the inaccuracy band [INACCURACY_DROP, MISTAKE_DROP) — the
-    // verdict grades this correct, so it MUST appear as a fine move (the
-    // 260726-fma bug excluded it, leaving soft puzzles with a lone arrow).
-    const inaccuracyCp = Math.round(expectedScoreToWhitePovCp(esRank1 - (INACCURACY_DROP + margin), 'white'));
-    // Just past MISTAKE_DROP: excluded. A move this search grades a mistake is
-    // never offered as a viable alternative, even on a puzzle the backend's
-    // deeper analysis classified as having several fine moves (191 UAT).
-    const mistakeCp = Math.round(expectedScoreToWhitePovCp(esRank1 - (MISTAKE_DROP + margin), 'white'));
-
-    act(() => {
-      result.current.startGrading(FEN);
-    });
-    act(() => {
-      mockWorker.simulateMessage(`info depth 12 multipv 1 score cp ${rank1Cp} nodes 1000 pv e2e4`);
-    });
-    act(() => {
-      mockWorker.simulateMessage(`info depth 12 multipv 2 score cp ${goodCp} nodes 1000 pv d2d4`);
-    });
-    act(() => {
-      mockWorker.simulateMessage(`info depth 12 multipv 3 score cp ${inaccuracyCp} nodes 1000 pv g1f3`);
-    });
-    act(() => {
-      mockWorker.simulateMessage(`info depth 12 multipv 4 score cp ${mistakeCp} nodes 1000 pv b1c3`);
-    });
-    act(() => {
-      mockWorker.simulateMessage('bestmove e2e4');
-    });
-
-    const grade = await result.current.gradeMove(FEN, 'e2e4');
-    expect(grade.fineMoves).toContainEqual({ uci: 'd2d4', quality: 'good' });
-    expect(grade.fineMoves).toContainEqual({ uci: 'g1f3', quality: 'inaccuracy' });
-    expect(grade.fineMoves.map((m) => m.uci)).not.toContain('b1c3');
-    // Regression guard: the test must import the real thresholds, not
-    // hand-copied literals, so it stays correct if the tiers ever retune.
-    expect(INACCURACY_DROP).toBeGreaterThan(0);
-    expect(MISTAKE_DROP).toBeGreaterThan(INACCURACY_DROP);
-  });
-
-  it('a mount search that returns only 2 ranks (fewer than the requested width) never throws, and fineMoves has at most 2 entries', async () => {
+  it('a mount search that returns fewer ranks than requested (none at all) never throws', async () => {
     const { result } = renderHook(() => useTrainGradingEngine({ enabled: true }));
     driveInit(mockWorker);
 
     act(() => {
       result.current.startGrading(FEN);
     });
-    act(() => {
-      mockWorker.simulateMessage('info depth 12 multipv 1 score cp 40 nodes 1000 pv e2e4');
-    });
-    act(() => {
-      mockWorker.simulateMessage('info depth 12 multipv 2 score cp 35 nodes 1000 pv d2d4');
-    });
-    // Engine reports it found only 2 legal moves' worth of ranks — never
-    // ranks 3/4 despite TRAIN_GRADING_MULTIPV_WIDTH requesting more.
+    // The engine settles with a bestmove but no exact info line at all —
+    // rank 1 is missing from the committed lines. The grade must resolve
+    // (null evals degrade to the neutral ES), never throw.
     act(() => {
       mockWorker.simulateMessage('bestmove e2e4');
     });
 
     const grade = await result.current.gradeMove(FEN, 'e2e4');
-    expect(grade.fineMoves.length).toBeLessThanOrEqual(2);
+    expect(grade.moveTier).toBe('good');
+    expect(grade.bestMoveUci).toBe('e2e4');
   });
 
   it('the exact-match fast path returns esAfter === esBefore, posts no second go, and playedLine deep-equals bestLine', async () => {
@@ -875,7 +837,7 @@ describe('useTrainGradingEngine — MultiPV mount search (190.1-02 Task 2)', () 
   });
 });
 
-describe('useTrainGradingEngine — rank-consistent evals (190.1 UAT round 9)', () => {
+describe('useTrainGradingEngine — consistent evals & display clamp (190.1 UAT round 9, narrowed by 211-02)', () => {
   beforeEach(() => {
     vi.useFakeTimers({ now: 0 });
     mockWorker = new MockWorker();
@@ -892,49 +854,14 @@ describe('useTrainGradingEngine — rank-consistent evals (190.1 UAT round 9)', 
     vi.unstubAllGlobals();
   });
 
-  /** Settle a mount search with rank 1 (e2e4, cp 230) and rank 2 (d2d4, `rank2Cp`). */
-  function settleTwoRankMount(result: { current: ReturnType<typeof useTrainGradingEngine> }, rank2Cp: number): void {
-    act(() => {
-      result.current.startGrading(FEN);
-    });
-    act(() => {
-      mockWorker.simulateMessage('info depth 12 multipv 1 score cp 230 nodes 1000 pv e2e4 e7e5');
-    });
-    act(() => {
-      mockWorker.simulateMessage(`info depth 12 multipv 2 score cp ${rank2Cp} nodes 1000 pv d2d4 d7d5`);
-    });
-    act(() => {
-      mockWorker.simulateMessage('bestmove e2e4');
-    });
-  }
+  // NOTE (211-02): the two "played move matching a non-top mount rank grades
+  // from that rank without a second search" tests that used to live here were
+  // RETIRED with the mount-rank shortcut itself (D-05). Their replacement —
+  // proving that even a spurious extra rank never short-circuits the
+  // after-move search — lives in the width-1 mount search block above
+  // ("the retired mount-rank shortcut must not resurrect").
 
-  it('a played move matching a non-top mount rank grades from that rank: no second go, esAfter from the rank eval, playedLine is the rank line', async () => {
-    const { result } = renderHook(() => useTrainGradingEngine({ enabled: true }));
-    driveInit(mockWorker);
-    settleTwoRankMount(result, 225);
-
-    const grade = await result.current.gradeMove(FEN, 'd2d4');
-    expect(mockWorker.messages.filter((m) => m.startsWith('go ')).length).toBe(1);
-    expect(grade.esAfter).toBe(evalToExpectedScore(225, null, 'white'));
-    expect(grade.playedLine.moves).toEqual(['d2d4', 'd7d5']);
-    expect(grade.playedLine.evalCp).toBe(225);
-    expect(grade.moveTier).toBe('good');
-  });
-
-  it('a played move matching a rank with a blunder-sized drop still resolves moveTier="wrong" without a second search', async () => {
-    const { result } = renderHook(() => useTrainGradingEngine({ enabled: true }));
-    driveInit(mockWorker);
-    // Same before/after cp pair as the existing BLUNDER_DROP test (230 -> 54),
-    // but the after eval now comes from rank 2 instead of a second search.
-    settleTwoRankMount(result, 54);
-
-    const grade = await result.current.gradeMove(FEN, 'd2d4');
-    expect(mockWorker.messages.filter((m) => m.startsWith('go ')).length).toBe(1);
-    expect(grade.esBefore - grade.esAfter).toBeGreaterThanOrEqual(BLUNDER_DROP);
-    expect(grade.moveTier).toBe('wrong');
-  });
-
-  it('a non-rank played move whose after-search reads BETTER than the best move gets its displayed eval clamped to the best line', async () => {
+  it('a played move whose after-search reads BETTER than the best move gets its displayed eval clamped to the best line', async () => {
     const { result } = renderHook(() => useTrainGradingEngine({ enabled: true }));
     driveInit(mockWorker);
 
@@ -971,10 +898,22 @@ describe('useTrainGradingEngine — rank-consistent evals (190.1 UAT round 9)', 
     expect(grade.playedLine.moves).toEqual(['d2d4', 'd7d5']);
   });
 
-  it('startGameMoveSearch resolves a game move matching a mount rank straight from that rank, dispatching no new search', async () => {
+  it("startGameMoveSearch resolves a game move that IS the engine's top move straight from the settled mount search, dispatching no new search (211-02 consumer ledger row 4)", async () => {
+    // At width 1 the only rank the exact-UCI lookup can match is the
+    // engine's own top move — the deliberately RETAINED consumer of
+    // rankLineForMove, narrowed from the old "any mount rank" behavior.
     const { result } = renderHook(() => useTrainGradingEngine({ enabled: true }));
     driveInit(mockWorker);
-    settleTwoRankMount(result, 225);
+
+    act(() => {
+      result.current.startGrading(FEN);
+    });
+    act(() => {
+      mockWorker.simulateMessage('info depth 12 multipv 1 score cp 230 nodes 1000 pv e2e4 e7e5');
+    });
+    act(() => {
+      mockWorker.simulateMessage('bestmove e2e4');
+    });
     // Flush the mount search's resolution microtask so bestSearchRef is
     // settled — in production the reveal (this call's only caller) opens
     // only after gradeMove resolved, which guarantees the same.
@@ -983,10 +922,10 @@ describe('useTrainGradingEngine — rank-consistent evals (190.1 UAT round 9)', 
     });
 
     const goCountBefore = mockWorker.messages.filter((m) => m.startsWith('go ')).length;
-    const line = await result.current.startGameMoveSearch(FEN, 'd2d4');
+    const line = await result.current.startGameMoveSearch(FEN, 'e2e4');
     expect(mockWorker.messages.filter((m) => m.startsWith('go ')).length).toBe(goCountBefore);
-    expect(line.moves).toEqual(['d2d4', 'd7d5']);
-    expect(line.evalCp).toBe(225);
+    expect(line.moves).toEqual(['e2e4', 'e7e5']);
+    expect(line.evalCp).toBe(230);
   });
 
   it('startGameMoveSearch clamps a non-rank game move whose after-search reads better than the best move', async () => {

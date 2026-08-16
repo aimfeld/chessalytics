@@ -23,6 +23,17 @@ even client rank 2 can be a different move than the server's `su`.
   INACCURACY_DROP); sharp puzzle → none, always; red herring → only `herring_pool.ladder`
   moves whose ES gap vs rank 1 is in the good band (shared sigmoid, white-POV cp/mate
   per D-16 of Phase 192).
+  - **Amendment (user-approved 2026-08-16, Task 3 checkpoint round 2):** soft puzzles now
+    serve the deep BEST move too — vetted list = [best (quality `best`), second-best],
+    best-first, display-filtered client-side as before. Rationale: with the `su` alone, a
+    soft puzzle whose `su` coincided with the client's best/played move rendered an empty
+    "Also fine" row under the "several fine moves" copy; serving the deep best guarantees
+    the copy is backed by at least one displayable alternative, or by both fine moves
+    already being on screen as the best/played arrows. D-04 untouched: no blob/worker
+    change — the best UCI comes from the already-stored `game_positions.best_move` at the
+    flaw ply, degrading to su-only when NULL/unavailable. D-07 consequence: a played deep
+    best matches the certified key and records tier `good` (the score ladder has no best
+    tier) with a drop-0 graded-ES pair.
 - **D-02 — Post-attempt delivery, P-01 held.** POOL-10 / P-01 (LOCKED, `app/schemas/train.py`)
   stays byte-identical: no answer-key material on the pre-attempt `TrainPuzzle` payload.
   Vetted moves + their evals reach the client only after the attempt is recorded

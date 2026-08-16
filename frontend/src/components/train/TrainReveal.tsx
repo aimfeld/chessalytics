@@ -1217,7 +1217,11 @@ export function TrainReveal({
             )}
             {showAlsoFine && (
               <p className="text-sm" data-testid="train-reveal-also-fine">
-                Also fine: {alsoFineSanList}
+                {/* "e.g." because the vetted list is not exhaustive: a soft
+                    puzzle serves only the deep best + second-best, and even
+                    the herring ladder stops at MultiPV-5 — other good moves
+                    may exist beyond what the server certified. */}
+                Also fine, e.g. {alsoFineSanList}
               </p>
             )}
             {motif !== null && (

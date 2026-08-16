@@ -171,7 +171,7 @@
 | 208. Paste a FEN or PGN on /analysis (SEED-144, unassigned) | 4/4 | Complete    | 2026-08-08 |
 | 209. Traffic-Surge Quick Wins (SEED-146, unassigned) | 4/4 | Complete    | 2026-08-15 |
 | 210. Custom-Start Games — Crash Containment & Insight Eviction (SEED-042, unassigned) | 3/3 | Complete    | 2026-08-15 |
-| 211. Vetted "Also Fine" Moves & Server-Key Grading (SEED-150, unassigned) | 0/3 | Planned | - |
+| 211. Vetted "Also Fine" Moves & Server-Key Grading (SEED-150, unassigned) | 3/3 | Complete    | 2026-08-16 |
 
 ## Active Phases (unassigned milestone)
 
@@ -479,11 +479,13 @@ both dead guards are unchanged).
   `setState` updater) are therefore dead code. Replace with try/catch + `break`, matching the
   already-correct precedents in `treeCommon.ts:222` / `analysisUrl.ts:58`. Fold in the same
   latent pattern at `useChessGame.ts:147` and `useBotGame.ts:299`.
+
 - **Slice 2 — `games.initial_fen` and the eviction fix.** Nullable `TEXT` column (metadata-only
   add, no table rewrite), populated at import from the `[SetUp "1"]`/`[FEN ...]` header pair in
   **all** normalizer paths that can carry one, backfilled from the stored `games.pgn` in the
   same migration (~176 prod rows). Then filter the sample-representative aggregate in
   `query_opening_transitions` to standard-start games only, leaving the W/D/L counts untouched.
+
 - **Slice 3 — plumb the real root through.** Carry `initial_fen` on the library game-detail
   payload so `/analysis` game mode seeds from the game's actual starting position instead of
   the hardcoded `STARTING_FEN`, upgrading slice 1's "degrade gracefully" to "actually works".
@@ -493,12 +495,15 @@ both dead guards are unchanged).
 1. **Do NOT exclude custom-start games from the aggregate.** They legitimately reached the
    position and must keep contributing to W/D/L. Only their use as the SAN-path *sample
    representative* is the bug. The counts before and after this phase must be identical.
+
 2. **Do NOT drop custom-FEN games at import.** They are valid standard-rules games that
    correctly participate in position matching for openings and endgames.
+
 3. **Tier 2 stays deferred** (user decision 2026-08-15): threading a `rootFen` through
    `useChessGame`'s five start-anchored sites, versioning its sessionStorage payload, and
    migrating position bookmarks to carry a root. Phase-sized frontend refactor serving 0.05%
    of positions; slices 1 and 3 remove the user-visible pain without it.
+
 4. **No new index on `initial_fen`.** The predicate matches ~99.95% of rows and `Game` is
    already joined in the only query that reads it.
 
@@ -507,17 +512,22 @@ both dead guards are unchanged).
 1. Seeding `/analysis` with a SAN sequence that is illegal from its root renders a partial or
    empty board and leaves the page mounted — it never reaches the React ErrorBoundary. Proven
    by a test that goes red when the try/catch is reverted to `if (!move) break`.
+
 2. `games.initial_fen` is non-NULL exactly for games whose PGN carries a `[SetUp "1"]`/`[FEN]`
    pair naming a non-standard start, for chess.com, lichess and pasted imports alike, and the
    migration backfills existing rows from the stored PGN without a re-import.
+
 3. An opening transition whose shallowest-ply game is custom-start is still returned, with its
    full game count and W/D/L intact, and with a replayable `entry_san_sequence` sourced from a
    standard-start game in the same group.
+
 4. A transition group in which *every* game is custom-start is dropped without raising — the
    filtered aggregate yields a NULL sample, which `_wrap_transition_row` handles explicitly
    rather than by `TypeError` on `sample_pair[0]`.
+
 5. That residual drop is reported to Sentry as a warning-level `capture_message` (keeping the
    existing `set_context`/`set_tag`), not an escalating `capture_exception`.
+
 6. `/analysis` game mode seeds a custom-start library game from its own `initial_fen` and plays
    through its real mainline.
 
@@ -567,13 +577,16 @@ explicitly out of scope).
 - **P-01 (LOCKED)**: vetted moves and their evals reach the client **post-attempt only**
   (solve-recording POST response, or an attempt-gated fetch). The pre-attempt
   `TrainPuzzle` schema stays byte-identical.
+
 - **Phase 205 interaction**: ORACLE-0x made the free-play root ply grade from the mount
   search's rank lines — that mechanism dies with MultiPV-4. Its *guarantee* ("an Also
   fine move can never be badged a mistake when played") must be re-established the new
   way: both the list and the root-ply grading read the same server key. Deeper free-play
   plies stay engine-only, as today.
+
 - **Before removing width 4**: trace remaining consumers of the `lines` array passed
   through `GradeResult` (the reveal exploration surface passes it around).
+
 - Grading regimes: key move → both ES ends from server evals via the shared sigmoid
   (agrees with the list by construction); off-key move → existing full-budget width-1
   after-move search, same-engine ES delta against client rank 1.
@@ -583,14 +596,19 @@ explicitly out of scope).
 1. The "Also fine" list (legend row + board arrows, desktop and mobile) shows only
    server-vetted moves: at most one on a soft puzzle (the blob's `su`), none on a sharp
    puzzle, and only good-band ladder moves on a herring.
+
 2. The pre-attempt puzzle payload is unchanged; vetted moves are delivered only after an
    attempt is recorded (P-01 held, verified by schema/API test).
+
 3. Playing a server-vetted move yields a verdict computed from the server's deep evals
    with no engine search, and that verdict can never contradict the "Also fine" list.
+
 4. Playing an off-key move is graded by a full-budget width-1 after-move search; the
    accepted residual (shallow grading of off-key moves) is documented, not "fixed".
+
 5. `TRAIN_GRADING_MULTIPV_WIDTH` is 1; `deriveFineMoves` and the rank-match fast path are
    retired, with all former `lines` consumers accounted for.
+
 6. Phase 205's free-play root-ply agreement guarantee still holds under the new
    mechanism (a vetted move played in free-play at the root is never badged worse than
    the list claims).
@@ -604,11 +622,13 @@ lives in `211-01-PLAN.md`).
 
 Plans:
 
-- [ ] 211-01-PLAN.md — Server key: certify the vetted alternatives from the stored answer
+- [x] 211-01-PLAN.md — Server key: certify the vetted alternatives from the stored answer
   key, override the client's tier for a played key move, lock the P-01 surface (tracer, wave 1)
-- [ ] 211-02-PLAN.md — Width 1: retire the client's own "also fine" derivation and split the
+
+- [x] 211-02-PLAN.md — Width 1: retire the client's own "also fine" derivation and split the
   alternative-arrow cap per puzzle type (wave 2)
-- [ ] 211-03-PLAN.md — Re-establish Phase 205's free-play root-ply guarantee on the server
+
+- [x] 211-03-PLAN.md — Re-establish Phase 205's free-play root-ply guarantee on the server
   key; operator check (wave 3)
 
 ## Backlog

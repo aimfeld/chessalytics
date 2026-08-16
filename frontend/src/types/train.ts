@@ -93,6 +93,20 @@ export interface SolveRequest {
  * fetched `PuzzleRevealResponse.source` (which would open a post-solve
  * window where a real SR puzzle misrenders as suppressed).
  */
+/**
+ * One server-certified "also fine" alternative move (Phase 211, D-01) — the
+ * wire mirror of `app.schemas.train.VettedMove`. Structurally identical to
+ * `trainArrows.ts`'s `TrainFineMove`, on purpose: the reveal overlay consumes
+ * these entries directly. D-01 amendment (2026-08-16): 'best' marks the deep
+ * best move itself, served first on a soft puzzle alongside the certified
+ * second-best, so the "Also fine" row always has a displayable entry after
+ * the overlay filters out the client's own best/played arrows.
+ */
+export interface VettedMove {
+  uci: string;
+  quality: 'best' | 'good' | 'inaccuracy';
+}
+
 export interface SolveResponse {
   correct_guess: boolean;
   correct_move: boolean;
@@ -103,6 +117,19 @@ export interface SolveResponse {
   streak: number | null;
   due_date: string | null;
   session_complete: boolean;
+  /**
+   * Phase 211 (D-01/D-03/D-07): the server's certified "also fine" set and
+   * the graded-eval pair for a key-move override (non-null exactly when the
+   * server overrode the client's tier). All three fields are OPTIONAL on
+   * purpose: a `trainRevealCache` entry written by a pre-211 bundle restores
+   * a `verdict` object with none of these keys at runtime even though the
+   * compiler sees them — the same D-10 graceful-degradation pattern
+   * `GradeResult.lines?` established. Exactly one nullish default per seam,
+   * at the consumption site.
+   */
+  vetted_moves?: VettedMove[];
+  graded_es_before?: number | null;
+  graded_es_after?: number | null;
 }
 
 /**
