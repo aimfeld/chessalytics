@@ -15,8 +15,10 @@
 <meta property="og:image" content="https://stories.flawchess.com/two-pawns-up/social-card.png">
 <meta property="og:image:width" content="1200">
 <meta property="og:image:height" content="630">
+<meta property="og:image:alt" content="You're two pawns up. Do you actually win? The leader wins 73%, draws 3%, loses 24%.">
 <meta property="article:published_time" content="2026-08-15">
 <meta property="article:author" content="Adrian Imfeld">
+<meta property="article:section" content="Chess">
 <meta name="twitter:card" content="summary_large_image">
 <meta name="twitter:title" content="You're two pawns up. Do you actually win?">
 <meta name="twitter:description" content="What 460,604 Lichess games say about converting a two-pawn advantage, by rating and time control.">
@@ -28,10 +30,13 @@
   "headline": "You're two pawns up. Do you actually win?",
   "description": "What 460,604 Lichess games say about converting a two-pawn advantage, by rating and time control.",
   "datePublished": "2026-08-15",
+  "dateModified": "2026-08-15",
   "url": "https://stories.flawchess.com/two-pawns-up/",
-  "image": "https://stories.flawchess.com/two-pawns-up/social-card.png",
+  "mainEntityOfPage": {"@type": "WebPage", "@id": "https://stories.flawchess.com/two-pawns-up/"},
+  "image": {"@type": "ImageObject", "url": "https://stories.flawchess.com/two-pawns-up/social-card.png", "width": 1200, "height": 630},
   "isPartOf": {"@type": "Blog", "name": "Chess Data Stories", "url": "https://stories.flawchess.com/"},
-  "author": {"@type": "Person", "name": "Adrian Imfeld", "url": "https://www.linkedin.com/in/aimfeld/"},
+  "author": {"@type": "Person", "name": "Adrian Imfeld", "url": "https://www.linkedin.com/in/aimfeld/",
+    "sameAs": ["https://www.linkedin.com/in/aimfeld/", "https://github.com/aimfeld"]},
   "publisher": {
     "@type": "Organization", "name": "FlawChess", "url": "https://flawchess.com",
     "logo": {"@type": "ImageObject", "url": "https://stories.flawchess.com/logo.png"}
@@ -205,7 +210,18 @@
   </figure>
   <div class="callout"><span class="tk">Takeaway:</span> the engine bar says "winning". The scoreboard says "maybe".
   A lead is a promise you still have to keep.</div>
-  <details class="tbl"><summary>View the data</summary><div id="t1"></div></details>
+  <details class="tbl"><summary>View the data</summary><div>
+    <table>
+      <thead><tr><th>Rating</th><th>Games with an entry lead</th><th>Median lead</th><th>Leader loses</th></tr></thead>
+      <tbody>
+        <tr><td>800</td><td>9,674</td><td>+4.5</td><td>27.3%</td></tr>
+        <tr><td>1200</td><td>29,368</td><td>+4.1</td><td>27%</td></tr>
+        <tr><td>1600</td><td>30,886</td><td>+3.6</td><td>24.7%</td></tr>
+        <tr><td>2000</td><td>24,706</td><td>+3.2</td><td>21.3%</td></tr>
+        <tr><td>2400</td><td>17,949</td><td>+3.0</td><td>18.4%</td></tr>
+      </tbody>
+    </table>
+  </div></details>
 </section>
 
 <section class="card" id="s2">
@@ -218,7 +234,18 @@
   <figure aria-label="Bar chart: share of games entering the middlegame with a two-pawn advantage, by rating">
     <div id="c2"></div>
   </figure>
-  <details class="tbl"><summary>View the data</summary><div id="t2"></div></details>
+  <details class="tbl"><summary>View the data</summary><div>
+    <table>
+      <thead><tr><th>Rating</th><th>Share of games entering with a big lead</th></tr></thead>
+      <tbody>
+        <tr><td>800</td><td>58.1%</td></tr>
+        <tr><td>1200</td><td>45.3%</td></tr>
+        <tr><td>1600</td><td>31.2%</td></tr>
+        <tr><td>2000</td><td>19%</td></tr>
+        <tr><td>2400</td><td>12%</td></tr>
+      </tbody>
+    </table>
+  </div></details>
 </section>
 
 <section class="card" id="s3">
@@ -235,7 +262,17 @@
   <div class="callout"><span class="tk">Takeaway:</span> if you are <b>exactly</b> two pawns up, your real risk is
   closer to <b>one loss in three</b> than one in four. Every number elsewhere on this page is flattered by the games
   where somebody was already a piece ahead.</div>
-  <details class="tbl"><summary>View the data</summary><div id="t6"></div></details>
+  <details class="tbl"><summary>View the data</summary><div>
+    <table>
+      <thead><tr><th>Size of the lead</th><th>Games</th><th>Share of games</th><th>Sustained-lead win</th><th>Win after slip</th><th>Draw</th><th>Leader loses</th></tr></thead>
+      <tbody>
+        <tr><td>+2 to +3</td><td>40,662</td><td>36.1%</td><td>20.6%</td><td>44.8%</td><td>4.5%</td><td>30.1%</td></tr>
+        <tr><td>+3 to +5</td><td>45,745</td><td>40.6%</td><td>46%</td><td>26.1%</td><td>3.4%</td><td>24.5%</td></tr>
+        <tr><td>+5 to +10</td><td>23,625</td><td>21%</td><td>71.5%</td><td>13.2%</td><td>1.7%</td><td>13.6%</td></tr>
+        <tr><td>+10 or mate</td><td>2,551</td><td>2.3%</td><td>85.4%</td><td>8.3%</td><td>0.6%</td><td>5.7%</td></tr>
+      </tbody>
+    </table>
+  </div></details>
 </section>
 
 <section class="card" id="s4">
@@ -251,7 +288,18 @@
   <figure aria-label="Stacked bar chart: four outcomes of a two-pawn-or-better middlegame lead, by rating">
     <div id="c3"></div>
   </figure>
-  <details class="tbl"><summary>View the data</summary><div id="t3"></div></details>
+  <details class="tbl"><summary>View the data</summary><div>
+    <table>
+      <thead><tr><th>Rating</th><th>Sustained-lead win</th><th>Win after slip</th><th>Draw</th><th>Leader loses</th></tr></thead>
+      <tbody>
+        <tr><td>800</td><td>42.6%</td><td>27.1%</td><td>3%</td><td>27.3%</td></tr>
+        <tr><td>1200</td><td>42.6%</td><td>27.9%</td><td>2.5%</td><td>27%</td></tr>
+        <tr><td>1600</td><td>42.7%</td><td>29.4%</td><td>3.2%</td><td>24.7%</td></tr>
+        <tr><td>2000</td><td>42.6%</td><td>31.8%</td><td>4.2%</td><td>21.3%</td></tr>
+        <tr><td>2400</td><td>45.6%</td><td>31.7%</td><td>4.3%</td><td>18.4%</td></tr>
+      </tbody>
+    </table>
+  </div></details>
   <p class="lede" style="margin-top:18px">Weaker players are handed <b>much bigger</b> leads (median +4.5 pawns at 800
   against +3.0 at 2400), and bigger leads are easier to hold on to. That mix effect exactly cancels the skill effect and
   flattens the green bar. Compare like with like, the same size of lead <b>at middlegame entry</b> for every rating,
@@ -264,7 +312,18 @@
   <div class="callout"><span class="tk">Takeaway:</span> masters are better at holding a lead <b>and</b> better at
   fighting back when it slips. Given the same two-to-three-pawn lead, sustained wins climb from <b>17% at 800 to 27% at
   2400</b>. The flat bar in the first chart is an illusion produced by who gets which size of lead.</div>
-  <details class="tbl"><summary>View the data</summary><div id="t7"></div></details>
+  <details class="tbl"><summary>View the data</summary><div>
+    <table>
+      <thead><tr><th>Rating</th><th>Entry lead +2 to +3</th><th>Entry lead +3 to +5</th><th>Entry lead +5 to +10</th><th>All sizes</th></tr></thead>
+      <tbody>
+        <tr><td>800</td><td>16.6%</td><td>33.5%</td><td>63.1%</td><td>42.6%</td></tr>
+        <tr><td>1200</td><td>16%</td><td>38.9%</td><td>68%</td><td>42.6%</td></tr>
+        <tr><td>1600</td><td>18.6%</td><td>44.7%</td><td>73.5%</td><td>42.7%</td></tr>
+        <tr><td>2000</td><td>21.8%</td><td>52.2%</td><td>78.4%</td><td>42.6%</td></tr>
+        <tr><td>2400</td><td>26.5%</td><td>59.2%</td><td>84.5%</td><td>45.6%</td></tr>
+      </tbody>
+    </table>
+  </div></details>
 </section>
 
 <section class="card" id="s5">
@@ -290,7 +349,32 @@
   moving from blitz to rapid cuts flag losses from about <b>7% to 2.5%</b> of won games, and classical nearly
   eliminates them. Only above 2000 does speed also start costing games on the board: at 2400, blitz board losses are
   <b>14.4%</b> against <b>10.6%</b> in classical.</div>
-  <details class="tbl"><summary>View the data</summary><div id="t4"></div></details>
+  <details class="tbl"><summary>View the data</summary><div>
+    <table>
+      <thead><tr><th>Rating</th><th>Time control</th><th>Lost on the board</th><th>Lost on the clock</th><th>Disconnect</th><th>Total lost</th><th>Board only*</th></tr></thead>
+      <tbody>
+        <tr><td>800</td><td>Blitz</td><td>19.6%</td><td>9.3%</td><td>0.6%</td><td>29.4%</td><td>24.8%</td></tr>
+        <tr><td>800</td><td>Rapid</td><td>22.4%</td><td>2.7%</td><td>0.8%</td><td>25.9%</td><td>24.6%</td></tr>
+        <tr><td>800</td><td>Classical</td><td>19%</td><td>0.7%</td><td>2.2%</td><td>21.9%</td><td>21.2%</td></tr>
+        <tr><td>1200</td><td>Blitz</td><td>21.1%</td><td>8.4%</td><td>0.5%</td><td>30%</td><td>26.3%</td></tr>
+        <tr><td>1200</td><td>Rapid</td><td>23.6%</td><td>2.2%</td><td>0.7%</td><td>26.6%</td><td>25.6%</td></tr>
+        <tr><td>1200</td><td>Classical</td><td>21.7%</td><td>0.6%</td><td>1.2%</td><td>23.5%</td><td>23%</td></tr>
+        <tr><td>1600</td><td>Blitz</td><td>19.9%</td><td>6.5%</td><td>0.3%</td><td>26.8%</td><td>24%</td></tr>
+        <tr><td>1600</td><td>Rapid</td><td>21.7%</td><td>2.4%</td><td>0.6%</td><td>24.7%</td><td>23.6%</td></tr>
+        <tr><td>1600</td><td>Classical</td><td>21%</td><td>1.4%</td><td>1%</td><td>23.3%</td><td>22.6%</td></tr>
+        <tr><td>2000</td><td>Blitz</td><td>16.1%</td><td>8.1%</td><td>0.2%</td><td>24.4%</td><td>19.9%</td></tr>
+        <tr><td>2000</td><td>Rapid</td><td>18.6%</td><td>2.9%</td><td>0.3%</td><td>21.8%</td><td>20.3%</td></tr>
+        <tr><td>2000</td><td>Classical</td><td>16.3%</td><td>1%</td><td>0.5%</td><td>17.8%</td><td>17.2%</td></tr>
+        <tr><td>2400</td><td>Blitz</td><td>14.4%</td><td>6.8%</td><td>0.2%</td><td>21.4%</td><td>17.4%</td></tr>
+        <tr><td>2400</td><td>Rapid</td><td>13.1%</td><td>2.7%</td><td>0.2%</td><td>15.9%</td><td>14.2%</td></tr>
+        <tr><td>2400</td><td>Classical</td><td>10.6%</td><td>0.9%</td><td>0.5%</td><td>12.1%</td><td>11.3%</td></tr>
+      </tbody>
+    </table>
+    <p style="margin-top:10px;color:var(--ink-mid)">* Share of losses among games that were actually decided on the
+    board, with clock-decided games removed from the count entirely. The three loss columns are shares of all
+    entry-lead games and add up to "Total lost", to rounding. The chart shows the board and clock components;
+    disconnects (at most 2.2% in any cell) appear only in this table.</p>
+  </div></details>
 </section>
 
 <section class="card" id="takeaways">
@@ -429,7 +513,6 @@ const SUSTBYBAND=[
   {key:"b3",label:"+5 to +10", v:[63.1,68.0,73.5,78.4,84.5],loss:[19.0,15.9,12.6,8.6,4.8], c:"#6B4226"}
 ];
 const SUSTAGG=[42.6,42.6,42.7,42.6,45.6];   // all lead sizes combined (the illusion)
-const MEDIAN_ENTRY=[450,411,364,317,297];   // median entry advantage in cp, by rating
 /* Report §3 (blunder timing) is deliberately NOT surfaced on this page. Its
    after-entry "leader blunders 1.2x more" result is confounded by blunder
    headroom: a blunder means losing >=15 percentage points of winning chances,
@@ -477,11 +560,6 @@ function grid(svg,x0,x1,yFor,ticks,fmt){
   for(const v of ticks){const y=yFor(v);
     el("line",{x1:x0,x2:x1,y1:y,y2:y,class:"gridline"},svg);
     txt(svg,x0-10,y+5,fmt(v),{class:"axis","text-anchor":"end"});}
-}
-function table(id,head,rows){
-  const h="<table><thead><tr>"+head.map(c=>`<th>${c}</th>`).join("")+"</tr></thead><tbody>"+
-    rows.map(r=>"<tr>"+r.map(c=>`<td>${c}</td>`).join("")+"</tr>").join("")+"</tbody></table>";
-  document.getElementById(id).innerHTML=h;
 }
 function legend(id,items){document.getElementById(id).innerHTML=
   items.map(i=>`<span class="it"><span class="chip" style="background:${i[1]}"></span>${i[0]}</span>`).join("");}
@@ -627,28 +705,12 @@ function renderC7(){
   });
 }
 
-/* ---------- static setup: legends and tables ---------- */
+/* ---------- static setup: legends ---------- */
+/* The "View the data" tables are static HTML in the page body (not JS-rendered):
+   most AI crawlers don't execute JS, and the tables are the citable data. */
 legend("lg3",[["Sustained-lead win",COL.win],["Win after the lead slipped",COL.win2],["Draw",COL.draw],["Leader loses",COL.loss]]);
 legend("lg4",[["Blitz",COL.blitz],["Rapid",COL.rapid],["Classical",COL.classical]]);
 legend("lg7",SUSTBYBAND.map(b=>["Entry lead "+b.label,b.c]).concat([["All lead sizes",COL.draw]]));
-table("t1",["Rating","Games with an entry lead","Median lead","Leader loses"],
-  RATINGS.map((r,i)=>[r,OUTCOME.n[i].toLocaleString("en-US"),"+"+(MEDIAN_ENTRY[i]/100).toFixed(1),OUTCOME.loss[i]+"%"]));
-table("t2",["Rating","Share of games entering with a big lead"],RATINGS.map((r,i)=>[r,PREVALENCE[i]+"%"]));
-table("t6",["Size of the lead","Games","Share of games","Sustained-lead win","Win after slip","Draw","Leader loses"],
-  LEADSIZE.label.map((lab,i)=>[lab,LEADSIZE.n[i].toLocaleString("en-US"),LEADSIZE.share[i]+"%",
-    LEADSIZE.sustained[i]+"%",LEADSIZE.comeback[i]+"%",LEADSIZE.draw[i]+"%",LEADSIZE.loss[i]+"%"]));
-table("t3",["Rating","Sustained-lead win","Win after slip","Draw","Leader loses"],
-  RATINGS.map((r,i)=>[r,OUTCOME.sustained[i]+"%",OUTCOME.comeback[i]+"%",OUTCOME.draw[i]+"%",OUTCOME.loss[i]+"%"]));
-table("t7",["Rating"].concat(SUSTBYBAND.map(b=>"Entry lead "+b.label)).concat(["All sizes"]),
-  RATINGS.map((r,i)=>[r].concat(SUSTBYBAND.map(b=>b.v[i]+"%")).concat([SUSTAGG[i]+"%"])));
-table("t4",["Rating","Time control","Lost on the board","Lost on the clock","Disconnect","Total lost","Board only*"],
-  RATINGS.flatMap((r,i)=>TC_KEYS.map(k=>[r,TC[k].label,TC[k].board[i]+"%",TC[k].clock[i]+"%",
-    TC[k].aband[i]+"%",TC[k].total[i]+"%",TC[k].boardOnly[i]+"%"])));
-document.getElementById("t4").insertAdjacentHTML("beforeend",
-  '<p style="margin-top:10px;color:var(--ink-mid)">* Share of losses among games that were actually decided on the '+
-  'board, with clock-decided games removed from the count entirely. The three loss columns are shares of all '+
-  'entry-lead games and add up to "Total lost", to rounding. The chart shows the board and clock components; '+
-  'disconnects (at most 2.2% in any cell) appear only in this table.</p>');
 
 /* ---------- responsive render: redraw at container width ---------- */
 function renderAll(){renderC1();renderC2();renderC6();renderC3();renderC7();renderC4();}
