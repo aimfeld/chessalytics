@@ -23,12 +23,13 @@ Every page under `stories/` carries the Umami tag in `<head>`, right after the G
 
 ```html
 <!-- Umami analytics (self-hosted, privacy-friendly, no cookies) -->
-<script defer src="https://analytics.flawchess.com/script.js" data-website-id="62d4b783-3457-45f2-8098-f3f1e14a8fa4"></script>
+<script defer src="https://analytics.flawchess.com/script.js" data-website-id="62d4b783-3457-45f2-8098-f3f1e14a8fa4" data-domains="stories.flawchess.com"></script>
 ```
 
 - The stories site is its own Umami website (ID above), **separate from the flawchess.com app site** — story traffic is mostly cold inbound from search and social, and mixing it into the app's numbers muddies both funnels. Never reuse the app's `data-website-id` (`0ca19960-…`, in `frontend/index.html`).
-- No `data-domains` attribute, so the tag reports from any hostname, local previews included. If self-inflicted preview traffic ever shows up as noise, add `data-domains="stories.flawchess.com"` to every page and Umami will drop events from anywhere else.
+- **`data-domains` is required**: the tracker sends nothing unless `location.hostname` matches, which keeps local previews out of production stats. The flip side is that a wrong or missing value fails *silently* — the page looks fine and no events arrive.
 - This is a deliberate exception to the "self-contained, no CDNs" rule. It stays safe for local preview because the tag is `defer`red and failure-tolerant: if `analytics.flawchess.com` is unreachable the page renders normally, with one failed request in the console.
+- **Verifying the tag**: Umami's bot filter silently drops events from a `HeadlessChrome` user agent, so a headless check looks broken when it isn't. Pass `--user-agent="Mozilla/5.0 … Chrome/140.0.0.0 Safari/537.36"` to record a real pageview. To confirm the tag works *without* writing a row into production stats, load with the default headless UA and check the net log for a `POST` to `analytics.flawchess.com/api/send` — the request proves the `data-domains` check passed, and the server drops the event as a bot.
 
 ## Header (must match the flawchess.com homepage)
 
