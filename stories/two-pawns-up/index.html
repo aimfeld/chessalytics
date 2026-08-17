@@ -143,11 +143,6 @@
   .promo-head .pname{font-family:'Fredoka',sans-serif;font-weight:600;font-size:24px;letter-spacing:-.02em}
   .promo-head .ptag{color:var(--ink-3);font-size:15px}
   .promo .plede{color:var(--ink-2);margin-top:12px}
-  .pfeat{list-style:none;display:grid;grid-template-columns:1fr 1fr;gap:10px 26px;margin-top:14px;font-size:16px;color:var(--ink-2)}
-  .pfeat li{padding-left:22px;position:relative}
-  .pfeat li::before{content:"";position:absolute;left:0;top:.45em;width:10px;height:10px;border-radius:3px;background:var(--brown)}
-  .pfeat b{color:var(--ink)}
-  @media (max-width:700px){ .pfeat{grid-template-columns:1fr} }
   .author{display:flex;align-items:center;gap:20px;background:var(--card);border:1px solid var(--line);
           border-radius:20px;padding:20px clamp(18px,4vw,38px);margin-top:18px}
   .author img{width:72px;height:72px;border-radius:50%;flex:none}
@@ -436,23 +431,9 @@
         <div class="ptag">Engines are flawless, humans play FlawChess.</div>
       </div>
     </div>
-    <p class="plede">Find and fix the flaws in your game: free full-game analysis of every chess.com
-    and lichess game you've played.</p>
-    <ul class="pfeat">
-      <li><b>Your best practical move</b>: the FlawChess Engine (Stockfish + Maia) scores each move by
-      how likely you are to find it and convert the position, not by perfect play.</li>
-      <li><b>Game and tactic analysis</b>: Stockfish runs over your entire game history and tags your
-      blunders with the tactic behind them (fork, pin, skewer, and 20+ more).</li>
-      <li><b>Personalized puzzle training</b>: your own blunders come back as puzzles on a
-      spaced-repetition schedule until the patterns stick.</li>
-      <li><b>Human-like bots</b>: play against 24 named opponents with different ELO ratings and
-      playing styles, then analyze the game like any other.</li>
-      <li><b>Opening explorer and insights</b>: win/draw/loss stats for every move
-      you've played.</li>
-      <li><b>Endgame analytics</b>: conversion and recovery rates, and your Endgame ELO over time.</li>
-      <li><b>Time management stats</b>: find out if you crack under time pressure more than your
-      opponents.</li>
-    </ul>
+    <p class="plede">Wondering how often <i>you</i> let won positions slip? FlawChess runs Stockfish
+    over your chess.com and lichess game history: how often you convert an endgame when you're
+    up material, the blunders and tactics that cost you, and your flag rate per time control.</p>
     <a class="cta" href="https://flawchess.com">Analyze your own games free at flawchess.com &rarr;</a>
     <p class="fineprint">All features free &middot; no signup required &middot; open source</p>
   </div>
