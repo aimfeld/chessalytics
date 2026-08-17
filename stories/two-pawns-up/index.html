@@ -30,7 +30,7 @@
   "headline": "You're two pawns up. Do you actually win?",
   "description": "What 460,604 Lichess games say about converting a two-pawn advantage, by rating and time control.",
   "datePublished": "2026-08-15",
-  "dateModified": "2026-08-15",
+  "dateModified": "2026-08-17",
   "url": "https://stories.flawchess.com/two-pawns-up/",
   "mainEntityOfPage": {"@type": "WebPage", "@id": "https://stories.flawchess.com/two-pawns-up/"},
   "image": {"@type": "ImageObject", "url": "https://stories.flawchess.com/two-pawns-up/social-card.png", "width": 1200, "height": 630},
@@ -185,15 +185,19 @@
 <div class="hero">
   <div class="kicker"><a href="../" data-testid="link-stories-index">A Chess Data Story</a> &middot; <time datetime="2026-08-15">August 15, 2026</time> &middot; 460,604 Lichess games screened</div>
   <h1>You're two pawns up.<br><span class="accent">Do you actually win?</span></h1>
-  <p class="sub">We took every game in our benchmark database where a player reached the middlegame
-  <b>at least two pawns up</b> by Stockfish's count, and checked how those games
-  actually ended. The answer should change how you think about "winning positions".</p>
+  <p class="sub">In one of our recent exchanges, GM
+  <a href="https://nextlevelchess.com/" data-testid="link-noel-studer">Noël Studer</a> of Next Level Chess
+  suggested looking into what actually becomes of a big engine advantage at the end of the opening. So I had a close look at
+  games in the FlawChess benchmark database where a player reached the middlegame with a Stockfish evaluation of
+  <b>at least +2.0</b>, the engine's way of saying "about two pawns up". That can mean extra material, a superior
+  position, or both. Then I checked how those games actually ended for different rating levels and time controls.
+  The answer might change how you think about "winning positions".</p>
   <div class="hero-stats" aria-label="Overall outcomes from a two-pawn-or-better middlegame lead">
     <div class="tile win"><div class="big">73%</div><div class="lbl">the leader wins</div></div>
     <div class="tile draw"><div class="big">3%</div><div class="lbl">draw</div></div>
     <div class="tile loss"><div class="big">24%</div><div class="lbl">the leader <b>loses</b></div></div>
   </div>
-  <p class="hero-note">All 112,583 games that entered the middlegame with a &ge; two-pawn engine advantage, all ratings
+  <p class="hero-note">All 112,583 games that entered the middlegame at <b>+2.0 or better</b>, all ratings
   combined. "At least" matters: the median lead here is <b>+3.6 pawns</b>, and a bare two-pawn lead does considerably
   worse than the headline (section 3).</p>
 </div>
@@ -252,7 +256,7 @@
   <div class="card-head"><div class="num">3</div>
   <h2>"Two pawns up" usually means more than two pawns</h2></div>
   <p class="lede">Two pawns is the <i>floor</i> of this group, not its typical member. Half of these leads are
-  bigger than <b>+3.6 pawns</b>, and roughly one in four is <b>+5 or more</b>, which is a whole rook.
+  bigger than <b>+3.6 pawns</b>, and roughly one in four is <b>+5 or more</b>, worth about a rook.
   Size changes everything: a bare two-pawn lead is lost <b>30%</b> of the time, while a five-pawn lead is
   lost only <b>13.6%</b> of the time. The 24% headline is an average across all of them.</p>
   <p class="ctitle">Games LOST by the leader, by how big the lead was when the middlegame began</p>
@@ -403,12 +407,13 @@
 <footer class="site">
   <div class="box">
     <h2>About this analysis</h2>
-    <p style="margin-top:8px">We analyzed <b>460,604 Lichess games</b> (blitz, rapid and classical) with full
+    <p style="margin-top:8px">I analyzed <b>460,604 Lichess games</b> (blitz, rapid and classical) with full
     Stockfish evaluations, across five rating groups from 800 to 2400. "Two pawns up" means the engine evaluation
     reached &ge; 200 centipawns for one side at the first move of the middlegame. Where the middlegame starts is
     decided by Lichess's own phase rules (the same division you see on its analysis board, based on piece counts,
     back-rank development, and how entangled the two sides' pieces are). Full methodology, exact queries,
-    and every table are in the technical report.</p>
+    and every table are in the technical report. GM Noël Studer suggested the question; the analysis, and any
+    errors in it, are mine.</p>
     <p style="margin-top:10px">
       <a href="https://github.com/flawchess/flawchess/blob/main/stories/two-pawns-up/two-pawns-up-report.md">Read the technical report</a>
       &middot;
@@ -416,7 +421,8 @@
     </p>
     <p class="fineprint">Data: Lichess games with server-side Stockfish analysis, which players request themselves,
     so these are not a uniform sample of Lichess. Ratings are Lichess ratings at the time each game was played,
-    grouped into 400-point bands, and opponents are rating-matched. "Two pawns up" is a floor, not a description:
+    grouped into 400-point bands, and opponents are rating-matched. This is an engine evaluation, not a material
+    count: a position can be worth +2.0 with the material dead level. "Two pawns up" is a floor, not a description:
     the median lead in this group is +3.6 pawns, which is why section 3 breaks the results out by lead size.
     Section 5 splits losses by Lichess's own game-termination field; "abandoned" (a disconnect) is counted
     separately from a clock forfeit. Unrated games and games against a bot are excluded.
