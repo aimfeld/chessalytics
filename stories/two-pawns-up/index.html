@@ -4,33 +4,33 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Two Pawns Up: Do You Actually Win? | Chess Data Stories</title>
-<meta name="description" content="What 460,604 Lichess games say about converting a two-pawn advantage, by rating and time control. A Chess Data Stories analysis.">
+<meta name="description" content="What 329,518 evenly matched Lichess games say about converting a two-pawn advantage, by rating and time control. A Chess Data Stories analysis.">
 <link rel="canonical" href="https://stories.flawchess.com/two-pawns-up/">
 <link rel="icon" href="../logo.png">
 <meta property="og:type" content="article">
 <meta property="og:site_name" content="Chess Data Stories">
 <meta property="og:title" content="You're two pawns up. Do you actually win?">
-<meta property="og:description" content="What 460,604 Lichess games say about converting a two-pawn advantage, by rating and time control.">
+<meta property="og:description" content="What 329,518 evenly matched Lichess games say about converting a two-pawn advantage, by rating and time control.">
 <meta property="og:url" content="https://stories.flawchess.com/two-pawns-up/">
 <meta property="og:image" content="https://stories.flawchess.com/two-pawns-up/social-card.png">
 <meta property="og:image:width" content="1200">
 <meta property="og:image:height" content="630">
-<meta property="og:image:alt" content="You're two pawns up. Do you actually win? The leader wins 73%, draws 3%, loses 24%.">
+<meta property="og:image:alt" content="You're two pawns up. Do you actually win? The leader wins 71%, draws 4%, loses 25%.">
 <meta property="article:published_time" content="2026-08-15">
 <meta property="article:author" content="Adrian Imfeld">
 <meta property="article:section" content="Chess">
 <meta name="twitter:card" content="summary_large_image">
 <meta name="twitter:title" content="You're two pawns up. Do you actually win?">
-<meta name="twitter:description" content="What 460,604 Lichess games say about converting a two-pawn advantage, by rating and time control.">
+<meta name="twitter:description" content="What 329,518 evenly matched Lichess games say about converting a two-pawn advantage, by rating and time control.">
 <meta name="twitter:image" content="https://stories.flawchess.com/two-pawns-up/social-card.png">
 <script type="application/ld+json">
 {
   "@context": "https://schema.org",
   "@type": "Article",
   "headline": "You're two pawns up. Do you actually win?",
-  "description": "What 460,604 Lichess games say about converting a two-pawn advantage, by rating and time control.",
+  "description": "What 329,518 evenly matched Lichess games say about converting a two-pawn advantage, by rating and time control.",
   "datePublished": "2026-08-15",
-  "dateModified": "2026-08-18",
+  "dateModified": "2026-08-19",
   "url": "https://stories.flawchess.com/two-pawns-up/",
   "mainEntityOfPage": {"@type": "WebPage", "@id": "https://stories.flawchess.com/two-pawns-up/"},
   "image": {"@type": "ImageObject", "url": "https://stories.flawchess.com/two-pawns-up/social-card.png", "width": 1200, "height": 630},
@@ -180,21 +180,22 @@
 <main class="wrap">
 
 <div class="hero">
-  <div class="kicker"><a href="../" data-testid="link-stories-index">A Chess Data Story</a> &middot; <time datetime="2026-08-15">August 15, 2026</time> &middot; 460,604 Lichess games screened</div>
+  <div class="kicker"><a href="../" data-testid="link-stories-index">A Chess Data Story</a> &middot; <time datetime="2026-08-15">August 15, 2026</time> (updated <time datetime="2026-08-19">August 19</time>) &middot; 329,518 Lichess games analyzed</div>
   <h1>You're two pawns up.<br><span class="accent">Do you actually win?</span></h1>
   <p class="sub">In one of our recent exchanges, GM
   Noël Studer of <a href="https://nextlevelchess.com/" data-umami-event="outbound-next-level-chess" data-testid="link-next-level-chess">Next Level Chess</a>
   suggested looking into what actually becomes of a big engine advantage at the end of the opening. So I had a close look at
-  games in the FlawChess benchmark database where a player reached the middlegame with a Stockfish evaluation of
+  games in the FlawChess benchmark database where a player, facing an opponent of nearly the same rating, reached the
+  middlegame with a Stockfish evaluation of
   <b>at least +2.0</b>, the engine's way of saying "about two pawns up". That can mean extra material, a superior
   position, or both. Then I checked how those games actually ended for different rating levels and time controls.
   The answer might change how you think about "winning positions".</p>
   <div class="hero-stats" aria-label="Overall outcomes from a two-pawn-or-better middlegame lead">
-    <div class="tile win"><div class="big">73%</div><div class="lbl">the leader wins</div></div>
-    <div class="tile draw"><div class="big">3%</div><div class="lbl">draw</div></div>
-    <div class="tile loss"><div class="big">24%</div><div class="lbl">the leader <b>loses</b></div></div>
+    <div class="tile win"><div class="big">71%</div><div class="lbl">the leader wins</div></div>
+    <div class="tile draw"><div class="big">4%</div><div class="lbl">draw</div></div>
+    <div class="tile loss"><div class="big">25%</div><div class="lbl">the leader <b>loses</b></div></div>
   </div>
-  <p class="hero-note">All 112,583 games that entered the middlegame at <b>+2.0 or better</b>, all ratings
+  <p class="hero-note">All 82,023 games that entered the middlegame at <b>+2.0 or better</b>, all ratings
   combined. "At least" matters: the median lead here is <b>+3.6 pawns</b>, and a bare two-pawn lead does considerably
   worse than the headline (section 3).</p>
 </div>
@@ -203,7 +204,7 @@
   <div class="card-head"><div class="num">1</div>
   <h2>A two-pawn lead is not a won game, at any level</h2></div>
   <p class="lede">Players who start the middlegame two pawns up or better go on to <b>lose roughly one game in four</b>.
-  And this is not just a beginner problem: even at 2400 Lichess, nearly one of these games in five
+  And this is not just a beginner problem: even at 2400 Lichess, more than one of these games in five
   still ends in defeat for the player who had the advantage.</p>
   <p class="ctitle">Games LOST by the player who entered the middlegame at least two pawns up</p>
   <figure aria-label="Bar chart: how often the leader loses, by rating">
@@ -215,11 +216,11 @@
     <table>
       <thead><tr><th>Rating</th><th>Games with an entry lead</th><th>Median lead</th><th>Leader loses</th></tr></thead>
       <tbody>
-        <tr><td>800</td><td>9,674</td><td>+4.5</td><td>27.3%</td></tr>
-        <tr><td>1200</td><td>29,368</td><td>+4.1</td><td>27%</td></tr>
-        <tr><td>1600</td><td>30,886</td><td>+3.6</td><td>24.7%</td></tr>
-        <tr><td>2000</td><td>24,706</td><td>+3.2</td><td>21.3%</td></tr>
-        <tr><td>2400</td><td>17,949</td><td>+3.0</td><td>18.4%</td></tr>
+        <tr><td>800</td><td>6,998</td><td>+4.4</td><td>27.9%</td></tr>
+        <tr><td>1200</td><td>23,390</td><td>+4.1</td><td>27.9%</td></tr>
+        <tr><td>1600</td><td>24,962</td><td>+3.6</td><td>25.2%</td></tr>
+        <tr><td>2000</td><td>17,469</td><td>+3.1</td><td>22.6%</td></tr>
+        <tr><td>2400</td><td>9,204</td><td>+2.9</td><td>21.8%</td></tr>
       </tbody>
     </table>
   </div></details>
@@ -229,7 +230,7 @@
   <div class="card-head"><div class="num">2</div>
   <h2>Big leads are everywhere at club level, rare among masters</h2></div>
   <p class="lede">At 800, a majority of games (<b>58%</b>) already have a two-pawn advantage
-  for someone when the middlegame starts: openings decide games early. By 2400 that collapses to <b>12%</b>.
+  for someone when the middlegame starts: openings decide games early. By 2400 that collapses to <b>10%</b>.
   Strong players simply don't hand over (or receive) free material in the opening.</p>
   <p class="ctitle">Share of ALL games that begin the middlegame with someone two pawns up</p>
   <figure aria-label="Bar chart: share of games entering the middlegame with a two-pawn advantage, by rating">
@@ -239,11 +240,11 @@
     <table>
       <thead><tr><th>Rating</th><th>Share of games entering with a big lead</th></tr></thead>
       <tbody>
-        <tr><td>800</td><td>58.1%</td></tr>
-        <tr><td>1200</td><td>45.3%</td></tr>
-        <tr><td>1600</td><td>31.2%</td></tr>
-        <tr><td>2000</td><td>19%</td></tr>
-        <tr><td>2400</td><td>12%</td></tr>
+        <tr><td>800</td><td>57.5%</td></tr>
+        <tr><td>1200</td><td>44.5%</td></tr>
+        <tr><td>1600</td><td>30.8%</td></tr>
+        <tr><td>2000</td><td>18.5%</td></tr>
+        <tr><td>2400</td><td>10.3%</td></tr>
       </tbody>
     </table>
   </div></details>
@@ -254,8 +255,8 @@
   <h2>"Two pawns up" usually means more than two pawns</h2></div>
   <p class="lede">Two pawns is the <i>floor</i> of this group, not its typical member. Half of these leads are
   bigger than <b>+3.6 pawns</b>, and roughly one in four is <b>+5 or more</b>, worth about a rook.
-  Size changes everything: a bare two-pawn lead is lost <b>30%</b> of the time, while a five-pawn lead is
-  lost only <b>13.6%</b> of the time. The 24% headline is an average across all of them.</p>
+  Size changes everything: a bare two-pawn lead is lost <b>32%</b> of the time, while a five-pawn lead is
+  lost only <b>14.6%</b> of the time. The 25% headline is an average across all of them.</p>
   <p class="ctitle">Games LOST by the leader, by how big the lead was when the middlegame began</p>
   <figure aria-label="Bar chart: how often the leader loses, by size of the entry advantage">
     <div id="c6"></div>
@@ -267,10 +268,10 @@
     <table>
       <thead><tr><th>Size of the lead</th><th>Games</th><th>Share of games</th><th>Sustained-lead win</th><th>Win after slip</th><th>Draw</th><th>Leader loses</th></tr></thead>
       <tbody>
-        <tr><td>+2 to +3</td><td>40,662</td><td>36.1%</td><td>20.6%</td><td>44.8%</td><td>4.5%</td><td>30.1%</td></tr>
-        <tr><td>+3 to +5</td><td>45,745</td><td>40.6%</td><td>46%</td><td>26.1%</td><td>3.4%</td><td>24.5%</td></tr>
-        <tr><td>+5 to +10</td><td>23,625</td><td>21%</td><td>71.5%</td><td>13.2%</td><td>1.7%</td><td>13.6%</td></tr>
-        <tr><td>+10 or mate</td><td>2,551</td><td>2.3%</td><td>85.4%</td><td>8.3%</td><td>0.6%</td><td>5.7%</td></tr>
+        <tr><td>+2 to +3</td><td>29,561</td><td>36%</td><td>18.9%</td><td>44.9%</td><td>4.4%</td><td>31.8%</td></tr>
+        <tr><td>+3 to +5</td><td>33,691</td><td>41.1%</td><td>43.5%</td><td>27%</td><td>3.6%</td><td>25.9%</td></tr>
+        <tr><td>+5 to +10</td><td>16,938</td><td>20.7%</td><td>69.3%</td><td>14.2%</td><td>1.9%</td><td>14.6%</td></tr>
+        <tr><td>+10 or mate</td><td>1,833</td><td>2.2%</td><td>84.6%</td><td>8.7%</td><td>0.5%</td><td>6.2%</td></tr>
       </tbody>
     </table>
   </div></details>
@@ -282,7 +283,7 @@
   <p class="lede">Split every one of these games into four endings and something odd appears:
   the share of <b>sustained-lead wins</b> (the advantage stays at two pawns or more the whole way
   from middlegame entry to the win) barely moves with
-  rating, sitting near 43% everywhere. It is tempting to conclude that masters are no better at holding on to
+  rating, sitting near 40% everywhere. It is tempting to conclude that masters are no better at holding on to
   a lead. That conclusion is wrong, and the reason is section 3.</p>
   <p class="ctitle">Four outcomes of a two-pawn-or-better middlegame lead</p>
   <div class="legend" id="lg3"></div>
@@ -293,16 +294,16 @@
     <table>
       <thead><tr><th>Rating</th><th>Sustained-lead win</th><th>Win after slip</th><th>Draw</th><th>Leader loses</th></tr></thead>
       <tbody>
-        <tr><td>800</td><td>42.6%</td><td>27.1%</td><td>3%</td><td>27.3%</td></tr>
-        <tr><td>1200</td><td>42.6%</td><td>27.9%</td><td>2.5%</td><td>27%</td></tr>
-        <tr><td>1600</td><td>42.7%</td><td>29.4%</td><td>3.2%</td><td>24.7%</td></tr>
-        <tr><td>2000</td><td>42.6%</td><td>31.8%</td><td>4.2%</td><td>21.3%</td></tr>
-        <tr><td>2400</td><td>45.6%</td><td>31.7%</td><td>4.3%</td><td>18.4%</td></tr>
+        <tr><td>800</td><td>40.8%</td><td>28.2%</td><td>3.1%</td><td>27.9%</td></tr>
+        <tr><td>1200</td><td>41.1%</td><td>28.5%</td><td>2.5%</td><td>27.9%</td></tr>
+        <tr><td>1600</td><td>41.4%</td><td>30.1%</td><td>3.3%</td><td>25.2%</td></tr>
+        <tr><td>2000</td><td>40.6%</td><td>32.4%</td><td>4.4%</td><td>22.6%</td></tr>
+        <tr><td>2400</td><td>39.3%</td><td>34%</td><td>4.8%</td><td>21.8%</td></tr>
       </tbody>
     </table>
   </div></details>
-  <p class="lede" style="margin-top:18px">Weaker players are handed <b>much bigger</b> leads (median +4.5 pawns at 800
-  against +3.0 at 2400), and bigger leads are easier to hold on to. That mix effect exactly cancels the skill effect and
+  <p class="lede" style="margin-top:18px">Weaker players are handed <b>much bigger</b> leads (median +4.4 pawns at 800
+  against +2.9 at 2400), and bigger leads are easier to hold on to. That mix effect swallows the skill effect whole and
   flattens the green bar. Compare like with like, the same size of lead <b>at middlegame entry</b> for every rating,
   and the flatness disappears.</p>
   <p class="ctitle">Sustained-lead wins by rating, holding the size of the entry lead fixed</p>
@@ -311,17 +312,17 @@
     <div id="c7"></div>
   </figure>
   <div class="callout"><span class="tk">Takeaway:</span> masters are better at holding a lead <b>and</b> better at
-  fighting back when it slips. Given the same two-to-three-pawn lead, sustained wins climb from <b>17% at 800 to 27% at
+  fighting back when it slips. Given the same two-to-three-pawn lead, sustained wins climb from <b>16% at 800 to 23% at
   2400</b>. The flat bar in the first chart is an illusion produced by who gets which size of lead.</div>
   <details class="tbl"><summary>View the data</summary><div>
     <table>
       <thead><tr><th>Rating</th><th>Entry lead +2 to +3</th><th>Entry lead +3 to +5</th><th>Entry lead +5 to +10</th><th>All sizes</th></tr></thead>
       <tbody>
-        <tr><td>800</td><td>16.6%</td><td>33.5%</td><td>63.1%</td><td>42.6%</td></tr>
-        <tr><td>1200</td><td>16%</td><td>38.9%</td><td>68%</td><td>42.6%</td></tr>
-        <tr><td>1600</td><td>18.6%</td><td>44.7%</td><td>73.5%</td><td>42.7%</td></tr>
-        <tr><td>2000</td><td>21.8%</td><td>52.2%</td><td>78.4%</td><td>42.6%</td></tr>
-        <tr><td>2400</td><td>26.5%</td><td>59.2%</td><td>84.5%</td><td>45.6%</td></tr>
+        <tr><td>800</td><td>15.6%</td><td>32.2%</td><td>61.5%</td><td>40.8%</td></tr>
+        <tr><td>1200</td><td>15.4%</td><td>38%</td><td>66.3%</td><td>41.1%</td></tr>
+        <tr><td>1600</td><td>17.9%</td><td>43.7%</td><td>72.4%</td><td>41.4%</td></tr>
+        <tr><td>2000</td><td>20.6%</td><td>50.3%</td><td>77.2%</td><td>40.6%</td></tr>
+        <tr><td>2400</td><td>23.2%</td><td>53.6%</td><td>78.6%</td><td>39.3%</td></tr>
       </tbody>
     </table>
   </div></details>
@@ -330,12 +331,12 @@
 <section class="card" id="s5">
   <div class="card-head"><div class="num">5</div>
   <h2>Two ways to lose a won game: outplayed, or flagged</h2></div>
-  <p class="lede">At 800, <b>29%</b> of two-pawn blitz leads end in defeat against <b>22%</b> in classical, so blitz
+  <p class="lede">At 800, <b>30%</b> of two-pawn blitz leads end in defeat against <b>22%</b> in classical, so blitz
   looks like the worst place to hold an advantage. But split those defeats by how the game actually ended and two very
   different problems appear. Losing <b>on the board</b> is a rating problem: the three time controls sit almost on top
-  of each other, falling from roughly 20% at club level to 11&ndash;14% at 2400. Losing <b>on the clock</b> is a
-  time-control problem: blitz leaders flag away <b>7&ndash;9%</b> of these winning positions at every rating, rapid players
-  about 2.5%, classical players about 1%, and getting stronger barely moves it. Those flag falls are genuine
+  of each other, falling from roughly 20% at club level to 13&ndash;16% at 2400. Losing <b>on the clock</b> is a
+  time-control problem: blitz leaders flag away <b>6&ndash;9%</b> of these winning positions at every rating, rapid players
+  about 3%, classical players about 1%, and getting stronger barely moves it. Those flag falls are genuine
   throwaways: in <b>41%</b> of them the engine still had the blitz leader two pawns up on the final move.</p>
   <p class="ctitle">Games LOST by the leader: on the board vs on the clock</p>
   <div class="legend" id="lg4"></div>
@@ -348,28 +349,28 @@
   <div class="callout"><span class="tk">Takeaway:</span> nearly <b>one in three</b> blitz leads that get thrown
   away are thrown away on the clock, not on the board. Improving your chess fixes board losses, but it barely
   touches flagging. If you keep losing won blitz games, part of the cure is not tactics at all, it's the clock:
-  moving from blitz to rapid cuts flag losses from about <b>7% to 2.5%</b> of these winning positions, and classical nearly
-  eliminates them. Only above 2000 does speed also start costing games on the board: at 2400, blitz board losses are
-  <b>14.4%</b> against <b>10.6%</b> in classical.</div>
+  moving from blitz to rapid cuts flag losses from about <b>7% to 3%</b> of these winning positions, and classical nearly
+  eliminates them. Only above 2000 does speed also start costing games on the board: at 2400, with clock-decided games
+  removed from the count entirely, blitz leaders still lose <b>19%</b> of these positions against <b>14%</b> in classical.</div>
   <details class="tbl"><summary>View the data</summary><div>
     <table>
       <thead><tr><th>Rating</th><th>Time control</th><th>Lost on the board</th><th>Lost on the clock</th><th>Disconnect</th><th>Total lost</th><th>Board only*</th></tr></thead>
       <tbody>
-        <tr><td>800</td><td>Blitz</td><td>19.6%</td><td>9.3%</td><td>0.6%</td><td>29.4%</td><td>24.8%</td></tr>
-        <tr><td>800</td><td>Rapid</td><td>22.4%</td><td>2.7%</td><td>0.8%</td><td>25.9%</td><td>24.6%</td></tr>
-        <tr><td>800</td><td>Classical</td><td>19%</td><td>0.7%</td><td>2.2%</td><td>21.9%</td><td>21.2%</td></tr>
-        <tr><td>1200</td><td>Blitz</td><td>21.1%</td><td>8.4%</td><td>0.5%</td><td>30%</td><td>26.3%</td></tr>
-        <tr><td>1200</td><td>Rapid</td><td>23.6%</td><td>2.2%</td><td>0.7%</td><td>26.6%</td><td>25.6%</td></tr>
-        <tr><td>1200</td><td>Classical</td><td>21.7%</td><td>0.6%</td><td>1.2%</td><td>23.5%</td><td>23%</td></tr>
-        <tr><td>1600</td><td>Blitz</td><td>19.9%</td><td>6.5%</td><td>0.3%</td><td>26.8%</td><td>24%</td></tr>
-        <tr><td>1600</td><td>Rapid</td><td>21.7%</td><td>2.4%</td><td>0.6%</td><td>24.7%</td><td>23.6%</td></tr>
-        <tr><td>1600</td><td>Classical</td><td>21%</td><td>1.4%</td><td>1%</td><td>23.3%</td><td>22.6%</td></tr>
-        <tr><td>2000</td><td>Blitz</td><td>16.1%</td><td>8.1%</td><td>0.2%</td><td>24.4%</td><td>19.9%</td></tr>
-        <tr><td>2000</td><td>Rapid</td><td>18.6%</td><td>2.9%</td><td>0.3%</td><td>21.8%</td><td>20.3%</td></tr>
-        <tr><td>2000</td><td>Classical</td><td>16.3%</td><td>1%</td><td>0.5%</td><td>17.8%</td><td>17.2%</td></tr>
-        <tr><td>2400</td><td>Blitz</td><td>14.4%</td><td>6.8%</td><td>0.2%</td><td>21.4%</td><td>17.4%</td></tr>
-        <tr><td>2400</td><td>Rapid</td><td>13.1%</td><td>2.7%</td><td>0.2%</td><td>15.9%</td><td>14.2%</td></tr>
-        <tr><td>2400</td><td>Classical</td><td>10.6%</td><td>0.9%</td><td>0.5%</td><td>12.1%</td><td>11.3%</td></tr>
+        <tr><td>800</td><td>Blitz</td><td>20.1%</td><td>9.4%</td><td>0.6%</td><td>30.1%</td><td>25.6%</td></tr>
+        <tr><td>800</td><td>Rapid</td><td>22.5%</td><td>2.6%</td><td>1%</td><td>26.1%</td><td>24.7%</td></tr>
+        <tr><td>800</td><td>Classical</td><td>18.3%</td><td>0.5%</td><td>2.9%</td><td>21.6%</td><td>20.9%</td></tr>
+        <tr><td>1200</td><td>Blitz</td><td>21.4%</td><td>8.5%</td><td>0.5%</td><td>30.4%</td><td>26.7%</td></tr>
+        <tr><td>1200</td><td>Rapid</td><td>23.9%</td><td>2.3%</td><td>0.7%</td><td>26.9%</td><td>25.9%</td></tr>
+        <tr><td>1200</td><td>Classical</td><td>23.5%</td><td>0.6%</td><td>1.4%</td><td>25.4%</td><td>25.1%</td></tr>
+        <tr><td>1600</td><td>Blitz</td><td>20.3%</td><td>6.2%</td><td>0.4%</td><td>26.9%</td><td>24.3%</td></tr>
+        <tr><td>1600</td><td>Rapid</td><td>21.9%</td><td>2.4%</td><td>0.6%</td><td>24.9%</td><td>23.7%</td></tr>
+        <tr><td>1600</td><td>Classical</td><td>21.8%</td><td>1.4%</td><td>1%</td><td>24.2%</td><td>23.5%</td></tr>
+        <tr><td>2000</td><td>Blitz</td><td>17.4%</td><td>7.9%</td><td>0.2%</td><td>25.5%</td><td>21.5%</td></tr>
+        <tr><td>2000</td><td>Rapid</td><td>19.1%</td><td>3%</td><td>0.3%</td><td>22.3%</td><td>20.9%</td></tr>
+        <tr><td>2000</td><td>Classical</td><td>18.1%</td><td>1.2%</td><td>0.5%</td><td>19.8%</td><td>19.2%</td></tr>
+        <tr><td>2400</td><td>Blitz</td><td>15.6%</td><td>7.4%</td><td>0.2%</td><td>23.2%</td><td>19.2%</td></tr>
+        <tr><td>2400</td><td>Rapid</td><td>16.3%</td><td>3.5%</td><td>0.2%</td><td>20%</td><td>17.8%</td></tr>
+        <tr><td>2400</td><td>Classical</td><td>12.9%</td><td>1.4%</td><td>0%</td><td>14.3%</td><td>13.6%</td></tr>
       </tbody>
     </table>
     <p style="margin-top:10px;color:var(--ink-mid)">* Share of losses among games that were actually decided on the
@@ -393,33 +394,37 @@
     game were undecided, because it is.</li>
     <li><b>Holding a lead is its own skill.</b> Given the same size of lead at middlegame entry,
     sustained-lead wins (the lead never dips below two pawns for the rest of the game) climb steadily
-    with rating: 17% at 800 to 27% at 2400 for a two-to-three-pawn entry lead. Winning the material
+    with rating: 16% at 800 to 23% at 2400 for a two-to-three-pawn entry lead. Winning the material
     was only half the work; the other half is the unglamorous part, trading down and shutting off
     counterplay.</li>
     <li><b>Losing won blitz games? The fix may be a slower time control, not more tactics.</b> Blitz
-    leaders flag away 7&ndash;9% of these games at every rating, and getting stronger barely helps.
-    Playing rapid instead cuts that to about 2.5%, and classical nearly eliminates it.</li>
+    leaders flag away 6&ndash;9% of these games at every rating, and getting stronger barely helps.
+    Playing rapid instead cuts that to about 3%, and classical nearly eliminates it.</li>
   </ul>
 </section>
 
 <footer class="site">
   <div class="box">
     <h2>About this analysis</h2>
-    <p style="margin-top:8px">I analyzed <b>460,604 Lichess games</b> (blitz, rapid and classical) with full
-    Stockfish evaluations, across five rating groups from 800 to 2400. "Two pawns up" means the engine evaluation
+    <p style="margin-top:8px">I analyzed <b>329,518 Lichess games</b> (blitz, rapid and classical) with full
+    Stockfish evaluations, across five rating groups from 800 to 2400, keeping only games between opponents within
+    100 rating points of each other (460,604 games before that matching filter; the first version of this story
+    skipped it, which flattered the 2400 numbers by a few points). "Two pawns up" means the engine evaluation
     reached &ge; 200 centipawns for one side at the first move of the middlegame. Where the middlegame starts is
     decided by Lichess's own phase rules (the same division you see on its analysis board, based on piece counts,
     back-rank development, and how entangled the two sides' pieces are). Full methodology, exact queries,
     and every table are in the technical report. GM Noël Studer suggested the question; the analysis, and any
     errors in it, are mine.</p>
     <p style="margin-top:10px">
-      <a href="https://github.com/flawchess/flawchess/blob/main/stories/two-pawns-up/two-pawns-up-report.md" data-umami-event="outbound-report-two-pawns-up">Read the technical report</a>
+      <a href="https://github.com/flawchess/flawchess/blob/main/stories/two-pawns-up/two-pawns-up-report-v2.md" data-umami-event="outbound-report-two-pawns-up">Read the technical report</a>
       &middot;
       <a href="https://github.com/flawchess/flawchess/blob/main/reports/benchmark/benchmarks-latest.md" data-umami-event="outbound-report-benchmarks">Browse the benchmark database</a>
     </p>
     <p class="fineprint">Data: Lichess games with server-side Stockfish analysis, which players request themselves,
-    so these are not a uniform sample of Lichess. Ratings are Lichess ratings at the time each game was played,
-    grouped into 400-point bands, and opponents are rating-matched. This is an engine evaluation, not a material
+    so these are not a uniform sample of Lichess; analyzed games also lean toward the games their players wanted
+    examined, often losses, so the absolute rates carry some selection tilt (the technical report quantifies it).
+    Ratings are Lichess ratings at the time each game was played, grouped into 400-point bands, and only games
+    where the two players were within 100 rating points of each other are counted. This is an engine evaluation, not a material
     count: a position can be worth +2.0 with the material dead level. "Two pawns up" is a floor, not a description:
     the median lead in this group is +3.6 pawns, which is why section 3 breaks the results out by lead size.
     Section 5 splits losses by Lichess's own game-termination field; "abandoned" (a disconnect) is counted
@@ -461,48 +466,48 @@
 const RATINGS=[800,1200,1600,2000,2400];
 const COL={win:"#166534",win2:"#5F901A",draw:"#8A7F71",loss:"#B02A2A",
            blitz:"#C97A00",rapid:"#3B82F6",classical:"#166534",brown:"#8B5E3C"};
-const OUTCOME={ // % of entry-lead games per rating
-  sustained:[42.6,42.6,42.7,42.6,45.6],
-  comeback:[27.1,27.9,29.4,31.8,31.7],
-  draw:[3.0,2.5,3.2,4.2,4.3],
-  loss:[27.3,27.0,24.7,21.3,18.4],
-  n:[9674,29368,30886,24706,17949]
+const OUTCOME={ // % of entry-lead games per rating (v2 equal-footing basis)
+  sustained:[40.8,41.1,41.4,40.6,39.3],
+  comeback:[28.2,28.5,30.1,32.4,34.0],
+  draw:[3.1,2.5,3.3,4.4,4.8],
+  loss:[27.9,27.9,25.2,22.6,21.8],
+  n:[6998,23390,24962,17469,9204]
 };
-const PREVALENCE=[58.1,45.3,31.2,19.0,12.0]; // % of all games entering MG two pawns up
+const PREVALENCE=[57.5,44.5,30.8,18.5,10.3]; // % of all games entering MG two pawns up
 /* Report §5: leader losses split by how the game ended, as % of that cell's entry-lead
    games. board+clock+abandoned sums to the §2 "leader loses" total for the cell
    (a displayed component can be a rounding tick off the total). */
 const TC={
-  blitz:{label:"Blitz",n:[4492,9393,7988,6219,8851],
-    board:[19.6,21.1,19.9,16.1,14.4],clock:[9.3,8.4,6.5,8.1,6.8],aband:[0.6,0.5,0.3,0.2,0.2],
-    total:[29.4,30.0,26.8,24.4,21.4],boardOnly:[24.8,26.3,24.0,19.9,17.4]},
-  rapid:{label:"Rapid",n:[4598,13572,10987,11397,8327],
-    board:[22.4,23.6,21.7,18.6,13.1],clock:[2.7,2.2,2.4,2.9,2.7],aband:[0.8,0.7,0.6,0.3,0.2],
-    total:[25.9,26.6,24.7,21.8,15.9],boardOnly:[24.6,25.6,23.6,20.3,14.2]},
-  classical:{label:"Classical",n:[584,6403,11911,7090,771],
-    board:[19.0,21.7,21.0,16.3,10.6],clock:[0.7,0.6,1.4,1.0,0.9],aband:[2.2,1.2,1.0,0.5,0.5],
-    total:[21.9,23.5,23.3,17.8,12.1],boardOnly:[21.2,23.0,22.6,17.2,11.3]}
+  blitz:{label:"Blitz",n:[3307,8098,6752,4671,5496],
+    board:[20.1,21.4,20.3,17.4,15.6],clock:[9.4,8.5,6.2,7.9,7.4],aband:[0.6,0.5,0.4,0.2,0.2],
+    total:[30.1,30.4,26.9,25.5,23.2],boardOnly:[25.6,26.7,24.3,21.5,19.2]},
+  rapid:{label:"Rapid",n:[3483,11597,9400,8634,3568],
+    board:[22.5,23.9,21.9,19.1,16.3],clock:[2.6,2.3,2.4,3.0,3.5],aband:[1.0,0.7,0.6,0.3,0.2],
+    total:[26.1,26.9,24.9,22.3,20.0],boardOnly:[24.7,25.9,23.7,20.9,17.8]},
+  classical:{label:"Classical",n:[208,3695,8810,4164,140],
+    board:[18.3,23.5,21.8,18.1,12.9],clock:[0.5,0.6,1.4,1.2,1.4],aband:[2.9,1.4,1.0,0.5,0.0],
+    total:[21.6,25.4,24.2,19.8,14.3],boardOnly:[20.9,25.1,23.5,19.2,13.6]}
 };
 /* Report §4: the >=200cp cohort cut by how big the entry lead actually was.
-   Band counts sum exactly to the §2 totals (112,583 games). */
+   Band counts sum exactly to the §2 totals (82,023 games). */
 const LEADSIZE={
   label:["+2 to +3","+3 to +5","+5 to +10","+10 or mate"],
   shortLabel:["+2–3","+3–5","+5–10","+10/mate"], // narrow screens: full labels collide
-  n:[40662,45745,23625,2551],
-  share:[36.1,40.6,21.0,2.3],          // % of all entry-lead games
-  sustained:[20.6,46.0,71.5,85.4],
-  comeback:[44.8,26.1,13.2,8.3],
-  draw:[4.5,3.4,1.7,0.6],
-  loss:[30.1,24.5,13.6,5.7]
+  n:[29561,33691,16938,1833],
+  share:[36.0,41.1,20.7,2.2],          // % of all entry-lead games
+  sustained:[18.9,43.5,69.3,84.6],
+  comeback:[44.9,27.0,14.2,8.7],
+  draw:[4.4,3.6,1.9,0.5],
+  loss:[31.8,25.9,14.6,6.2]
 };
 /* Report §4: sustained-lead win % by rating, holding lead size fixed. The flat
    aggregate row is Simpson's paradox — within every band the trend is steep. */
 const SUSTBYBAND=[
-  {key:"b1",label:"+2 to +3",  v:[16.6,16.0,18.6,21.8,26.5],loss:[34.9,36.3,32.2,27.7,24.2],c:"#BC9560"},
-  {key:"b2",label:"+3 to +5",  v:[33.5,38.9,44.7,52.2,59.2],loss:[32.9,30.2,25.7,19.1,15.0],c:"#96663F"},
-  {key:"b3",label:"+5 to +10", v:[63.1,68.0,73.5,78.4,84.5],loss:[19.0,15.9,12.6,8.6,4.8], c:"#6B4226"}
+  {key:"b1",label:"+2 to +3",  v:[15.6,15.4,17.9,20.6,23.2],loss:[34.5,37.2,32.4,29.1,27.1],c:"#BC9560"},
+  {key:"b2",label:"+3 to +5",  v:[32.2,38.0,43.7,50.3,53.6],loss:[33.6,30.9,26.0,20.0,17.9],c:"#96663F"},
+  {key:"b3",label:"+5 to +10", v:[61.5,66.3,72.4,77.2,78.6],loss:[19.5,16.6,13.2,9.1,6.4], c:"#6B4226"}
 ];
-const SUSTAGG=[42.6,42.6,42.7,42.6,45.6];   // all lead sizes combined (the illusion)
+const SUSTAGG=[40.8,41.1,41.4,40.6,39.3];   // all lead sizes combined (the illusion)
 /* Report §3 (blunder timing) is deliberately NOT surfaced on this page. Its
    after-entry "leader blunders 1.2x more" result is confounded by blunder
    headroom: a blunder means losing >=15 percentage points of winning chances,
