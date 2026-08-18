@@ -79,6 +79,8 @@ export function GameCard({ game, analyzePly }: GameCardProps) {
         <Tooltip content="Open game on platform">
           <a
             href={gameUrl}
+            data-umami-event="outbound-platform-game"
+            data-umami-event-platform={game.platform}
             target="_blank"
             rel="noopener noreferrer"
             className="text-brand-brown-light hover:text-brand-brown-highlight transition-colors"

@@ -401,6 +401,7 @@ export function EndgamesPage() {
                       run is published as the {' '}
                       <a
                         href="https://github.com/flawchess/flawchess/blob/main/reports/benchmark/benchmarks-latest.md"
+                        data-umami-event="outbound-report-benchmarks"
                         className="text-primary underline-offset-4 hover:underline"
                         target="_blank"
                         rel="noopener noreferrer"
@@ -430,6 +431,7 @@ export function EndgamesPage() {
                         those games. chess.com ratings are converted to Lichess-equivalent via the{' '}
                         <a
                           href="https://chessgoals.com/rating-comparison"
+                          data-umami-event="outbound-chessgoals"
                           className="text-primary underline-offset-4 hover:underline"
                           target="_blank"
                           rel="noopener noreferrer"
@@ -505,6 +507,7 @@ export function EndgamesPage() {
                       <strong>Eval Score:</strong> an Eval converted into a Score with the{' '}
                       <a
                         href="https://lichess.org/page/accuracy"
+                        data-umami-event="outbound-lichess-accuracy"
                         className="text-primary underline-offset-4 hover:underline"
                         target="_blank"
                         rel="noopener noreferrer"
@@ -548,6 +551,7 @@ export function EndgamesPage() {
                       <strong>Entry Eval Score:</strong> your Entry Eval converted to a Score with the{' '}
                       <a
                         href="https://lichess.org/page/accuracy"
+                        data-umami-event="outbound-lichess-accuracy"
                         className="text-primary underline-offset-4 hover:underline"
                         target="_blank"
                         rel="noopener noreferrer"

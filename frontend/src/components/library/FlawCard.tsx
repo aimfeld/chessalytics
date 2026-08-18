@@ -225,6 +225,8 @@ export function FlawCard({ flaw, tacticOrientation = 'either' }: FlawCardProps) 
         <Tooltip content="Open at this move on platform">
           <a
             href={flawUrl}
+            data-umami-event="outbound-platform-flaw"
+            data-umami-event-platform={flaw.platform}
             target="_blank"
             rel="noopener noreferrer"
             className="text-brand-brown-light hover:text-brand-brown-highlight transition-colors"

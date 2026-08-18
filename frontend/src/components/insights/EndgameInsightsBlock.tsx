@@ -289,6 +289,7 @@ function RenderedState({
                   Study endgame technique by level (Basic to Advanced):{' '}
                   <a
                     href={ENDGAME_STUDY_URL}
+                    data-umami-event="outbound-endgame-study"
                     className="text-primary underline-offset-4 hover:underline"
                     target="_blank"
                     rel="noopener noreferrer"
@@ -304,6 +305,7 @@ function RenderedState({
                   Practice endgame puzzles:{' '}
                   <a
                     href={ENDGAME_PUZZLES_URL}
+                    data-umami-event="outbound-endgame-puzzles"
                     className="text-primary underline-offset-4 hover:underline"
                     target="_blank"
                     rel="noopener noreferrer"

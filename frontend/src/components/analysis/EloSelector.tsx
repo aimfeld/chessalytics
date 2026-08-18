@@ -48,6 +48,7 @@ function EloInfoTooltip(): React.ReactElement {
           Conversion uses the{' '}
           <a
             href={CHESSGOALS_RATING_URL}
+            data-umami-event="outbound-chessgoals"
             target="_blank"
             rel="noopener noreferrer"
             data-testid="analysis-elo-info-link-chessgoals"
