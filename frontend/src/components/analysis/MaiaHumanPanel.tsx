@@ -97,6 +97,7 @@ function MaiaInfoTooltip(): React.ReactElement {
           Predictions come from{' '}
           <a
             href={MAIA_SOURCE_URL}
+            data-umami-event="outbound-maia-model"
             target="_blank"
             rel="noopener noreferrer"
             data-testid="maia-info-link-maia3"
@@ -107,6 +108,7 @@ function MaiaInfoTooltip(): React.ReactElement {
           , a neural network trained on millions of human games. Check out{' '}
           <a
             href={MAIA_SITE_URL}
+            data-umami-event="outbound-maia-site"
             target="_blank"
             rel="noopener noreferrer"
             data-testid="maia-info-link-maiachess"

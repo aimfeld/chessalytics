@@ -1,6 +1,6 @@
 ---
 name: benchmarks
-description: Generate FlawChess endgame population benchmarks from the benchmark DB. Computes per-user distributions for score-gap (endgame vs non-endgame), Conversion/Parity/Recovery rates, composite Endgame Skill, time-pressure stats at endgame entry, time-pressure-vs-performance curves, per-endgame-class (rook/minor_piece/pawn/queen/mixed/pawnless) score and conv/recov rates, and (Phase 114, §5) flaw-delta zones: 15-metric you−opponent paired-delta per-(ELO×TC) Q1/Q3 zones (flaw rate, tempo, phase, opportunity, impact, combos) with Cohen's-d collapse verdicts and viability diagnostics. All metrics are bucketed via 400-wide ELO buckets (anchored at 800/1200/1600/2000/2400) computed from the cohort user's **rating at game time** (`games.white_rating`/`games.black_rating`, never the frozen selection-snapshot rating — see "Rating-lag selection bias" in chapter 1) and the 4 TC buckets (anchored from `benchmark_selected_users.tc_bucket`). For every metric, the skill produces a Cohen's-d-based collapse verdict per axis ({TC, ELO}) that determines whether the metric needs cell-specific zones or collapses to a single global zone. Use this skill whenever the user asks about endgame benchmarks, neutral zones, gauge ranges, "what's typical", baseline distributions, calibrating thresholds, comparing time controls, deciding whether to collapse zones across TC or ELO, breaking down stats by endgame class, or flaw-delta zones / you-vs-opponent flaw comparisons / flaw-delta typical range / flaw zone calibration. Trigger on phrases like "benchmark", "benchmarks", "baseline", "neutral zone", "gauge range", "collapse verdict", "Cohen's d", "calibrate thresholds", "endgame type breakdown", "by endgame class", "rook vs minor piece", "flaw delta", "flaw zone", "you vs opponent". Writes the latest markdown report to reports/benchmark/benchmarks-latest.md, rotating any prior latest file to reports/benchmark/benchmarks-YYYY-MM-DD.md based on its first-line date.
+description: Generate FlawChess endgame population benchmarks from the benchmark DB. Computes per-user distributions for score-gap (endgame vs non-endgame), Conversion/Parity/Recovery rates, composite Endgame Skill, time-pressure stats at endgame entry, time-pressure-vs-performance curves, per-endgame-class (rook/minor_piece/pawn/queen/mixed/pawnless) score and conv/recov rates, and (Phase 114, §5) flaw-delta zones: 15-metric you−opponent paired-delta per-(ELO×TC) Q1/Q3 zones (flaw rate, tempo, phase, opportunity, impact, combos) with Cohen's-d collapse verdicts and viability diagnostics. All metrics are bucketed via 400-wide ELO buckets (anchored at 800/1200/1600/2000/2400) computed from the cohort user's **rating at game time** (`games.white_rating`/`games.black_rating`, never the frozen selection-snapshot rating — see "Rating-lag selection bias" in chapter 1) and the 4 TC buckets (anchored from `benchmark_selected_users.tc_bucket`). For every metric, the skill produces a Cohen's-d-based collapse verdict per axis ({TC, ELO}) that determines whether the metric needs cell-specific zones or collapses to a single global zone. Use this skill whenever the user asks about endgame benchmarks, neutral zones, gauge ranges, "what's typical", baseline distributions, calibrating thresholds, comparing time controls, deciding whether to collapse zones across TC or ELO, breaking down stats by endgame class, flaw-delta zones / you-vs-opponent flaw comparisons / flaw-delta typical range / flaw zone calibration, or (§1) how many benchmark games carry whole-game Lichess analysis per (ELO x TC) cell. Trigger on phrases like "benchmark", "benchmarks", "baseline", "neutral zone", "gauge range", "collapse verdict", "Cohen's d", "calibrate thresholds", "endgame type breakdown", "by endgame class", "rook vs minor piece", "flaw delta", "flaw zone", "you vs opponent", "analysis share", "analysis coverage", "analyzed game share", "how many games are analyzed", "lichess analysis coverage". Writes the latest markdown report to reports/benchmark/benchmarks-latest.md, rotating any prior latest file to reports/benchmark/benchmarks-YYYY-MM-DD.md based on its first-line date.
 ---
 
 # Benchmarks
@@ -254,6 +254,97 @@ SELECT
 FROM first_endgame fe
 JOIN game_positions ep ON ep.game_id = fe.game_id AND ep.ply = fe.entry_ply;
 ```
+
+#### Full-game analysis share
+
+Distinct from the eval-coverage check above. That one asks "is there a Stockfish eval at the
+**first endgame ply**" (it gates the conv/parity/recovery bucketing and sits at ~100% because
+our own backfill fills it). This one asks how many games carry **whole-game move-quality
+analysis** — the Lichess server-side Stockfish pass that produces per-ply evals plus the
+per-color inaccuracy/mistake/blunder counts. It is the ceiling on every all-ply analysis built
+on this DB (§5 flaw-delta zones, and the ad-hoc story reports under `stories/`), and it is
+strongly non-uniform across cells, so it belongs in the methodology preamble rather than
+buried in a caveat.
+
+**Definition.** A game is analyzed iff `games.white_blunders IS NOT NULL` — the same predicate
+as the app's `Game.is_analyzed` hybrid property (`app/models/game.py`), exposed as
+`sql.FULL_ANALYSIS_PREDICATE`. On the benchmark DB this is exactly "Lichess attached a server
+analysis": all 641,855 such rows also have `lichess_evals_at` set and none is engine-written,
+so there is no provenance split to report (re-check with a `white_blunders IS NOT NULL AND
+lichess_evals_at IS NULL` count if a future ingest ever runs our own full-ply drain here).
+
+**Why not the ≥90%-of-plies-have-an-eval ratio** used by `reports/benchmark/benchmark-eval-coverage-*.md`
+and `stories/two-pawns-up/two-pawns-up-report.md`: it needs a `game_positions` aggregation over
+~190M rows, and it agrees with the cheap predicate to within 0.05pp of cohort. Measured on this
+cohort (2026-08-18): 563,226 games by `is_analyzed` vs 561,950 by ≥90% coverage — 1,276 games
+(0.23%) are flagged analyzed with sparser per-ply coverage, and **zero** games clear 90%
+coverage without being flagged. Prefer the predicate; reach for the ratio only when you are
+already scanning `game_positions`.
+
+**Basis (deliberate).** The primary grid uses `COHORT_GAME_FILTER` (rated, human opponent,
+TC-anchored) **without** the equal-footing filter: analysis availability is a property of the
+ingested data, not of an analysis design, and the story reports use the same cohort half. The
+equal-footing subset is reported alongside as a sensitivity check — if the Δ ever grows past a
+couple of points, the filter is interacting with who requests analysis and the §2/§3 denominators
+need a caveat.
+
+**Bucketing.** Canonical game-time ELO buckets (`800 = 800–1199 … 2400 = 2400+`, sub-800 dropped).
+Note these are **not** the `600–999 → 800` anchors used by the ad-hoc coverage reports — that
+grid is offset by 400 and its cells are not comparable to this one row-for-row.
+
+**No collapse verdict.** This is a data-availability diagnostic, like the eval-coverage check.
+It is not a per-user metric, has no zone, and MUST NOT appear in the Top-axis collapse summary
+or the Recommended thresholds summary.
+
+**Sparse cell.** `(2400, classical)` is kept in the cell grids with a `*` footnote and excluded
+from every marginal and the pooled total, per the universal rule above.
+
+**Emitted tables** (generator: `scripts/benchmarks/chapter1.py` `_analysis_share`, one `games`-table
+scan; no hand SQL):
+
+1. **Share grid** — 5×4 cells + an `all TC` ELO-marginal column and an `all ELO` TC-marginal row.
+2. **Analyzed / total games** — the same grid with raw counts, so the denominators are auditable.
+3. **Cohort vs equal-footing subset** — per-marginal share on both bases with the Δ.
+
+Reference SQL (what the generator builds; do not run by hand):
+
+```sql
+WITH selected_users AS ( /* Standard CTE */ ),
+gt AS (
+  SELECT (CASE WHEN g.user_color::text='white' THEN g.white_rating ELSE g.black_rating END) AS ueag,
+         su.tc_bucket AS tc,
+         (g.white_blunders IS NOT NULL) AS analyzed,
+         (g.white_rating IS NOT NULL AND g.black_rating IS NOT NULL
+          AND abs(...) <= 100)                                   AS ef
+  FROM games g JOIN selected_users su ON su.user_id = g.user_id
+  WHERE g.rated AND NOT g.is_computer_game
+    AND g.time_control_bucket::text = su.tc_bucket
+)
+SELECT (/* canonical elo_bucket CASE */) AS elo, tc,
+       count(*) AS games,
+       count(*) FILTER (WHERE analyzed)          AS analyzed,
+       count(*) FILTER (WHERE ef)                AS games_ef,
+       count(*) FILTER (WHERE ef AND analyzed)   AS analyzed_ef
+FROM gt WHERE ueag >= 800 GROUP BY 1, 2;
+```
+
+Marginals are summed in Python from these cell counts (they are counts, so the marginal is an
+exact sum) with the sparse cell dropped — see `_share_totals` / `_marginal_keys_*`.
+
+**Narration.** Report the three tables, then short paragraphs covering: the TC gradient, the
+ELO gradient, the interaction (the two axes are not separable — the pooled ELO gradient is
+largely a TC-mix effect), and which cells clear a usable share. No recommendations block
+(nothing to calibrate).
+
+Also run the **outcome-selection check** and report it, because readers reliably misread a low
+share as "this cell is a biased slice". Compare the cohort user's win rate in analyzed vs
+unanalyzed games per TC (a `games`-only query on `COHORT_GAME_FILTER`, `ueag >= 800`, user_won
+from `user_color` + `result`). On the 2026-08-18 snapshot the Δ is bullet −0.4pp, rapid −0.8pp,
+blitz +2.3pp, classical **−9.7pp** — i.e. the *best*-covered TC is the most outcome-selected and
+the worst-covered is the least. State that coverage share and selection strength are close to
+independent, so the grid is a sample-size read, not a trustworthiness read. If a future snapshot
+flips this (e.g. bullet's Δ grows past a few points), that is a real finding and belongs in the
+report header, not just here.
 
 #### Sparse-cell exclusion
 
@@ -3388,6 +3479,7 @@ Write to `reports/benchmark/benchmarks-latest.md`. Before writing, if that file 
 - Cell coverage table
 - Equal-footing retention table
 - Eval coverage check
+- Full-game analysis share (share grid + analyzed/total counts + cohort-vs-equal-footing) — no verdict, no recommendations
 (This chapter is the report's methodology preamble — short, mostly tables, no per-metric blocks.)
 
 ## 2. Openings

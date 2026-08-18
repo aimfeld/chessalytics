@@ -190,6 +190,8 @@ export function WelcomePage() {
         <Button
           variant="brand-outline"
           data-testid="welcome-btn-signup"
+          data-umami-event="signup-cta"
+          data-umami-event-source="welcome"
           onClick={handleSignUp}
         >
           Sign up free

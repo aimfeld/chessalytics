@@ -345,12 +345,30 @@ selected_users AS (
   JOIN users u ON u.lichess_username = bsu.lichess_username
 )"""
 
+# Cohort half of the base filter: rated, human opponent, TC-anchored to the user's
+# selected bucket. This is the "which games belong to this cell" half, with no
+# analysis-design filtering. §1's full-game analysis share uses it directly (analysis
+# availability is a property of the ingested data, not of the analysis design).
+# `su` is the `selected_users` CTE alias; `g` is `games`.
+COHORT_GAME_FILTER: str = (
+    "g.rated AND NOT g.is_computer_game\n    AND g.time_control_bucket::text = su.tc_bucket"
+)
+
+# Rating-present + equal-footing half, as a standalone boolean so a query can carry it
+# as a per-row flag instead of a WHERE clause (§1 reports both cohorts in one scan).
+# NULL ratings make `EQUAL_FOOTING_FILTER` NULL, so the IS NOT NULL guards come first.
+EQUAL_FOOTING_PREDICATE: str = (
+    f"g.white_rating IS NOT NULL AND g.black_rating IS NOT NULL\n    AND {EQUAL_FOOTING_FILTER}"
+)
+
 # Base per-game filter shared by every Chapter 2/3 per-game CTE, including the
 # universal equal-footing filter (SKILL.md "Equal-footing opponent filter").
-# `su` is the `selected_users` CTE alias; `g` is `games`.
-BASE_GAME_FILTER: str = (
-    "g.rated AND NOT g.is_computer_game\n"
-    "    AND g.time_control_bucket::text = su.tc_bucket\n"
-    "    AND g.white_rating IS NOT NULL AND g.black_rating IS NOT NULL\n"
-    f"    AND {EQUAL_FOOTING_FILTER}"
-)
+BASE_GAME_FILTER: str = f"{COHORT_GAME_FILTER}\n    AND {EQUAL_FOOTING_PREDICATE}"
+
+# §1 "Full-game analysis share": a game carries whole-game move-quality analysis.
+# Mirrors `Game.is_analyzed` (app/models/game.py) — `white_blunders` is non-NULL when
+# per-color inaccuracy/mistake/blunder counts were ingested with the game. On the
+# benchmark DB this is exactly Lichess server-side Stockfish analysis: every one of the
+# 641,855 rows with `white_blunders` also has `lichess_evals_at` set, and none is
+# engine-written (verified 2026-08-18), so no provenance split is needed here.
+FULL_ANALYSIS_PREDICATE: str = "g.white_blunders IS NOT NULL"

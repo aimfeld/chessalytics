@@ -59,6 +59,36 @@ EXPECTED_GAME_TIME: dict[tuple[int, str], tuple[int, int]] = {
     (2400, "classical"): (10, 47),
 }
 
+# (elo, tc) -> (analyzed, games) on the cohort filter (full-game analysis share, §1).
+# Equal-footing counterparts are gated by the pooled invariants below rather than cell by
+# cell — the grid is already the thing that regresses if the cohort filter drifts.
+EXPECTED_ANALYSIS_SHARE: dict[tuple[int, str], tuple[int, int]] = {
+    (800, "bullet"): (15914, 138400),
+    (1200, "bullet"): (16774, 184122),
+    (1600, "bullet"): (12666, 193294),
+    (2000, "bullet"): (13284, 190624),
+    (2400, "bullet"): (17180, 175462),
+    (800, "blitz"): (20991, 135447),
+    (1200, "blitz"): (25380, 181336),
+    (1600, "blitz"): (27636, 189074),
+    (2000, "blitz"): (37527, 183668),
+    (2400, "blitz"): (79609, 144349),
+    (800, "rapid"): (21355, 115483),
+    (1200, "rapid"): (31735, 148778),
+    (1600, "rapid"): (39772, 158664),
+    (2000, "rapid"): (59357, 136965),
+    (2400, "rapid"): (49068, 69945),
+    (800, "classical"): (6105, 22494),
+    (1200, "classical"): (21913, 54337),
+    (1600, "classical"): (40060, 69725),
+    (2000, "classical"): (26427, 35864),
+    (2400, "classical"): (473, 609),
+}
+
+# Pooled totals with the sparse (2400, classical) cell excluded, as the report renders them.
+EXPECTED_ANALYSIS_POOLED = {"analyzed": 562753, "games": 2528031}
+EXPECTED_ANALYSIS_POOLED_EF = {"analyzed": 397114, "games": 1989576}
+
 # Representative status cells (C/S/F/U), incl. the pool-limited / sparse cells whose
 # 'unattempted' is absent from the query result and must render as 0.
 EXPECTED_STATUS: dict[tuple[int, str], dict[str, int]] = {
@@ -82,6 +112,32 @@ async def test_chapter1_matches_report(benchmark_session: AsyncSession) -> None:
 
     game_time = {(c["elo"], c["tc"]): (c["users"], c["games"]) for c in values["game_time_cells"]}
     assert game_time == EXPECTED_GAME_TIME
+
+    share = {(c["elo"], c["tc"]): (c["analyzed"], c["games"]) for c in values["analysis_share"]}
+    assert share == EXPECTED_ANALYSIS_SHARE
+
+    # Marginals drop the sparse cell (SKILL.md "Sparse-cell exclusion"); the report's
+    # pooled row is this sum, so gate it directly rather than trusting the grid alone.
+    non_sparse = [c for c in values["analysis_share"] if (c["elo"], c["tc"]) != (2400, "classical")]
+    assert {
+        "analyzed": sum(c["analyzed"] for c in non_sparse),
+        "games": sum(c["games"] for c in non_sparse),
+    } == EXPECTED_ANALYSIS_POOLED
+    assert {
+        "analyzed": sum(c["analyzed_ef"] for c in non_sparse),
+        "games": sum(c["games_ef"] for c in non_sparse),
+    } == EXPECTED_ANALYSIS_POOLED_EF
+
+    # The equal-footing subset is a subset: never more games, never more analyzed.
+    for c in values["analysis_share"]:
+        assert c["games_ef"] <= c["games"] and c["analyzed_ef"] <= c["analyzed"]
+
+    # Cross-table invariant: the analysis share's equal-footing denominator IS the
+    # game-time cell size (same filter, same bucketing). Catches a drift in either query
+    # without a second hand-transcribed grid.
+    assert {(c["elo"], c["tc"]): c["games_ef"] for c in values["analysis_share"]} == {
+        cell: games for cell, (_users, games) in EXPECTED_GAME_TIME.items()
+    }
 
     status: dict[tuple[int, str], dict[str, int]] = {}
     for row in values["pool_status"]:

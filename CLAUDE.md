@@ -346,6 +346,21 @@ Rules specific to `frontend/` (React + TypeScript + Vite). Shared cross-stack ru
 - **Knip runs in CI** — `npm run knip` in the frontend detects dead exports and unused dependencies. CI fails if knip finds issues. When removing a feature, also remove its exports. When adding exports, ensure they're actually imported somewhere.
 - **Minimum font size is `text-sm`** — never use `text-xs` (or smaller) in new code. Even for badges, captions, metadata, footnotes, and "supporting" labels — `text-sm` is the floor. Sub-`text-sm` becomes unreadable on real devices and at high DPI. If a row feels too dense at `text-sm`, fix the layout (more whitespace, fewer columns, shorter labels), don't shrink the type. Applies to all Tailwind utilities (`text-xs`, raw `font-size` < 14px, `[font-size:0.75rem]`, etc.) and to UI copy on both desktop and mobile. **Exception: hover/tap-activated info tooltips** (Radix popover bodies with the HelpCircle trigger pattern — `MetricStatPopover`, `WdlConfidenceTooltip`, `EvalConfidenceTooltip`, `AchievableScorePopover`, etc.) may use `text-xs`; these are short, transient, opt-in surfaces where the denser text reads as a visual aside rather than primary content.
 
+### Outbound link tracking (Umami)
+
+Umami does **not** track outbound clicks automatically. Every `<a>` leaving flawchess.com (including `mailto:`) needs an explicit `data-umami-event` attribute, otherwise the click is invisible:
+
+```tsx
+<a href={gameUrl} data-umami-event="outbound-platform-game" data-umami-event-platform={game.platform} target="_blank" rel="noopener noreferrer">
+```
+
+- **Naming**: `outbound-<destination>`, kebab-case. Reuse the same name for the same destination across pages so totals aggregate (`outbound-github`, `outbound-support-email`).
+- **Many low-value links of one kind** (the Home acknowledgements list) share one event name plus a `data-umami-event-<prop>` attribute for the specific target, so the dashboard shows one row with a breakdown instead of a dozen near-zero rows.
+- Events land in the **app** Umami site (`0ca19960-…`, tag in `frontend/index.html`), separate from the stories site. Only fires on `flawchess.com` because of `data-domains`, so localhost clicks are never recorded.
+- Dynamically rendered links (game cards) work without extra wiring: the tracker observes DOM mutations and binds new elements.
+- **Never put `data-umami-event` on an internal react-router `<Link>`.** On an `<a href>` without `target="_blank"` the tracker calls `preventDefault()` and then assigns `location.href` itself, downgrading a client-side navigation into a full page reload. For internal links call `trackEvent()` from `frontend/src/lib/analytics.ts` in `onClick` instead; the attribute is only for `<button>` elements and outbound `target="_blank"` links.
+- Track only what the browser knows and the database cannot: signup-CTA attribution (`signup-cta` + `source`), guest starts, and the PWA install funnel. Signups, imports, and analysis runs already live in `users` / `import_jobs` and must not be duplicated as events.
+
 ### UI & Components
 
 - **Mobile friendly UI** — use responsive design patterns (Tailwind breakpoints, flexible layouts) so all pages and components work well on small screens.

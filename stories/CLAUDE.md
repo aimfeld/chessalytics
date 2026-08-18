@@ -6,7 +6,7 @@ The blog is named **Chess Data Stories** (not "FlawChess Data Stories"): use tha
 
 ## Structure
 
-- One directory per story: `stories/<slug>/index.html` (kebab-case slug = URL). Self-contained pages: inline CSS/JS, vanilla SVG charts, no CDNs or JS libraries. The only allowed external resource is Google Fonts (Fredoka, for the brand label).
+- One directory per story: `stories/<slug>/index.html` (kebab-case slug = URL). Self-contained pages: inline CSS/JS, vanilla SVG charts, no CDNs or JS libraries. The only allowed external resources are Google Fonts (Fredoka, for the brand label) and the Umami analytics tag (below).
 - **Co-locate the technical report**: the report a story summarizes lives next to it as `stories/<slug>/<slug>-report.md` (short name, e.g. `two-pawns-up-report.md`), not under `reports/`. The story footer links to it via its GitHub blob URL.
 - Add a card for every new story to `stories/index.html`, including its publication date.
 
@@ -16,6 +16,33 @@ The blog is named **Chess Data Stories** (not "FlawChess Data Stories"): use tha
 - **Social card**: a 1200×630 `social-card.png` in the story directory, referenced with an **absolute** `https://stories.flawchess.com/...` URL (scrapers don't resolve relative og:image paths). Render it from a brand-styled HTML card via headless Chrome (`google-chrome --headless=new --window-size=1200,630 --screenshot=...`); show the story headline and its hero stat(s).
 - **Sitemap**: add the story URL to `stories/sitemap.xml` (and bump the landing page's `lastmod`). Update the landing page's JSON-LD `blogPost` list too.
 - **Landmarks**: page content lives in `<main class="wrap">`.
+
+## Analytics (required on every page)
+
+Every page under `stories/` carries the Umami tag in `<head>`, right after the Google Fonts link:
+
+```html
+<!-- Umami analytics (self-hosted, privacy-friendly, no cookies) -->
+<script defer src="https://analytics.flawchess.com/script.js" data-website-id="62d4b783-3457-45f2-8098-f3f1e14a8fa4" data-domains="stories.flawchess.com"></script>
+```
+
+- The stories site is its own Umami website (ID above), **separate from the flawchess.com app site** — story traffic is mostly cold inbound from search and social, and mixing it into the app's numbers muddies both funnels. Never reuse the app's `data-website-id` (`0ca19960-…`, in `frontend/index.html`).
+- **`data-domains` is required**: the tracker sends nothing unless `location.hostname` matches, which keeps local previews out of production stats. The flip side is that a wrong or missing value fails *silently* — the page looks fine and no events arrive.
+- This is a deliberate exception to the "self-contained, no CDNs" rule. It stays safe for local preview because the tag is `defer`red and failure-tolerant: if `analytics.flawchess.com` is unreachable the page renders normally, with one failed request in the console.
+- **Verifying the tag**: Umami's bot filter silently drops events from a `HeadlessChrome` user agent, so a headless check looks broken when it isn't. Pass `--user-agent="Mozilla/5.0 … Chrome/140.0.0.0 Safari/537.36"` to record a real pageview. To confirm the tag works *without* writing a row into production stats, load with the default headless UA and check the net log for a `POST` to `analytics.flawchess.com/api/send` — the request proves the `data-domains` check passed, and the server drops the event as a bot.
+
+### Outbound link tracking (required)
+
+Umami does **not** track outbound clicks automatically (that's Plausible). Every link leaving the stories site needs an explicit `data-umami-event` attribute, otherwise the click is invisible:
+
+```html
+<a href="https://flawchess.com" data-umami-event="outbound-flawchess-cta">Analyze your own games free at flawchess.com &rarr;</a>
+```
+
+- **Tag every external `<a>`**: the header brand link, the footer CTA, report/GitHub links, author links, and any site named in the story body. Internal links between stories need nothing — they already produce a pageview.
+- **Naming**: `outbound-<destination>`, kebab-case (`outbound-github`, `outbound-linkedin`, `outbound-next-level-chess`). When the same destination appears more than once on a page, suffix the placement so the two are distinguishable in the dashboard (`outbound-flawchess-header` vs `outbound-flawchess-cta`). Reuse the exact same event name across stories for the same link, so totals aggregate.
+- No `target="_blank"` is needed: for a same-tab link the tracker intercepts the click, sends the event, then navigates.
+- Clicks land in the stories Umami site under **Events**, not under pageviews, and are subject to the same `data-domains` gate — local preview clicks are never recorded.
 
 ## Header (must match the flawchess.com homepage)
 
@@ -32,7 +59,7 @@ The blog is named **Chess Data Stories** (not "FlawChess Data Stories"): use tha
 - **Terminology must match the underlying technical report.** Don't invent story-side synonyms for defined terms (e.g. the report's "sustained lead" stays "sustained lead", not "wire-to-wire").
 - **Em-dashes very sparingly** — at most one per page section; prefer commas, parentheses, colons, or semicolons.
 - Every chart gets a `<details>` "View the data" table; all numbers live inline in the page (no fetches).
-- **Story footer, in order** (copy the markup from `two-pawns-up/index.html`): the "About this analysis" box (methodology, report link, data fineprint), then the **FlawChess card** (`.promo`: logo + Fredoka brand name + tagline, one-line pitch, feature bullets sourced from `frontend/src/pages/Home.tsx` copy, the flawchess.com CTA button, "All features free · no signup required · open source"), then the **author card** (`.author`: circular photo `stories/author.jpg` (shared asset, CSS `border-radius:50%`), name "Adrian Imfeld", short bio, LinkedIn (https://www.linkedin.com/in/aimfeld/) + GitHub (https://github.com/aimfeld) links). The CTA button lives in the FlawChess card only, not in the About box. The landing page keeps only the one-line footer byline, not the full cards.
+- **Story footer, in order** (copy the markup from `two-pawns-up/index.html`): the "About this analysis" box (methodology, report link, data fineprint), then the **FlawChess card** (`.promo`: logo + Fredoka brand name + tagline, a short pitch **tailored to the story's topic** (2–3 sentences naming the features that answer the question the story just raised; NO feature-bullet grid — a full feature list reads as an ad and undermines the story's credibility), the flawchess.com CTA button, "All features free · no signup required · open source"), then the **author card** (`.author`: circular photo `stories/author.jpg` (shared asset, CSS `border-radius:50%`), name "Adrian Imfeld", short bio, LinkedIn (https://www.linkedin.com/in/aimfeld/) + GitHub (https://github.com/aimfeld) links). The CTA button lives in the FlawChess card only, not in the About box. The landing page keeps only the one-line footer byline, not the full cards.
 
 ## Visual style
 

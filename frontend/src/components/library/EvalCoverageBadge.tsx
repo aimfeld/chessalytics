@@ -103,6 +103,8 @@ export function EvalCoverageBadge({
           variant="brand-outline"
           size="sm"
           data-testid="btn-coverage-signup"
+          data-umami-event="signup-cta"
+          data-umami-event-source="eval-coverage"
           aria-label="Sign up to unlock full-game analysis"
           // A guest holds a guest JWT, so AuthPage treats them as authenticated
           // and bounces them off /login. Drop the guest token first (keeping

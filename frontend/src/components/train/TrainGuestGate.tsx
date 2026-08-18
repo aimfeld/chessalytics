@@ -44,6 +44,8 @@ export function TrainGuestGate() {
       <Button
         variant="default"
         data-testid="btn-signup-for-train"
+        data-umami-event="signup-cta"
+        data-umami-event-source="train-gate"
         aria-label="Sign up free to use Train"
         onClick={handleSignUp}
       >

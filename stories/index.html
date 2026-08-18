@@ -42,6 +42,8 @@
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Fredoka:wght@600&display=swap" rel="stylesheet">
+<!-- Umami analytics (self-hosted, privacy-friendly, no cookies) -->
+<script defer src="https://analytics.flawchess.com/script.js" data-website-id="62d4b783-3457-45f2-8098-f3f1e14a8fa4" data-domains="stories.flawchess.com"></script>
 <style>
   :root{
     --brown:#8B5E3C; --brown-dark:#6B4226; --cream:#FAF7F0; --card:#FFFFFF;
@@ -83,7 +85,7 @@
 
 <header class="site">
   <div class="wrap">
-    <a class="brand" href="https://flawchess.com">
+    <a class="brand" href="https://flawchess.com" data-umami-event="outbound-flawchess-header">
       <img src="logo.png" alt="FlawChess logo">
       <span class="name">FlawChess</span>
     </a>
@@ -95,26 +97,26 @@
 <main class="wrap">
 
 <h1>What real games reveal about how humans actually play chess</h1>
-<p class="sub">Interactive analyses built on the <a href="https://github.com/flawchess/flawchess/blob/main/reports/benchmark/benchmarks-latest.md">FlawChess benchmark database</a>: hundreds of thousands of
+<p class="sub">Interactive analyses built on the <a href="https://github.com/flawchess/flawchess/blob/main/reports/benchmark/benchmarks-latest.md" data-umami-event="outbound-report-benchmarks">FlawChess benchmark database</a>: hundreds of thousands of
 Lichess games with full Stockfish evaluations, across every rating level and time control.</p>
 
 <a class="story" href="two-pawns-up/">
   <div class="date">August 15, 2026</div>
   <h2>You're two pawns up. Do you actually win?</h2>
   <p>460,604 games say a "winning position" is a promise you still have to keep: players who reach the
-  middlegame at least two pawns up lose roughly one game in four, and a bare two-pawn lead goes down
-  almost a third of the time. Plus the two ways a won game is lost: outplayed, or flagged.</p>
+  middlegame at a Stockfish evaluation of +2.0 or better lose roughly one game in four, and a bare two-pawn
+  lead goes down almost a third of the time. Plus the two ways a won game is lost: outplayed, or flagged.</p>
   <span class="go">Read the story &rarr;</span>
 </a>
 
 <footer class="site">
   <div class="byline">
     <img src="author.jpg" alt="Portrait of Adrian Imfeld" width="36" height="36">
-    <span>Chess Data Stories by <a href="https://www.linkedin.com/in/aimfeld/">Adrian Imfeld</a>,
+    <span>Chess Data Stories by <a href="https://www.linkedin.com/in/aimfeld/" data-umami-event="outbound-linkedin">Adrian Imfeld</a>,
     data scientist and creator of FlawChess</span>
   </div>
-  <a href="https://flawchess.com">flawchess.com</a> &middot; free &amp; open source &middot;
-  <a href="https://github.com/flawchess/flawchess">GitHub</a>
+  <a href="https://flawchess.com" data-umami-event="outbound-flawchess-footer">flawchess.com</a> &middot; free &amp; open source &middot;
+  <a href="https://github.com/flawchess/flawchess" data-umami-event="outbound-github">GitHub</a>
 </footer>
 
 </main>

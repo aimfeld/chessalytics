@@ -60,6 +60,7 @@ export function PrivacyPage() {
             You can request deletion of your account and all associated data by emailing{' '}
             <a
               href="mailto:support@flawchess.com"
+              data-umami-event="outbound-support-email"
               className="text-primary underline-offset-4 hover:underline"
             >
               support@flawchess.com
@@ -76,6 +77,7 @@ export function PrivacyPage() {
             it by reading the code on{' '}
             <a
               href="https://github.com/flawchess/flawchess"
+              data-umami-event="outbound-github"
               target="_blank"
               rel="noopener noreferrer"
               className="text-primary underline-offset-4 hover:underline"
@@ -91,6 +93,7 @@ export function PrivacyPage() {
             Questions? Contact us at{' '}
             <a
               href="mailto:support@flawchess.com"
+              data-umami-event="outbound-support-email"
               className="text-primary underline-offset-4 hover:underline"
             >
               support@flawchess.com

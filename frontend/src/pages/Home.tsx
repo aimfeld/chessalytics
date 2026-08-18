@@ -17,6 +17,7 @@ import {
 } from '@/components/ui/accordion';
 import { cn } from '@/lib/utils';
 import { FLAWCHESS_ENGINE_ACCENT } from '@/lib/theme';
+import { trackEvent } from '@/lib/analytics';
 import { Search, Scale, Dumbbell, TrophyIcon, Timer, Compass, Loader2, UserPlus, DoorOpen, ChessKnight } from 'lucide-react';
 import type { LucideIcon } from 'lucide-react';
 
@@ -159,6 +160,7 @@ const FAQ_ITEMS: {
         level, instead of assuming perfect play from both sides. Read the full deep-dive in{' '}
         <a
           href="https://github.com/flawchess/flawchess/blob/main/docs/flawchess-engine-explained-2026-07-06.md"
+          data-umami-event="outbound-engine-explainer"
           className="text-primary underline-offset-4 hover:underline"
           target="_blank"
           rel="noopener noreferrer"
@@ -202,6 +204,7 @@ const FAQ_ITEMS: {
         Open an issue on{' '}
         <a
           href="https://github.com/flawchess/flawchess"
+          data-umami-event="outbound-github"
           className="text-primary underline-offset-4 hover:underline"
           target="_blank"
           rel="noopener noreferrer"
@@ -222,6 +225,7 @@ const FAQ_ITEMS: {
         FlawChess is an open source project developed independently. Find the code on{' '}
         <a
           href="https://github.com/flawchess/flawchess"
+          data-umami-event="outbound-github"
           className="text-primary underline-offset-4 hover:underline"
           target="_blank"
           rel="noopener noreferrer"
@@ -231,6 +235,7 @@ const FAQ_ITEMS: {
         , contribute, or reach out at{' '}
         <a
           href="mailto:support@flawchess.com"
+          data-umami-event="outbound-support-email"
           className="text-primary underline-offset-4 hover:underline"
         >
           support@flawchess.com
@@ -335,7 +340,10 @@ export function HomePageContent() {
                 className="min-h-11 min-w-40"
                 data-testid="hero-cta-signup"
               >
-                <Link to="/login?tab=register">
+                <Link
+                  to="/login?tab=register"
+                  onClick={() => trackEvent('signup-cta', { source: 'hero' })}
+                >
                   <UserPlus className="mr-1.5 h-4 w-4" />
                   Sign up free
                 </Link>
@@ -345,6 +353,7 @@ export function HomePageContent() {
                 variant="brand-outline"
                 className="min-h-11 min-w-40"
                 data-testid="btn-guest"
+                data-umami-event="guest-start"
                 onClick={handleGuestLogin}
                 disabled={isLoading}
               >
@@ -498,6 +507,7 @@ export function HomePageContent() {
           reports and feature requests are welcome on{' '}
           <a
             href="https://github.com/flawchess/flawchess"
+            data-umami-event="outbound-github"
             className="text-primary underline-offset-4 hover:underline"
             target="_blank"
             rel="noopener noreferrer"
@@ -507,6 +517,7 @@ export function HomePageContent() {
           or via{' '}
           <a
             href="mailto:support@flawchess.com"
+            data-umami-event="outbound-support-email"
             className="text-primary underline-offset-4 hover:underline"
           >
             support@flawchess.com
@@ -538,6 +549,8 @@ export function HomePageContent() {
           <li>
             <a
               href="https://lichess.org"
+              data-umami-event="outbound-acknowledgement"
+              data-umami-event-target="lichess"
               className="text-primary underline-offset-4 hover:underline"
               target="_blank"
               rel="noopener noreferrer"
@@ -549,6 +562,8 @@ export function HomePageContent() {
           <li>
             <a
               href="https://chess.com"
+              data-umami-event="outbound-acknowledgement"
+              data-umami-event-target="chess-com"
               className="text-primary underline-offset-4 hover:underline"
               target="_blank"
               rel="noopener noreferrer"
@@ -560,6 +575,8 @@ export function HomePageContent() {
           <li>
             <a
               href="https://www.openingtree.com"
+              data-umami-event="outbound-acknowledgement"
+              data-umami-event-target="openingtree"
               className="text-primary underline-offset-4 hover:underline"
               target="_blank"
               rel="noopener noreferrer"
@@ -571,6 +588,8 @@ export function HomePageContent() {
           <li>
             <a
               href="https://chessgoals.com/rating-comparison"
+              data-umami-event="outbound-acknowledgement"
+              data-umami-event-target="chessgoals"
               className="text-primary underline-offset-4 hover:underline"
               target="_blank"
               rel="noopener noreferrer"
@@ -582,6 +601,8 @@ export function HomePageContent() {
           <li>
             <a
               href="https://python-chess.readthedocs.io"
+              data-umami-event="outbound-acknowledgement"
+              data-umami-event-target="python-chess"
               className="text-primary underline-offset-4 hover:underline"
               target="_blank"
               rel="noopener noreferrer"
@@ -593,6 +614,8 @@ export function HomePageContent() {
           <li>
             <a
               href="https://stockfishchess.org"
+              data-umami-event="outbound-acknowledgement"
+              data-umami-event-target="stockfish"
               className="text-primary underline-offset-4 hover:underline"
               target="_blank"
               rel="noopener noreferrer"
@@ -604,6 +627,8 @@ export function HomePageContent() {
           <li>
             <a
               href="https://maiachess.com"
+              data-umami-event="outbound-acknowledgement"
+              data-umami-event-target="maia"
               className="text-primary underline-offset-4 hover:underline"
               target="_blank"
               rel="noopener noreferrer"
@@ -615,6 +640,8 @@ export function HomePageContent() {
           <li>
             <a
               href="https://fastapi.tiangolo.com"
+              data-umami-event="outbound-acknowledgement"
+              data-umami-event-target="fastapi"
               className="text-primary underline-offset-4 hover:underline"
               target="_blank"
               rel="noopener noreferrer"
@@ -626,6 +653,8 @@ export function HomePageContent() {
           <li>
             <a
               href="https://github.com/jhlywa/chess.js"
+              data-umami-event="outbound-acknowledgement"
+              data-umami-event-target="chess-js"
               className="text-primary underline-offset-4 hover:underline"
               target="_blank"
               rel="noopener noreferrer"
@@ -637,6 +666,8 @@ export function HomePageContent() {
           <li>
             <a
               href="https://github.com/Clariity/react-chessboard"
+              data-umami-event="outbound-acknowledgement"
+              data-umami-event-target="react-chessboard"
               className="text-primary underline-offset-4 hover:underline"
               target="_blank"
               rel="noopener noreferrer"
@@ -648,6 +679,8 @@ export function HomePageContent() {
           <li>
             <a
               href="https://recharts.org"
+              data-umami-event="outbound-acknowledgement"
+              data-umami-event-target="recharts"
               className="text-primary underline-offset-4 hover:underline"
               target="_blank"
               rel="noopener noreferrer"
@@ -669,7 +702,10 @@ export function HomePageContent() {
             className="min-h-11 min-w-40"
             data-testid="footer-cta-signup"
           >
-            <Link to="/login?tab=register">
+            <Link
+              to="/login?tab=register"
+              onClick={() => trackEvent('signup-cta', { source: 'home-footer' })}
+            >
               <UserPlus className="mr-1.5 h-4 w-4" />
               Sign up free
             </Link>
