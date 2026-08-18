@@ -178,6 +178,44 @@ v2 may well conclude that both belong in the report, with the cross-rating claim
 equal-footing basis and the absolute-risk headline left on the unfiltered one. Decide from the
 diff, not in advance.
 
+## Implementation notes (from an aborted first build — read before writing the generator)
+
+**Do one `game_positions` scan, not twelve.** The coverage CTE (≥90% of plies evaled) over
+~190M position rows is the entire cost; every individual section query re-pays it, at 2–5 min
+each. Instead emit **one per-game fact row** (elo, tc, result, user_color, termination, both
+ratings, the four move-quality count columns, entry_abs/entry_sign, the raw middlegame-window
+aggregates, and the last evaluated ply) and compute the Game-sample table and Sections 1, 2, 4,
+5 plus the robustness split as pure Python aggregations over it. Only **Section 3** (blunder
+timing) needs per-ply evals and has to stay as its own SQL aggregate.
+
+**Do not apply equal-footing in SQL.** Return the cohort user's and opponent's rating per game
+and apply `abs(opp − user) <= 100` in Python. Then v1 and v2 come out of *identical code* and
+every v1↔v2 delta is attributable to the filter rather than to a re-derivation artifact — which
+matters because the whole deliverable is a comparison. It also halves the DB work vs two runs.
+
+**The two `sustained` definitions are not the same and must not be collapsed into one boolean.**
+This is the trap that killed the first attempt:
+
+- **Section 1** — `positions > 0 AND min_abs >= 200 AND min_sign = max_sign AND min_sign <> 0`.
+  No reference to the entry ply. The sustained side is `min_sign`.
+- **Section 2** — Section 1's condition **plus** `min_sign = entry_sign`, i.e. tied to the
+  initial leader.
+
+So the fact row must carry the raw `mg_positions` / `mg_min_abs` / `mg_min_sign` / `mg_max_sign`,
+not a pre-collapsed flag. Deriving Section 1 from a Section-2 flag is impossible: when the flag
+is false you cannot tell "not sustained" from "sustained for the other side". The populations
+almost coincide (v1 notes Section 2's sustained-win counts equal Section 1's leader-wins counts
+exactly), but the edge cases are real — a game whose first `phase > 0` ply has a **NULL** eval is
+excluded from Section 2 entirely while still being Section-1 sustained, because the mg window
+skips nulls whereas `first_mg` takes the entry ply as stored with no fallback.
+
+**Expect the cohort to shrink ~21%** (the share of benchmark games with a rating gap > 100).
+Re-check every sparse-cell footnote afterwards: v1 already flags 800 classical (n=884) and 2400
+classical (n=5,483), and both get materially thinner. The 2400 cell loses the most, since that
+is where the matchmaking gap is widest — n roughly halves in the leader-identity split
+(10,765 → 4,677 user-leads). Some v1 cells may drop below a usable floor and need a footnote
+rather than a percentage.
+
 ## Pointers
 
 - `stories/two-pawns-up/two-pawns-up-report.md` — Caveats bullet on the omitted filter (the
