@@ -358,6 +358,8 @@ Umami does **not** track outbound clicks automatically. Every `<a>` leaving flaw
 - **Many low-value links of one kind** (the Home acknowledgements list) share one event name plus a `data-umami-event-<prop>` attribute for the specific target, so the dashboard shows one row with a breakdown instead of a dozen near-zero rows.
 - Events land in the **app** Umami site (`0ca19960-…`, tag in `frontend/index.html`), separate from the stories site. Only fires on `flawchess.com` because of `data-domains`, so localhost clicks are never recorded.
 - Dynamically rendered links (game cards) work without extra wiring: the tracker observes DOM mutations and binds new elements.
+- **Never put `data-umami-event` on an internal react-router `<Link>`.** On an `<a href>` without `target="_blank"` the tracker calls `preventDefault()` and then assigns `location.href` itself, downgrading a client-side navigation into a full page reload. For internal links call `trackEvent()` from `frontend/src/lib/analytics.ts` in `onClick` instead; the attribute is only for `<button>` elements and outbound `target="_blank"` links.
+- Track only what the browser knows and the database cannot: signup-CTA attribution (`signup-cta` + `source`), guest starts, and the PWA install funnel. Signups, imports, and analysis runs already live in `users` / `import_jobs` and must not be duplicated as events.
 
 ### UI & Components
 

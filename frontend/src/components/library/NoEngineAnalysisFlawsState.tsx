@@ -47,6 +47,8 @@ export function NoEngineAnalysisFlawsState({ isGuest }: NoEngineAnalysisFlawsSta
           <Button
             variant="brand-outline"
             data-testid="btn-signup-for-analysis-flaws"
+            data-umami-event="signup-cta"
+            data-umami-event-source="flaws-no-analysis"
             aria-label="Sign up to unlock full-game analysis"
             onClick={() => navigate('/login?tab=register')}
           >

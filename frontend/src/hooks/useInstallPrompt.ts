@@ -9,6 +9,7 @@ import {
   resolveInstallOfferState,
 } from '@/lib/installCooldown';
 import { clearHandoffMarker, isHandoffActive } from '@/lib/handoffMarker';
+import { trackEvent } from '@/lib/analytics';
 
 // navigator.standalone is Apple-only (iOS Safari's home-screen-launch flag)
 // and is absent from lib.dom.d.ts — without this augmentation the hook
@@ -58,6 +59,13 @@ if (typeof window !== 'undefined') {
     e.preventDefault();
     setCapturedPromptEvent(e as BeforeInstallPromptEvent);
   });
+  // Completed installs are invisible everywhere else: no server call happens
+  // and nothing is written to the DB. Chromium-only — iOS Safari fires
+  // neither `beforeinstallprompt` nor `appinstalled`, so iOS installs are
+  // only ever visible as the offer-shown event plus later standalone visits.
+  window.addEventListener('appinstalled', () => {
+    trackEvent('pwa-installed');
+  });
 }
 
 /** Test-only: drops the module-level singleton so each vitest case starts
@@ -103,6 +111,7 @@ export function useInstallPrompt() {
     if (!promptEvent) return;
     await promptEvent.prompt();
     const { outcome } = await promptEvent.userChoice;
+    trackEvent('pwa-install-outcome', { outcome });
     if (outcome === 'accepted') {
       // The ONLY correct null site (INSTALL-04). Clears the SHARED module
       // state (not just this instance's local state) so every mounted

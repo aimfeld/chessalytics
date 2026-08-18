@@ -336,15 +336,31 @@ ELO gradient, the interaction (the two axes are not separable — the pooled ELO
 largely a TC-mix effect), and which cells clear a usable share. No recommendations block
 (nothing to calibrate).
 
-Also run the **outcome-selection check** and report it, because readers reliably misread a low
-share as "this cell is a biased slice". Compare the cohort user's win rate in analyzed vs
-unanalyzed games per TC (a `games`-only query on `COHORT_GAME_FILTER`, `ueag >= 800`, user_won
-from `user_color` + `result`). On the 2026-08-18 snapshot the Δ is bullet −0.4pp, rapid −0.8pp,
-blitz +2.3pp, classical **−9.7pp** — i.e. the *best*-covered TC is the most outcome-selected and
-the worst-covered is the least. State that coverage share and selection strength are close to
-independent, so the grid is a sample-size read, not a trustworthiness read. If a future snapshot
-flips this (e.g. bullet's Δ grows past a few points), that is a real finding and belongs in the
-report header, not just here.
+Also run the **outcome-selection check** and report it, because a share below 100% means someone
+chose these games and readers will ask whether the chosen ones differ in outcome. Two rules:
+
+1. **Do not claim who requested the analysis.** Lichess attaches analysis to the game, not to a
+   player; the export exposes only whether `%eval` annotations exist (`lichess_client.py`,
+   `"evals": True`) and no requester is recorded anywhere in the API or our schema. Only the
+   association between "analyzed" and the cohort user's result is measurable. Say "tilted toward
+   the user's losses", never "the loser requested it".
+2. **Use the paired within-(user, TC) estimator, never the pooled one.** Users differ enormously
+   in how much they analyze, so a pooled analyzed-vs-unanalyzed comparison partly compares
+   different users. On the 2026-08-18 snapshot the two estimators disagree in magnitude
+   everywhere and in **sign** for blitz (pooled +2.3pp vs paired −3.4pp) — a Simpson's paradox.
+   Compute per (user, TC) mean score (win + ½ draw, cohort-user POV) on analyzed vs unanalyzed
+   games, floor at ≥20 games of each, then average the per-user differences. Report the pooled
+   column only as a foil.
+
+Snapshot result (paired Δ, score): bullet −3.5pp, blitz −3.4pp, rapid −5.3pp, classical
+**−13.5pp**; 62–78% of individual users score worse in their own analyzed games. So the analyzed
+subset is loss-tilted in **every** TC — a low share does not mean a cell is unselected, and a
+high share does not mean it is clean (classical is both the best-covered and the most tilted).
+Narrate that no outcome rate computed on the analyzed subset is a population rate. Note the
+estimator's own scope limit (it excludes users at either coverage extreme) and that §5's basis is
+`evals_completed_at`, not full-game analysis, so this finding does not transfer to §5 unchecked.
+If a future snapshot changes the sign or collapses the classical gap, that belongs in the report
+header, not just here.
 
 #### Sparse-cell exclusion
 

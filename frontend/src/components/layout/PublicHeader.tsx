@@ -1,5 +1,6 @@
 import { Link } from 'react-router';
 import { Button } from '@/components/ui/button';
+import { trackEvent } from '@/lib/analytics';
 
 export function PublicHeader() {
   return (
@@ -25,7 +26,12 @@ export function PublicHeader() {
               <Link to="/login">Log in</Link>
             </Button>
             <Button size="sm" asChild data-testid="nav-signup">
-              <Link to="/login?tab=register">Sign up free</Link>
+              <Link
+                to="/login?tab=register"
+                onClick={() => trackEvent('signup-cta', { source: 'header' })}
+              >
+                Sign up free
+              </Link>
             </Button>
           </div>
         </div>

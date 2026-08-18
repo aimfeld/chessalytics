@@ -11,7 +11,7 @@
 - **Equal-footing filter (universal — all subchapters)**: `abs(opp_rating − user_rating) ≤ 100`, both ratings NOT NULL. Live UI uses unfiltered games; the gap above the equal-footing baseline is the intended skill signal.
 - **Conv/Parity/Recovery bucketing**: Stockfish eval at the first endgame ply (or first ply of each class span in 3.4.1). Mirrors `_classify_endgame_bucket` (`EVAL_ADVANTAGE_THRESHOLD = 100` cp; mate forces conv/recov; NULL → parity).
 - **Eval coverage**: **100.00%** at endgame entry (1,538,581 / 1,538,585 endgame-reaching games have non-NULL eval).
-- **Full-game analysis share (new, §1)**: **22.3%** of cohort games carry whole-game Lichess move-quality analysis (562,753 / 2,528,031). Strongly cell-dependent — 8.6% in bullet vs 51.8% in classical — and it is the per-cell sample ceiling for §5 and for any all-ply analysis built on this DB. Diagnostic only: no zone, no collapse verdict.
+- **Full-game analysis share (new, §1)**: **22.3%** of cohort games carry whole-game Lichess move-quality analysis (562,753 / 2,528,031). Strongly cell-dependent — 8.6% in bullet vs 51.8% in classical — and it is the per-cell sample ceiling for any all-ply analysis built on this DB. **The analyzed subset is loss-tilted in every TC** (paired within-user score Δ: bullet −3.5pp, blitz −3.4pp, rapid −5.3pp, classical −13.5pp), so no outcome rate computed on it is a population rate. Diagnostic only: no zone, no collapse verdict.
 - **Sparse-cell exclusion**: `(2400, classical)` (12 completed users, ~47 games, pool-exhausted) excluded from TC marginals, ELO marginals, pooled overall, and Cohen's d on both axes; kept in cell grids with `*` footnote.
 - **Deleted calibration targets** (retracted Phase 87.4): `endgame_skill` and `section2_score_gap_skill` composites — §3.2.1 / §3.2.2 report distributions for completeness only, no band.
 - **Verdict thresholds**: Cohen's d **< 0.2 collapse** / **0.2–0.5 review** / **≥ 0.5 keep separate** (per axis, independently).
@@ -132,22 +132,44 @@ monotone (27.1% → 77.7%). The pooled ELO gradient is therefore mostly a TC-mix
 12,666–17,180 analyzed games each off ~180k, so absolute volume is rarely the constraint.
 `(2400, classical)` has 473 analyzed games and stays excluded from marginals.
 
-**A low share is not evidence of selection bias — check the direction, not the size.** The
-obvious worry is that a 7%-covered cell is a heavily self-selected slice (people analyze the
-games they care about). Comparing the cohort user's win rate in analyzed vs unanalyzed games
-per TC says the opposite of the intuition:
+**The analyzed subset is tilted toward the cohort user's losses in every time control.**
+A share below 100% means someone chose these games, so the question is whether the chosen ones
+differ in outcome. Two limits on how far this can be answered:
 
-| TC | win% (analyzed) | win% (unanalyzed) | Δ |
-|---|---:|---:|---:|
-| bullet | 49.3% | 49.7% | −0.4pp |
-| blitz | 51.2% | 48.9% | +2.3pp |
-| rapid | 49.7% | 50.5% | −0.8pp |
-| classical | 45.2% | 55.0% | **−9.7pp** |
+- **Requester attribution is not available.** Lichess attaches analysis to the *game*, not to a
+  player — the export exposes only whether `%eval` annotations exist (`lichess_client.py`,
+  `"evals": True`), and neither the API nor our schema records who asked for it. So "the loser
+  requested it" is not something this data can confirm; only the association is measurable.
+- **The pooled comparison is confounded and must not be used.** Users differ enormously in how
+  much they analyze, so pooling compares partly different users. Paired within (user, TC) —
+  restricted to users with ≥20 analyzed and ≥20 unanalyzed games — gives a different and in one
+  case opposite answer. Score = win + ½ draw, from the cohort user's POV:
 
-Bullet, the worst-covered TC, is the *least* outcome-selected in the pool; classical, the
-best-covered, is by far the most (its analyzed games skew nearly 10pp toward losses). Coverage
-share and selection strength are close to independent here, so do not use the share grid as a
-proxy for trustworthiness — read it as sample size only.
+| TC | pooled Δ (confounded) | **paired Δ** | paired users | users scoring worse when analyzed |
+|---|---:|---:|---:|---:|
+| bullet | −0.4pp | **−3.5pp** | 959 | 62.4% |
+| blitz | **+2.3pp** | **−3.4pp** | 922 | 66.8% |
+| rapid | −0.8pp | **−5.3pp** | 923 | 65.8% |
+| classical | −9.7pp | **−13.5pp** | 485 | 78.4% |
+
+Blitz flips sign between the two estimators — a Simpson's paradox, and the reason the pooled
+row is shown only as a warning. On the paired estimator the effect is **negative in all four
+time controls**, and it is a majority-of-individuals effect, not a few outliers: 62–78% of users
+score worse in their own analyzed games than in their own unanalyzed ones.
+
+Reading: classical is the extreme (−13.5pp, and its 51.8% coverage means this tilt applies to
+half the cell), but no TC is exempt — bullet's low 8.6% share does not make it a clean random
+sample. The direction is consistent with cohort users requesting analysis after losses, which
+Stage-1 selection would amplify (the pool requires ≥10 eval-bearing games, i.e. it selects
+people who request analysis). But it is equally consistent with opponents requesting, or with
+longer/sharper games being both more analysis-worthy and more often lost. **Treat the analyzed
+subset as loss-tilted, and do not read any outcome-rate computed on it as a population rate.**
+
+Two scope notes. The paired estimator excludes users at either coverage extreme (485 of the
+classical cell's users qualify), so it describes users who analyze *some* of their games. And
+§5's flaw-delta zones are built on `evals_completed_at` (1,770,418 games) rather than full-game
+analysis (641,855), a much broader and differently-selected basis — this finding does not
+transfer to §5 without its own check.
 
 **The equal-footing filter does not distort availability.** Every level moves by less than 3pp
 and always in the same direction (analyzed games are marginally more often rating-mismatched).
