@@ -1,6 +1,7 @@
 # FlawChess Benchmarks — 2026-06-10
 
 - **DB**: benchmark (Docker on localhost:5433, flawchess_benchmark)
+- **Benchmark DB dump**: https://drive.google.com/file/d/1JWGPIvjAPIXsRowOy4IaHcDwSngnjxcC/view?usp=sharing
 - **Snapshot taken**: 2026-06-10 (benchmark DB unchanged since 2026-03 ingest; re-run of §1–§3 confirms every constant; §5 flaw-delta zones added in this snapshot)
 - **Population**: 4,697 users / 2,767,158 games / 190,934,222 positions (candidate pool: 9,523 selected-user rows)
 - **Generator**: `scripts/gen_benchmarks.py --db benchmark` (deterministic; numeric tables spliced from `benchmarks-generated.md`, verdict words + recommendations authored here)
