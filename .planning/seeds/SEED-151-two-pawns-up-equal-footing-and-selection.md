@@ -86,7 +86,27 @@ investigating:
 (≥10 eval-bearing games at Stage 1); their opponents are not. If blown-win regret drives cohort
 entry, the benchmark user's blown leads should be over-represented.
 
-Entry-lead games (≥200 cp at MG entry), **with equal-footing applied**:
+Entry-lead games (≥200 cp at MG entry). **Both bases must appear in v2** — the contrast between
+them is the finding, not a footnote.
+
+**(a) v1 basis — no equal-footing filter:**
+
+| Rating | user leads (n) | opp leads (n) | user-leader loses | opp-leader loses | Δ |
+|---|---:|---:|---:|---:|---:|
+| 800 | 4,602 | 5,072 | 30.27% | 24.61% | **+5.7** |
+| 1200 | 14,412 | 14,956 | 29.31% | 24.78% | **+4.5** |
+| 1600 | 15,899 | 14,987 | 25.12% | 24.31% | +0.8 |
+| 2000 | 13,756 | 10,950 | 19.87% | 23.14% | −3.3 |
+| 2400 | 10,765 | 7,184 | 14.32% | 24.62% | **−10.3** |
+| all | 59,434 | 53,149 | 23.36% | 24.27% | −0.9 |
+
+The opponent column is nearly **flat** (~24% at every rating) while the user column falls
+steeply, 30.27% → 14.32%. Under the null — cohort user and opponent equally strong — the two
+columns should be equal in every bucket and should share whatever rating gradient exists. They
+don't, and the divergence is monotone in rating, which is the signature of the matchmaking gap
+(+45.4 Elo at 800 → −171.8 Elo at 2400), not of chess skill.
+
+**(b) equal-footing basis:**
 
 | Rating | user leads (n) | opp leads (n) | user-leader loses | opp-leader loses | Δ |
 |---|---:|---:|---:|---:|---:|
@@ -97,10 +117,15 @@ Entry-lead games (≥200 cp at MG entry), **with equal-footing applied**:
 | 2400 | 4,677 | 4,527 | 20.63% | 23.11% | −2.5 |
 | all | 42,121 | 39,902 | 25.69% | 24.81% | +0.9 |
 
-Without equal-footing the same split reads +5.7 / +4.5 / +0.8 / −3.3 / **−10.3**, i.e. most of
-the high-rating asymmetry was matchmaking, not selection. **Do not read the pooled row** — it is
-a cancellation of opposite-signed buckets (the same Simpson's trap that broke the first version
-of the §1 narration).
+Controlling for opponent strength collapses the high-rating asymmetry (2400: −10.3pp → −2.5pp;
+the user-leader rate itself moves 14.32% → 20.63%) while leaving the low-rating one almost
+untouched (800: +5.7 → +5.3). So **most of the high-rating effect was matchmaking; the
+low-rating effect is not.**
+
+**Do not read either pooled row** — both are cancellations of opposite-signed buckets (−0.9pp
+and +0.9pp respectively, from components spanning +5.7 to −10.3). This is the same Simpson's
+trap that broke the first version of the §1 narration; v2 must present the per-rating split and
+may show the pooled row only as an explicit warning.
 
 Residual after the matchmaking control: at 800/1200 the benchmark user blows leads 4–5pp more
 often than equally-rated opponents in the same games. That is the direction blown-win selection
@@ -120,8 +145,20 @@ as a limit; do not claim the cohort is unbiased.
    CTE. Same section structure, same definitions, so v1 and v2 are diffable table-for-table.
    Expect the analyzed cohort to drop ~21% and every cell's n to shrink; re-check the sparse-cell
    footnotes (800 classical and 2400 classical get thinner).
-2. **A robustness section in v2** carrying Problem 2: the attribution limit, the paired loss-tilt
-   result, the leader-identity split (both bases), and the untestable residual.
+2. **A robustness section in v2** carrying Problem 2, as a first-class section rather than a
+   caveat bullet. It must contain, in this order:
+   - the requester-attribution limit (what cannot be established at all);
+   - the paired within-user loss-tilt result, with the note that a general loss tilt does not by
+     itself inflate "leader loses";
+   - **the leader-identity split on BOTH bases — table (a) and table (b) above, side by side** —
+     since the v1→equal-footing contrast is what separates the matchmaking artifact from the
+     residual selection signal. Include the per-bucket mean (opponent − user) Elo column so the
+     mechanism is visible in the same view;
+   - the residual reading: +4–5pp at 800/1200 survives the matchmaking control and is not
+     explained by strength (cohort scores ≈0.504–0.508 at 800–1600 under game-time bucketing);
+     nothing detectable at 1600+;
+   - the untestable residual (symmetric big-swing selection), stated as a limit, with no claim
+     that the cohort is unbiased.
 3. **A v1-vs-v2 comparison** — per-rating and per-TC deltas for the Section 2 four-way split and
    the Section 5 board/clock split — then a decision on whether
    `stories/two-pawns-up/index.html` needs updating. It currently quotes **18.4% / 21.3% /
