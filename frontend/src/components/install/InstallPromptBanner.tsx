@@ -1,3 +1,4 @@
+import { useEffect, useRef } from 'react';
 import { Share, X } from 'lucide-react';
 import { useLocation } from 'react-router';
 import { Button } from '@/components/ui/button';
@@ -7,6 +8,7 @@ import {
 } from '@/components/ui/drawer';
 import { useInstallPrompt } from '@/hooks/useInstallPrompt';
 import { isHandoffActive } from '@/lib/handoffMarker';
+import { trackEvent } from '@/lib/analytics';
 
 export function InstallPromptBanner() {
   const { showAndroidPrompt, showIOSBanner, triggerInstall, dismissAndroid, dismissIOS } = useInstallPrompt();
@@ -20,6 +22,24 @@ export function InstallPromptBanner() {
   // handoff QR overrides this suppression for that one load — the marker is
   // an explicit "I came here to install" signal.
   const suppressedOnTrainRoute = location.pathname.startsWith('/train') && !isHandoffActive();
+
+  // Analytics denominator for the install funnel: how often an offer is
+  // actually shown, against `pwa-install-outcome` / `pwa-installed`. Fires at
+  // most once per platform per page load, and must sit ABOVE the early return
+  // below so the hook order stays unconditional.
+  const offerTracked = useRef({ android: false, ios: false });
+  useEffect(() => {
+    if (suppressedOnTrainRoute) return;
+    if (showAndroidPrompt && !offerTracked.current.android) {
+      offerTracked.current.android = true;
+      trackEvent('pwa-install-offer-shown', { platform: 'android' });
+    }
+    if (showIOSBanner && !offerTracked.current.ios) {
+      offerTracked.current.ios = true;
+      trackEvent('pwa-install-offer-shown', { platform: 'ios' });
+    }
+  }, [showAndroidPrompt, showIOSBanner, suppressedOnTrainRoute]);
+
   if (suppressedOnTrainRoute) {
     return null;
   }

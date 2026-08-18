@@ -17,6 +17,7 @@ import {
 } from '@/components/ui/form-card';
 import { apiClient } from '@/api/client';
 import { getGoogleAuthorizationUrl } from '@/api/googleAuth';
+import { trackEvent } from '@/lib/analytics';
 
 export function LoginForm() {
   const { login } = useAuth();
@@ -147,7 +148,11 @@ export function LoginForm() {
         </p>
         <p className="mt-4 text-center text-sm text-muted-foreground">
           Don&apos;t have an account?{' '}
-          <Link to="/login?tab=register" className="underline underline-offset-4 hover:text-primary">
+          <Link
+            to="/login?tab=register"
+            className="underline underline-offset-4 hover:text-primary"
+            onClick={() => trackEvent('signup-cta', { source: 'login-form' })}
+          >
             Create one
           </Link>
         </p>

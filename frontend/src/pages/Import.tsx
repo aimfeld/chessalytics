@@ -397,6 +397,8 @@ export function ImportPage({ onImportStarted, activeJobIds, onJobDismissed }: Im
               onClick={() => { logoutForPromotion(); window.location.href = '/login?tab=register'; }}
               className="font-medium underline underline-offset-2"
               data-testid="import-guest-promo-link"
+              data-umami-event="signup-cta"
+              data-umami-event-source="import-promo"
             >
               Sign up free
             </button>{' '}

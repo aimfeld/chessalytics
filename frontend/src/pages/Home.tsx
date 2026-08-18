@@ -17,6 +17,7 @@ import {
 } from '@/components/ui/accordion';
 import { cn } from '@/lib/utils';
 import { FLAWCHESS_ENGINE_ACCENT } from '@/lib/theme';
+import { trackEvent } from '@/lib/analytics';
 import { Search, Scale, Dumbbell, TrophyIcon, Timer, Compass, Loader2, UserPlus, DoorOpen, ChessKnight } from 'lucide-react';
 import type { LucideIcon } from 'lucide-react';
 
@@ -339,7 +340,10 @@ export function HomePageContent() {
                 className="min-h-11 min-w-40"
                 data-testid="hero-cta-signup"
               >
-                <Link to="/login?tab=register">
+                <Link
+                  to="/login?tab=register"
+                  onClick={() => trackEvent('signup-cta', { source: 'hero' })}
+                >
                   <UserPlus className="mr-1.5 h-4 w-4" />
                   Sign up free
                 </Link>
@@ -349,6 +353,7 @@ export function HomePageContent() {
                 variant="brand-outline"
                 className="min-h-11 min-w-40"
                 data-testid="btn-guest"
+                data-umami-event="guest-start"
                 onClick={handleGuestLogin}
                 disabled={isLoading}
               >
@@ -697,7 +702,10 @@ export function HomePageContent() {
             className="min-h-11 min-w-40"
             data-testid="footer-cta-signup"
           >
-            <Link to="/login?tab=register">
+            <Link
+              to="/login?tab=register"
+              onClick={() => trackEvent('signup-cta', { source: 'home-footer' })}
+            >
               <UserPlus className="mr-1.5 h-4 w-4" />
               Sign up free
             </Link>
