@@ -7,7 +7,7 @@ The blog is named **Chess Data Stories** (not "FlawChess Data Stories"): use tha
 ## Structure
 
 - One directory per story: `stories/<slug>/index.html` (kebab-case slug = URL). Self-contained pages: inline CSS/JS, vanilla SVG charts, no CDNs or JS libraries. The only allowed external resources are Google Fonts (Fredoka, for the brand label) and the Umami analytics tag (below).
-- **Co-locate the technical report**: the report a story summarizes lives next to it as `stories/<slug>/<slug>-report.md` (short name, e.g. `two-pawns-up-report.md`), not under `reports/`. The story footer links to it via its GitHub blob URL.
+- **Co-locate the technical report**: the report a story summarizes lives next to it as `stories/<slug>/<slug>-report.md` (short name, e.g. `two-pawns-up-report-latest.md`), not under `reports/`. The story footer links to it via its GitHub blob URL.
 - Add a card for every new story to `stories/index.html`, including its publication date.
 
 ## SEO & sharing (required for every story)

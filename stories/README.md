@@ -23,7 +23,7 @@ stories/
   two-pawns-up/       # one directory per story -> flawchess.github.io/flawchess/two-pawns-up/
     index.html        # self-contained page: inline CSS/JS, vanilla SVG charts, no CDNs
     social-card.png   # 1200x630 Open Graph image for this story
-    two-pawns-up-report.md  # the technical report the story summarizes
+    two-pawns-up-report-latest.md  # the technical report the story summarizes
 ```
 
 ## Adding a story

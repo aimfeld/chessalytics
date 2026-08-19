@@ -4,13 +4,13 @@
 **Source:** Lichess games imported from the curated benchmark pool (players sampled across rating buckets and time controls). Engine evals come from Lichess server-side analysis; only games with ≥ 90% per-ply eval coverage are included.
 **Scope:** blitz, rapid, classical only (bullet excluded — Lichess almost never attaches analysis to bullet games). **Rated, human-vs-human games between roughly equally rated players**: unrated games, games against a bot, games missing either player's rating, and games with a rating gap above 100 points are excluded — the full `BASE_GAME_FILTER` of `scripts/benchmarks/sql.py`, including the equal-footing opponent filter that the v1 report deliberately omitted.
 
-This is the **equal-footing re-run** of `two-pawns-up-report.md` (v1, 2026-08-15). Every query in Sections 1–5 is identical to v1 except for one added cohort condition, applied in Python over the same per-game fact rows (see Reproducibility), so every v1↔v2 difference is attributable to the filter alone:
+This is the **equal-footing re-run** of `two-pawns-up-report-v1.md` (v1, 2026-08-15). Every query in Sections 1–5 is identical to v1 except for one added cohort condition, applied in Python over the same per-game fact rows (see Reproducibility), so every v1↔v2 difference is attributable to the filter alone:
 
 > both ratings present AND `abs(user_rating − opp_rating) ≤ 100` (ratings at game time)
 
-Why this exists: v1's Caveats defended the omission with "rating matching is close without one: median gap 43 points". That pooled figure hides a monotone per-bucket bias — in the analyzed cohort the mean (opponent − user) rating gap runs from **+47 at 800 to −83 at 2400** (Section 6), so v1's cross-rating comparisons measured weak players against stronger opposition and experts against weaker opposition, in exactly the direction that flattered the headline gradient. v2 removes that confound. The table-for-table comparison and the verdict on which basis answers which question live in `two-pawns-up-v1-v2-comparison.md`.
+Why this exists: v1's Caveats defended the omission with "rating matching is close without one: median gap 43 points". That pooled figure hides a monotone per-bucket bias — in the analyzed cohort the mean (opponent − user) rating gap runs from **+47 at 800 to −83 at 2400** (see `two-pawns-up-v1-v2-comparison.md` §1), so v1's cross-rating comparisons measured weak players against stronger opposition and experts against weaker opposition, in exactly the direction that flattered the headline gradient. v2 removes that confound. The table-for-table comparison and the verdict on which basis answers which question live in `two-pawns-up-v1-v2-comparison.md`.
 
-The filter costs 28.5% of the cohort (460,604 → 329,518 analyzed games; the loss is worst at 2400, −40%, where the matchmaking gap is widest). New in v2: **Section 6** promotes the analysis-request selection question from a caveat bullet to a first-class robustness analysis.
+The filter costs 28.5% of the cohort (460,604 → 329,518 analyzed games; the loss is worst at 2400, −40%, where the matchmaking gap is widest). New in v2: **Section 6** promotes the analysis-request selection question from a caveat bullet to a direct measurement on FlawChess production data.
 
 ---
 
@@ -220,7 +220,7 @@ The within-band gradient survives equal footing but is shallower than v1's (+2.0
 | +5.0 to +10.0 | 19.5% | 16.6% | 13.2% |  9.1% |  **6.4%** |
 | *aggregate (Section 2)* | *27.9%* | *27.9%* | *25.2%* | *22.6%* | *21.8%* |
 
-The rating effect on upsets survives lead-size control in every band, but shrinks: in the bottom band the 800→2400 drop is now 7.4pp (v1: 10.7pp), and the top of the table flattens — 800 and 1200 are again statistically inseparable (34.5% vs 37.2%, with 1200 nominally *worse*). Section 6 adds a further caveat on reading even these controlled gradients: the benchmark-user side of the cohort carries a rating-dependent selection tilt that equal footing does not remove.
+The rating effect on upsets survives lead-size control in every band, but shrinks: in the bottom band the 800→2400 drop is now 7.4pp (v1: 10.7pp), and the top of the table flattens — 800 and 1200 are again statistically inseparable (34.5% vs 37.2%, with 1200 nominally *worse*). Section 6 adds a caveat on reading even these controlled gradients: analysis-request selection tilts side-specific rates by ~±5pp in the one population where it could be measured, so a few points of any cross-rating gradient may be selection, not skill.
 
 ## Section 5 — How the upsets happen: board vs clock
 
@@ -284,55 +284,31 @@ v1's three conclusions all survive, one of them sharpened:
 2. **Blitz vs rapid still does not survive below 2400** — within ~1pp at every rating below 2400 on the board-only measure.
 3. **At 2400 a genuine board effect remains on top of the clock effect** (19.2% vs 13.6%), though the classical anchor is now a 140-game cell — treat the size, not the existence, of that gap as uncertain.
 
-## Section 6 — Robustness: analysis-request selection
+## Section 6 — Robustness: does "the loser requested the analysis" bias these numbers?
 
-Cohort entry requires that *someone* requested a Lichess server analysis for the game. This section states what that selection can and cannot do to the numbers above, in order of what is established.
+Every game here is in the data because someone requested a Lichess server analysis for it, and Lichess records only that `%eval` annotations exist, not who asked. The objection this invites: players who realize they threw away a winning position may be especially likely to request analysis, which would over-sample blown leads and inflate every "leader loses" number in this report.
 
-### 6.1 Requester attribution is unavailable
+Unlike the benchmark database, the FlawChess production database can measure this directly. Its pipeline runs Stockfish over **every** imported game of a registered user, so games *without* a Lichess analysis still carry per-ply evals and an identifiable entry lead — the counterfactual this cohort lacks. For the same player, entry-lead outcomes can then be compared between their Lichess-analyzed games and the games no one sent to analysis.
 
-Lichess attaches analysis to the *game*, not to a player. The export exposes only whether `%eval` annotations exist (`lichess_client.py`, `"evals": True`); neither the API nor our schema records who asked. Any statement of the form "the loser requested the analysis" is unverifiable in this data — only associations are measurable.
+**Setup** (`stories/two-pawns-up/prod_selection_bias.py`): prod Lichess games of non-guest accounts under this report's cohort rules (rated, human, equal footing, ≥ 90% eval coverage, same rating buckets), blitz + rapid only (prod classical is ~1.2k games). Chess.com imports are excluded: their analysis status on chess.com is unknowable from our data, and the selection under test — presence of a *Lichess* server analysis — is lichess-specific anyway. Game-level semantics (entry ply, entry lead, leader identity, outcome) are imported from `gen_report_v2.Fact`, so they match this report by construction. Cohort: **95,679 games from 98 accounts** — 26,249 with a Lichess analysis, 69,430 without. With so few accounts and heavy concentration, every headline number is a user-stratified paired delta (MH weights over accounts with games in both arms) with a 95% cluster-bootstrap CI resampling accounts; pooled rates are context only.
 
-### 6.2 The analyzed subset is loss-tilted — but that alone does not fake the headline
+| Metric | Lichess-analyzed | not analyzed | stratified Δ (analyzed − not) | 95% CI (pp) | accounts |
+|---|---:|---:|---:|---:|---:|
+| user score, all games | 54.9% (n=26,249) | 49.8% (n=69,430) | +6.1pp | [+0.5, +11.8] | 93 |
+| entry-lead prevalence | 28.6% | 25.6% | +2.6pp | [+1.3, +3.8] | 93 |
+| leader loses, user leads | 24.0% (n=4,669) | 28.6% (n=10,322) | **−5.4pp** | [−9.9, −0.4] | 78 |
+| leader loses, opponent leads | 30.6% (n=2,834) | 26.0% (n=7,483) | **+5.7pp** | [+1.0, +10.3] | 83 |
+| leader loses, either leads | 26.5% (n=7,503) | 27.5% (n=17,805) | **−1.0pp** | [−3.1, +1.0] | 88 |
 
-From `reports/benchmark/benchmarks-latest.md` §1: pairing each user's analyzed vs unanalyzed games within (user, TC) — users with ≥ 20 of each — the cohort user scores worse in their analyzed games in every time control: bullet **−3.5pp**, blitz **−3.4pp**, rapid **−5.3pp**, classical **−13.5pp** (score = win + ½ draw), with 62–78% of individual users affected. The paired estimator is the only valid one here; the pooled version is confounded by between-user composition and flips sign for blitz.
+The deltas are stable when the entry-lead threshold is moved to 180 or 220 cp (every Δ within 0.3pp), so they are not an artifact of the two arms' different eval sources (Lichess's Stockfish vs ours), and excluding the one internal account barely moves them (−5.5 / +6.2 / −0.9).
 
-A general loss tilt does **not** by itself inflate the *symmetric* "leader loses" rates of Sections 2–5: it over-samples both games the user lost while leading (inflating "leader loses") and games the user lost while trailing (inflating "leader wins" from the opponent's side). Only selection specifically on blown wins — or, as it turns out below, the user-side asymmetry the tilt creates — biases particular readings.
+**Findings.**
 
-### 6.3 The leader-identity split: v1 basis vs equal footing
+- **Selection is real but side-specific — and here it runs toward the user's wins**, not their losses (score +6.1pp in analyzed games): Lichess-analyzed games under-represent the user's blown leads (−5.4pp) and over-represent the opponent's (+5.7pp).
+- **The two tilts cancel almost exactly in the statistic this report is built on**: the both-sides "leader loses" rate differs by **−1.0pp [−3.1, +1.0]** between analyzed and never-analyzed games. In the never-analyzed games an entry leader loses **27.5%** of the time — slightly *above* the analyzed 26.5% and in line with this report's 25.3%. The objection's direction (selection inflates blown-lead rates) is not supported.
+- **Swing-selection exists and is small**: analysis-bearing games are +2.6pp more likely to contain an entry lead at all. Selection shifts which games get analyzed far more than how the analyzed ones end.
 
-Benchmark users are selected for requesting analysis (Stage 1 requires ≥ 10 eval-bearing games); their opponents are not. Splitting entry-lead games by *whose* lead it was separates two stories: under the null (both sides equally strong, no user-specific selection) the two columns should match within every bucket.
-
-**(a) v1 basis — no equal-footing filter:**
-
-| Rating | mean (opp − user) Elo | user score | user leads (n) | opp leads (n) | user-leader loses | opp-leader loses | Δ |
-|---|---:|---:|---:|---:|---:|---:|---:|
-| 800 | +46.6 | 0.458 | 4,602 | 5,072 | 30.27% | 24.61% | **+5.7** |
-| 1200 | +14.1 | 0.477 | 14,412 | 14,956 | 29.31% | 24.78% | **+4.5** |
-| 1600 | +5.0 | 0.496 | 15,899 | 14,987 | 25.12% | 24.31% | +0.8 |
-| 2000 | −27.0 | 0.524 | 13,756 | 10,950 | 19.87% | 23.14% | −3.3 |
-| 2400 | −82.9 | 0.567 | 10,765 | 7,184 | 14.32% | 24.62% | **−10.3** |
-
-**(b) equal-footing basis (v2):**
-
-| Rating | mean (opp − user) Elo | user score | user leads (n) | opp leads (n) | user-leader loses | opp-leader loses | Δ |
-|---|---:|---:|---:|---:|---:|---:|---:|
-| 800 | +5.4 | 0.466 | 3,470 | 3,528 | 30.55% | 25.23% | **+5.3** |
-| 1200 | +1.1 | 0.484 | 11,710 | 11,680 | 29.74% | 26.04% | **+3.7** |
-| 1600 | +0.0 | 0.502 | 12,980 | 11,982 | 25.43% | 24.94% | +0.5 |
-| 2000 | −3.5 | 0.515 | 9,284 | 8,185 | 21.68% | 23.62% | −1.9 |
-| 2400 | −9.8 | 0.520 | 4,677 | 4,527 | 20.63% | 23.11% | −2.5 |
-
-"user score" = the cohort user's score over **all** of that basis' analyzed-cohort games in the bucket (win + ½ draw). Do not read a pooled row for either table — the buckets carry opposite signs and any pooled Δ is a Simpson's cancellation (v1: −0.9pp, v2: +0.9pp, both meaningless).
-
-**What (a) → (b) establishes.** In (a) the opponent column is nearly flat (~24%) while the user column falls 30.3% → 14.3%, and the divergence is monotone in the matchmaking gap. Equal footing collapses the high-rating asymmetry (2400: −10.3 → −2.5; the user-leader rate itself moves 14.32% → 20.63%) while leaving the low-rating one nearly intact (800: +5.7 → +5.3). **Most of v1's high-rating asymmetry was matchmaking.**
-
-**What the residual is — and what it is not.** After the matchmaking control, a residual asymmetry remains: at 800/1200 the benchmark user blows leads 4–5pp more often than their equally rated opponents in the very same games; at 2000/2400 the sign reverses (−1.9/−2.5pp). Note the user-score column: even against equally rated opponents, the cohort user scores **0.466 at 800 and 0.484 at 1200** (below parity), rising to **0.515–0.520 at 2000/2400** (above parity). The residual Δ tracks this score tilt bucket for bucket. That is exactly the footprint the loss tilt of 6.2 leaves on a *user-sided* statistic: analysis requests over-sample the user's losses at low ratings (blown leads included) and, at high ratings, apparently their wins. So the residual cannot be cleanly attributed to blown-win-specific selection ("tilt regret"); a generic user-side loss tilt of the observed size produces the same signature. What is established is narrower but still important: **the user-side columns of this cohort carry a rating-dependent selection tilt that the equal-footing filter does not remove** — roughly +4–5pp on the user's leader-loses at 800/1200 and roughly −2pp at 2400, relative to the non-selected opponent side.
-
-**A selection-resistant reading.** The opponent-leader column is the closest thing this data has to an unselected estimate of "how often does an entry lead get blown between equals": it sits between **23.1% and 26.0% at every rating** on the equal-footing basis. Read that way, the true cross-rating gradient in holding an entry lead (lead-size mix aside) is far shallower than either headline column suggests — about 2–3pp from 800 to 2400, not v1's 8.9pp — with the caveat that the opponent side is still subject to the symmetric selection below and conditions on the benchmark user being the one behind.
-
-### 6.4 What stays untestable
-
-If big-swing games attract analysis regardless of *who* blew the lead, "leader loses" is inflated symmetrically on both sides and the leader-identity test is blind to it. Unanalyzed games have no evals, so an entry lead cannot even be identified in them; there is no within-data check. This cohort is selected on someone finding the game worth engine analysis, and no claim in this report should be read as describing an unselected population of Lichess games.
+**Limits.** This is a different population — ~100 FlawChess accounts (mass at 1400–2200) rather than the curated benchmark pool, whose users are *selected for* being heavy analysis requesters, so the sign of the side tilt need not transfer. Per-bucket deltas are noisy (8–50 contributing accounts) and show no clean rating gradient, so cross-rating comparisons built on user-sided statistics should still be read with care. `lichess_evals_at` reflects analysis present at import time; games analyzed on Lichess later are mislabeled "not analyzed", which dilutes every contrast toward zero but cannot flip a sign. What transfers is the mechanism: **a request-side tilt, whatever its direction, largely cancels in the symmetric headline statistic — and the one direct measurement of that statistic's bias is about a point.**
 
 ## Method
 
@@ -348,11 +324,11 @@ Identical to v1 except for the added equal-footing condition:
 
 ## Caveats
 
-- **The v1 caveat defending the missing equal-footing filter is retired.** "Median gap 43 points" was a pooled figure; the per-bucket mean gap runs +47 (800) to −83 (2400) in the analyzed cohort, and Section 6.3 shows it moved v1's cross-rating numbers materially (2400 user-leader loses: 14.3% → 20.6%).
-- **The equal-footing filter controls opponent strength, not selection.** Section 6.3's user-score column shows the benchmark-user side still carries a rating-dependent analysis-selection tilt (score 0.466–0.520 across buckets against equally rated opposition). Cross-rating comparisons built on user-sided statistics remain tilted by roughly the amounts given there.
+- **The v1 caveat defending the missing equal-footing filter is retired.** "Median gap 43 points" was a pooled figure; the per-bucket mean gap runs +47 (800) to −83 (2400) in the analyzed cohort, and the v1↔v2 deltas (`two-pawns-up-v1-v2-comparison.md`) show it moved v1's cross-rating numbers materially (2400 leader-loses: 18.4% → 21.8%).
+- **The equal-footing filter controls opponent strength, not selection.** Section 6 measures the selection directly on production data: side-specific rates tilt by ~±5pp, the combined "leader loses" rate by −1.0pp [−3.1, +1.0].
 - Sparse cells: **800 classical (315 games / 208 entry-lead)** and **2400 classical (1,674 / 140)** are quoted for completeness only. The 2400 classical board-effect size in Section 5 inherits this uncertainty.
 - The sustained condition remains strict per-move: a single transient dip below +200 cp reclassifies a Section 2 game from "sustained win" to "win, not sustained".
-- Lichess analysis coverage skews toward longer TCs and higher ratings; the cohort is not a uniform sample of Lichess games, and it is additionally selected on someone requesting analysis (Section 6).
+- Lichess analysis coverage skews toward longer TCs and higher ratings; the cohort is not a uniform sample of Lichess games, and it is additionally selected on someone requesting analysis. Section 6 measures that selection's effect on the headline statistic directly (on FlawChess production data, a different population): −1.0pp [−3.1, +1.0].
 - **The ≥ 200 cp cohort is heterogeneous** (Section 4): median entry lead +358 cp; any "with a two-pawn lead, X happens" statement describes the mixture, not a two-pawn lead.
 - **"Leader loses" is not the same as "failed to convert"** (Section 5): 16.2% of upsets are clock forfeits, and in ~40% of those the leader was still ≥ +200 cp on the final evaluated move.
 - Section 5's board/clock split relies on `games.termination` as normalised at import; `abandoned` is reported separately from `timeout` because its semantics differ by platform export.
@@ -362,8 +338,10 @@ Identical to v1 except for the added equal-footing condition:
 
 This report is generated by **`stories/two-pawns-up/gen_report_v2.py`** (`uv run python stories/two-pawns-up/gen_report_v2.py`, benchmark DB via `bin/benchmark_db.sh start`). Design, per the SEED-151 implementation notes:
 
-- **One `game_positions` pass.** A single fact query computes per-game coverage, ply bounds, and the raw middlegame-window aggregates (`mg_positions` / `mg_min_abs` / `mg_min_sign` / `mg_max_sign`) in one grouped scan, plus two indexed point-joins for the entry-ply and last-evaled-ply evals. Sections 1, 2, 4, 5 and the Section 6 split are pure Python aggregations over the resulting 460,604 fact rows. Only Section 3 (per-ply blunder recomputation) issues a second `game_positions` query, fed the 112,583 entry-lead game ids.
+- **One `game_positions` pass.** A single fact query computes per-game coverage, ply bounds, and the raw middlegame-window aggregates (`mg_positions` / `mg_min_abs` / `mg_min_sign` / `mg_max_sign`) in one grouped scan, plus two indexed point-joins for the entry-ply and last-evaled-ply evals. Sections 1, 2, 4 and 5 are pure Python aggregations over the resulting 460,604 fact rows. Only Section 3 (per-ply blunder recomputation) issues a second `game_positions` query, fed the 112,583 entry-lead game ids.
 - **The equal-footing filter is applied in Python, not SQL.** Both bases come out of identical code over identical fact rows, so every v1↔v2 delta is attributable to the filter.
 - **Replication gate.** Before emitting anything, the script recomputes the v1 basis and asserts it against hard-coded anchors from the published v1 report (game-sample counts, Section 1 sustained counts, Section 2 totals, Section 5 flag counts, plus tolerance checks on Sections 1/3 rates); any mismatch aborts. The gate passed on 2026-08-19; the single discrepancy found en route is the Section 5 "≥ 0" erratum documented above.
 
 The v1 report's inline SQL remains the reference for the underlying definitions; the fact query mirrors it CTE for CTE.
+
+Section 6 is generated by the companion script **`stories/two-pawns-up/prod_selection_bias.py`** (`uv run python stories/two-pawns-up/prod_selection_bias.py`, prod DB via `bin/prod_db_tunnel.sh`), which imports `gen_report_v2.Fact` so the game-level semantics cannot drift from this report's.

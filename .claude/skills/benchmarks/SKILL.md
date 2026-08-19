@@ -274,7 +274,7 @@ so there is no provenance split to report (re-check with a `white_blunders IS NO
 lichess_evals_at IS NULL` count if a future ingest ever runs our own full-ply drain here).
 
 **Why not the ≥90%-of-plies-have-an-eval ratio** used by `reports/benchmark/benchmark-eval-coverage-*.md`
-and `stories/two-pawns-up/two-pawns-up-report.md`: it needs a `game_positions` aggregation over
+and `stories/two-pawns-up/two-pawns-up-report-latest.md`: it needs a `game_positions` aggregation over
 ~190M rows, and it agrees with the cheap predicate to within 0.05pp of cohort. Measured on this
 cohort (2026-08-18): 563,226 games by `is_analyzed` vs 561,950 by ≥90% coverage — 1,276 games
 (0.23%) are flagged analyzed with sparser per-ply coverage, and **zero** games clear 90%

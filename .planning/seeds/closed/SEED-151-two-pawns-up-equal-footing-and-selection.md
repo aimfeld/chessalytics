@@ -20,7 +20,7 @@ supersedes: nothing — v1 stays in place as the unfiltered basis until the comp
 
 ## Problem 1 — no equal-footing filter, and the matchmaking gap is rating-dependent
 
-`stories/two-pawns-up/two-pawns-up-report.md` applies only the **cohort half** of
+`../../../stories/two-pawns-up/two-pawns-up-report-v1.md` applies only the **cohort half** of
 `BASE_GAME_FILTER` (`g.rated AND NOT g.is_computer_game`). It states this deliberately in its
 Caveats:
 
@@ -140,7 +140,7 @@ as a limit; do not claim the cohort is unbiased.
 
 ## Deliverable
 
-1. **`stories/two-pawns-up/two-pawns-up-report-v2.md`** — every query in Sections 1–5 re-run with
+1. **`../../../stories/two-pawns-up/two-pawns-up-report-latest.md`** — every query in Sections 1–5 re-run with
    the equal-footing filter (`abs(opp − user) ≤ 100`, both ratings NOT NULL) added to the cohort
    CTE. Same section structure, same definitions, so v1 and v2 are diffable table-for-table.
    Expect the analyzed cohort to drop ~21% and every cell's n to shrink; re-check the sparse-cell
@@ -218,7 +218,7 @@ rather than a percentage.
 
 ## Pointers
 
-- `stories/two-pawns-up/two-pawns-up-report.md` — Caveats bullet on the omitted filter (the
+- `../../../stories/two-pawns-up/two-pawns-up-report-v1.md` — Caveats bullet on the omitted filter (the
   claim to retire), Method, and the Reproducibility SQL that v2 forks from
 - `scripts/benchmarks/sql.py` — `EQUAL_FOOTING_FILTER`, `EQUAL_FOOTING_PREDICATE`,
   `COHORT_GAME_FILTER`, `BASE_GAME_FILTER` (refactored 2026-08-18, byte-identical)

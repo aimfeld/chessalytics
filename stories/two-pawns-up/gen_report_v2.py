@@ -1,6 +1,6 @@
 """Generator for the two-pawns-up report v2 (SEED-151).
 
-Re-runs every analysis of stories/two-pawns-up/two-pawns-up-report.md on TWO bases
+Re-runs every analysis of stories/two-pawns-up/two-pawns-up-report-v1.md on TWO bases
 from identical code:
 
 - v1 basis: the cohort half of BASE_GAME_FILTER only (rated, human) — the published
@@ -528,7 +528,7 @@ def compute_basis(facts: list[Fact], blun: dict[int, tuple[int, int, int, int]])
 # Replication gate: the v1 basis must reproduce the published report.
 # ---------------------------------------------------------------------------
 
-# Hard anchors from stories/two-pawns-up/two-pawns-up-report.md (2026-08-15).
+# Hard anchors from stories/two-pawns-up/two-pawns-up-report-v1.md (2026-08-15).
 V1_ANCHORS: dict[str, Any] = {
     "n_total": 460_604,
     "n_by_elo": {800: 16_637, 1200: 64_875, 1600: 98_911, 2000: 130_346, 2400: 149_835},

@@ -32,7 +32,7 @@ BASE_GAME_FILTER: str = (
 )
 ```
 
-`stories/two-pawns-up/two-pawns-up-report.md` hand-wrote its own `cohort_games` CTE and
+`../../stories/two-pawns-up/two-pawns-up-report-v1.md` hand-wrote its own `cohort_games` CTE and
 inherited none of it. Nothing upstream compensates: `lichess_client.py` passes no `rated`
 param to the games export (only `since`/`until`/`max`/`perfType`), and
 `app/services/normalization.py` returns `None` only for non-standard variants — it records
@@ -114,7 +114,7 @@ Working SQL for all of these is already in the report's "Reproducibility — SQL
 
 ## Files and every number that has to move
 
-### `stories/two-pawns-up/two-pawns-up-report.md`
+### `../../stories/two-pawns-up/two-pawns-up-report-v1.md`
 All tables in §1–§5, the intro paragraph's cohort-size claims, the Game sample table, and the
 Caveats bullet that currently *documents* the unrated/bot contamination — that bullet becomes
 "these are excluded, per `BASE_GAME_FILTER`" instead.
