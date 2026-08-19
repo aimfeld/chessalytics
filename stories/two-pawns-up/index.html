@@ -421,8 +421,10 @@
       <a href="https://github.com/flawchess/flawchess/blob/main/reports/benchmark/benchmarks-latest.md" data-umami-event="outbound-report-benchmarks">Browse the benchmark database</a>
     </p>
     <p class="fineprint">Data: Lichess games with server-side Stockfish analysis, which players request themselves,
-    so these are not a uniform sample of Lichess; analyzed games also lean toward the games their players wanted
-    examined, often losses, so the absolute rates carry some selection tilt (the technical report quantifies it).
+    so these are not a uniform sample of Lichess. To check whether that skews the results, the technical
+    report (section 6) repeats the measurement on a second dataset where every game has engine evals whether or
+    not anyone requested analysis: for the same player, the share of blown leads differs by about one point
+    between requested-analysis games and the rest.
     Ratings are Lichess ratings at the time each game was played, grouped into 400-point bands, and only games
     where the two players were within 100 rating points of each other are counted. This is an engine evaluation, not a material
     count: a position can be worth +2.0 with the material dead level. "Two pawns up" is a floor, not a description:

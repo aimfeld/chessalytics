@@ -349,9 +349,9 @@ def main_analysis(rows: list[ProdFact]) -> None:
     print(header)
     print(rule)
     lead_rows = [r for r in rows if r.fact.is_entry_lead]
-    for side, name in ((True, "user leads"), (False, "opponent leads")):
+    for side, name in ((True, "user's"), (False, "opponent's")):
         report_contrast(
-            f"leader loses | {name}",
+            f"{name} entry leads ending in a loss",
             collect(
                 lead_rows,
                 lambda r, side=side: r.fact.user_is_leader == side,
@@ -359,7 +359,7 @@ def main_analysis(rows: list[ProdFact]) -> None:
             ),
         )
     report_contrast(
-        "leader loses | either leads",
+        "all entry leads ending in a loss",
         collect(lead_rows, lambda r: True, lambda r: float(r.fact.outcome == "ll")),
     )
 
@@ -367,9 +367,9 @@ def main_analysis(rows: list[ProdFact]) -> None:
     print(header)
     print(rule)
     for thr in SENSITIVITY_THRESHOLDS:
-        for side, name in ((True, "user leads"), (False, "opp leads")):
+        for side, name in ((True, "user's"), (False, "opponent's")):
             report_contrast(
-                f"leader loses ≥{thr}cp | {name}",
+                f"{name} leads lost, threshold ≥{thr}cp",
                 collect(
                     rows,
                     lambda r, thr=thr, side=side: (

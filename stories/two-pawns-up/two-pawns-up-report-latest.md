@@ -288,7 +288,7 @@ v1's three conclusions all survive, one of them sharpened:
 
 Every game here is in the data because someone requested a Lichess server analysis for it, and Lichess records only that `%eval` annotations exist, not who asked. The objection this invites: players who realize they threw away a winning position may be especially likely to request analysis, which would over-sample blown leads and inflate every "leader loses" number in this report.
 
-Unlike the benchmark database, the FlawChess production database can measure this directly. Its pipeline runs Stockfish over **every** imported game of a registered user, so games *without* a Lichess analysis still carry per-ply evals and an identifiable entry lead — the counterfactual this cohort lacks. For the same player, entry-lead outcomes can then be compared between their Lichess-analyzed games and the games no one sent to analysis.
+Unlike the benchmark database, the FlawChess production database can measure this directly. Its pipeline runs Stockfish over **every** imported game of a registered user, so games *without* a Lichess analysis still carry per-ply evals and an identifiable entry lead. For the same player, entry-lead outcomes can then be compared between their Lichess-analyzed games and the games no one sent to analysis.
 
 **Setup** (`stories/two-pawns-up/prod_selection_bias.py`): prod Lichess games of non-guest accounts under this report's cohort rules (rated, human, equal footing, ≥ 90% eval coverage, same rating buckets), blitz + rapid only (prod classical is ~1.2k games). Chess.com imports are excluded: their analysis status on chess.com is unknowable from our data, and the selection under test — presence of a *Lichess* server analysis — is lichess-specific anyway. Game-level semantics (entry ply, entry lead, leader identity, outcome) are imported from `gen_report_v2.Fact`, so they match this report by construction. Cohort: **95,679 games from 98 accounts** — 26,249 with a Lichess analysis, 69,430 without. With so few accounts and heavy concentration, every headline number is a user-stratified paired delta (MH weights over accounts with games in both arms) with a 95% cluster-bootstrap CI resampling accounts; pooled rates are context only.
 
@@ -296,9 +296,9 @@ Unlike the benchmark database, the FlawChess production database can measure thi
 |---|---:|---:|---:|---:|---:|
 | user score, all games | 54.9% (n=26,249) | 49.8% (n=69,430) | +6.1pp | [+0.5, +11.8] | 93 |
 | entry-lead prevalence | 28.6% | 25.6% | +2.6pp | [+1.3, +3.8] | 93 |
-| leader loses, user leads | 24.0% (n=4,669) | 28.6% (n=10,322) | **−5.4pp** | [−9.9, −0.4] | 78 |
-| leader loses, opponent leads | 30.6% (n=2,834) | 26.0% (n=7,483) | **+5.7pp** | [+1.0, +10.3] | 83 |
-| leader loses, either leads | 26.5% (n=7,503) | 27.5% (n=17,805) | **−1.0pp** | [−3.1, +1.0] | 88 |
+| user's entry leads ending in a loss | 24.0% (n=4,669) | 28.6% (n=10,322) | **−5.4pp** | [−9.9, −0.4] | 78 |
+| opponent's entry leads ending in a loss | 30.6% (n=2,834) | 26.0% (n=7,483) | **+5.7pp** | [+1.0, +10.3] | 83 |
+| all entry leads ending in a loss | 26.5% (n=7,503) | 27.5% (n=17,805) | **−1.0pp** | [−3.1, +1.0] | 88 |
 
 The deltas are stable when the entry-lead threshold is moved to 180 or 220 cp (every Δ within 0.3pp), so they are not an artifact of the two arms' different eval sources (Lichess's Stockfish vs ours), and excluding the one internal account barely moves them (−5.5 / +6.2 / −0.9).
 
