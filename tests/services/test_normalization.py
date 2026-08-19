@@ -4,11 +4,14 @@ Covers is_correspondence_time_control and normalize_flawchess_game (Phase 167
 STORE-01/02) — no DB required, pure unit tests.
 """
 
+import pytest
+
 from app.services.normalization import (
     FLAWCHESS_BOT_USERNAME,
     _clock_presence_by_color,
     is_correspondence_time_control,
     normalize_flawchess_game,
+    normalize_flawchess_game_or_reason,
 )
 
 # Test constants (no magic numbers per CLAUDE.md)
@@ -437,3 +440,75 @@ class TestNormalizeFlawchessGame:
             _TEST_TC_STR,
         )
         assert normalized is None
+
+
+# Fewer than two plies is exactly the FLAWCHESS-64 shape: a game resigned (or
+# flagged) before both sides moved can never satisfy the both-colors [%clk]
+# gate, so the frontend must not POST it at all.
+_PGN_SINGLE_PLY = (
+    '[Event "FlawChess Bot Game"]\n[Result "0-1"]\n[Termination "resignation"]\n\n'
+    "1. e4 {[%clk 0:05:00]} 0-1\n"
+)
+
+_PGN_NO_MOVES = '[Event "FlawChess Bot Game"]\n[Result "0-1"]\n[Termination "resignation"]\n\n0-1\n'
+
+_PGN_NO_RESULT_HEADER = (
+    '[Event "FlawChess Bot Game"]\n\n1. e4 {[%clk 0:05:00]} e5 {[%clk 0:04:57]} *\n'
+)
+
+
+class TestNormalizeFlawchessGameRejectReason:
+    """FLAWCHESS-64 — every rejection carries a machine-readable reason code."""
+
+    @pytest.mark.parametrize(
+        ("pgn", "expected_reason"),
+        [
+            (_PGN_NO_MOVES, "no_moves"),
+            (_PGN_SINGLE_PLY, "missing_clk"),
+            (_PGN_NO_RESULT_HEADER, "invalid_result"),
+        ],
+    )
+    def test_rejection_returns_reason(self, pgn: str, expected_reason: str) -> None:
+        """A rejected PGN returns the reason string, not a NormalizedGame."""
+        result = normalize_flawchess_game_or_reason(
+            pgn,
+            _TEST_GAME_UUID,
+            _TEST_USER_ID,
+            "white",
+            _TEST_BOT_ELO,
+            _TEST_PLAYER_RATING,
+            _TEST_PLAYER_USERNAME,
+            _TEST_TC_STR,
+        )
+        assert result == expected_reason
+
+    def test_accepted_pgn_returns_normalized_game(self) -> None:
+        """The success arm of the union is a NormalizedGame, never a str."""
+        result = normalize_flawchess_game_or_reason(
+            _PGN_BOTH_CLOCKS_CHECKMATE,
+            _TEST_GAME_UUID,
+            _TEST_USER_ID,
+            "white",
+            _TEST_BOT_ELO,
+            _TEST_PLAYER_RATING,
+            _TEST_PLAYER_USERNAME,
+            _TEST_TC_STR,
+        )
+        assert not isinstance(result, str)
+        assert result.platform_game_id == _TEST_GAME_UUID
+
+    def test_wrapper_collapses_reason_to_none(self) -> None:
+        """normalize_flawchess_game keeps its reason-free None contract."""
+        assert (
+            normalize_flawchess_game(
+                _PGN_SINGLE_PLY,
+                _TEST_GAME_UUID,
+                _TEST_USER_ID,
+                "white",
+                _TEST_BOT_ELO,
+                _TEST_PLAYER_RATING,
+                _TEST_PLAYER_USERNAME,
+                _TEST_TC_STR,
+            )
+            is None
+        )

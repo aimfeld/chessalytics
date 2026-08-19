@@ -780,6 +780,14 @@ describe('store on finish (D-21)', () => {
     return (JSON.parse(raw) as unknown[]).length;
   }
 
+  // FLAWCHESS-64: the finish-time store only fires for a game BOTH colors moved
+  // in, so every test here needs a move history matching SAMPLE_PGN. The outer
+  // `beforeEach` resets this to [] (which is the unstorable case, pinned by its
+  // own test at the end of this block).
+  beforeEach(() => {
+    fakeGame.moveHistory = ['e4', 'e5', 'Nf3'];
+  });
+
   it('POSTs exactly once when outcome transitions null -> finished, with a matching game_uuid (V-14)', async () => {
     vi.mocked(botsApi.storeGame).mockResolvedValue({ game_id: 1, created: true });
     renderBots();
@@ -805,6 +813,48 @@ describe('store on finish (D-21)', () => {
       fakeGame.setOutcome({ reason: 'resignation', winner: 'white' });
     });
     await waitFor(() => expect(botsApi.storeGame).toHaveBeenCalledTimes(1));
+  });
+
+  // FLAWCHESS-64: the server's both-colors [%clk] gate rejects any game that
+  // ended before both sides moved. Those games used to be POSTed anyway, 422 on
+  // every attempt, and reach the user as nothing but a missing Library row.
+  it.each([
+    ['no moves at all (flagged before moving)', [] as string[]],
+    ['one ply (resigned before the bot replied)', ['e4']],
+  ])('does not POST a game the server can never accept: %s', async (_label, history) => {
+    vi.mocked(botsApi.storeGame).mockResolvedValue({ game_id: 1, created: true });
+    renderBots();
+    await startFromSetup();
+
+    fakeGame.moveHistory = history;
+    act(() => {
+      fakeGame.setPgn(SAMPLE_PGN);
+      fakeGame.setOutcome({ reason: 'resignation', winner: 'black' });
+    });
+
+    await waitFor(() => expect(screen.getByTestId('result-dialog')).toBeTruthy());
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    expect(botsApi.storeGame).not.toHaveBeenCalled();
+  });
+
+  it('leaves Analyze usable for an unstorable game instead of spinning forever', async () => {
+    vi.mocked(botsApi.storeGame).mockResolvedValue({ game_id: 1, created: true });
+    renderBots();
+    await startFromSetup();
+
+    fakeGame.moveHistory = ['e4'];
+    act(() => {
+      fakeGame.setPgn(SAMPLE_PGN);
+      fakeGame.setOutcome({ reason: 'resignation', winner: 'black' });
+    });
+
+    // `analyzeBusy` is derived from the store mutation settling; with no
+    // mutation fired it would stay pending forever without the isStorable
+    // short-circuit, leaving the CTA permanently disabled.
+    const analyze = await screen.findByTestId('btn-analyze-game');
+    await waitFor(() => expect(analyze.hasAttribute('disabled')).toBe(false));
+    fireEvent.click(analyze);
+    await waitFor(() => expect(navigateSpy).toHaveBeenCalled());
   });
 
   it('does not POST while pgn is still null (a finished game always has a PGN, but the guard stays honest)', async () => {

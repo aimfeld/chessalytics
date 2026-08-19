@@ -210,6 +210,9 @@ async def test_store_bot_game_missing_clock_returns_422(
             headers=headers,
         )
     assert response.status_code == 422
+    # The reason code is what makes a client-side Sentry 422 diagnosable at all
+    # (FLAWCHESS-64): before it, every rejection body was the same prose.
+    assert response.json()["detail"]["reason"] == "missing_clk"
 
 
 @pytest.mark.asyncio
@@ -229,6 +232,9 @@ async def test_store_bot_game_unparseable_pgn_returns_422(
             headers=headers,
         )
     assert response.status_code == 422
+    # python-chess parses free text into a Game with an empty mainline rather
+    # than failing outright, so the honest reason here is "no_moves".
+    assert response.json()["detail"]["reason"] == "no_moves"
 
 
 @pytest.mark.asyncio

@@ -107,7 +107,12 @@ import {
   wouldBotOfferDraw,
   DRAW_OFFER_COOLDOWN_MOVES,
 } from '@/lib/botDrawGate';
-import { annotateClock, finalizeBotPgn, toBackendTcStr } from '@/lib/botGamePgn';
+import {
+  annotateClock,
+  finalizeBotPgn,
+  isStorableBotGame,
+  toBackendTcStr,
+} from '@/lib/botGamePgn';
 import { playSound, unlockAudio } from '@/lib/sounds';
 import { fireWinConfetti, prefersReducedMotion } from '@/lib/confetti';
 import { createWorkerPool, type WorkerPool } from '@/lib/engine/workerPool';
@@ -791,12 +796,21 @@ export function useBotGame(
       // after checkmate) cannot double-enqueue (enqueuePendingStore is also
       // uuid-idempotent, belt and braces). See `newGame`'s mirrored note
       // below for why the discard path does NOT touch this queue.
-      enqueuePendingStore(ownerKey, {
-        gameUuid,
-        pgn: finalPgn,
-        settings,
-        enqueuedAt: Date.now(),
-      });
+      //
+      // FLAWCHESS-64: a game that ended before BOTH sides moved (resign or
+      // flag at ply 0/1) can never pass the server's both-colors [%clk] gate,
+      // so it is dropped here instead of being queued for a POST that is
+      // guaranteed to 422. Bots.tsx's finish-time store applies the same
+      // predicate — the two call sites must agree, or a game skipped here
+      // would still be POSTed there (and vice versa).
+      if (isStorableBotGame(chessRef.current.history().length)) {
+        enqueuePendingStore(ownerKey, {
+          gameUuid,
+          pgn: finalPgn,
+          settings,
+          enqueuedAt: Date.now(),
+        });
+      }
       clearSnapshot(ownerKey);
 
       // Quick 260723-tqn: outcome-specific sound + win-only confetti. This is

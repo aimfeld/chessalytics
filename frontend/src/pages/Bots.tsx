@@ -60,6 +60,7 @@ import { useTier1EnqueueForGame } from '@/hooks/useEnqueueGame';
 import { readSnapshot, clearSnapshot, type BotGameSnapshot } from '@/lib/botGameSnapshot';
 import { useMarkPlayActive } from '@/lib/playActive';
 import { removePendingStore } from '@/lib/botPendingStore';
+import { isStorableBotGame } from '@/lib/botGamePgn';
 import { resolvePlayerName } from '@/lib/playerName';
 import { playSound, setMuted, unlockAudio, useMuted } from '@/lib/sounds';
 import { buildAnalysisLineUrl, buildGameAnalysisUrl } from '@/lib/analysisUrl';
@@ -313,9 +314,15 @@ function BotsGame({
   // until the 5-minute window lapsed or a hard reload forced a real refetch.
   const store = useStoreBotGame();
   const storedGameUuidRef = useRef<string | null>(null);
+  // FLAWCHESS-64: a game that ended before BOTH sides moved can never pass the
+  // server's both-colors [%clk] gate, so it is never POSTed (`finalizeGame`
+  // does not queue it either — the two predicates must agree). `store` then
+  // stays idle forever, which `analyzeBusy` below has to account for.
+  const isStorable = isStorableBotGame(game.moveHistory.length);
   useEffect(() => {
     if (game.outcome === null) return;
     if (game.pgn === null) return;
+    if (!isStorable) return;
     if (storedGameUuidRef.current === game.gameUuid) return;
     // Latch FIRST, before the async mutate call: a re-render while the
     // mutation is in flight must not double-fire for the same gameUuid.
@@ -340,7 +347,16 @@ function BotsGame({
     // success), which the `storedGameUuidRef` latch guards against anyway
     // but is needless churn.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [game.outcome, game.pgn, game.gameUuid, ownerKey, settings, store.mutate, queryClient]);
+  }, [
+    game.outcome,
+    game.pgn,
+    game.gameUuid,
+    isStorable,
+    ownerKey,
+    settings,
+    store.mutate,
+    queryClient,
+  ]);
 
   // Pitfall 4: unlock iOS/mobile-Chrome audio playback from the page's first
   // user gesture of ANY kind (useBotGame.attemptMove also unlocks on the
@@ -366,7 +382,14 @@ function BotsGame({
   const storedGameId = store.data?.game_id ?? null;
   // Busy while the store mutation hasn't settled either way yet, OR the
   // tier-1 enqueue triggered by clicking Analyze is itself in flight.
-  const analyzeBusy = (!store.isSuccess && !store.isError) || enqueueTier1.isPending;
+  //
+  // FLAWCHESS-64: an unstorable game never fires the mutation at all, so
+  // `store` sits idle (neither isSuccess nor isError) and this would spin
+  // forever — `isStorable` short-circuits it to "not busy", and handleAnalyze's
+  // existing `storedGameId === null` branch already routes those games to the
+  // free-play ?line= URL.
+  const analyzeBusy =
+    (isStorable && !store.isSuccess && !store.isError) || enqueueTier1.isPending;
 
   const handleAnalyze = useCallback((): void => {
     if (storedGameId === null) {

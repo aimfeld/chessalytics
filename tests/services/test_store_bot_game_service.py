@@ -25,10 +25,13 @@ from app.models.bot_game_settings import BotGameSettings
 from app.models.game import Game
 from app.repositories.user_rating_anchors_repository import upsert_anchor
 from app.repositories.user_repository import update_profile
-from app.schemas.bots import StoreBotGameRequest
+from app.schemas.bots import StoreBotGameRequest, StoreBotGameResponse
 from app.services.bot_game_pgn import build_bot_game_url
 from app.services.normalization import FLAWCHESS_BOT_USERNAME, FLAWCHESS_PLAYER_FALLBACK_USERNAME
-from app.services.store_bot_game_service import resolve_player_username, store_bot_game
+from app.services.store_bot_game_service import (
+    resolve_player_username,
+    store_bot_game as store_bot_game_or_reason,
+)
 from tests.conftest import ensure_test_user
 
 # quick-260714-pnk: no module-level `pytestmark = pytest.mark.asyncio` —
@@ -36,6 +39,21 @@ from tests.conftest import ensure_test_user
 # and a module-level marker triggers a "marked async but not async" warning
 # on TestResolvePlayerUsername's sync tests (mirrors
 # test_user_benchmark_percentiles_service.py's established pattern).
+
+
+async def store_bot_game(
+    session: AsyncSession, user_id: int, request: StoreBotGameRequest
+) -> StoreBotGameResponse:
+    """Narrowing wrapper around the service's StoreBotGameResponse | reason union.
+
+    Almost every test here asserts on a SUCCESSFUL store, so a str reject reason
+    is a test failure, not a branch to handle. TestInvalidPgn calls
+    store_bot_game_or_reason directly to assert the reason code itself.
+    """
+    result = await store_bot_game_or_reason(session, user_id, request)
+    assert not isinstance(result, str), f"unexpected reject reason: {result}"
+    return result
+
 
 _TEST_USER_ID = 92500  # unique ID for this test module
 _TEST_BOT_ELO = 1400
@@ -173,14 +191,15 @@ class TestRatingDerivation:
 
 
 class TestInvalidPgn:
-    """STORE-02: invalid PGN input surfaces as None (router maps to 422)."""
+    """STORE-02: invalid PGN input surfaces as a reject reason (router maps to 422)."""
 
-    async def test_missing_clock_returns_none(self, db_session: AsyncSession) -> None:
+    async def test_missing_clock_returns_reason(self, db_session: AsyncSession) -> None:
         await ensure_test_user(db_session, _TEST_USER_ID + 3)
-        response = await store_bot_game(
+        response = await store_bot_game_or_reason(
             db_session, _TEST_USER_ID + 3, _make_request(pgn=_PGN_MISSING_CLOCK)
         )
-        assert response is None
+        # FLAWCHESS-64: the reason is what makes the 422 diagnosable in Sentry.
+        assert response == "missing_clk"
 
 
 class TestIdempotency:

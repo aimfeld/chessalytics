@@ -18,6 +18,10 @@ from app.users import current_active_user
 
 router = APIRouter(prefix="/bots", tags=["bots"])
 
+# Static prose half of the 422 body; the machine-readable half is the
+# FlawchessRejectReason the service returns.
+_INVALID_PGN_MESSAGE = "Invalid PGN or missing [%clk] annotations"
+
 
 @router.post("/games", response_model=StoreBotGameResponse, status_code=200)
 async def store_game(
@@ -33,10 +37,19 @@ async def store_game(
 
     Returns 422 when the PGN is invalid: unparseable, missing per-move
     [%clk] on either color (STORE-02/D-15), or no recognized Result header.
+    The body carries a closed-vocabulary `reason` (FlawchessRejectReason)
+    alongside the static message: the frontend captures the response `detail`
+    into its Sentry event (lib/queryClient.ts), and without a reason every
+    rejection looked identical in Sentry and the cause had to be inferred
+    from the code. The message stays variable-free so Sentry grouping is
+    unaffected (CLAUDE.md Sentry rule).
     """
     result = await store_bot_game_service.store_bot_game(session, user.id, data)
-    if result is None:
-        raise HTTPException(status_code=422, detail="Invalid PGN or missing [%clk] annotations")
+    if isinstance(result, str):
+        raise HTTPException(
+            status_code=422,
+            detail={"reason": result, "message": _INVALID_PGN_MESSAGE},
+        )
     return result
 
 
