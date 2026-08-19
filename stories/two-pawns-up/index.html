@@ -89,9 +89,14 @@
   .tile .lbl{color:var(--ink-2);font-size:15px;margin-top:2px}
   .tile.win .big{color:var(--win)} .tile.draw .big{color:var(--draw)} .tile.loss .big{color:var(--loss)}
   .hero-note{color:var(--ink-mid);font-size:15px;margin-bottom:8px}
-  section.card{background:var(--card);border:1px solid var(--line);border-radius:20px;padding:30px clamp(18px,4vw,38px);margin:26px 0}
+  section.card{background:var(--card);border:1px solid var(--line);border-radius:20px;padding:30px clamp(18px,4vw,38px);margin:26px 0;scroll-margin-top:14px}
   .card-head{display:flex;align-items:center;gap:12px;margin-bottom:10px}
   .card-head h2{margin-bottom:0}
+  .card-head .anchor{margin-left:auto;align-self:flex-start;color:var(--ink-3);text-decoration:none;
+    font-weight:800;font-size:20px;line-height:1;padding:4px 6px;opacity:0;transition:opacity .15s}
+  .card-head:hover .anchor,.card-head .anchor:focus-visible{opacity:1}
+  .card-head .anchor:hover{color:var(--brown-dark)}
+  @media (hover:none){.card-head .anchor{opacity:.5}}
   .num{display:inline-flex;flex:none;align-items:center;justify-content:center;width:34px;height:34px;border-radius:50%;
        background:var(--hl);color:var(--brown-dark);font-weight:800;font-size:17px}
   h2{font-size:clamp(23px,3.4vw,31px);letter-spacing:-.02em;line-height:1.2;margin-bottom:10px}
@@ -198,12 +203,13 @@
   </div>
   <p class="hero-note">All 82,023 games that entered the middlegame at <b>+2.0 or better</b>, all ratings
   combined. "At least" matters: the median lead here is <b>+3.6 pawns</b>, and a bare two-pawn lead does considerably
-  worse than the headline (section 3).</p>
+  worse than the headline (<a href="#lead-size">section 3</a>).</p>
 </div>
 
-<section class="card" id="s1">
+<section class="card" id="not-a-won-game">
   <div class="card-head"><div class="num">1</div>
-  <h2>A two-pawn lead is not a won game, at any level</h2></div>
+  <h2>A two-pawn lead is not a won game, at any level</h2>
+  <a class="anchor" href="#not-a-won-game" aria-label="Link to this section">#</a></div>
   <p class="lede">Players who start the middlegame two pawns up or better go on to <b>lose roughly one game in four</b>.
   And this is not just a beginner problem: even at 2400 Lichess, more than one of these games in five
   still ends in defeat for the player who had the advantage.</p>
@@ -227,9 +233,10 @@
   </div></details>
 </section>
 
-<section class="card" id="s2">
+<section class="card" id="how-common">
   <div class="card-head"><div class="num">2</div>
-  <h2>Big leads are everywhere at club level, rare among masters</h2></div>
+  <h2>Big leads are everywhere at club level, rare among masters</h2>
+  <a class="anchor" href="#how-common" aria-label="Link to this section">#</a></div>
   <p class="lede">At 800, a majority of games (<b>58%</b>) already have a two-pawn advantage
   for someone when the middlegame starts: openings decide games early. By 2400 that collapses to <b>10%</b>.
   Strong players simply don't hand over (or receive) free material in the opening.</p>
@@ -251,9 +258,10 @@
   </div></details>
 </section>
 
-<section class="card" id="s3">
+<section class="card" id="lead-size">
   <div class="card-head"><div class="num">3</div>
-  <h2>"Two pawns up" usually means more than two pawns</h2></div>
+  <h2>"Two pawns up" usually means more than two pawns</h2>
+  <a class="anchor" href="#lead-size" aria-label="Link to this section">#</a></div>
   <p class="lede">Two pawns is the <i>floor</i> of this group, not its typical member. Half of these leads are
   bigger than <b>+3.6 pawns</b>, and roughly one in four is <b>+5 or more</b>, worth about a rook.
   Size changes everything: a bare two-pawn lead is lost <b>32%</b> of the time, while a five-pawn lead is
@@ -278,14 +286,15 @@
   </div></details>
 </section>
 
-<section class="card" id="s4">
+<section class="card" id="holding-the-lead">
   <div class="card-head"><div class="num">4</div>
-  <h2>Masters hold their leads better. The averages hide it.</h2></div>
+  <h2>Masters hold their leads better. The averages hide it.</h2>
+  <a class="anchor" href="#holding-the-lead" aria-label="Link to this section">#</a></div>
   <p class="lede">Split every one of these games into four endings and something odd appears:
   the share of <b>sustained-lead wins</b> (the advantage stays at two pawns or more the whole way
   from middlegame entry to the win) barely moves with
   rating, sitting near 40% everywhere. It is tempting to conclude that masters are no better at holding on to
-  a lead. That conclusion is wrong, and the reason is section 3.</p>
+  a lead. That conclusion is wrong, and the reason is <a href="#lead-size">section 3</a>.</p>
   <p class="ctitle">Four outcomes of a two-pawn-or-better middlegame lead</p>
   <div class="legend" id="lg3"></div>
   <figure aria-label="Stacked bar chart: four outcomes of a two-pawn-or-better middlegame lead, by rating">
@@ -329,9 +338,10 @@
   </div></details>
 </section>
 
-<section class="card" id="s5">
+<section class="card" id="board-vs-clock">
   <div class="card-head"><div class="num">5</div>
-  <h2>Two ways to lose a won game: outplayed, or flagged</h2></div>
+  <h2>Two ways to lose a won game: outplayed, or flagged</h2>
+  <a class="anchor" href="#board-vs-clock" aria-label="Link to this section">#</a></div>
   <p class="lede">At 800, <b>30%</b> of two-pawn blitz leads end in defeat against <b>22%</b> in classical, so blitz
   looks like the worst place to hold an advantage. But split those defeats by how the game actually ended and two very
   different problems appear. Losing <b>on the board</b> is a rating problem: the three time controls sit almost on top
@@ -388,6 +398,7 @@
       fill="currentColor" d="M15 14c.2-1 .7-1.7 1.5-2.5 1-.9 1.5-2.2 1.5-3.5A6 6 0 0 0 6 8c0 1 .2 2.2 1.5 3.5.7.7 1.3 1.5 1.5 2.5"/><path
       d="M9 18h6"/><path d="M10 22h4"/></svg></div>
     <h2>What to take to your next game</h2>
+    <a class="anchor" href="#takeaways" aria-label="Link to this section">#</a>
   </div>
   <ul class="adv">
     <li><b>A lead is a promise, not a result.</b> Players who reach the middlegame two pawns up still lose
@@ -429,8 +440,8 @@
     Ratings are Lichess ratings at the time each game was played, grouped into 400-point bands, and only games
     where the two players were within 100 rating points of each other are counted. This is an engine evaluation, not a material
     count: a position can be worth +2.0 with the material dead level. "Two pawns up" is a floor, not a description:
-    the median lead in this group is +3.6 pawns, which is why section 3 breaks the results out by lead size.
-    Section 5 splits losses by Lichess's own game-termination field; "abandoned" (a disconnect) is counted
+    the median lead in this group is +3.6 pawns, which is why <a href="#lead-size">section 3</a> breaks the results out by lead size.
+    <a href="#board-vs-clock">Section 5</a> splits losses by Lichess's own game-termination field; "abandoned" (a disconnect) is counted
     separately from a clock forfeit. Unrated games and games against a bot are excluded.
     Small samples: 800 and 2400 classical have the fewest games, so treat those two cells as approximate.</p>
   </div>
