@@ -1946,7 +1946,8 @@ describe('useBotGame', () => {
       expect(readSnapshot(OWNER_KEY)).toBeNull();
     });
 
-    it('resign enqueues exactly one entry and clears the in-progress snapshot', () => {
+    it('resign enqueues exactly one entry and clears the in-progress snapshot', async () => {
+      mockSelectBotMove.mockResolvedValueOnce('e7e5');
       const { result } = renderHook(() =>
         useBotGame(DEFAULT_SETTINGS, undefined, OWNER_KEY),
       );
@@ -1954,6 +1955,9 @@ describe('useBotGame', () => {
       act(() => {
         result.current.attemptMove('e2', 'e4');
       });
+      // Both colors must have moved for the game to be storable at all
+      // (FLAWCHESS-64) — a one-ply resign is covered by its own test below.
+      await advance(2000);
       act(() => {
         result.current.resign();
       });
@@ -1966,11 +1970,17 @@ describe('useBotGame', () => {
     });
 
     it('a flag-on-time enqueues exactly one entry and clears the in-progress snapshot', async () => {
+      mockSelectBotMove.mockResolvedValueOnce('e7e5');
       const { result } = renderHook(() =>
-        useBotGame({ ...DEFAULT_SETTINGS, baseSeconds: 1 }, undefined, OWNER_KEY),
+        useBotGame({ ...DEFAULT_SETTINGS, baseSeconds: 5 }, undefined, OWNER_KEY),
       );
 
-      await advance(1100);
+      act(() => {
+        result.current.attemptMove('e2', 'e4');
+      });
+      await advance(2000);
+      expect(result.current.moveHistory).toEqual(['e4', 'e5']);
+      await advance(6000);
 
       expect(result.current.outcome).toEqual({ reason: 'timeout', winner: 'black' });
       const entries = listPendingStore(OWNER_KEY);
@@ -1980,6 +1990,43 @@ describe('useBotGame', () => {
       // `clearSnapshot` call from `finalizeGame` — the
       // `readSnapshot(OWNER_KEY)).toBeNull()` assertion above (and in the
       // checkmate/resign tests above) goes RED.
+    });
+
+    // FLAWCHESS-64: the server's both-colors [%clk] gate rejects any game that
+    // ended before both sides moved, so `finalizeGame` must not queue one. Both
+    // tests below used to be the ENQUEUE tests above (one ply / zero plies) —
+    // i.e. the bug was pinned as correct behavior.
+    it('FLAWCHESS-64: a resign before the bot has replied enqueues nothing', () => {
+      const { result } = renderHook(() =>
+        useBotGame(DEFAULT_SETTINGS, undefined, OWNER_KEY),
+      );
+
+      act(() => {
+        result.current.attemptMove('e2', 'e4');
+      });
+      act(() => {
+        result.current.resign();
+      });
+
+      expect(result.current.outcome).toEqual({ reason: 'resignation', winner: 'black' });
+      expect(result.current.moveHistory).toEqual(['e4']);
+      expect(listPendingStore(OWNER_KEY)).toHaveLength(0);
+      // The in-progress snapshot is still cleared — an unstorable game is
+      // dropped, not left resumable.
+      expect(readSnapshot(OWNER_KEY)).toBeNull();
+    });
+
+    it('FLAWCHESS-64: a flag-on-time before either side moved enqueues nothing', async () => {
+      const { result } = renderHook(() =>
+        useBotGame({ ...DEFAULT_SETTINGS, baseSeconds: 1 }, undefined, OWNER_KEY),
+      );
+
+      await advance(1100);
+
+      expect(result.current.outcome).toEqual({ reason: 'timeout', winner: 'black' });
+      expect(result.current.moveHistory).toEqual([]);
+      expect(listPendingStore(OWNER_KEY)).toHaveLength(0);
+      expect(readSnapshot(OWNER_KEY)).toBeNull();
     });
 
     it('WR-03: a second finalizeGame call (stale draw-accept after checkmate) does not add a second queue entry', async () => {

@@ -1,7 +1,7 @@
 """Store-on-finish service for POST /bots/games (Phase 167, STORE-01/03/05/06).
 
 Orchestrates: server-side rating derivation (D-05/D-06/D-07) -> PGN-only
-normalization (normalize_flawchess_game) -> the existing hot-lane persistence
+normalization (normalize_flawchess_game_or_reason) -> the existing hot-lane persistence
 path (import_service._flush_batch, D-09) -> a game-id lookup (Pitfall 2, no id
 in _flush_batch's return) -> a post-insert PGN header stamp + targeted UPDATE
 (quick-260714-qaj, D-07 — the `Site` deep link needs the auto-increment
@@ -21,7 +21,8 @@ from app.services.import_service import _flush_batch
 from app.services.normalization import (
     FLAWCHESS_BOT_USERNAME,
     FLAWCHESS_PLAYER_FALLBACK_USERNAME,
-    normalize_flawchess_game,
+    FlawchessRejectReason,
+    normalize_flawchess_game_or_reason,
     parse_time_control,
 )
 
@@ -81,12 +82,13 @@ async def store_bot_game(
     session: AsyncSession,
     user_id: int,
     request: StoreBotGameRequest,
-) -> StoreBotGameResponse | None:
+) -> StoreBotGameResponse | FlawchessRejectReason:
     """Persist one finished bot game as a platform='flawchess' Library game.
 
-    Returns None when the PGN is invalid (unparseable, missing [%clk] on either
-    color, or no recognized Result header) — this is an EXPECTED validation
-    failure (STORE-02/D-15); the caller (bots router) maps None to a 422. No
+    Returns a FlawchessRejectReason (a plain string, never a StoreBotGameResponse)
+    when the PGN is invalid (unparseable, missing [%clk] on either color, or no
+    recognized Result header) — this is an EXPECTED validation failure
+    (STORE-02/D-15); the caller (bots router) maps the reason to a 422 body. No
     Sentry capture and no DB write happen on this path.
 
     Idempotent on request.game_uuid (D-11): re-invoking with the same
@@ -102,7 +104,7 @@ async def store_bot_game(
 
     Returns:
         StoreBotGameResponse with the (new or existing) game_id and a
-        created flag, or None on invalid PGN input.
+        created flag, or a FlawchessRejectReason on invalid PGN input.
     """
     # D-05/D-06: player rating is server-computed from the user's rating
     # anchor for the game's TC bucket; NULL when no anchor (guest or no
@@ -136,7 +138,7 @@ async def store_bot_game(
     bot_username = request.persona_name or FLAWCHESS_BOT_USERNAME
     bot_rating = request.bot_rating if request.bot_rating is not None else request.bot_elo
 
-    normalized = normalize_flawchess_game(
+    normalized = normalize_flawchess_game_or_reason(
         request.pgn,
         request.game_uuid,
         user_id,
@@ -147,8 +149,11 @@ async def store_bot_game(
         request.tc_preset,
         bot_username=bot_username,
     )
-    if normalized is None:
-        return None  # STORE-02/D-15 — expected, no Sentry capture, no commit
+    if isinstance(normalized, str):
+        # A FlawchessRejectReason — STORE-02/D-15, expected: no Sentry capture,
+        # no commit. Handed straight to the router, which puts it in the 422
+        # body so a rejection is diagnosable from the client-side Sentry event.
+        return normalized
 
     try:
         inserted_count = await _flush_batch(session, [normalized], user_id)

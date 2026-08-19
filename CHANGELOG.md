@@ -46,6 +46,8 @@ in `YYYY-MM-DD` (Europe/Zurich).
 
 ### Fixed
 
+- Bot games that ended before both sides had moved — resigning right after starting, or letting the clock run out on move one — no longer vanish. They used to be sent to the server, rejected, and dropped without any message, so the game simply never appeared in your Library. Games that short carry nothing to analyse, so they are now discarded on the spot, and Analyze still opens the moves that were played.
+
 - Opening a game that did not start from the standard chess position — a chess.com thematic tournament, a custom-position "Let's Play!" game, or a pasted PGN with a set-up position — no longer crashes the analysis page. The board now opens such a game from its own starting position and plays through it normally. (Phase 210)
 
 - Opening insights no longer silently drop entire lines. A popular opening could vanish from your strengths and weaknesses because one game in it happened to start from a custom position; every game still counts toward the win/draw/loss numbers, and the line is shown. (Phase 210)

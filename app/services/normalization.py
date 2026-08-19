@@ -8,7 +8,7 @@ import hashlib
 import io
 import re
 from collections.abc import Mapping, Sequence
-from typing import cast
+from typing import Literal, cast
 
 import chess.pgn
 import sentry_sdk
@@ -541,7 +541,14 @@ def _clock_presence_by_color(
     return white_has_clock, black_has_clock
 
 
-def normalize_flawchess_game(
+# Closed vocabulary of reasons the bot-game normalizer can reject a client PGN.
+# Surfaced verbatim in the 422 body (app/routers/bots.py) so a rejection is
+# diagnosable from a frontend Sentry event's captured `detail` — before this
+# existed, every 422 looked identical and the cause had to be inferred.
+FlawchessRejectReason = Literal["unparseable_pgn", "no_moves", "missing_clk", "invalid_result"]
+
+
+def normalize_flawchess_game_or_reason(
     pgn_text: str,
     game_uuid: str,
     user_id: int,
@@ -552,7 +559,7 @@ def normalize_flawchess_game(
     tc_str: str,
     *,
     bot_username: str = FLAWCHESS_BOT_USERNAME,
-) -> NormalizedGame | None:
+) -> NormalizedGame | FlawchessRejectReason:
     """Build a NormalizedGame from a client-POSTed finished bot-game PGN (D-14).
 
     PGN-only normalizer — unlike normalize_chesscom_game/normalize_lichess_game,
@@ -563,11 +570,14 @@ def normalize_flawchess_game(
     which derives player_rating server-side from user_rating_anchors (D-05/D-06)
     and never trusts the client for it.
 
-    Returns None (never raises past this function) when the PGN is unparseable,
-    has no mainline moves, is missing per-move [%clk] on either color (STORE-02/
-    D-15), or has no recognized Result header ("1-0"/"0-1"/"1/2-1/2") — the router
-    maps None to a 422. These are expected validation outcomes, NOT bugs: no
-    Sentry capture for them (only for a genuinely unexpected parse exception).
+    Returns a FlawchessRejectReason string — never raises past this function —
+    when the PGN is unparseable, has no mainline moves, is missing per-move
+    [%clk] on either color (STORE-02/D-15), or has no recognized Result header
+    ("1-0"/"0-1"/"1/2-1/2"); the router maps that reason into the 422 body.
+    These are expected validation outcomes, NOT bugs: no Sentry capture for
+    them (only for a genuinely unexpected parse exception). The union is
+    discriminated by type (`isinstance(result, str)`), so no caller has to
+    thread a second out-parameter around.
 
     Args:
         pgn_text: The client-submitted PGN (already length-bounded by the
@@ -599,8 +609,9 @@ def normalize_flawchess_game(
             unaffected by the default.
 
     Returns:
-        A NormalizedGame with platform="flawchess", rated=False,
-        is_computer_game=True (D-04), or None on any invalid-input case above.
+        A NormalizedGame on success — platform="flawchess", rated=False,
+        is_computer_game=True (D-04) — or a FlawchessRejectReason on any
+        invalid-input case above.
     """
     try:
         game = chess.pgn.read_game(io.StringIO(pgn_text))
@@ -609,14 +620,14 @@ def normalize_flawchess_game(
         # Sentry per the module's set_context convention (Sentry rule).
         sentry_sdk.set_context("flawchess_normalize", {"game_uuid": game_uuid})
         sentry_sdk.capture_exception()
-        return None
+        return "unparseable_pgn"
 
     if game is None:
-        return None  # unparseable PGN — expected 422 case, no Sentry capture
+        return "unparseable_pgn"  # expected 422 case, no Sentry capture
 
     nodes = list(game.mainline())
     if not nodes:
-        return None  # no moves — expected 422 case
+        return "no_moves"  # expected 422 case
 
     # [%clk] presence gate (STORE-02/D-15) — require at least one clock reading
     # for BOTH colors. WR-02 fix: derive the starting side-to-move from the
@@ -630,11 +641,11 @@ def normalize_flawchess_game(
         clock_present, start_white_to_move=game.board().turn
     )
     if not (white_has_clock and black_has_clock):
-        return None  # expected 422 case, no Sentry capture
+        return "missing_clk"  # expected 422 case, no Sentry capture
 
     result_str = game.headers.get("Result", "")
     if result_str not in _VALID_GAME_RESULTS:
-        return None  # no/invalid Result header — expected 422 case
+        return "invalid_result"  # expected 422 case
     result: GameResult = cast(GameResult, result_str)
 
     # Termination: prefer a closed-vocab [Termination "..."] header (Phase 169
@@ -719,6 +730,39 @@ def normalize_flawchess_game(
         # stays NULL rather than being derived from the generated PGN.
         initial_fen=None,
     )
+
+
+def normalize_flawchess_game(
+    pgn_text: str,
+    game_uuid: str,
+    user_id: int,
+    user_color: Color,
+    bot_elo: int,
+    player_rating: int | None,
+    player_username: str,
+    tc_str: str,
+    *,
+    bot_username: str = FLAWCHESS_BOT_USERNAME,
+) -> NormalizedGame | None:
+    """Reason-free view of normalize_flawchess_game_or_reason.
+
+    Kept because most callers (and every test that predates the reason codes)
+    only care whether the PGN was accepted. Production's one caller
+    (store_bot_game_service) uses the _or_reason variant so the 422 body can
+    say WHY — see FlawchessRejectReason.
+    """
+    result = normalize_flawchess_game_or_reason(
+        pgn_text,
+        game_uuid,
+        user_id,
+        user_color,
+        bot_elo,
+        player_rating,
+        player_username,
+        tc_str,
+        bot_username=bot_username,
+    )
+    return None if isinstance(result, str) else result
 
 
 # ---------------------------------------------------------------------------

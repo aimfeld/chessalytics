@@ -2,7 +2,15 @@ import { Chess } from 'chess.js';
 import { describe, expect, it } from 'vitest';
 
 import type { BotGameOutcome } from '../botGameEnd';
-import { annotateClock, finalizeBotPgn, formatClockHms, TERMINATION_CHECKMATE, toBackendTcStr } from '../botGamePgn';
+import {
+  annotateClock,
+  finalizeBotPgn,
+  formatClockHms,
+  isStorableBotGame,
+  MIN_STORABLE_PLIES,
+  TERMINATION_CHECKMATE,
+  toBackendTcStr,
+} from '../botGamePgn';
 
 describe('formatClockHms', () => {
   it('formats remaining time as lichess h:mm:ss', () => {
@@ -53,5 +61,36 @@ describe('annotateClock + finalizeBotPgn', () => {
     const pgn = finalizeBotPgn(chess, outcome, '300+3');
     expect(pgn).toContain('[Termination "draw"]');
     expect(pgn).toContain('[Result "1/2-1/2"]');
+  });
+});
+
+describe('isStorableBotGame', () => {
+  // FLAWCHESS-64: the backend needs one [%clk] reading from BOTH colors, which
+  // a game shorter than a full move pair can never supply.
+  it('rejects a game that ended before both colors moved', () => {
+    expect(isStorableBotGame(0)).toBe(false);
+    expect(isStorableBotGame(1)).toBe(false);
+  });
+
+  it('accepts a game once both colors have moved', () => {
+    expect(isStorableBotGame(MIN_STORABLE_PLIES)).toBe(true);
+    expect(isStorableBotGame(40)).toBe(true);
+  });
+
+  it('agrees with what the backend actually accepts', () => {
+    // Build the shortest PGN the real builder can emit for each ply count and
+    // check the predicate against the both-colors-have-a-clock rule the server
+    // applies (app/services/normalization.py).
+    const chess = new Chess();
+    chess.move('e4');
+    annotateClock(chess, 300_000);
+    const onePly: BotGameOutcome = { reason: 'resignation', winner: 'black' };
+    expect(finalizeBotPgn(chess, onePly, '300+0').match(/\[%clk/g)).toHaveLength(1);
+    expect(isStorableBotGame(chess.history().length)).toBe(false);
+
+    chess.move('e5');
+    annotateClock(chess, 298_000);
+    expect(finalizeBotPgn(chess, onePly, '300+0').match(/\[%clk/g)).toHaveLength(2);
+    expect(isStorableBotGame(chess.history().length)).toBe(true);
   });
 });

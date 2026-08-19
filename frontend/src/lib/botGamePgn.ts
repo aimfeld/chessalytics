@@ -112,3 +112,29 @@ export function finalizeBotPgn(chess: Chess, outcome: BotGameOutcome, tcStr: str
 export function toBackendTcStr(baseSeconds: number, incrementSeconds: number): string {
   return `${baseSeconds}+${incrementSeconds}`;
 }
+
+/**
+ * Minimum ply count a finished bot game must reach to be storable.
+ *
+ * The backend's `[%clk]` presence gate (`normalize_flawchess_game_or_reason`)
+ * requires at least one clock reading from BOTH colors, so a game that ends
+ * before both sides have moved can never be accepted — it 422s with
+ * `missing_clk`/`no_moves`. A bot game always starts from the standard
+ * position (`useBotGame` only ever constructs a bare `new Chess()`, no
+ * SetUp/FEN entry point), so "both colors moved" is exactly "ply count >= 2".
+ */
+export const MIN_STORABLE_PLIES = 2;
+
+/**
+ * Whether a finished game is worth POSTing to `/bots/games` at all.
+ *
+ * Bug fix (Sentry FLAWCHESS-64): resigning — or flagging on time — before both
+ * sides had moved still enqueued and POSTed the game, which the server
+ * rejected with a 422 the user never saw. Each such game produced up to two
+ * Sentry events (the finish-time store, then one drain retry on the next
+ * `/bots` mount) and no Library row. Games this short carry no analysable
+ * content, so dropping them client-side is the fix, not relaxing the gate.
+ */
+export function isStorableBotGame(plyCount: number): boolean {
+  return plyCount >= MIN_STORABLE_PLIES;
+}
