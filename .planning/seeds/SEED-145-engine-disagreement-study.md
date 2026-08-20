@@ -139,6 +139,11 @@ against the actual game result. See E-13 for the two-boundary frames.
 
 ## Gate 0 — go/no-go, run first
 
+**COMPLETE 2026-08-20 — verdict: GO.** All seven items measured, none fatal. User
+approved **5,000 games/cell** (E-07 confirmed, no trim, no FC-only subset) at the
+Gate 0 checkpoint; FC runs at **@100 nodes** (E-08 confirmed). Stage B (full
+sampler + `--workers` sweep + ledger loader) is cleared to start.
+
 - [x] **Coverage query** — DONE 2026-08-20: filtered frame (rated, human, ±100), 5%
       sample: **100% eval coverage at BOTH boundaries** (98,508 middlegame + 65,917
       endgame entries, zero missing). E-03 verified. Also measured: ~21% of frame games
