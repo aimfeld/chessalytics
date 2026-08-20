@@ -20,11 +20,31 @@ flawchess.com {
     # Volume is bounded by the `logging:` limits on the caddy service in
     # docker-compose.yml — Docker's json-file default has NO rotation, and this
     # host has no /etc/docker/daemon.json, so without those limits an access log
-    # grows until the 160 GB disk fills. Caddy redacts the Authorization and
-    # Cookie headers by default, so session tokens never land here.
+    # grows until the 160 GB disk fills.
+    #
+    # SECRET REDACTION. Caddy redacts Authorization and Cookie by default, but
+    # NOTHING else — and this app carries two credentials those defaults miss.
+    # Both leaked into prod for ~40 minutes after the log was first enabled:
+    #   1. X-Operator-Token — the SHARED remote-worker secret, sent on every
+    #      eval-worker poll (app/routers/eval_remote.py:169). Worker polling is
+    #      the bulk of API traffic, so it appeared in most log lines.
+    #   2. ?token= — password-reset links are FRONTEND_URL/auth/reset-password
+    #      ?token=<token> (app/users.py:131). That is an SPA route, not /api/*,
+    #      so it is NOT covered by log_skip below and its query string is logged
+    #      in full. The token grants account takeover.
+    # Any NEW credential that travels in a header or query string must be added
+    # here BEFORE it can reach production.
     log {
         output stdout
-        format json
+        format filter {
+            wrap json
+            fields {
+                request>headers>X-Operator-Token replace REDACTED
+                request>uri query {
+                    replace token REDACTED
+                }
+            }
+        }
     }
 
     # Frontend SPA — serve static files first
