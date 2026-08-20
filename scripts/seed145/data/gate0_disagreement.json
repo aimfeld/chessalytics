@@ -4,38 +4,38 @@
       "n": 548,
       "judged": 542,
       "sf_neutral": 6,
-      "disagreements": 130,
-      "disagreement_rate": 0.23985239852398524,
-      "sf_favorite_scored": 0.5115384615384615,
-      "maia_favorite_scored": 0.48846153846153845
+      "disagreements": 114,
+      "disagreement_rate": 0.21033210332103322,
+      "sf_favorite_scored": 0.5043859649122807,
+      "maia_favorite_scored": 0.4956140350877193
     },
     "middlegame/all": {
       "n": 726,
       "judged": 717,
       "sf_neutral": 9,
-      "disagreements": 171,
-      "disagreement_rate": 0.2384937238493724,
-      "sf_favorite_scored": 0.52046783625731,
-      "maia_favorite_scored": 0.47953216374269003
+      "disagreements": 142,
+      "disagreement_rate": 0.19804741980474197,
+      "sf_favorite_scored": 0.5246478873239436,
+      "maia_favorite_scored": 0.4753521126760563
     },
     "endgame/headline": {
       "n": 310,
       "judged": 303,
       "sf_neutral": 7,
-      "disagreements": 31,
-      "disagreement_rate": 0.10231023102310231,
-      "sf_favorite_scored": 0.5,
-      "maia_favorite_scored": 0.5
+      "disagreements": 27,
+      "disagreement_rate": 0.0891089108910891,
+      "sf_favorite_scored": 0.5370370370370371,
+      "maia_favorite_scored": 0.46296296296296297
     },
     "endgame/all": {
       "n": 442,
       "judged": 429,
       "sf_neutral": 13,
-      "disagreements": 43,
-      "disagreement_rate": 0.10023310023310024,
-      "sf_favorite_scored": 0.5,
-      "maia_favorite_scored": 0.5
+      "disagreements": 40,
+      "disagreement_rate": 0.09324009324009325,
+      "sf_favorite_scored": 0.5125,
+      "maia_favorite_scored": 0.4875
     }
   },
-  "generated_at": "2026-08-20T18:03:16.215Z"
+  "generated_at": "2026-08-20T21:25:24.425Z"
 }

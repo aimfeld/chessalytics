@@ -17,11 +17,14 @@
  * is the swept variable (the app uses 400), maxPlies = FLAWCHESS_ENGINE_MAX_PLIES,
  * default policy temperature, no stopRule, no extraRootMoves (the study FC arm
  * is self-contained — the app's SF-best-move root injection depends on server
- * evals this census does not assume). E-12: `SearchBudget.elo` is color-keyed,
- * so BOTH players' real ratings go straight into the search — each node's
- * policy runs at the mover-at-that-node's own rating. Remaining asterisk
- * (recorded in the summary): `nodePolicy`'s per-inference `elo_oppo` defaults
- * to `elo_self`; only `nodeValueHead` threads a distinct opponent rating.
+ * evals this census does not assume). E-12 (REVERSED 2026-08-20): both sides
+ * run at the MEAN of the two ratings (`SearchBudget.elo = {w: mean, b: mean}`)
+ * — the rating DIFF would hand FC a who-is-favored signal Stockfish
+ * structurally lacks; the mean keeps only the skill level. NOTE: the committed
+ * 2026-08-20 Gate 0 ledger predates this reversal and was produced with
+ * per-color real ratings ({w: white_rating, b: black_rating}); the
+ * convergence/cost conclusions are insensitive to the <=50-point shift (gap
+ * filter is +-100) and were not re-run.
  *
  * POV (seed Trap 1): `practicalScore` is root-side-to-move POV (types.ts
  * D-06); the ledger stores it raw AND normalized to white-POV.
@@ -224,10 +227,10 @@ function analyze(ledgerRows, meta) {
     config: {
       node_budgets: NODE_BUDGETS,
       max_plies: FLAWCHESS_ENGINE_MAX_PLIES,
-      elo: 'color-keyed real ratings (SearchBudget.elo = {w: white_rating, b: black_rating})',
+      elo: 'symmetric mean rating (SearchBudget.elo = {w: mean, b: mean}; E-12 reversed 2026-08-20)',
       note_e12:
-        'nodePolicy per-inference elo_oppo defaults to elo_self; each node still runs at the ' +
-        "mover-at-that-node's own real rating via the color-keyed budget",
+        'the committed 2026-08-20 Gate 0 ledger predates the reversal (per-color real ratings); ' +
+        'conclusions insensitive to the <=50-point shift, not re-run',
       extra_root_moves: 'omitted (self-contained FC arm; app-only SF-best injection not used)',
       score_source: 'rankedLines[0].practicalScore (the app #1 pick, findability-sorted)',
       ...meta,
@@ -329,13 +332,16 @@ async function main() {
       resetMaiaRunMemo();
       const controller = new AbortController();
       const t0 = performance.now();
+      // E-12 (reversed): symmetric mean rating — skill level without the
+      // who-is-favored direction signal Stockfish cannot see.
+      const meanRating = (row.white_rating + row.black_rating) / 2;
       const snapshot = await mctsSearch(
         row.fen,
         {
           maxNodes: budget,
           maxPlies: FLAWCHESS_ENGINE_MAX_PLIES,
           concurrency: pool.size,
-          elo: { w: row.white_rating, b: row.black_rating },
+          elo: { w: meanRating, b: meanRating },
         },
         providers,
         () => {},

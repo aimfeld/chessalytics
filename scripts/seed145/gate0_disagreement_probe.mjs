@@ -4,7 +4,11 @@
  * rates at both phase boundaries.
  *
  * Reads the Gate 0 manifest (sample_gate0_positions.py), runs the Maia value
- * head on every position with both players' REAL ratings (E-12), and measures
+ * head on every position at the MEAN of the two ratings, symmetrically
+ * (E-12 as REVERSED 2026-08-20: the rating DIFF would hand Maia a
+ * who-is-favored signal Stockfish structurally lacks; the mean keeps only the
+ * skill level. The first run of this probe used real per-side ratings —
+ * 24% MG / 10% EG — and was re-run under this convention), and measures
  * how often Maia and Stockfish favor OPPOSITE sides — the viability check for
  * E-11's lay headline ("among positions where the arms disagree about who is
  * favored, whose side actually won"). SF's favored side is the sign of the
@@ -57,9 +61,9 @@ async function main() {
   const results = [];
   for (let i = 0; i < rows.length; i++) {
     const row = rows[i];
-    const moverRating = row.side_to_move === 'w' ? row.white_rating : row.black_rating;
-    const oppoRating = row.side_to_move === 'w' ? row.black_rating : row.white_rating;
-    const { expectedScore } = await nodeValueHead(session, ort, row.fen, moverRating, oppoRating);
+    // E-12 (reversed): symmetric mean rating — level without direction.
+    const meanRating = (row.white_rating + row.black_rating) / 2;
+    const { expectedScore } = await nodeValueHead(session, ort, row.fen, meanRating, meanRating);
     results.push({ ...row, maia_score_stm: expectedScore });
     if ((i + 1) % PROGRESS_EVERY === 0) {
       const elapsed = (performance.now() - started) / 1000;
