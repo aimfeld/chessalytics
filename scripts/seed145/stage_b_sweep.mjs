@@ -51,7 +51,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import zlib from 'node:zlib';
 import { spawn } from 'node:child_process';
-import { fileURLToPath } from 'node:url';
+import { fileURLToPath, pathToFileURL } from 'node:url';
 
 // fileURLToPath (not URL.pathname): URL.pathname yields '/C:/...' on Windows,
 // which path.resolve then mangles — this sweep runs on a Windows laptop.
@@ -307,7 +307,10 @@ async function runSupervisor(args) {
       process.execPath,
       [
         '--import',
-        HOOK_PATH,
+        // file:// URL, not a bare absolute path: Windows Node parses 'C:\...'
+        // as a URL with protocol 'c:' and kills the worker with
+        // ERR_UNSUPPORTED_ESM_URL_SCHEME before any code runs.
+        pathToFileURL(HOOK_PATH).href,
         SCRIPT_PATH,
         '--workers',
         String(args.workers),
