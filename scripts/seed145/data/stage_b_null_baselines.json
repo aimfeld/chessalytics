@@ -1,0 +1,77 @@
+{
+  "generated_at": "2026-08-20T23:43:39+0200",
+  "config": {
+    "source": "Stage B full manifest (stage_b_sample.py, 5000 games/cell)",
+    "features": "[1, material_white, elo_diff/100, clock_diff/60, clock_total/60, stm_white]",
+    "fit": "per (boundary, tc) weighted IRLS, draws as two half-weight rows",
+    "split": "md5(game_id) parity; metrics are eval-half only"
+  },
+  "middlegame": {
+    "n_rows": 86043,
+    "n_clocked": 86043,
+    "tc_fits": [
+      "blitz",
+      "bullet",
+      "classical",
+      "rapid"
+    ],
+    "headline": {
+      "elo_only": {
+        "n_eval": 31982,
+        "brier": 0.23012188720212307,
+        "log_loss": 0.6887518849785071
+      },
+      "material_rating_clock_logistic": {
+        "n_eval": 31982,
+        "brier": 0.22452500598201203,
+        "log_loss": 0.6772904418354506
+      }
+    },
+    "with_flags": {
+      "elo_only": {
+        "n_eval": 43085,
+        "brier": 0.23344458256640202,
+        "log_loss": 0.6888975457211882
+      },
+      "material_rating_clock_logistic": {
+        "n_eval": 43085,
+        "brier": 0.2236058486109407,
+        "log_loss": 0.6684925134026524
+      }
+    }
+  },
+  "endgame": {
+    "n_rows": 54615,
+    "n_clocked": 54615,
+    "tc_fits": [
+      "blitz",
+      "bullet",
+      "classical",
+      "rapid"
+    ],
+    "headline": {
+      "elo_only": {
+        "n_eval": 19535,
+        "brier": 0.22268237610052063,
+        "log_loss": 0.6890560238968904
+      },
+      "material_rating_clock_logistic": {
+        "n_eval": 19535,
+        "brier": 0.18302938006911246,
+        "log_loss": 0.6029598780511781
+      }
+    },
+    "with_flags": {
+      "elo_only": {
+        "n_eval": 27303,
+        "brier": 0.22821182709846147,
+        "log_loss": 0.6895504518339366
+      },
+      "material_rating_clock_logistic": {
+        "n_eval": 27303,
+        "brier": 0.18529457695509916,
+        "log_loss": 0.5961100115310058
+      }
+    }
+  }
+}

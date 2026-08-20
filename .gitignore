@@ -244,3 +244,4 @@ reports/data/persona-recal-*/
 # SEED-145 Stage B bulk data: manifest committed as .gz only; sweep ledger shards stay local until Stage C
 scripts/seed145/data/stage_b_manifest.ndjson
 scripts/seed145/data/stage_b_ledger-worker-*.ndjson
+scripts/seed145/data/*.log
