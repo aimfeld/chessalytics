@@ -22,7 +22,7 @@
  * package specifiers straight out of frontend/node_modules via createRequire.)
  */
 import { createRequire } from 'node:module';
-import { pathToFileURL } from 'node:url';
+import { fileURLToPath, pathToFileURL } from 'node:url';
 import { spawn } from 'node:child_process';
 import path from 'node:path';
 import fs from 'node:fs';
@@ -32,7 +32,9 @@ import os from 'node:os';
 // scripts/gem-elo-calibration.mjs — REPO_ROOT/FRONTEND_DIR are re-derived
 // relative to THIS file's own location, not inherited from the caller) ────────
 
-const __dirname = path.dirname(new URL(import.meta.url).pathname);
+// fileURLToPath (not URL.pathname): URL.pathname yields '/C:/...' on Windows,
+// which path.resolve then mangles — the Stage B sweep runs on a Windows laptop.
+const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const REPO_ROOT = path.resolve(__dirname, '../..');
 export const FRONTEND_DIR = path.resolve(REPO_ROOT, 'frontend');
 

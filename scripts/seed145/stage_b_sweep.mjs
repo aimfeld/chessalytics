@@ -51,8 +51,11 @@ import fs from 'node:fs';
 import path from 'node:path';
 import zlib from 'node:zlib';
 import { spawn } from 'node:child_process';
+import { fileURLToPath } from 'node:url';
 
-const __dirname = path.dirname(new URL(import.meta.url).pathname);
+// fileURLToPath (not URL.pathname): URL.pathname yields '/C:/...' on Windows,
+// which path.resolve then mangles — this sweep runs on a Windows laptop.
+const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const REPO_ROOT = path.resolve(__dirname, '..', '..');
 const HOOK_PATH = path.join(REPO_ROOT, 'scripts', 'lib', 'frontend-alias-hook.mjs');
 const SCRIPT_PATH = path.join(__dirname, 'stage_b_sweep.mjs');
