@@ -2,288 +2,154 @@
 id: SEED-145
 status: active
 planted: 2026-08-08
+revised: >-
+  2026-08-20 — redesigned via /gsd-explore: hunted-corpus + sidecar design replaced
+  by a single endgame-entry census. Story-first scope for Chess Data Stories #2. The
+  original three-corpus design and its rationale live in this file's git history.
 planted_during: /gsd-explore — "find positions where Stockfish and the FlawChess engine
-  evaluate the position very differently"
-trigger_when: a milestone with appetite for an engine-validation / measurement track, or
-  any time the FlawChess Engine's practical-score thesis needs evidence before further
-  investment in search
-scope: medium — one Node harness extension + one sweep script + one report. No migration,
-  no product surface, no frontend work. Gate 0 is cheap and can kill the rest.
+  evaluate the position very differently"; re-scoped 2026-08-20 in /gsd-explore for the
+  second data story
+trigger_when: the next data-story milestone, or any time the FlawChess Engine's
+  practical-score thesis needs population-scale evidence
+scope: medium — one Node harness extension + one sweep script + one report + one story
+  page. No migration, no product surface. Gate 0 is cheap and can kill the rest.
 ---
 
-# SEED-145: Three-engine disagreement study — where Stockfish, Maia and FlawChess diverge, and which one is right
+# SEED-145: Which engine predicts game outcomes best? Stockfish vs Maia vs FlawChess at endgame entry
 
 ## Why This Matters
 
-The FlawChess Engine's entire thesis is that a *practical* expected score — Maia-modelled
-fallible play at both players' real ELOs, backed up over Stockfish-graded leaves — beats
-objective evaluation at describing what will actually happen in a human game. That thesis
-has never been measured at population scale. The only evidence today is a single
-hand-verified case (`.planning/notes/2026-07-10-flawchess-engine-self-execution-analysis.md`,
-game 687537 ply 46), which concluded the engine's pessimism about a queen-sac perpetual is
-"working as designed" — a claim that deserves a denominator.
+The FlawChess Engine's thesis is that a *practical* expected score (Maia-modelled fallible
+play at both players' real ELOs, backed over Stockfish-graded leaves) beats objective
+evaluation at describing what will actually happen in a human game. That thesis has never
+been measured at population scale.
 
-Disagreement with Stockfish is not a defect to be fixed. It is the product. So the study is
-not "find the bugs", it is **"characterise the disagreement, then find out who is right."**
+This study answers one question three ways: **at the moment the endgame begins, which of
+three judges best predicts how the game actually ends** — Stockfish (objective, no human
+model), Maia's value head (pure human model, no search), or FlawChess `practicalScore`
+(the hybrid)? None of the three was built primarily as an outcome predictor; that is the
+point — outcome prediction is the neutral ground where the thesis is falsifiable.
 
-Three payoffs, one corpus:
+Payoffs, in priority order:
 
-1. **Validate the thesis** — does `practicalScore` predict real outcomes better than cp?
-2. **Hunt engine bugs** — extreme disagreement (SF ≥ +200 vs FC ≤ −200) is a bug detector.
-3. **Content** — "the positions where the engines disagree, by rating band" is a post.
+1. **Chess Data Stories #2** — a lay-explainable sequel to two-pawns-up, on-brand with the
+   shipped endgame-analytics product. Simplicity of method is a design constraint, not a
+   nice-to-have: the audience is non-technical but chess-savvy.
+2. **Validate (or falsify) the engine thesis** — FlawChess must beat *both* arms to justify
+   the hybrid. If Maia's free forward pass matches it, the search is dead weight.
+3. Bug signal from the extreme-disagreement tail, as a byproduct only.
 
-The user-facing-feature payoff (a "objectively lost, practically playable" badge on the
-analysis board) was explicitly **not** a goal of this exploration. Do not let it drive scope.
+## The Design (locked 2026-08-20)
 
-## The Three Arms
-
-The reason this is worth doing as a *three*-way study rather than SF-vs-FC is that the arms
-are orthogonal on exactly the two axes that matter:
-
-| Arm | Human model | Search | Knows ELO | Cost per position |
-|---|---|---|---|---|
-| Stockfish → expected score | none | deep | **no** | free (`game_positions.eval_cp`, pure SQL) |
-| Maia value head | pure | none | yes | one batched ONNX forward pass (~ms) |
-| FlawChess `practicalScore` | Maia priors | shallow SF leaves | yes | ~100 nodes of Maia + depth-14 SF |
-
-FlawChess must beat **both** to justify the hybrid. If Maia's raw value head matches it,
-the 400-node search is dead weight and a free forward pass gets the same answer — a finding
-worth having, and one that falls out of this design at no extra cost.
-
-## Locked Decisions
+**One position per game: the first ply of the endgame phase** (`MIN(ply) WHERE phase = 2`;
+Lichess Divider.scala classification, `game_positions.phase`, 0=opening/1=middlegame/
+2=endgame; PHASE-INV-01: phase=2 ⟺ `endgame_class IS NOT NULL`). Evaluate all three arms
+there; score against the actual game result.
 
 | # | Decision | Rationale |
 |---|----------|-----------|
-| D-01 | **Three arms, not two**: SF cp, Maia value head, FlawChess practicalScore | Orthogonal on {human model, search}. SF-vs-FC alone cannot distinguish "the opponent model works" from "shrinkage toward 0.5 is better calibrated" |
-| D-02 | **Hunt for the corpus, use the cheap arm for the base rate** | Q2 ("in disagreement positions, which predicts better") is *already conditional* on disagreement, so hunting is not a bias there. Q1 ("is it more common at low ELO") is a rate and needs a denominator — get it from the SF-vs-Maia sweep over the full frame, which is cheap enough to run exhaustively |
-| D-03 | **SF-vs-Maia disagreement is the proxy for SF-vs-FlawChess disagreement**, and the proxy's strength is measured, not assumed | FlawChess sits structurally between the two (Maia priors over SF leaves), so the proxy should hold. Gate 0 measures it. A weak proxy is itself a finding: the search sees something the value head cannot |
-| D-04 | **Hard-filter to `abs(white_rating - black_rating) <= 50`** rather than statistically controlling for rating gap | FlawChess is ELO-conditioned on both colors (`types.ts` D-07); Stockfish is not. A rating gap leaks that asymmetry straight into the comparison. ~290k games survive the filter (see Measured Facts) — there is no reason to model a confound you can afford to delete |
-| D-05 | **100-node budget, screened at 50** with hysteresis: screen loose, include tight. The 15%/30% gaps are **placeholders — final thresholds are set budget-first, biased low**: after the cheap sweep yields the gap distribution and Gate 0 yields FC-arm cost, pick the *loosest* include threshold whose corpus fits the budget. "Extreme disagreement" subsets are cut at analysis time from the recorded continuous deltas, never baked into corpus membership | The app default is `FLAWCHESS_ENGINE_MAX_NODES = 400` (`useFlawChessEngine.ts:39`), which is unaffordable at corpus scale. Screening and including at the *same* threshold would systematically drop positions that drift *into* disagreement between node 50 and node 100. A tight include threshold is a one-way door (re-scanning is the expensive thing, per D-07), and a corpus spanning moderate disagreements enables dose-response analyses (does the move-prediction edge grow with disagreement magnitude?) that an extremes-only corpus cannot support |
-| D-06 | Benchmark DB is the **primary frame**; prod DB is a replication check only | Benchmark carries the stratified ELO×TC design (`benchmark_selected_users`) that Q1 requires. Prod has deeper evals and PVs but a self-selected user population and no stratification |
-| D-07 | **Record, don't re-run**: per scanned position store all three expected scores, all three top moves, the top-two SF grade margin, and the human's actual move | Every question in this seed is answerable from that row. Changing what is recorded is free; re-running the scan is not |
-| D-08 | The two **derived question designs** (signed asymmetry, move prediction) are in scope from the start, not follow-ups | Move prediction needs no additional scans — only D-07's extra columns. The asymmetry design additionally needs D-09's random sidecar: it is a population-level claim and cannot be estimated on the hunted corpus. Retrofitting either means re-running the corpus |
-| D-09 | **Two corpora: the hunted corpus plus an unconditioned random sidecar** (one ply per game, no disagreement screen, full FlawChess scan, ~20–50k positions sized by Gate 0's cost measurement). Per-question assignment: **sidecar** → signed asymmetry (Q2), dead-weight (Q4), D-03 proxy validation at scale, and a direct unproxied base rate for Q5; **hunted** → move prediction (Q1), the only-move mechanism split, outcome prediction (Q3), and the bug hunt | Hunting selects on `\|s_Maia − s_SF\|`, and at score extremes that selection is one-sided (near `s_SF = 1` a large gap can only point downward), so any population-level statistic computed on the hunted corpus carries a bias of unknown sign — and the Maia-null arm is the selection variable itself, so subtracting it distorts rather than controls. Conditional questions are unaffected (D-02). The sidecar is *efficient* for the asymmetry curve, not wasteful: every position contributes to the binned means, agreement positions included |
+| E-01 | **Selection rule is the board, not an engine.** Endgame entry is defined by piece counts/phase, so no arm's opinion selects the sample. No hunting, no sidecar, no reweighting, no proxy validation — the entire bias apparatus of the original design becomes unnecessary | Replaces old D-02/D-03/D-05/D-09. Any selection on an arm's output (incl. the considered "first ply with SF 200–500cp") makes that arm look overconfident via regression to the mean and samples only one eval slice |
+| E-02 | **One position per game by construction** — no clustered outcomes, no clustered-SE machinery | The old design had to legislate this |
+| E-03 | **Frame: the FULL benchmark DB**, via our own quick-scan entry evals (depth-15, written to `game_positions.eval_cp`/`eval_mate` at phase-entry plies by the entry-ply lane, `app/services/eval_entry.py`). Do NOT restrict to lichess-evaled games | Removes the "players requested analysis" self-selection caveat the two-pawns-up fineprint had to carry. User states coverage is all benchmark games (2026-08-20); Gate 0 re-verifies with one query |
+| E-04 | **Equal footing: exclude games with rating gap > 100** | Same convention as the published two-pawns-up story (v2), so the two stories' cohorts compose. Supersedes the old ±50 (D-04) |
+| E-05 | **Headline basis excludes clock-decided games** (flag falls) **and disconnects/abandoned**. The with-flags numbers are a one-line robustness check in the report, not the headline | "Who judges the *board* best." Caveat to keep honest: flags randomize outcomes, and randomness flatters shrunk-toward-50% predictors (Maia, FC) over confident SF — so excluding them is the pro-SF, conservative basis, and the robustness check costs zero extra engine runs |
+| E-06 | **All entry evals in scope, full range** (dead-equal through crushed) for the cheap arms — that is what draws a calibration curve per engine. If the FC budget is tight, FC may fall back to a contested band while SF/Maia keep the full range | Boring positions are nearly free in the cheap arms and only they anchor the curve's ends |
+| E-07 | **Scale asymmetrically.** SF arm + outcomes: free census over the whole frame (pure SQL). Maia: stratified fixed-N per ELO×TC cell (hundreds of thousands max — full-frame ~1.5M+ forward passes is days of wall-clock against the known wasm heap crash). FlawChess: a Gate-0-cost-sized subset of the Maia sample, same stratification | Per-cell reporting (as in two-pawns-up) means fixed-N-per-cell needs no reweighting math anywhere |
+| E-08 | **FlawChess at ~100 nodes** (50 fallback), not the app's 400 | Gate 0's convergence check (@50/@100 vs @400 on ~200 positions) is what makes this defensible in the report |
+| E-09 | **Fair thermometer for SF**: fit the cp→expected-score sigmoid per (ELO, TC) on held-out games, against OUR depth-15 evals (not lichess's curve). Report the depth | Otherwise "SF lost" is rebuttable as "your sigmoid lost". Free cross-check: on the ~25% overlap subset, compare quick-scan entry evals vs lichess evals — if they track, the shallow-eval objection dies in a footnote |
+| E-10 | **Record, don't re-run** (survives from old D-07): per position store all three expected scores, all three top moves, the human's actual next move, `endgame_class`, `clock_seconds`, ratings, TC | Move-prediction and time-pressure questions stay answerable later without re-scanning |
+| E-11 | **Scoring**: report backbone = paired Brier / log loss + calibration curves per arm per cell. Story headline = the lay conditional: *among positions where the arms disagree about who is favored* (opposite sides of 50%), whose side actually won | Proper scoring uses agreement positions too (different probabilities, same winner); winner-accuracy alone would waste them. "They disagree about who's winning" is explainable; "15-point score gap" is not |
+| E-12 | **Maia/FC get both real ratings.** Extend the Node provider — `calibration-providers.mjs` currently forces `elo_oppo = elo_self` (~:227) | Two-line change; removes an asterisk even though ±100 makes it nearly harmless |
 
-## Measured Facts (verified 2026-08-08, do not re-derive)
+## Gate 0 — go/no-go, run first
 
-Benchmark DB:
+- [ ] **Coverage query**: share of benchmark games (±100, standard filters) with an
+      endgame-entry ply carrying `eval_cp`/`eval_mate`. Verifies E-03's "all games" claim.
+- [ ] **Extend the Node Maia provider to emit the value head**
+      (`scripts/lib/calibration-providers.mjs:244` returns only the policy slice), reusing
+      `softmaxWdl` + `expectedScore` from `frontend/src/lib/maiaEncoding.ts`. Verify against
+      the browser Maia eval bar on a handful of positions — float-precision agreement.
+      Include E-12's `elo_oppo` fix.
+- [ ] **Node-budget convergence**: `practicalScore@{50,100}` vs `@400` on ~200 endgame-entry
+      positions spanning ELO buckets. If @100 does not track @400, E-08 changes first.
+- [ ] **FC cost measurement**: seconds per position at @100 → sizes the FC sample (E-07) and
+      decides whether E-06's contested-band fallback is needed.
+- [ ] **Quick-scan vs lichess eval cross-check** (E-09) on the overlap subset. One SQL join.
 
-| Fact | Value |
-|---|---|
-| Games with lichess evals | 641,855 (of 2,767,158) |
-| Games analyzed **by us** (`full_evals_completed_at` NOT NULL AND `lichess_evals_at` IS NULL) | **0** |
-| Games with PVs (`full_pv_completed_at`) | **0** |
-| `game_positions` rows | 190,934,222 |
-| …with `eval_cp` | **47,723,051** (25%) |
-| …with `move_san` | 47,619,858 |
-| …with `best_move` | **0** |
+## Measured Facts
 
-Prod DB: 521,906 games analyzed by us, 75,705 lichess-sourced, 597,611 with PVs, 774,304 total.
+Verified 2026-08-20 (code):
 
-**Rating gap in the benchmark DB — the assumption that it is pre-filtered is FALSE.**
-Over the 639,608 lichess-evaled games carrying both ratings:
+- Entry-eval lane: depth-15, no-shift, writes `eval_cp`/`eval_mate` (never `best_move`) at
+  middlegame entry (`MIN(ply) WHERE phase = 1`) and at the first ply of each contiguous
+  `endgame_class` span — `app/services/eval_entry.py` (`_collect_eval_targets_per_game`,
+  `_collect_endgame_span_eval_targets`). Lichess-populated rows are preserved, not
+  overwritten (T-78-17).
+- A game can have multiple endgame spans (class A → class B → class A = three span entries).
+  The study position is the FIRST endgame ply (`MIN(ply) WHERE phase = 2`), which is the
+  first span's entry and therefore always carries an eval.
+- `phase` semantics + PHASE-INV-01: `app/models/game_position.py:153-157`.
 
-| mean abs diff | p50 | p90 | max | share within ±50 |
-|---|---|---|---|---|
-| 107.7 | 59 | 253 | 2241 | **45.4%** |
+Verified 2026-08-08 (benchmark DB, from the original exploration — still relevant):
 
-45.4% of 639,608 ≈ 290k games survive D-04's filter. Affordable.
+- 2,767,158 games total; 641,855 with lichess evals; 190.9M `game_positions` rows.
+- `best_move` is empty in the benchmark DB — SF's preferred move at scanned positions comes
+  from the harness's grade map argmax, not the DB.
+- Rating gap: ~45% of games fall within ±50; ±100 (E-04) keeps substantially more. Re-derive
+  the exact ±100 endgame-reaching count in Gate 0's coverage query.
 
-**Maia's ONNX contract** (`frontend/public/maia/maia3_simplified.onnx`, verified via
+**Maia's ONNX contract** (`frontend/public/maia/maia3_simplified.onnx`, via
 `scripts/inspect_maia_onnx.mjs`):
 
 ```
 inputs:  tokens [N,64,12] float32, elo_self [batch], elo_oppo [batch]
 outputs: logits_move [batch,4352], logits_value [batch,3]
-
 softmax(logits_value) index order = [Loss, Draw, Win]   <- NOT W/D/L
-startpos @ elo 1500 -> [0.467, 0.026, 0.507]
 ```
 
 ## Reuse Anchors
 
-The Maia arm is almost entirely built already — it ships in the app as the Maia eval bar.
-
 | Need | Existing code |
 |------|---------------|
-| Softmax the raw value head into a WDL vector | `softmaxWdl()` — `frontend/src/lib/maiaEncoding.ts:445`. **Already documents the [L,D,W] order (CONTRACT §e)** |
-| Collapse WDL to a 0..1 expected score | `expectedScore()` — `frontend/src/lib/maiaEncoding.ts:436` (`win + DRAW_WEIGHT * draw`) |
-| Read the value head off an inference result | `frontend/public/maia/maia-worker.js:252` (`outputs.logits_value.data`) |
-| Run the live `selectBotMove`/`mctsSearch` headlessly in Node | `scripts/calibration-harness.mjs` + `scripts/lib/frontend-alias-hook.mjs` — the established pattern for driving the real engine outside the browser |
+| Softmax value head → WDL | `softmaxWdl()` — `frontend/src/lib/maiaEncoding.ts:445` (documents [L,D,W] order) |
+| WDL → 0..1 expected score | `expectedScore()` — `frontend/src/lib/maiaEncoding.ts:436` |
+| Run the live engine headlessly in Node | `scripts/calibration-harness.mjs` + `scripts/lib/frontend-alias-hook.mjs` |
 | Node Maia session + SF pool | `scripts/lib/node-engine-providers.mjs`, `scripts/lib/stockfish-pool.mjs` |
-| Stratified ELO×TC bucketing, rating-at-game-time | `scripts/benchmarks/` + the `benchmarks` skill. **Use `games.white_rating`/`black_rating`, never the frozen selection-snapshot rating** (rating-lag selection bias, benchmarks chapter 1) |
-| Report shape precedent | `reports/benchmarks-latest.md`, `scripts/tactic_tagger_report.py` |
+| Stratified ELO×TC bucketing, rating-at-game-time | `scripts/benchmarks/` + `benchmarks` skill. Use `games.white_rating`/`black_rating`, never the frozen snapshot rating |
+| Story + report shape | `stories/two-pawns-up/` (page, co-located report, robustness-check pattern); `stories/CLAUDE.md` rules |
 
-**The one change needed:** `scripts/lib/calibration-providers.mjs:244` returns only
-`{ policySlice: result.logits_move.data.slice(...) }` and discards `result.logits_value`.
-Extend it to also return the WDL slice. Note the same file forces `elo_oppo = elo_self`
-(`:227`, symmetric per BOT-03) — harmless under D-04's ±50 filter, but it means the provider
-cannot express an asymmetric matchup without a change.
+## Traps (each manufactures a convincing fake result)
 
-## Gate 0 — go/no-go before funding the corpus
+- **Three sign conventions.** DB `eval_cp` is white-POV; `practicalScore` is
+  root-side-to-move (`types.ts` D-06); Maia WDL is side-to-move after mirror-on-black.
+  Normalize to one frame (suggest: entry-position side-to-move) before any comparison.
+- **`eval_mate`** must map to expected score 0.0/1.0 and must never leak through as cp.
+  Endgame entries in mate-score territory are common at low ELO.
+- **Maia WDL index order is [Loss, Draw, Win].** A hand-rolled softmax inverts the arm.
+- **onnxruntime-web heap exhaustion**: ~270k calls per process before "memory access out of
+  bounds" (memory `project_calibration_harness_wasm_oob_crash`). Wrap the sweep in a
+  resume-on-crash supervisor with a durable per-position ledger, as
+  `calibration-harness.mjs --resume` does.
+- **Long runs die in subagents** (`project_executor_backgrounded_runs_die`,
+  `project_executor_sse_timeout_long_plans`): run sweeps inline from the orchestrator,
+  never backgrounded in an executor; commit before starting.
+- **Draws are common in endgames.** Score against actual points (0 / 0.5 / 1) with the
+  same draw weight convention as `expectedScore()`; don't collapse to win/loss.
 
-Cheap, and any one of these failing rescopes everything downstream. Run this first.
+## Deferred (dropped 2026-08-20, reasoning preserved in git history of this file)
 
-- [ ] **Extend the Node Maia provider to emit the value head** (`calibration-providers.mjs:244`),
-      reusing `softmaxWdl` + `expectedScore` rather than reimplementing them. Verify against the
-      browser's Maia eval bar on a handful of positions — they must agree to float precision.
-- [ ] **Node-budget convergence**: `practicalScore@{50,100,200}` vs `@400` on ~200 positions
-      spanning ELO buckets. If @100 does not track @400, the corpus measures harness artifacts
-      rather than the engine, and D-05 must change before anything else runs.
-- [ ] **Proxy strength (D-03)**: on that same sample, how well does `|s_Maia − s_SF|` predict
-      `|s_FC − s_SF|`? Strong → Q1 is answerable on the full 47.7M frame. Weak → Q1 falls back
-      to inverse-probability-weighted hunting, and the weakness itself becomes a headline.
-- [ ] **Full-frame SF-vs-Maia sweep feasibility**: batched ONNX over a large slice, measured
-      throughput, extrapolated to 47.7M. Establishes whether "exhaustive" is literal or a sample.
-- [ ] **FlawChess-arm cost**: measured seconds-per-position for a full `practicalScore@100`
-      scan (~100 Maia nodes + depth-14 SF grading). This sizes D-09's random sidecar (20k vs
-      50k positions; overnight vs multi-day) and sets the hunted-corpus budget. The seed
-      currently has no target N for the expensive arm — this measurement is where it comes from.
-      Combined with the cheap sweep's gap distribution, it also fixes D-05's final screen/include
-      thresholds (loosest include the budget affords).
-
-## Questions, ranked by power
-
-The original framing put outcome prediction first. It should be third — a game result is one
-Bernoulli draw per game, so the outcome tests are the *weakest* things in this corpus.
-
-**1. Does disagreement predict the player's actual next move?** One observation per **ply**,
-not per game — orders of magnitude more statistical power than any outcome test, and it needs
-no game result at all. Record SF's best move, Maia's most likely move, and FlawChess's
-top-ranked move; compare hit rates against `move_san`.
-
-> **Maia will win this, and that is a sanity check, not a finding** — its policy head is
-> literally trained to predict human moves at a given ELO. If it loses, the encoding is broken.
-> The signal is in the conditionals: *when the human deviates from Maia's top move, do they
-> deviate toward Stockfish's move or away from it?* And the sharp one — *when FlawChess and
-> Stockfish disagree on the best move and the human played Stockfish's move anyway, did they
-> then botch the follow-up at the rate Maia predicted?* That last one is a direct falsifiable
-> test of the Qxh2+ mechanism, and `move_san` on subsequent plies is right there.
-
-**2. Is FlawChess systematically pessimistic in one direction?** **Corpus: the D-09 random
-sidecar, never the hunted corpus** (see the selection-bias trap). The self-execution note
-predicts a *signed* asymmetry: the engine undervalues objectively-winning lines that require
-precise follow-up, because the history-less Maia-3 export cannot condition on "you just
-sacked intending this". Estimator, all in root-side-to-move frame:
-
-```
-s_SF = sigmoid(eval_cp)
-s_FC = practicalScore
-d    = s_FC - s_SF          # positive = FlawChess more optimistic
-```
-
-Bin mean `d` by `s_SF`. **Pure shrinkage toward 0.5 yields an antisymmetric curve** — `d < 0`
-when winning, `d > 0` when losing, equal magnitude. Self-execution blindness predicts the
-winning side is discounted *more* than the losing side is credited, i.e.
-`|E[d | s_SF = 0.5+x]| > |E[d | s_SF = 0.5−x]|`. One number after mirroring one half onto the
-other. **Maia's value head supplies the null** — also shrunk, also ELO-conditioned, no search,
-no self-execution modelling — so `asymmetry(FC−SF) − asymmetry(Maia−SF)` isolates the search's
-contribution.
-
-**Then the mechanism test, which is the strongest single result available here.** The
-hypothesis says the pessimism should *concentrate* where precise follow-up is required. That
-is free to detect: the harness's MultiPV grade map already yields the top-two grade margin, so
-split the corpus on it. If mean `d` is sharply more negative in wide-margin ("only-move")
-positions than in positions with many adequate moves, the Qxh2+ note stops being an anecdote
-and becomes a population-scale claim — bug-hunt priority list and content headline at once.
-
-**3. In disagreement positions, which engine predicts the outcome best?** The original Q2.
-Weakest test in the set (one draw per game), so it needs the largest corpus and the most care.
-Note that the corpus is clustered if multiple plies come from one game — either take one ply
-per game or use clustered standard errors, and say which.
-
-**4. Is the 400-node search dead weight?** Does FlawChess@100 beat Maia's raw value head at
-anything? Falls out of arms 2 and 3 for free — but scored on the **D-09 sidecar**: the hunted
-corpus is selected on the Maia arm, so an FC-vs-Maia comparison there is rigged.
-
-**5. Does disagreement happen more at low ELO?** (original Q1) — needs D-02/D-03's base rate.
-The D-09 sidecar additionally yields a direct, unproxied base rate on the real FC-vs-SF metric,
-cross-checking the proxy. See the confound below before interpreting any answer.
-
-**6. Where does disagreement concentrate?** By `phase` and `endgame_class` (both columns exist
-on `game_positions`). Endgames are where Maia priors are sharpest and Stockfish is most
-reliable — a natural place for the two models to part company.
-
-**7. Does disagreement predict outcomes better under time pressure?** `clock_seconds` is on
-`game_positions`. FlawChess models fallibility; fallibility spikes on a low clock. Wires
-directly into the shipped time-management feature.
-
-### The ELO confound in Q5
-
-"Does disagreement grow at low ELO" conflates two mechanisms, because the engine is
-ELO-parameterized (`types.ts` D-07: ELO is color-keyed `{w, b}`):
-
-1. positions *from* low-rated games are objectively messier, and
-2. the engine *configured* at low ELO produces a flatter Maia policy, so it diverges more.
-
-They are separable only by a factorial design: hold the position pool fixed and sweep engine
-ELO 800 → 2400 over the same positions. That multiplies scan cost by the number of ELO
-settings, so it is a deliberate add-on, not the default. **Do not report an answer to Q5
-without stating which mechanism was controlled.**
-
-## Traps
-
-Each of these manufactures a convincing fake result. Write them into the plan.
-
-- **Population-level statistics on the hunted corpus.** Hunting selects on `|s_Maia − s_SF|`,
-  and at score extremes the selection is one-sided (near `s_SF = 1` a large gap can only point
-  down, near `s_SF = 0` only up) — so the hunted sample mechanically reproduces the shrinkage
-  null curve, and any second-order statistic (the asymmetry number above all) carries a bias of
-  unknown sign. The Maia-null subtraction does not rescue it: the Maia arm is the selection
-  variable itself, so it is distorted *more* than the FC arm. Conditional questions (D-02) are
-  safe; every unconditional claim runs on the D-09 sidecar.
-- **Three sign conventions.** Lichess `eval_cp` is white-POV. `practicalScore` is
-  root-side-to-move (`types.ts` D-06 — "never a per-node/per-ply-relative value"). Maia's WDL
-  is side-to-move after mirror-on-black. This is *exactly* the shape of bug that gets reported
-  as "the engine has a sign error" — the 2026-07-10 note already had to rule one out by hand.
-- **`eval_mate`.** Must map to expected score ±1.0. It must never leak through as a cp value.
-- **Maia WDL index order is [Loss, Draw, Win], not W/D/L.** `maiaEncoding.ts:445` documents it;
-  a hand-rolled softmax in the harness will get it backwards and invert the entire Maia arm.
-- **Frame selection.** Only 25% of benchmark positions carry a lichess eval, and that subset is
-  whatever lichess happened to have analysis for. A caveat on external validity, not a blocker,
-  but it belongs in the report.
-- **`best_move` is empty in the benchmark DB** (consistent with zero PVs). Stockfish's preferred
-  move is therefore *not* available on the full frame — but it is free on scanned positions,
-  since `grade(fen, candidateUcis)` already returns a MoveGrade map and its argmax is SF's pick.
-  Question 1 runs on the scanned corpus, not the frame.
-- **onnxruntime-web heap exhaustion on long sweeps.** Documented in
-  `calibration-providers.mjs:246` and memory `project_calibration_harness_wasm_oob_crash`:
-  ~270k policy calls (~8.5–9h) hit "memory access out of bounds" in the wasm linear heap; only a
-  fresh process cleared it. This study is a long sweep by construction — wrap it in a
-  resume-on-crash supervisor and stream a durable per-position ledger, exactly as
-  `calibration-harness.mjs` does with `--resume`.
-- **Executor subagents die on long runs.** Per `project_executor_backgrounded_runs_die` and
-  `project_executor_sse_timeout_long_plans`: run the sweep inline from the orchestrator, never
-  backgrounded inside a subagent, and commit before starting it.
-
-## Rejected Alternatives
-
-- **Two-arm study (SF vs FlawChess only) — REJECTED.** Cannot distinguish "the opponent model
-  works" from "a predictor shrunk toward 0.5 is better calibrated on noisy low-rated games".
-  FlawChess is conditioned on both players' ELOs and is a prior-weighted *average* of
-  lichess-sigmoid leaves, so it is structurally shrunk relative to raw cp. At 1100 it would win
-  a naive comparison automatically, and the report would claim "practical modelling matters more
-  for weak players" when the real cause is thermometer calibration. Maia's value head is the
-  cheap arm that dissolves this; a per-(ELO,TC)-refit sigmoid on cp is a further control if the
-  Maia arm proves insufficient.
-- **Scan every ply of fewer games — REJECTED.** Richer per-game narrative, but plies from one
-  game share one outcome, so ~30 plies is ~1 effective observation. Effective N collapses exactly
-  where the outcome tests are already weakest.
-- **Random ply, one per game, scanned exhaustively — REJECTED as the primary design, ADOPTED
-  as a small sidecar** (D-02, D-09). As the *primary* it spends the expensive arm on positions
-  that are overwhelmingly *not* disagreements, and D-03's cheap proxy buys the base-rate
-  denominator without that waste. But the population-level questions (signed asymmetry,
-  dead-weight) cannot run on a hunted sample at all, and there the random design is efficient,
-  not wasteful — every position feeds the binned calibration curve. D-09 keeps it at ~20–50k
-  positions alongside the hunt rather than instead of it. If the proxy fails Gate 0, this
-  design scales up and becomes the fallback for Q1/Q5 as well.
-- **Statistically controlling for rating gap instead of filtering — REJECTED** (D-04). 290k games
-  survive a hard ±50 filter. Modelling a confound you can afford to delete is strictly worse.
-- **Prod DB as the primary frame — REJECTED** (D-06). More evals, real PVs, and 521,906 games
-  analyzed by us rather than by lichess — but a self-selected FlawChess-user population with no
-  ELO stratification, which is precisely what Q1 and Q5 need. Keep it as a replication check:
-  if the benchmark-DB result reproduces on prod's deeper evals, the lichess-eval frame selection
-  caveat largely dissolves.
-- **A user-facing "practically playable" badge — OUT OF SCOPE.** Considered and explicitly not a
-  goal. This seed produces a report, not a product surface. If the findings justify a badge,
-  that is a separate seed.
+- **Hunted disagreement corpus + random sidecar + proxy validation** (old D-02/D-03/D-05/
+  D-09) — obsoleted by E-01: a board-defined census needs none of it. If a future study
+  needs population claims from a selected sample, the old file documents the stratified
+  inverse-probability-weighting design.
+- **Signed-asymmetry / self-execution mechanism test** (old Q2, the Qxh2+ follow-up from
+  `.planning/notes/2026-07-10-flawchess-engine-self-execution-analysis.md`) — the strongest
+  engine-validation result available, but not lay-explainable and not needed for the story.
+  E-10's recorded columns keep the door open.
+- **Move-prediction battery** (old Q1) and **only-move mechanism split** — answerable later
+  from E-10's recorded data without re-scanning.
+- **Q5 ELO-confound factorial** (position-pool-fixed engine-ELO sweep) — multiplies scan
+  cost; only revisit if the story's per-ELO result demands a mechanism answer.
+- **Bug-hunt tail triage** — do opportunistically from the recorded extreme-disagreement
+  rows; not a deliverable.
+- **A user-facing "practically playable" badge — still explicitly OUT OF SCOPE.**
