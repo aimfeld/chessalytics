@@ -69,25 +69,46 @@ against the actual game result. See E-13 for the two-boundary frames.
 
 ## Gate 0 — go/no-go, run first
 
-- [ ] **Coverage query**: exact counts of benchmark games (±100, standard filters) with an
-      evaled entry ply at EACH boundary. A raw-frame probe already ran 2026-08-20 (see
-      Measured Facts: ~100% coverage at both); this item pins the filtered-frame counts.
+- [x] **Coverage query** — DONE 2026-08-20: filtered frame (rated, human, ±100), 5%
+      sample: **100% eval coverage at BOTH boundaries** (98,508 middlegame + 65,917
+      endgame entries, zero missing). E-03 verified. Also measured: ~21% of frame games
+      carry LICHESS evals at entry plies (preserved rows), ~79% our depth-15 — the SF
+      arm's eval source is a mix, which the cross-check below must validate.
 - [ ] **Disagreement-rate probe at both boundaries** (SF vs Maia on the Gate-0 sample):
       verifies E-11's lay conditional isn't thin at middlegame entry, where arms agree
       more often. If the middlegame disagreement set is tiny, E-13's story framing (not
       its census) needs a rethink.
-- [ ] **Extend the Node Maia provider to emit the value head**
-      (`scripts/lib/calibration-providers.mjs:244` returns only the policy slice), reusing
-      `softmaxWdl` + `expectedScore` from `frontend/src/lib/maiaEncoding.ts`. Verify against
-      the browser Maia eval bar on a handful of positions — float-precision agreement.
-      Include E-12's `elo_oppo` fix.
+- [x] **Extend the Node Maia provider to emit the value head** — DONE 2026-08-20
+      (branch `study/seed-145-engine-outcome-prediction`): `nodeValueHead` in
+      `calibration-providers.mjs` (shares `runMaia`'s memoized inference with the policy),
+      E-12 `elo_oppo` included. `scripts/seed145/verify_value_head.mjs` passes: LDW-order
+      (KQK pair 0.98/0.03), color-mirror invariance (exact), `elo_oppo` reaches the model
+      (start pos @1500: 0.88 vs 800-oppo, 0.08 vs 2400-oppo). KQK conversion rises
+      0.70→0.99 across 800→2400 self-ELO. Browser eval-bar float check: optional
+      remaining spot-check (same model file + same softmax code via `@/` alias).
 - [ ] **Node-budget convergence**: `practicalScore@{50,100}` vs `@400` on ~200 endgame-entry
       positions spanning ELO buckets. If @100 does not track @400, E-08 changes first.
 - [ ] **FC cost measurement**: seconds per position at @100 → validates E-07's 5,000
       games/cell (~163k FC searches; at 2 s/position that is ~4 days single-process).
       Decides: keep 5k, trim to 3k, restore an FC-only subset, or need E-06's
       contested-band fallback.
-- [ ] **Quick-scan vs lichess eval cross-check** (E-09) on the overlap subset. One SQL join.
+- [ ] **Quick-scan vs lichess eval cross-check** (E-09). CORRECTED 2026-08-20: NOT a SQL
+      join — a row stores ONE eval source (lichess rows are preserved, never overwritten,
+      T-78-17), so no position has both. Instead: run our depth-15 on a few hundred
+      lichess-evaled entry positions and compare. This validates the SF arm's mixed eval
+      source (~21% lichess / ~79% quick-scan in the frame).
+
+## Implementation Requirements (locked 2026-08-20)
+
+- **Every multi-minute script must be resumable after a crash**: durable per-position
+  ledger (NDJSON append) + `--resume` that skips completed work, as
+  `calibration-harness.mjs` does. Applies to the sweep AND to Gate 0's convergence/cost
+  runs.
+- **Every long-running script prints progress with an ETA**: items done / total, rate,
+  projected finish, on an interval that keeps terminal output readable.
+- Work happens on branch `study/seed-145-engine-outcome-prediction` (no GSD phase —
+  study, not platform work); squash-merge to `main` when the report lands.
+- Study scripts live in `scripts/seed145/`.
 
 ## Measured Facts
 
@@ -106,6 +127,12 @@ Measured 2026-08-20 (benchmark DB, ~26k-game `TABLESAMPLE SYSTEM (1)`, raw frame
   35k–185k games. Thin cells: classical×800 = 1,262, classical×2400 = 1,817,
   classical×1200 = 23,429 (fine). Full 20-cell table reproducible with one GROUP BY
   on `games`.
+- **`game_positions` has NO FEN column** (Zobrist hashes + `move_san` only): the sample
+  manifest must reconstruct entry-ply FENs by replaying `games.pgn` (python-chess in the
+  sampler). While doing so, verify the ply↔eval row semantics against
+  `app/services/eval_entry.py` (memory warns of a post-move shift in another lane).
+- **Eval source mix in the filtered frame**: ~21% of games carry lichess evals at entry
+  plies, ~79% our depth-15 quick-scan (rows store one source, never both).
 
 Verified 2026-08-20 (code):
 
