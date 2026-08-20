@@ -98,11 +98,15 @@ against the actual game result. See E-13 for the two-boundary frames.
       games/cell (~163k FC searches; at 2 s/position that is ~4 days single-process).
       Decides: keep 5k, trim to 3k, restore an FC-only subset, or need E-06's
       contested-band fallback.
-- [ ] **Quick-scan vs lichess eval cross-check** (E-09). CORRECTED 2026-08-20: NOT a SQL
-      join — a row stores ONE eval source (lichess rows are preserved, never overwritten,
-      T-78-17), so no position has both. Instead: run our depth-15 on a few hundred
-      lichess-evaled entry positions and compare. This validates the SF arm's mixed eval
-      source (~21% lichess / ~79% quick-scan in the frame).
+- [x] **Quick-scan vs lichess eval cross-check** (E-09) — DONE 2026-08-20
+      (`gate0_lichess_crosscheck.mjs` on a 316-row `--lichess-only` manifest, our
+      depth-15 WASM Stockfish vs the stored lichess evals, both white-POV): endgame
+      entries r=0.976, favored-side flip 4.2% (0.0% where stored |cp| >= 100);
+      middlegame entries r=0.887, flip 15.8% (7.8% confident) — flips concentrate in
+      dead-equal territory; median |dcp| 38, p90 179 overall. The mixed eval source
+      (~21% lichess / ~79% quick-scan) tracks; footnote-grade validation secured.
+      (Original correction stands: NOT a SQL join — a row stores ONE eval source,
+      T-78-17, so no position has both.)
 
 ## Implementation Requirements (locked 2026-08-20)
 
@@ -139,6 +143,11 @@ Measured 2026-08-20 (benchmark DB, ~26k-game `TABLESAMPLE SYSTEM (1)`, raw frame
   `app/services/eval_entry.py` (memory warns of a post-move shift in another lane).
 - **Eval source mix in the filtered frame**: ~21% of games carry lichess evals at entry
   plies, ~79% our depth-15 quick-scan (rows store one source, never both).
+- **Quick-scan vs lichess agreement** (2026-08-20, 316 lichess-evaled entry positions,
+  our depth-15 WASM vs stored lichess evals): Pearson r=0.935 overall (EG 0.976,
+  MG 0.887), median |dcp| 38, p90 179; favored-side flips 11.3% overall but 3.8%
+  where the stored eval is confident (|cp| >= 100) and 0.0% at confident endgame
+  entries — the SF arm's mixed source is not a materially different thermometer.
 
 Verified 2026-08-20 (code):
 
