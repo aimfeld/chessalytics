@@ -116,6 +116,18 @@ against the actual game result. See E-13 for the two-boundary frames.
   runs.
 - **Every long-running script prints progress with an ETA**: items done / total, rate,
   projected finish, on an interval that keeps terminal output readable.
+- **The Stage B sweep takes a `--workers N` parameter** (added 2026-08-20; target
+  machine is a 32-thread gaming laptop). Parallelization = PROCESS-level sharding
+  across positions: N worker processes, each with its OWN Maia session + Stockfish
+  pool, positions partitioned deterministically (e.g. by index mod N). Rationale:
+  Maia inference is the serial bottleneck within one process (onnxruntime-web wasm,
+  single JS thread — measured 2026-08-20: ~33s of a ~42s @400 search is Maia), so
+  in-process parallelism cannot scale; `SearchBudget.concurrency` stays pinned at 4
+  (app-faithful — tree shape depends on it); and sharding divides the ~270k
+  inferences/process wasm OOB ceiling instead of reaching it sooner. Each worker
+  appends to its own ledger shard (`...-worker-N.ndjson`) to avoid interleaved
+  appends; the analyzer/loader reads all shards. A supervisor (the `--workers`
+  entrypoint itself) respawns a crashed worker, which resumes from its shard.
 - Work happens on branch `study/seed-145-engine-outcome-prediction` (no GSD phase —
   study, not platform work); squash-merge to `main` when the report lands.
 - Study scripts live in `scripts/seed145/`.
