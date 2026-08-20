@@ -74,10 +74,16 @@ against the actual game result. See E-13 for the two-boundary frames.
       endgame entries, zero missing). E-03 verified. Also measured: ~21% of frame games
       carry LICHESS evals at entry plies (preserved rows), ~79% our depth-15 — the SF
       arm's eval source is a mix, which the cross-check below must validate.
-- [ ] **Disagreement-rate probe at both boundaries** (SF vs Maia on the Gate-0 sample):
-      verifies E-11's lay conditional isn't thin at middlegame entry, where arms agree
-      more often. If the middlegame disagreement set is tiny, E-13's story framing (not
-      its census) needs a rethink.
+- [x] **Disagreement-rate probe at both boundaries** — DONE 2026-08-20
+      (`gate0_disagreement_probe.mjs` on the 1,168-row Gate 0 manifest, real ratings
+      both sides): SF and Maia favor opposite sides in **24% of middlegame entries**
+      and **10% of endgame entries** (headline basis; with-flags nearly identical).
+      E-11's conditional is viable at BOTH boundaries — at 5k games/cell that is
+      ~1,200 MG and ~300 EG disagreements per cell. Conditional outcome on this tiny
+      sample: ~50/50 both boundaries (n=31–130 — no signal, genuinely competitive).
+      Bonus measurement: Maia value-head throughput ~12 positions/s single-process
+      (all-unique positions, no memo hits) → the full ~163k-position Maia arm is
+      ~3.8 h single-process.
 - [x] **Extend the Node Maia provider to emit the value head** — DONE 2026-08-20
       (branch `study/seed-145-engine-outcome-prediction`): `nodeValueHead` in
       `calibration-providers.mjs` (shares `runMaia`'s memoized inference with the policy),
