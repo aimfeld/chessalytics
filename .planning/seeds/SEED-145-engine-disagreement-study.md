@@ -9,6 +9,8 @@ revised: >-
   Second pass same day: added the middlegame-entry boundary (two positions per game,
   E-13), locked the fixed lichess sigmoid (E-09), corrected E-05's cost claim, and
   settled E-10 storage (NDJSON ledger + script-managed benchmark-DB table, no Alembic).
+  Third pass same day: web research on dedicated outcome predictors added a Prior Art
+  section, bounded the claim (E-15), and added two free statistical null arms (E-14).
 planted_during: /gsd-explore — "find positions where Stockfish and the FlawChess engine
   evaluate the position very differently"; re-scoped 2026-08-20 in /gsd-explore for the
   second data story
@@ -31,8 +33,14 @@ been measured at population scale.
 This study answers one question three ways: **at two moments in the game — when the
 middlegame begins and when the endgame begins — which of three judges best predicts how
 the game actually ends** — Stockfish (objective, no human model), Maia's value head (pure
-human model, no search), or FlawChess `practicalScore` (the hybrid)? None of the three was built primarily as an outcome predictor; that is the
-point — outcome prediction is the neutral ground where the thesis is falsifiable.
+human model, no search), or FlawChess `practicalScore` (the hybrid)? These are the three
+judges a chess player actually meets in an analysis tool, and outcome prediction is the
+neutral ground on which the hybrid's thesis is falsifiable.
+
+**Only Stockfish is innocent of the task.** Maia's value head is trained on game outcomes
+by construction, and purpose-built human-outcome predictors exist outside this trio (see
+Prior Art). So the claim under test is *"the hybrid describes human games better than its
+own two ingredients"*, not *"these are the best outcome predictors available"* (E-15).
 
 Payoffs, in priority order:
 
@@ -42,6 +50,66 @@ Payoffs, in priority order:
 2. **Validate (or falsify) the engine thesis** — FlawChess must beat *both* arms to justify
    the hybrid. If Maia's free forward pass matches it, the search is dead weight.
 3. Bug signal from the extreme-disagreement tail, as a byproduct only.
+
+## Prior Art — dedicated outcome predictors (web research 2026-08-20)
+
+Purpose-built human-game outcome predictors exist and are public. That does not invalidate
+the study (E-15 bounds the claim), but the report and story must acknowledge them, and one
+of them supplies the calibration yardstick that motivates E-14.
+
+- **ChessMimic** (arXiv 2606.04473, 2026-06-03, single author, NOT peer-reviewed; code +
+  per-band weights at `github.com/thomasj02/1e4_ai`, demo `1e4.ai`). Three small
+  encoder-only transformers per 100-ELO band; one is a dedicated 3-class W/D/L **outcome
+  head** conditioned on position + last 12 plies + BOTH ratings + BOTH clocks + increment.
+  Trained on ~450M rated lichess blitz games (2024-09..2025-08), tested on 2026-04 (4.78M
+  games, ONE random non-opening ply per game, bots excluded). Blitz only. Its Table 9 is
+  E-11's backbone already run on a different frame:
+
+  | Predictor | Brier ↓ | Log-loss ↓ | AUC ↑ |
+  |---|---|---|---|
+  | Rating-only ELO expectation | 0.2374 | 0.6905 | 0.5550 |
+  | Rating + clock logistic | 0.2281 | 0.6707 | 0.6192 |
+  | Material + rating + clock logistic | 0.2084 | 0.6265 | 0.7014 |
+  | Draw-aware W/D/L multinomial | 0.2070 | 0.6231 | 0.7074 |
+  | Maia-2 (isotonic-recalibrated) | 0.2372 | 0.6892 | 0.5127 |
+  | Maia-2 (raw) | 0.2787 | 0.8501 | 0.5012 |
+  | **ChessMimic winner head** | **0.1837** | **0.5647** | **0.7768** |
+
+  **Do NOT quote their Maia-2 row as a forecast of our Maia arm.** AUC 0.5012 raw and
+  0.5127 after isotonic recalibration means their baseline carried essentially no signal,
+  which contradicts our own Gate 0 verification (KQK pair 0.98/0.03; `elo_oppo` moves KQK
+  conversion 0.70 → 0.99 across 800 → 2400 self-ELO). That is the exact signature of this
+  file's first Maia trap: `[Loss, Draw, Win]` index order, or a side-to-move vs white-POV
+  mixup in their baseline harness. Cite the SHAPE of their table (a cheap logistic beats a
+  value head), never the number. Stockfish is absent from their table entirely.
+
+- **Allie** (ICLR 2025, CMU; MIT weights `yimingzhang/allie-models`). Decoder transformer
+  over the MOVE SEQUENCE — it has game history, which Maia-3 does not (see
+  `project_engine_self_execution_sac_blindness`) — conditioned on both players' ELO, with
+  policy + think-time + **value** heads. The value head is plain MSE against the raw result
+  v ∈ {-1, 0, +1}, no engine oracle. Trained on lichess blitz, rating-binned 500–3000.
+  Claims its value estimates predict outcomes "just as well" as Stockfish at 10^6 nodes and
+  sometimes better, crediting the player-skill metadata Stockfish lacks. Allie v2
+  (`github.com/y0mingzhang/chess-v2`) is a Qwen-3 1.7B fine-tune on 57B lichess tokens
+  covering all time controls, but is GPU/vLLM-shaped and documents no value head.
+
+- **Maia-2's value head is outcome-trained by construction** — our Maia arm is a
+  purpose-built outcome predictor, not a repurposed one. This is what E-15 corrects.
+
+- **Stockfish's own WDL model** (`UCI_ShowWDL`, `official-stockfish/WDL_model`) is a fitted
+  eval + material + ply → W/D/L map, but fitted on ENGINE SELF-PLAY at fishtest LTC ("what
+  fraction of positions with this score do *engines* win"). It is a free third thermometer
+  for E-09's robustness line, not a human-outcome model — the lichess sigmoid stays primary.
+
+- **Lc0 WDL head + `WDL_rescale`/contempt** (v0.30+) takes an ELO difference and rescales
+  W/D/L toward practical winning chances: the closest published cousin of our thesis, but a
+  parametric rescale over self-play calibration, not a fit on human results.
+
+**Optional ceiling arm (deferred; revisit only if Gate 0 leaves budget)**: run ChessMimic's
+winner head on the blitz cells as a purpose-built-specialist reference, reframing the story
+from "which of three is best" to "how much of the gap to a dedicated predictor does the
+hybrid close". Costs a Python service + weights, and blitz-only weights cannot cover all
+20 cells.
 
 ## The Design (locked 2026-08-20)
 
@@ -65,6 +133,8 @@ against the actual game result. See E-13 for the two-boundary frames.
 | E-10 | **Record, don't re-run** (survives from old D-07): per position store all three expected scores, all three top moves, the human's actual next move, `endgame_class`, `clock_seconds`, ratings, TC, termination, boundary. **Storage (locked 2026-08-20): the sweep appends to an NDJSON resume ledger; a loader script creates `seed145_entry_predictions` in the benchmark DB via plain `CREATE TABLE` and bulk-inserts.** NO column on `game_positions`, NO Alembic migration | The benchmark DB shares prod's Alembic history — a benchmark-only migration would fork the head. The payload is ~10 fields per position: a results-table row, not columns on a 190M-row table. The ledger doubles as the wasm-crash resume mechanism (see Traps); the table gives SQL joins against `games`/`game_positions` and read-only MCP access. Script-managed DDL, same territory as `deploy/init-benchmark-db.sql`. Move-prediction and time-pressure questions stay answerable later without re-scanning |
 | E-11 | **Scoring**: report backbone = paired Brier / log loss + calibration curves per arm per cell. Story headline = the lay conditional: *among positions where the arms disagree about who is favored* (opposite sides of 50%), whose side actually won | Proper scoring uses agreement positions too (different probabilities, same winner); winner-accuracy alone would waste them. "They disagree about who's winning" is explainable; "15-point score gap" is not |
 | E-12 | **Maia/FC get both real ratings.** Extend the Node provider — `calibration-providers.mjs` currently forces `elo_oppo = elo_self` (~:227) | Two-line change; removes an asterisk even though ±100 makes it nearly harmless |
+| E-14 | **Two free statistical null arms, scored alongside the three engines** (added 2026-08-20): (a) rating-only ELO expectation, (b) a material + rating + clock logistic, fit per boundary on a held-out slice of the frame. Pure SQL + scikit-learn over columns E-10 already records — zero engine cost. **Pre-registered gate: `practicalScore` must beat BOTH, at both boundaries, or the hybrid thesis fails regardless of how it does against SF/Maia** | Absolute Brier is uninterpretable without a skill floor, and paired Brier between three engine arms cannot tell you whether any of them is actually good. ChessMimic's Table 9 (Prior Art) puts a material+rating+clock logistic at 0.208 Brier against a raw value head at 0.279: the real falsification risk is not "FC loses to Stockfish", it is "FC loses to a logistic regression on material, ratings and clock". Pre-register it — discovering it in the report is far worse than discovering it in Gate 0 |
+| E-15 | **Bounded claim** (added 2026-08-20): the study compares the hybrid against ITS OWN two ingredients, on the frame a FlawChess user actually sees. It does NOT claim these are the best available outcome predictors. Report and story each carry one sentence saying so, pointing at Prior Art | Purpose-built human-outcome predictors are public (ChessMimic, Allie). An unqualified "which engine predicts game outcomes best" headline is falsifiable by any reader with a browser, and the story's credibility is the deliverable. Also corrects the original framing: Maia's value head is outcome-trained, so "none of the three was built for this" was never true |
 | E-13 | **Two boundaries per game** (added 2026-08-20): middlegame entry AND endgame entry. Per-boundary census each on its own frame; the paired "same game, two stages" trajectory on the intersection (games reaching an endgame, 57–67% by TC). Sampling is game-level (E-07), so both boundaries of a sampled game are always evaluated together. E-04/E-05 filters apply identically at both boundaries | Entry evals already exist at both boundaries (100% coverage, 2026-08-20 probe). Middlegame entries are contested (median \|cp\| 92, p75 219) so the disagreement headline is viable there — Gate 0 confirms with real disagreement rates. Adds a falsifiable thesis gradient (more game left → human-model arms should have a LARGER edge earlier) and a stronger lay hook: "how early can you tell who's going to win?" The ~33% of games that end in the middlegame are systematically decisive (resignations); a story sentence, not a bias — the selection rule stays board-defined (E-01) |
 
 ## Gate 0 — go/no-go, run first
@@ -92,6 +162,16 @@ against the actual game result. See E-13 for the two-boundary frames.
       (start pos @1500: 0.88 vs 800-oppo, 0.08 vs 2400-oppo). KQK conversion rises
       0.70→0.99 across 800→2400 self-ELO. Browser eval-bar float check: optional
       remaining spot-check (same model file + same softmax code via `@/` alias).
+- [x] **Null-baseline fit** (E-14) — DONE 2026-08-20 (`gate0_null_baselines.py`, 5,000
+      games at 250/cell, per-(boundary, tc) weighted IRLS with draws as two half-weight
+      rows, md5(game_id) fit/eval split; no sklearn — numpy IRLS). Eval-half headline
+      Brier / log loss: **middlegame** elo-only 0.2282/0.6868, logistic 0.2257/0.6840
+      (n=1,699); **endgame** elo-only 0.2207/0.6886, logistic **0.1851**/0.6165
+      (n=1,017). The pre-registered E-14 gate is therefore: practicalScore Brier must
+      beat 0.2257 at MG entry and 0.1851 at EG entry (Gate 0 sample estimates; Stage B
+      refits on the full frame). Shape sanity: material+clock adds almost nothing at MG
+      entry (near-equal material, full clocks) and a lot at EG entry — consistent with
+      ChessMimic Table 9's logistic at 0.2084 on random plies.
 - [ ] **Node-budget convergence**: `practicalScore@{50,100}` vs `@400` on ~200 endgame-entry
       positions spanning ELO buckets. If @100 does not track @400, E-08 changes first.
 - [ ] **FC cost measurement**: seconds per position at @100 → validates E-07's 5,000
@@ -160,6 +240,12 @@ Measured 2026-08-20 (benchmark DB, ~26k-game `TABLESAMPLE SYSTEM (1)`, raw frame
   `app/services/eval_entry.py` (memory warns of a post-move shift in another lane).
 - **Eval source mix in the filtered frame**: ~21% of games carry lichess evals at entry
   plies, ~79% our depth-15 quick-scan (rows store one source, never both).
+- **E-14 null floors** (2026-08-20, 5k-game Gate 0 sample, eval half, headline basis):
+  MG entry — elo-only Brier 0.2282, material+rating+clock logistic 0.2257 (the extra
+  features are nearly inert there); EG entry — elo-only 0.2207, logistic 0.1851.
+  Clock semantics for the logistic: a `game_positions` row's `clock_seconds` belongs to
+  the row's side_to_move (mover's clock after their move); the opponent's clock is the
+  previous ply's value — E-10's recorded columns should include BOTH clocks at entry.
 - **Quick-scan vs lichess agreement** (2026-08-20, 316 lichess-evaled entry positions,
   our depth-15 WASM vs stored lichess evals): Pearson r=0.935 overall (EG 0.976,
   MG 0.887), median |dcp| 38, p90 179; favored-side flips 11.3% overall but 3.8%
