@@ -128,6 +128,11 @@ against the actual game result. See E-13 for the two-boundary frames.
   appends to its own ledger shard (`...-worker-N.ndjson`) to avoid interleaved
   appends; the analyzer/loader reads all shards. A supervisor (the `--workers`
   entrypoint itself) respawns a crashed worker, which resumes from its shard.
+  Candidate machines: the dev workstation (16 threads, benchmark DB already set
+  up → ~5-7 workers) and/or the 32-thread laptop (~10-14 workers). Only the
+  sampler and the ledger-loader touch the benchmark DB — the sweep itself reads
+  the NDJSON manifest and writes shards, so it can run on a machine without the
+  DB (commit/copy the manifest, bring the shards back for loading).
 - Work happens on branch `study/seed-145-engine-outcome-prediction` (no GSD phase —
   study, not platform work); squash-merge to `main` when the report lands.
 - Study scripts live in `scripts/seed145/`.
