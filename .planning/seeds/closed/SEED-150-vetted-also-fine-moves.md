@@ -19,13 +19,13 @@ supersedes: nothing — builds on Phase 205's dead band (SEED-137) and Phase 192
 ## Problem
 
 The Train reveal's "Also fine" list is derived client-side (`deriveFineMoves` in
-`frontend/src/hooks/useTrainGradingEngine.ts`) from ranks 2–4 of a 1.5s MultiPV-4
+`../../../frontend/src/hooks/useTrainGradingEngine.ts`) from ranks 2–4 of a 1.5s MultiPV-4
 WASM mount search. But the server's deep-analysis guarantee only ever covers the
 **top two** moves:
 
 - Flaw-derived puzzles: the `missed_pv_lines` node-0 blob stores exactly best
   (`b`/`bm`) and second-best (`s`/`sm`/`su`) — see `PvNode` in
-  `app/services/forcing_line_gate.py`.
+  `../../../app/services/forcing_line_gate.py`.
 - So client ranks 3–4 are **never deep-vetted**, and even the client's rank 2 can
   be a different move than the server's `su`.
 
@@ -56,7 +56,7 @@ a fine-move arrow there.
 ## Design
 
 1. **Delivery: post-attempt only.** POOL-10 / P-01 (LOCKED) forbids answer-key
-   fields on the *pre-attempt* `TrainPuzzle` payload (`app/schemas/train.py`
+   fields on the *pre-attempt* `TrainPuzzle` payload (`../../../app/schemas/train.py`
    docstring). "Also fine" renders at reveal time, after the attempt — deliver
    the vetted list (and the key moves' evals) in the solve-recording POST
    response, or a post-attempt fetch gated on a recorded attempt. This does NOT
@@ -98,11 +98,11 @@ a fine-move arrow there.
 
 ## Pointers
 
-- `frontend/src/hooks/useTrainGradingEngine.ts` — deriveFineMoves (l.293),
+- `../../../frontend/src/hooks/useTrainGradingEngine.ts` — deriveFineMoves (l.293),
   rank-match fast path (l.749), width constant (l.96), 191-UAT comment on the
   ~7% borderline disagreement this seed's root cause also explains
-- `app/services/train_pool.py` — dead band (`dead_band_admissible`),
+- `../../../app/services/train_pool.py` — dead band (`dead_band_admissible`),
   `classify_puzzle_type`, SEED-141 gate
-- `app/services/forcing_line_gate.py` — `PvNode` blob shape
-- `app/models/herring_pool.py` — ladder shape + POV convention
-- `app/schemas/train.py` — P-01 lock on the pre-attempt payload
+- `../../../app/services/forcing_line_gate.py` — `PvNode` blob shape
+- `../../../app/models/herring_pool.py` — ladder shape + POV convention
+- `../../../app/schemas/train.py` — P-01 lock on the pre-attempt payload
