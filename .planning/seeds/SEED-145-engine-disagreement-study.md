@@ -57,15 +57,15 @@ against the actual game result. See E-13 for the two-boundary frames.
 | E-02 | **One position per boundary per game by construction** — no clustered outcomes within a boundary's census, no clustered-SE machinery. Cross-boundary comparisons are per-game paired by design (E-13) | The old design had to legislate this |
 | E-03 | **Frame: the FULL benchmark DB**, via our own quick-scan entry evals (depth-15, written to `game_positions.eval_cp`/`eval_mate` at phase-entry plies by the entry-ply lane, `app/services/eval_entry.py`). Do NOT restrict to lichess-evaled games | Removes the "players requested analysis" self-selection caveat the two-pawns-up fineprint had to carry. User states coverage is all benchmark games (2026-08-20); Gate 0 re-verifies with one query |
 | E-04 | **Equal footing: exclude games with rating gap > 100** | Same convention as the published two-pawns-up story (v2), so the two stories' cohorts compose. Supersedes the old ±50 (D-04) |
-| E-05 | **Headline basis excludes clock-decided games** (flag falls) **and disconnects/abandoned**. The with-flags numbers are a one-line robustness check in the report, not the headline. **Corrected 2026-08-20: NOT free for the sampled arms** — Maia/FC must also run on flagged games' positions. Sampling: fixed-N per cell drawn from the headline basis, plus a per-cell add-on of flagged games proportional to that cell's flag rate (bullet-heavy), termination reason recorded; cost accepted | "Who judges the *board* best." Caveat to keep honest: flags randomize outcomes, and randomness flatters shrunk-toward-50% predictors (Maia, FC) over confident SF — so excluding them is the pro-SF, conservative basis. Zero extra engine runs is true only for the SF census arm |
+| E-05 | **Sample uniformly from the full frame — flagged games included — and run all three arms on every sampled position** (simplified 2026-08-20, replacing a two-tier headline-basis + flagged-add-on sampling scheme). `termination` is recorded per row (E-10); the headline basis (excluding flag falls and disconnects/abandoned) and the with-flags robustness line are both **analysis-time filters over the same recorded rows** | "Who judges the *board* best" still gets the conservative, pro-SF headline basis: flags randomize outcomes and flatter shrunk-toward-50% predictors (Maia, FC) over confident SF. Uniform sampling costs the flag-share of extra engine runs (~accepted) and removes all sampling-design complexity |
 | E-06 | **All entry evals in scope, full range** (dead-equal through crushed) for the cheap arms — that is what draws a calibration curve per engine. If the FC budget is tight, FC may fall back to a contested band while SF/Maia keep the full range | Boring positions are nearly free in the cheap arms and only they anchor the curve's ends |
-| E-07 | **Scale asymmetrically.** SF arm + outcomes: free census over the whole frame (pure SQL). Maia: stratified fixed-N per ELO×TC cell (hundreds of thousands max — full-frame ~1.5M+ forward passes is days of wall-clock against the known wasm heap crash). FlawChess: a Gate-0-cost-sized subset of the Maia sample, same stratification | Per-cell reporting (as in two-pawns-up) means fixed-N-per-cell needs no reweighting math anywhere |
+| E-07 | **Sample size (sized 2026-08-20): 5,000 games per ELO×TC cell** (20 cells; 5 ELO buckets × bullet/blitz/rapid/classical), sampled as GAMES (dedup by platform+platform_game_id), with BOTH boundaries of each sampled game evaluated by all three arms. Per cell that yields 5,000 middlegame + ~2,900–3,350 endgame positions (reach rate 0.57–0.67 by TC). Totals: 100k games, ~163k positions, ~163k Maia forward passes + ~163k FC searches. SF arm + outcomes additionally get the free full-frame census (pure SQL). **Thin cells**: classical×800 (1,262 available) and classical×2400 (1,817) take everything and are flagged low-N / excluded from per-cell claims (consistent with the benchmarks skill's sparse-cell exclusion); all other cells have 23k–185k available. **Fallback if Gate 0's FC cost is too high**: trim to 3,000/cell, or restore an FC-only subset | Sizing logic: per-cell paired Brier with diff-SD ~0.15 detects gaps ≥~0.006 at n=5,000 (80% power); per-cell disagreement headline at an assumed ~10% disagreement rate gets ~300–500 disagreements → ±4–5% CI, and story-level marginals pool 4–5 cells → ±2%. ~163k Maia calls ≈ one wasm-supervisor cycle (270k/process ceiling). Fixed-N-per-cell + per-cell reporting needs no reweighting math anywhere |
 | E-08 | **FlawChess at ~100 nodes** (50 fallback), not the app's 400 | Gate 0's convergence check (@50/@100 vs @400 on ~200 positions) is what makes this defensible in the report |
 | E-09 | **Fixed thermometer for SF: the lichess sigmoid** `Win% = 50 + 50·(2/(1+exp(-0.00368208·cp)) − 1)` (lichess.org/page/accuracy), applied to OUR depth-15 evals; report the depth and disclose that lichess fit the constant on 2300-rated games. Also compute (but report only if it changes conclusions) an in-sample refit of the single constant on our data: the "most charitable thermometer for SF". Per-(ELO,TC) held-out fitting: dropped (superseded 2026-08-20) | The story headline (E-11) is **sigmoid-invariant** — SF's favored side is `sign(eval)` under any monotone curve through 50% at eval 0 — so the fixed curve only touches Brier/log-loss and calibration curves, where per-cell miscalibration is a *finding* ("+300 at 800 ELO doesn't mean what it means at 2300"), not a confound. The refit line kills the "your sigmoid lost, not SF" rebuttal at the cost of one scipy fit. Free cross-check survives: on the ~25% overlap subset, compare quick-scan entry evals vs lichess evals — if they track, the shallow-eval objection dies in a footnote |
 | E-10 | **Record, don't re-run** (survives from old D-07): per position store all three expected scores, all three top moves, the human's actual next move, `endgame_class`, `clock_seconds`, ratings, TC, termination, boundary. **Storage (locked 2026-08-20): the sweep appends to an NDJSON resume ledger; a loader script creates `seed145_entry_predictions` in the benchmark DB via plain `CREATE TABLE` and bulk-inserts.** NO column on `game_positions`, NO Alembic migration | The benchmark DB shares prod's Alembic history — a benchmark-only migration would fork the head. The payload is ~10 fields per position: a results-table row, not columns on a 190M-row table. The ledger doubles as the wasm-crash resume mechanism (see Traps); the table gives SQL joins against `games`/`game_positions` and read-only MCP access. Script-managed DDL, same territory as `deploy/init-benchmark-db.sql`. Move-prediction and time-pressure questions stay answerable later without re-scanning |
 | E-11 | **Scoring**: report backbone = paired Brier / log loss + calibration curves per arm per cell. Story headline = the lay conditional: *among positions where the arms disagree about who is favored* (opposite sides of 50%), whose side actually won | Proper scoring uses agreement positions too (different probabilities, same winner); winner-accuracy alone would waste them. "They disagree about who's winning" is explainable; "15-point score gap" is not |
 | E-12 | **Maia/FC get both real ratings.** Extend the Node provider — `calibration-providers.mjs` currently forces `elo_oppo = elo_self` (~:227) | Two-line change; removes an asterisk even though ±100 makes it nearly harmless |
-| E-13 | **Two boundaries per game** (added 2026-08-20): middlegame entry AND endgame entry. Per-boundary census each on its own frame; the paired "same game, two stages" trajectory on the intersection (games reaching an endgame, ~67% of games). Maia/FC get **full per-cell N at each boundary** (cost doubles; Gate 0's FC cost measurement sizes and trims if needed). E-04/E-05 filters apply identically at both boundaries | Entry evals already exist at both boundaries (100% coverage, 2026-08-20 probe). Middlegame entries are contested (median \|cp\| 92, p75 219) so the disagreement headline is viable there — Gate 0 confirms with real disagreement rates. Adds a falsifiable thesis gradient (more game left → human-model arms should have a LARGER edge earlier) and a stronger lay hook: "how early can you tell who's going to win?" The ~33% of games that end in the middlegame are systematically decisive (resignations); a story sentence, not a bias — the selection rule stays board-defined (E-01) |
+| E-13 | **Two boundaries per game** (added 2026-08-20): middlegame entry AND endgame entry. Per-boundary census each on its own frame; the paired "same game, two stages" trajectory on the intersection (games reaching an endgame, 57–67% by TC). Sampling is game-level (E-07), so both boundaries of a sampled game are always evaluated together. E-04/E-05 filters apply identically at both boundaries | Entry evals already exist at both boundaries (100% coverage, 2026-08-20 probe). Middlegame entries are contested (median \|cp\| 92, p75 219) so the disagreement headline is viable there — Gate 0 confirms with real disagreement rates. Adds a falsifiable thesis gradient (more game left → human-model arms should have a LARGER edge earlier) and a stronger lay hook: "how early can you tell who's going to win?" The ~33% of games that end in the middlegame are systematically decisive (resignations); a story sentence, not a bias — the selection rule stays board-defined (E-01) |
 
 ## Gate 0 — go/no-go, run first
 
@@ -83,9 +83,10 @@ against the actual game result. See E-13 for the two-boundary frames.
       Include E-12's `elo_oppo` fix.
 - [ ] **Node-budget convergence**: `practicalScore@{50,100}` vs `@400` on ~200 endgame-entry
       positions spanning ELO buckets. If @100 does not track @400, E-08 changes first.
-- [ ] **FC cost measurement**: seconds per position at @100 → sizes the FC sample (E-07,
-      now across TWO boundaries per E-13) and decides whether E-06's contested-band
-      fallback is needed.
+- [ ] **FC cost measurement**: seconds per position at @100 → validates E-07's 5,000
+      games/cell (~163k FC searches; at 2 s/position that is ~4 days single-process).
+      Decides: keep 5k, trim to 3k, restore an FC-only subset, or need E-06's
+      contested-band fallback.
 - [ ] **Quick-scan vs lichess eval cross-check** (E-09) on the overlap subset. One SQL join.
 
 ## Measured Facts
@@ -98,6 +99,13 @@ Measured 2026-08-20 (benchmark DB, ~26k-game `TABLESAMPLE SYSTEM (1)`, raw frame
   coverage 17,323/17,324; median |cp| 333, p75 530, p90 716.
 - So the middlegame census frame is ~1.5× the endgame frame, and the paired two-stage
   trajectory (E-13) covers ~67% of games.
+- **Endgame reach rate by TC** (rated, human sample): bullet 0.671, blitz 0.641,
+  rapid 0.614, classical 0.572.
+- **Cell inventory** (rated, human, both ratings present, gap ≤ 100; ELO bucket =
+  400-wide on the mean of both ratings, centers 800–2400): 16 of 20 cells hold
+  35k–185k games. Thin cells: classical×800 = 1,262, classical×2400 = 1,817,
+  classical×1200 = 23,429 (fine). Full 20-cell table reproducible with one GROUP BY
+  on `games`.
 
 Verified 2026-08-20 (code):
 
@@ -160,9 +168,13 @@ softmax(logits_value) index order = [Loss, Draw, Win]   <- NOT W/D/L
   paired intersection (games with both boundaries); pooling the two censuses conflates
   population change (decisive middlegame games drop out before the endgame) with stage
   change. Per-boundary census numbers live on their own frames.
-- **Flagged add-on rows must not leak into headline aggregates.** E-05's per-cell flagged
-  sample exists only for the robustness line; tag every recorded row with its basis
-  (headline / flagged-addon) and filter explicitly in every aggregate.
+- **Every aggregate must state its termination filter.** The sample includes flagged
+  games (E-05); the headline basis is an analysis-time filter on the recorded
+  `termination`. An aggregate that forgets the filter silently reports the with-flags
+  numbers as the headline.
+- **Duplicate games across benchmark users.** The same platform game can appear under two
+  selected users (both imported it). Dedup by `(platform, platform_game_id)` when
+  sampling, or a game can enter a cell twice.
 
 ## Deferred (dropped 2026-08-20, reasoning preserved in git history of this file)
 
