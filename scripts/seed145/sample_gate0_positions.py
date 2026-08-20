@@ -18,6 +18,14 @@ Usage:
     uv run python scripts/seed145/sample_gate0_positions.py --db benchmark
     uv run python scripts/seed145/sample_gate0_positions.py --db benchmark \
         --games-per-cell 40 --out scripts/seed145/data/gate0_manifest.ndjson
+
+--lichess-only (Gate 0 quick-scan vs lichess cross-check, E-09): restricts the
+frame to games whose entry-ply evals came from LICHESS server analysis
+(games.lichess_evals_at IS NOT NULL — those rows are preserved, never
+overwritten by our quick-scan, T-78-17), writes to a separate manifest, and
+defaults to a smaller per-cell quota (~300 rows total). The manifest rows'
+eval_cp/eval_mate are then the STORED LICHESS evals, which the cross-check
+script compares against our own depth-15 run on the same FENs.
 """
 
 from __future__ import annotations
@@ -41,6 +49,10 @@ from app.services.eval_entry import _snapshot_boards  # noqa: E402
 DEFAULT_GAMES_PER_CELL = 40
 DEFAULT_SEED = "seed145-gate0"
 DEFAULT_OUT = "scripts/seed145/data/gate0_manifest.ndjson"
+# --lichess-only defaults: ~10 games/cell x 20 cells x ~1.7 boundaries/game
+# yields the ~300 entry positions the E-09 cross-check needs.
+LICHESS_ONLY_GAMES_PER_CELL = 10
+LICHESS_ONLY_OUT = "scripts/seed145/data/gate0_lichess_manifest.ndjson"
 # Print a progress line every this many games during FEN reconstruction.
 PROGRESS_EVERY_GAMES = 100
 
@@ -76,6 +88,9 @@ WITH dedup AS (
       AND white_rating IS NOT NULL
       AND black_rating IS NOT NULL
       AND ABS(white_rating - black_rating) <= :max_gap
+      -- --lichess-only (E-09 cross-check): entry evals in these games are the
+      -- preserved lichess server-analysis values, never our quick-scan.
+      AND (NOT CAST(:lichess_only AS boolean) OR lichess_evals_at IS NOT NULL)
     ORDER BY platform, platform_game_id, id
 ),
 ranked AS (
@@ -157,10 +172,17 @@ def _build_rows(
 async def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--db", default="benchmark", choices=["benchmark", "dev"])
-    parser.add_argument("--games-per-cell", type=int, default=DEFAULT_GAMES_PER_CELL)
+    parser.add_argument("--games-per-cell", type=int, default=None)
     parser.add_argument("--seed", default=DEFAULT_SEED)
-    parser.add_argument("--out", default=DEFAULT_OUT)
+    parser.add_argument("--out", default=None)
+    parser.add_argument("--lichess-only", action="store_true")
     args = parser.parse_args()
+    if args.games_per_cell is None:
+        args.games_per_cell = (
+            LICHESS_ONLY_GAMES_PER_CELL if args.lichess_only else DEFAULT_GAMES_PER_CELL
+        )
+    if args.out is None:
+        args.out = LICHESS_ONLY_OUT if args.lichess_only else DEFAULT_OUT
 
     engine = create_async_engine(db_url_for_target(args.db))
     try:
@@ -184,6 +206,7 @@ async def main() -> None:
                             // ELO_BUCKET_WIDTH,
                             "seed": args.seed,
                             "games_per_cell": args.games_per_cell,
+                            "lichess_only": args.lichess_only,
                         },
                     )
                 ).mappings()
