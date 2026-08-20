@@ -204,6 +204,32 @@ sampler + `--workers` sweep + ledger loader) is cleared to start.
       (Original correction stands: NOT a SQL join — a row stores ONE eval source,
       T-78-17, so no position has both.)
 
+## Stage B (started 2026-08-20)
+
+- **Sampler DONE 2026-08-20** (`stage_b_sample.py`, seed `seed145-stage-b`):
+  92,940 deduped games — thin cells classical×800 = 1,206 and classical×2400 =
+  1,724 (take-everything, low-N flagged), all 18 other cells at the full 5,000.
+  **140,658 manifest rows: 86,043 middlegame + 54,615 endgame** (EG reach 58.8%;
+  ~6,900 games have no middlegame boundary at all — short games, census stays
+  per-boundary by design). Rows carry the E-10 additions: `move_san` (the
+  human's actual next move), `oppo_clock_seconds` (prev-ply clock), and
+  `material_white`. Manifest committed as
+  `scripts/seed145/data/stage_b_manifest.ndjson.gz` (8.4 MB; the sweep reads
+  .gz directly, so a machine without the benchmark DB just needs the repo).
+- **E-14 refit at Stage B scale DONE 2026-08-20** (`stage_b_null_refit.py`,
+  eval half, headline basis) — these SUPERSEDE the Gate 0 floors as the
+  pre-registered gate practicalScore must beat: **middlegame** elo-only Brier
+  0.2301 / LL 0.6888, logistic **0.2245** / 0.6773 (n=31,982); **endgame**
+  elo-only 0.2227 / 0.6891, logistic **0.1830** / 0.6030 (n=19,535).
+- **Sweep STARTED 2026-08-20 ~23:45** (`stage_b_sweep.mjs --workers 6`,
+  16-thread workstation, recycle-after 1,500, 4 SF procs/worker; shards
+  `stage_b_ledger-worker-{0..5}.ndjson`, resume = union of all shards so
+  worker count can change freely). Log: `scripts/seed145/data/stage_b_sweep.log`.
+  Resume after any interruption: same command, from repo root.
+- **Remaining on completion**: `stage_b_load.py --db benchmark` (recreates
+  `seed145_entry_predictions`; smoke-validated incl. read-only MCP access),
+  final row counts/skipped rows into this file, hand over to Stage C.
+
 ## Implementation Requirements (locked 2026-08-20)
 
 - **Every multi-minute script must be resumable after a crash**: durable per-position
