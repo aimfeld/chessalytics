@@ -149,6 +149,16 @@ services:
     depends_on:
       - backend
       - umami
+    # Bound the access log enabled in deploy/Caddyfile. Docker's json-file
+    # driver defaults to unlimited size with no rotation, and this host has no
+    # /etc/docker/daemon.json overriding that — so without these limits the log
+    # grows until the 160 GB disk fills. 50 MB x 5 holds roughly a week of
+    # API-only entries (static assets are log_skip'd) in ~250 MB.
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "50m"
+        max-file: "5"
     restart: unless-stopped
 
 volumes:
