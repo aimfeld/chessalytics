@@ -716,7 +716,7 @@ expected; all work is against existing dependencies (SQLAlchemy, Pydantic, React
 - `app/services/flaws_service.py` / `app/services/eval_utils.py` (targeted grep+read) — canonical threshold constants
 - `scripts/gen_flaw_thresholds_ts.py` (targeted grep) — CI drift-check mechanism
 - `app/models/drill_solve.py` (targeted) — `DrillSource` enum including `SHARP_FILLER`
-- `.planning/phases/211-vetted-also-fine-moves-server-key-grading/211-CONTEXT.md`, `.planning/seeds/SEED-150-vetted-also-fine-moves.md`, `.planning/ROADMAP.md` (Phase 211 + 206 sections)
+- `.planning/phases/211-vetted-also-fine-moves-server-key-grading/211-CONTEXT.md`, `../../seeds/closed/SEED-150-vetted-also-fine-moves.md`, `.planning/ROADMAP.md` (Phase 211 + 206 sections)
 
 ### Secondary (MEDIUM confidence)
 - `useTrainGradingEngine.test.ts`/`trainArrows.test.ts` file existence and mock pattern confirmed via `grep`, not fully read line-by-line

@@ -84,8 +84,19 @@ function sentryBeforeSend(
           : {}),
       };
     }
-    if (error.response?.status === 500) {
-      event.fingerprint = ["api-server-error"];
+    // FLAWCHESS-64: an axios rejection's stack is always the same two minified
+    // axios frames, so Sentry's default grouping collapses EVERY unfingerprinted
+    // status into one issue. That issue absorbed 403s from guests on /train,
+    // and once those were gated out (quick 260807-dr9) it silently "regressed"
+    // by absorbing unrelated deploy-window 502s instead. Keying the fingerprint
+    // on the status keeps unrelated failures in unrelated groups, so resolving
+    // one can no longer be undone by the next.
+    //
+    // 500 keeps its historical `api-server-error` key rather than moving to
+    // `api-http-500` so the existing Sentry issue keeps its history.
+    const status = error.response?.status;
+    if (status !== undefined) {
+      event.fingerprint = status === 500 ? ["api-server-error"] : [`api-http-${status}`];
     } else if (error.code === "ECONNABORTED") {
       event.fingerprint = ["api-timeout"];
     } else if (error.code === "ERR_NETWORK") {

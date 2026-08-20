@@ -9,10 +9,33 @@ analytics.flawchess.com {
 flawchess.com {
     encode gzip
 
+    # Access log. Without this Caddy logs NOTHING about requests, so any status
+    # Caddy produces on its own — above all the 502 it returns while the backend
+    # container restarts, and any 5xx that therefore never reaches FastAPI or the
+    # backend's Sentry — leaves no server-side trace at all. The only evidence was
+    # whatever the browser happened to report (FLAWCHESS-64), which is sampled,
+    # client-side, and useless for reconstructing an outage after the fact.
+    #
+    # stdout keeps `docker compose logs caddy` as the single inspection path.
+    # Volume is bounded by the `logging:` limits on the caddy service in
+    # docker-compose.yml — Docker's json-file default has NO rotation, and this
+    # host has no /etc/docker/daemon.json, so without those limits an access log
+    # grows until the 160 GB disk fills. Caddy redacts the Authorization and
+    # Cookie headers by default, so session tokens never land here.
+    log {
+        output stdout
+        format json
+    }
+
     # Frontend SPA — serve static files first
     # If the file exists on disk (JS, CSS, images, etc.), serve it directly
     @static file
     handle @static {
+        # Static assets are served by Caddy itself and can never 502, so they
+        # carry no diagnostic value — and logging every hashed chunk plus the
+        # 43.6 MB Maia model would drown the API entries this log exists for.
+        log_skip
+
         root * /srv
 
         # Service worker and PWA manifest must never be HTTP-cached so browsers
