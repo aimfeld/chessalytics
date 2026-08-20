@@ -1,7 +1,7 @@
 # Phase 211 Context — Vetted "Also Fine" Moves & Server-Key Grading
 
 **Source:** `/gsd-explore` session 2026-08-16 (user + assistant), distilled into
-[SEED-150](../../seeds/SEED-150-vetted-also-fine-moves.md). This file records the USER
+[SEED-150](../../seeds/closed/SEED-150-vetted-also-fine-moves.md). This file records the USER
 DECISIONS from that session; the seed carries the full verified analysis. Both were
 verified against the tree on 2026-08-16.
 
