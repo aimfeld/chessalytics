@@ -172,12 +172,21 @@ against the actual game result. See E-13 for the two-boundary frames.
       refits on the full frame). Shape sanity: material+clock adds almost nothing at MG
       entry (near-equal material, full clocks) and a lot at EG entry — consistent with
       ChessMimic Table 9's logistic at 0.2084 on random plies.
-- [ ] **Node-budget convergence**: `practicalScore@{50,100}` vs `@400` on ~200 endgame-entry
-      positions spanning ELO buckets. If @100 does not track @400, E-08 changes first.
-- [ ] **FC cost measurement**: seconds per position at @100 → validates E-07's 5,000
-      games/cell (~163k FC searches; at 2 s/position that is ~4 days single-process).
-      Decides: keep 5k, trim to 3k, restore an FC-only subset, or need E-06's
-      contested-band fallback.
+- [x] **Node-budget convergence** — DONE 2026-08-20 (`gate0_fc_convergence.mjs`, live
+      `mctsSearch`, 200 endgame-entry positions cell-spread, real ratings color-keyed,
+      concurrency 4 app-faithful): **@100 vs @400: MAE 0.0070 expected-score, Spearman
+      0.999, favored-side flip 0.5% (1/200, a 0.506-vs-0.496 hairline; median @400
+      margin |score−0.5| = 0.257), top-move agreement 89%**. @50 vs @400: MAE 0.0106,
+      Spearman 0.997, flip 2.0% (all 4 flips straddle 0.5). E-08's @100 is confirmed —
+      budget error is an order of magnitude below the 10% EG disagreement rate E-11
+      measures.
+- [x] **FC cost measurement** — DONE 2026-08-20 (same run, 4 Stockfish procs; Maia
+      wasm inference is the serial per-process bottleneck): **@100 mean 10.24 s/pos**
+      (median 9.87), @50 mean 5.48, @400 mean 37.72. E-07 at 5,000 games/cell
+      (~163k FC searches @100) = **~19.3 process-days**, sharded (`--workers`):
+      ~3.2 days on the 16-thread workstation (~6 workers), ~1.6 days on the 32-thread
+      laptop (~12 workers), ~1.1 days on both. 3,000/cell scales to 0.6× of those.
+      No contested-band fallback needed.
 - [x] **Quick-scan vs lichess eval cross-check** (E-09) — DONE 2026-08-20
       (`gate0_lichess_crosscheck.mjs` on a 316-row `--lichess-only` manifest, our
       depth-15 WASM Stockfish vs the stored lichess evals, both white-POV): endgame
@@ -240,6 +249,14 @@ Measured 2026-08-20 (benchmark DB, ~26k-game `TABLESAMPLE SYSTEM (1)`, raw frame
   `app/services/eval_entry.py` (memory warns of a post-move shift in another lane).
 - **Eval source mix in the filtered frame**: ~21% of games carry lichess evals at entry
   plies, ~79% our depth-15 quick-scan (rows store one source, never both).
+- **FC @100 convergence + cost** (2026-08-20, 200 EG-entry positions, live mctsSearch,
+  concurrency 4): @100 tracks @400 at MAE 0.0070 / Spearman 0.999 / 0.5% hairline flips /
+  89% top-move agreement; cost 10.24 s/pos mean (@50 5.48, @400 37.72). Maia wasm
+  inference is ~80% of @400 wall within one process — parallelize by sharding processes,
+  never by raising `SearchBudget.concurrency` (stays 4, app-faithful; tree shape depends
+  on it). `SearchBudget.elo` is color-keyed `{w, b}`, so E-12 needs no engine change for
+  FC; remaining asterisk: `nodePolicy`'s per-inference `elo_oppo` = `elo_self` (the value
+  head does thread both).
 - **E-14 null floors** (2026-08-20, 5k-game Gate 0 sample, eval half, headline basis):
   MG entry — elo-only Brier 0.2282, material+rating+clock logistic 0.2257 (the extra
   features are nearly inert there); EG entry — elo-only 0.2207, logistic 0.1851.

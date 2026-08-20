@@ -1,0 +1,56 @@
+{
+  "generated_at": "2026-08-20T21:11:30.641Z",
+  "config": {
+    "node_budgets": [
+      50,
+      100,
+      400
+    ],
+    "max_plies": 8,
+    "elo": "color-keyed real ratings (SearchBudget.elo = {w: white_rating, b: black_rating})",
+    "note_e12": "nodePolicy per-inference elo_oppo defaults to elo_self; each node still runs at the mover-at-that-node's own real rating via the color-keyed budget",
+    "extra_root_moves": "omitted (self-contained FC arm; app-only SF-best injection not used)",
+    "score_source": "rankedLines[0].practicalScore (the app #1 pick, findability-sorted)",
+    "positions_sampled": 200,
+    "stockfish_procs": 4
+  },
+  "cost_by_budget": {
+    "50": {
+      "n": 200,
+      "mean_s": 5.4805449999999984,
+      "median_s": 5.178
+    },
+    "100": {
+      "n": 200,
+      "mean_s": 10.242565000000003,
+      "median_s": 9.870000000000001
+    },
+    "400": {
+      "n": 200,
+      "mean_s": 37.718534999999996,
+      "median_s": 37.3465
+    }
+  },
+  "agreement": {
+    "@50_vs_@400": {
+      "n_pairs": 200,
+      "mae": 0.010619283721634946,
+      "median_abs_err": 0.006416266657938215,
+      "spearman": 0.9971694292357309,
+      "judged": 200,
+      "favored_side_flips": 4,
+      "favored_side_flip_rate": 0.02,
+      "top_move_agreement": 0.825
+    },
+    "@100_vs_@400": {
+      "n_pairs": 200,
+      "mae": 0.006961047909616443,
+      "median_abs_err": 0.0036587611616591964,
+      "spearman": 0.9990924773119328,
+      "judged": 200,
+      "favored_side_flips": 1,
+      "favored_side_flip_rate": 0.005,
+      "top_move_agreement": 0.89
+    }
+  }
+}
