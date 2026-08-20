@@ -115,9 +115,11 @@ WHERE rn <= :games_per_cell
 
 # Entry row per (game, phase) WITH its stored eval — DISTINCT ON picks the
 # minimal ply per phase, which is the boundary entry the eval lane wrote.
+# move_san: row P stores the PRE-push position and the SAN of move P, so this
+# IS the human's actual next move at the boundary (E-10, Stage B).
 ENTRY_ROWS_SQL = """
 SELECT DISTINCT ON (game_id, phase)
-    game_id, phase, ply, eval_cp, eval_mate, endgame_class, clock_seconds
+    game_id, phase, ply, eval_cp, eval_mate, endgame_class, clock_seconds, move_san
 FROM game_positions
 WHERE game_id = ANY(:ids) AND phase IN (:phase_mg, :phase_eg)
 ORDER BY game_id, phase, ply
@@ -164,6 +166,7 @@ def _build_rows(
                 "eval_mate": entry["eval_mate"],
                 "endgame_class": entry["endgame_class"],
                 "clock_seconds": entry["clock_seconds"],
+                "move_san": entry["move_san"],
             }
         )
     return rows
