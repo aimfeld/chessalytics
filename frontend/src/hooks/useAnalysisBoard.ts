@@ -12,6 +12,11 @@
  *   board (lichess parity). Guarded against defaultPrevented, modifier keys,
  *   typing-surface targets, and an open modal dialog; containerRef.current
  *   === null (useTrainFreePlay never attaches it) is what excludes Train.
+ * - Board-scoped wheel handler (Quick 260821-kyz): wheel down over the board
+ *   goes forward, wheel up goes back, and the page never scrolls while the
+ *   pointer is over the board. Rate limited by an accumulated-delta
+ *   threshold plus a time throttle so a trackpad flick advances a handful of
+ *   moves, not the whole game. Also excluded from Train via containerRef.
  */
 
 import { useRef, useState, useCallback, useEffect } from 'react';
@@ -136,7 +141,32 @@ const STARTING_FEN = 'rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1';
  */
 const OPEN_MODAL_SELECTOR = '[role="dialog"][aria-modal="true"][data-state="open"]';
 
+/** Accumulated wheel travel (px) required before one navigation step fires — filters trackpad micro-jitter (D-04). */
+const WHEEL_NAV_DELTA_THRESHOLD_PX = 15;
+/** Minimum gap (ms) between two wheel-driven navigation steps, so a momentum flick advances a handful of moves rather than the whole game (D-04). */
+const WHEEL_NAV_THROTTLE_MS = 90;
+/** WheelEvent.deltaMode value for line-unit deltas (Firefox's default reporting unit). */
+const WHEEL_DELTA_MODE_LINE = 1;
+/** WheelEvent.deltaMode value for page-unit deltas. */
+const WHEEL_DELTA_MODE_PAGE = 2;
+/** Approximate px-per-line used to normalize line-unit deltas onto the pixel threshold. */
+const WHEEL_LINE_HEIGHT_PX = 16;
+/** Approximate px-per-page used to normalize page-unit deltas onto the pixel threshold. */
+const WHEEL_PAGE_HEIGHT_PX = 800;
+
 // ─── Helpers ─────────────────────────────────────────────────────────────────
+
+/**
+ * Normalize a WheelEvent's deltaY onto pixels regardless of deltaMode — some
+ * browsers (notably Firefox) report line or page units instead of pixels,
+ * which would sit under WHEEL_NAV_DELTA_THRESHOLD_PX and need several notches
+ * per navigation step without this normalization.
+ */
+function wheelDeltaPx(e: WheelEvent): number {
+  if (e.deltaMode === WHEEL_DELTA_MODE_LINE) return e.deltaY * WHEEL_LINE_HEIGHT_PX;
+  if (e.deltaMode === WHEEL_DELTA_MODE_PAGE) return e.deltaY * WHEEL_PAGE_HEIGHT_PX;
+  return e.deltaY;
+}
 
 /**
  * True when `target` is an element the user is actively typing into (a text
@@ -785,6 +815,53 @@ export function useAnalysisBoard(
     };
     window.addEventListener('keydown', handleKeyDown);
     return () => window.removeEventListener('keydown', handleKeyDown);
+  }, [goBack, goForward]);
+
+  // Board-scoped, rate-limited wheel handler (wheel up = goBack, wheel down =
+  // goForward, D-03). Registered on `window` with a container.contains(e.target)
+  // test rather than directly on the container element itself, for the same
+  // reason the keydown handler above reads containerRef.current at event time
+  // instead of effect time: the Analysis page swaps the mobile and desktop
+  // board wrappers without re-running this effect, so a listener attached
+  // directly to the container would end up bound to a detached node after the
+  // swap. Uses addEventListener({ passive: false }) rather than a React
+  // onWheel prop because React's wheel handling is passive by default —
+  // preventDefault() inside an onWheel handler is silently ignored. Holds
+  // accumulatedPx/lastNavAtMs in the effect closure (not refs): goBack/
+  // goForward are stable [] callbacks, so this effect mounts once and the
+  // closure variables persist for the hook's lifetime same as a ref would.
+  useEffect(() => {
+    let accumulatedPx = 0;
+    let lastNavAtMs = 0;
+
+    const handleWheel = (e: WheelEvent): void => {
+      const container = containerRef.current;
+      if (!container) return;
+      if (!(e.target instanceof Node) || !container.contains(e.target)) return;
+
+      // The board is a navigation surface while hovered, never a scroll
+      // surface — prevented unconditionally once we know the pointer is over
+      // it, independent of whether a step fires below (D-03).
+      e.preventDefault();
+
+      accumulatedPx += wheelDeltaPx(e);
+      if (Math.abs(accumulatedPx) < WHEEL_NAV_DELTA_THRESHOLD_PX) return;
+
+      const now = Date.now();
+      if (now - lastNavAtMs < WHEEL_NAV_THROTTLE_MS) return; // keep accumulating; don't reset
+
+      lastNavAtMs = now;
+      const forward = accumulatedPx > 0;
+      accumulatedPx = 0;
+      if (forward) {
+        goForward();
+      } else {
+        goBack();
+      }
+    };
+
+    window.addEventListener('wheel', handleWheel, { passive: false });
+    return () => window.removeEventListener('wheel', handleWheel);
   }, [goBack, goForward]);
 
   const position = getPosition(state);
