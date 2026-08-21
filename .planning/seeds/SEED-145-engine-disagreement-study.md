@@ -236,6 +236,21 @@ sampler + `--workers` sweep + ledger loader) is cleared to start.
   still ledgers so one bad row can't loop). Run
   `node scripts/seed145/repair_shards.mjs` once on the sweep machine to strip
   the old error rows (backs up shards as `*.pre-repair.bak`), then resume.
+- **Native ORT backend 2026-08-21** (root fix for the wasm crash class): the
+  sweep now takes `--ort native|wasm` (default wasm). `native` =
+  onnxruntime-node from `scripts/package.json`, **pinned 1.21.1 — ort >= 1.22
+  segfaults loading maia3_simplified.onnx** (the exact segfault pyproject pins
+  Python ort to 1.20.1 for; frontend's maiaWorkerHost never root-fixed the
+  wasm leak either, it respawns the worker). No wasm heap → no OOB crashes,
+  and ~1.75x faster: 6.8 vs 11.9 s/pos measured on 8 manifest positions,
+  top-move 8/8, |dscore| <= 0.0016 (mean 0.0003) — an order below E-08's
+  accepted @100-vs-@400 budget error, and the same order as native's own
+  thread-count nondeterminism. Ledger rows record `ort_backend`; rows written
+  before 2026-08-21 lack the field and are all wasm. Setup on a sweep
+  machine: `npm install` inside `scripts/`. Laptop math at 16 workers:
+  finish-on-wasm ~37h vs full clean re-run on native ~28h — re-running
+  everything natively is cheaper than finishing on wasm AND yields a
+  single-backend dataset.
 - **Remaining on completion**: `stage_b_load.py --db benchmark` (recreates
   `seed145_entry_predictions`; smoke-validated incl. read-only MCP access),
   final row counts/skipped rows into this file, hand over to Stage C.

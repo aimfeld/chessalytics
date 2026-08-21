@@ -1,0 +1,8 @@
+{
+  "name": "flawchess-scripts",
+  "private": true,
+  "description": "Native deps for the Node analysis harness only, NOT the app. onnxruntime-node is PINNED at 1.21.1: >=1.22 segfaults loading the vendored maia3_simplified.onnx, the exact same pin rationale as pyproject.toml's onnxruntime==1.20.1 (see scripts/maia_parity_spike.py). Any bump must survive `node scripts/seed145/verify_value_head.mjs` first.",
+  "dependencies": {
+    "onnxruntime-node": "1.21.1"
+  }
+}

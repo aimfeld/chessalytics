@@ -52,12 +52,44 @@ export async function resolveFrontendModule(packageName) {
   return import(pathToFileURL(resolved).href);
 }
 
-// ─── Maia (onnxruntime-web WASM) — loaded ONCE, reused across all positions ────
+// ─── Maia (onnxruntime) — loaded ONCE, reused across all positions ────────────
 
-export async function createMaiaSession() {
+/**
+ * `backend: 'wasm'` (default) is onnxruntime-web, app-faithful but leaks the
+ * wasm arena (~"memory access out of bounds" after ~1,250 sweep positions —
+ * ort-web internal, SEED-113 already disposes everything we own; both the
+ * frontend maiaWorkerHost and the sweep supervisor mitigate by respawn).
+ *
+ * `backend: 'native'` is onnxruntime-node from scripts/package.json: no wasm
+ * heap (the OOB crash class disappears) and ~2x faster single-threaded.
+ * PINNED 1.21.1 — ort >= 1.22 SEGFAULTS loading this model (same pin as
+ * pyproject's onnxruntime==1.20.1, scripts/maia_parity_spike.py Pitfall 2).
+ * Pinned single-threaded: sweep workers are process-sharded, so intra-op
+ * threads would only oversubscribe the box; measured backend parity is
+ * |d expectedScore| <= ~1e-3 (same order as native's own thread-count
+ * nondeterminism, an order below E-08's accepted @100-vs-@400 budget error).
+ * NEVER mix backends within one study dataset without recording which rows
+ * used which (the Stage B ledger stores `ort_backend` per row).
+ */
+export async function createMaiaSession({ backend = 'wasm' } = {}) {
+  const modelPath = path.resolve(FRONTEND_DIR, 'public/maia/maia3_simplified.onnx');
+  if (backend === 'native') {
+    const requireFromScripts = createRequire(path.join(__dirname, '..', 'package.json'));
+    let ort;
+    try {
+      ort = requireFromScripts('onnxruntime-node');
+    } catch {
+      throw new Error("backend 'native' needs onnxruntime-node: run `npm install` in scripts/ first");
+    }
+    const session = await ort.InferenceSession.create(modelPath, {
+      executionProviders: ['cpu'],
+      intraOpNumThreads: 1,
+      interOpNumThreads: 1,
+    });
+    return { ort, session };
+  }
   const ort = (await resolveFrontendModule('onnxruntime-web')).default;
   ort.env.wasm.numThreads = 1; // matches the browser worker's no-COOP/COEP posture
-  const modelPath = path.resolve(FRONTEND_DIR, 'public/maia/maia3_simplified.onnx');
   const modelBytes = fs.readFileSync(modelPath);
   const session = await ort.InferenceSession.create(modelBytes, { executionProviders: ['wasm'] });
   return { ort, session };

@@ -46,7 +46,14 @@
  *
  * Usage (from repo root; supervisor):
  *   node --import ./scripts/lib/frontend-alias-hook.mjs scripts/seed145/stage_b_sweep.mjs \
- *     --workers 6 [--recycle-after 1500] [--stockfish-procs 4] [--limit N] [--manifest PATH]
+ *     --workers 6 [--ort native|wasm] [--recycle-after 1500] [--stockfish-procs 4] \
+ *     [--limit N] [--manifest PATH]
+ *
+ * `--ort native` (onnxruntime-node, `npm install` in scripts/ first) removes
+ * the wasm OOB crash class entirely and is ~1.75x faster per position
+ * (measured 2026-08-21: 6.8 vs 11.9 s/pos, top-move 8/8, |d score| <= 0.0016
+ * on the same positions — an order below E-08's accepted budget error).
+ * Default stays 'wasm'. Every ledger row records `ort_backend`.
  *
  * The manifest may be the plain .ndjson or a .ndjson.gz copy (a sweep machine
  * without the benchmark DB only needs the committed .gz).
@@ -107,6 +114,7 @@ function parseArgs(argv) {
     stockfishProcs: DEFAULT_STOCKFISH_PROCS,
     limit: null,
     manifest: DEFAULT_MANIFEST,
+    ort: 'wasm',
   };
   for (let i = 0; i < argv.length; i++) {
     const token = argv[i];
@@ -116,9 +124,11 @@ function parseArgs(argv) {
     else if (token === '--stockfish-procs') args.stockfishProcs = Number.parseInt(argv[++i], 10);
     else if (token === '--limit') args.limit = Number.parseInt(argv[++i], 10);
     else if (token === '--manifest') args.manifest = path.resolve(argv[i + 1]), i++;
+    else if (token === '--ort') args.ort = argv[++i];
     else throw new Error(`Unknown flag ${token}`);
   }
   if (args.workers === null || !(args.workers >= 1)) throw new Error('--workers N is required');
+  if (args.ort !== 'wasm' && args.ort !== 'native') throw new Error(`--ort must be wasm|native, got ${args.ort}`);
   return args;
 }
 
@@ -181,7 +191,7 @@ async function runWorker(args) {
   const { FLAWCHESS_ENGINE_MAX_PLIES } = await import('../calibration-harness.mjs');
   const { mctsSearch } = await import('@/lib/engine/mctsSearch');
 
-  const { ort, session } = await createMaiaSession();
+  const { ort, session } = await createMaiaSession({ backend: args.ort });
   const pool = await createStockfishPool({ size: args.stockfishProcs });
   const providers = makeNodeProviders(session, ort, pool.grade);
   const ledger = shardPath(args.workerIndex);
@@ -198,6 +208,7 @@ async function runWorker(args) {
       const out = {
         ...row,
         fc_node_budget: FC_NODE_BUDGET,
+        ort_backend: args.ort,
         maia_score_stm: null,
         maia_score_white: null,
         maia_win_stm: null,
@@ -319,7 +330,7 @@ async function runSupervisor(args) {
   const alreadyDone = loadDoneKeys().size;
   console.log(
     `[supervisor] ${total} manifest rows, ${alreadyDone} already ledgered, ` +
-      `${args.workers} workers (recycle-after ${args.recycleAfter}, ${args.stockfishProcs} SF procs each)`,
+      `${args.workers} workers (ort ${args.ort}, recycle-after ${args.recycleAfter}, ${args.stockfishProcs} SF procs each)`,
   );
 
   const children = new Map();
@@ -348,6 +359,8 @@ async function runSupervisor(args) {
         String(args.stockfishProcs),
         '--manifest',
         args.manifest,
+        '--ort',
+        args.ort,
         ...(args.limit !== null ? ['--limit', String(args.limit)] : []),
       ],
       { cwd: REPO_ROOT, stdio: ['ignore', 'inherit', 'inherit'] },
