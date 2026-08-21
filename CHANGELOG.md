@@ -20,7 +20,7 @@ in `YYYY-MM-DD` (Europe/Zurich).
 
 - You can now paste a FEN or a full PGN on the analysis board to load any position or game from outside FlawChess, look at it without saving anything, and optionally run a full analysis on it. Pasted games never count toward your openings, endgames, or insights stats, and stay hidden in the Library until you turn on the Pasted filter. (Phase 208)
 
-- The analysis board now supports lichess-style move browsing: arrow keys work as soon as you land on the page, no need to click the board first, and scrolling the mouse wheel while hovering the board steps through the moves too.
+- The analysis board and the opening explorer board now support the same lichess-style move browsing: arrow keys work as soon as you land on the page, no need to click the board first, and scrolling the mouse wheel while hovering the board steps through the moves too. Holding an arrow key browses at a steady, visible pace instead of jumping straight to the end of the game.
 
 ### Changed
 

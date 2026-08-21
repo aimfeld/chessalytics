@@ -7,23 +7,16 @@
  * - No Zobrist hashing or opening lookup.
  * - Mid-line moves fork a new child node rather than truncating the main line (BOARD-01).
  * - Stores full FEN per node for O(1) goToNode — no root replay (BOARD-02).
- * - Window-scoped keyboard handler (Quick 260821-kyz): promoted from
- *   container-scoped so ArrowLeft/ArrowRight work without first clicking the
- *   board (lichess parity). Guarded against defaultPrevented, modifier keys,
- *   typing-surface targets, and an open modal dialog; containerRef.current
- *   === null (useTrainFreePlay never attaches it) is what excludes Train.
- *   Auto-repeat keydowns (a held arrow key) are throttled so the board paints
- *   between steps instead of freezing until release.
- * - Board-scoped wheel handler (Quick 260821-kyz): wheel down over the board
- *   goes forward, wheel up goes back, and the page never scrolls while the
- *   pointer is over the board. Rate limited by an accumulated-delta
- *   threshold plus a time throttle so a trackpad flick advances a handful of
- *   moves, not the whole game. Also excluded from Train via containerRef.
+ * - Arrow-key and mouse-wheel move browsing (Quick 260821-kyz) live in the
+ *   shared useBoardNavigationInput hook, which the Openings board uses too.
+ *   containerRef.current === null (useTrainFreePlay never attaches it) is
+ *   what excludes Train from both surfaces.
  */
 
 import { useRef, useState, useCallback, useEffect } from 'react';
 import type { RefObject } from 'react';
 import { Chess } from 'chess.js';
+import { useBoardNavigationInput } from '@/hooks/useBoardNavigationInput';
 import { playSound, unlockAudio } from '@/lib/sounds';
 import type { SoundEvent } from '@/lib/sounds';
 
@@ -134,66 +127,7 @@ export interface AnalysisBoardReturn {
 
 const STARTING_FEN = 'rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1';
 
-/**
- * CSS selector matching an open Radix modal dialog (PasteModal). `aria-modal="true"`
- * is required in addition to `role="dialog"` because Radix popovers (e.g. a hovered
- * info tooltip) also render `role="dialog"` but are never modal — without the
- * aria-modal qualifier this guard would block board navigation behind a hovered
- * popover, which is worse than the click-to-focus bug it exists to fix (D-02).
- */
-const OPEN_MODAL_SELECTOR = '[role="dialog"][aria-modal="true"][data-state="open"]';
-
-/**
- * Minimum gap (ms) between two navigation steps driven by an auto-repeating
- * held arrow key. The OS repeat rate (~30/s) queues keydowns faster than the
- * analysis board can render one, so the main thread never gets an idle slot to
- * paint and the position appears frozen until the key is released (the whole
- * burst then resolves at once, jumping to the end of the game). Throttling the
- * repeats leaves paint time between steps, so a held key browses visibly.
- */
-const KEY_REPEAT_NAV_THROTTLE_MS = 90;
-
-/** Accumulated wheel travel (px) required before one navigation step fires — filters trackpad micro-jitter (D-04). */
-const WHEEL_NAV_DELTA_THRESHOLD_PX = 15;
-/** Minimum gap (ms) between two wheel-driven navigation steps, so a momentum flick advances a handful of moves rather than the whole game (D-04). */
-const WHEEL_NAV_THROTTLE_MS = 90;
-/** WheelEvent.deltaMode value for line-unit deltas (Firefox's default reporting unit). */
-const WHEEL_DELTA_MODE_LINE = 1;
-/** WheelEvent.deltaMode value for page-unit deltas. */
-const WHEEL_DELTA_MODE_PAGE = 2;
-/** Approximate px-per-line used to normalize line-unit deltas onto the pixel threshold. */
-const WHEEL_LINE_HEIGHT_PX = 16;
-/** Approximate px-per-page used to normalize page-unit deltas onto the pixel threshold. */
-const WHEEL_PAGE_HEIGHT_PX = 800;
-
 // ─── Helpers ─────────────────────────────────────────────────────────────────
-
-/**
- * Normalize a WheelEvent's deltaY onto pixels regardless of deltaMode — some
- * browsers (notably Firefox) report line or page units instead of pixels,
- * which would sit under WHEEL_NAV_DELTA_THRESHOLD_PX and need several notches
- * per navigation step without this normalization.
- */
-function wheelDeltaPx(e: WheelEvent): number {
-  if (e.deltaMode === WHEEL_DELTA_MODE_LINE) return e.deltaY * WHEEL_LINE_HEIGHT_PX;
-  if (e.deltaMode === WHEEL_DELTA_MODE_PAGE) return e.deltaY * WHEEL_PAGE_HEIGHT_PX;
-  return e.deltaY;
-}
-
-/**
- * True when `target` is an element the user is actively typing into (a text
- * input, textarea, select, or contentEditable region) — arrow-key navigation
- * must not hijack the caret there (D-02). Uses `instanceof` rather than a
- * cast (unlike the useChessGame.ts / MoveListPanel.tsx precedents) so a
- * non-Element target (e.g. `document` itself) returns false instead of throwing.
- */
-function isTypingTarget(target: EventTarget | null): boolean {
-  if (!(target instanceof HTMLElement)) return false;
-  if (target.tagName === 'INPUT' || target.tagName === 'TEXTAREA' || target.tagName === 'SELECT') {
-    return true;
-  }
-  return target.isContentEditable;
-}
 
 function buildNode(
   id: NodeId,
@@ -794,101 +728,8 @@ export function useAnalysisBoard(
     playSound(event);
   }, [state.currentNodeId, state.nodes]);
 
-  // Window-scoped, guarded keydown handler (ArrowLeft = goBack, ArrowRight =
-  // goForward). Promoted from container-scoped to window-scoped (D-01) so
-  // arrows work without first clicking the board — lichess parity. Six
-  // guards, cheapest first, keep this from hijacking keys that belong
-  // elsewhere: not an arrow key; already consumed (e.defaultPrevented, e.g. a
-  // Radix menu whose listener runs before this one in bubble order); a
-  // modifier is held (so browser shortcuts like Cmd+Left still work); the
-  // event target is a typing surface (input/textarea/select/contentEditable);
-  // this hook instance has no mounted container (containerRef.current ===
-  // null — how useTrainFreePlay opts out entirely, D-05, without a new hook
-  // prop); or a modal dialog is open (PasteModal). containerRef.current is
-  // read INSIDE the handler, not captured at effect-mount time, because the
-  // Analysis page swaps the mobile and desktop board wrappers without
-  // re-running this effect. goBack/goForward are stable [] callbacks, so this
-  // effect only re-runs on mount/unmount.
-  useEffect(() => {
-    let lastNavAtMs = 0;
-
-    const handleKeyDown = (e: KeyboardEvent): void => {
-      if (e.key !== 'ArrowLeft' && e.key !== 'ArrowRight') return;
-      if (e.defaultPrevented) return;
-      if (e.ctrlKey || e.metaKey || e.altKey) return;
-      if (isTypingTarget(e.target)) return;
-      if (!containerRef.current) return;
-      if (document.querySelector(OPEN_MODAL_SELECTOR)) return;
-
-      // Always prevent the arrow key's default page scroll, even for a repeat
-      // this handler throttles away — otherwise a held key scrolls the page
-      // between navigation steps.
-      e.preventDefault();
-
-      // Throttle auto-repeats only (e.repeat): deliberate presses, however
-      // fast the user taps, always navigate. See KEY_REPEAT_NAV_THROTTLE_MS
-      // for why a held key otherwise froze the board until release. The
-      // timestamp is stamped on every navigation, repeat or not, so the first
-      // repeat is paced against the press that started the hold.
-      if (e.repeat && Date.now() - lastNavAtMs < KEY_REPEAT_NAV_THROTTLE_MS) return;
-      lastNavAtMs = Date.now();
-
-      if (e.key === 'ArrowLeft') {
-        goBack();
-      } else {
-        goForward();
-      }
-    };
-    window.addEventListener('keydown', handleKeyDown);
-    return () => window.removeEventListener('keydown', handleKeyDown);
-  }, [goBack, goForward]);
-
-  // Board-scoped, rate-limited wheel handler (wheel up = goBack, wheel down =
-  // goForward, D-03). Registered on `window` with a container.contains(e.target)
-  // test rather than directly on the container element itself, for the same
-  // reason the keydown handler above reads containerRef.current at event time
-  // instead of effect time: the Analysis page swaps the mobile and desktop
-  // board wrappers without re-running this effect, so a listener attached
-  // directly to the container would end up bound to a detached node after the
-  // swap. Uses addEventListener({ passive: false }) rather than a React
-  // onWheel prop because React's wheel handling is passive by default —
-  // preventDefault() inside an onWheel handler is silently ignored. Holds
-  // accumulatedPx/lastNavAtMs in the effect closure (not refs): goBack/
-  // goForward are stable [] callbacks, so this effect mounts once and the
-  // closure variables persist for the hook's lifetime same as a ref would.
-  useEffect(() => {
-    let accumulatedPx = 0;
-    let lastNavAtMs = 0;
-
-    const handleWheel = (e: WheelEvent): void => {
-      const container = containerRef.current;
-      if (!container) return;
-      if (!(e.target instanceof Node) || !container.contains(e.target)) return;
-
-      // The board is a navigation surface while hovered, never a scroll
-      // surface — prevented unconditionally once we know the pointer is over
-      // it, independent of whether a step fires below (D-03).
-      e.preventDefault();
-
-      accumulatedPx += wheelDeltaPx(e);
-      if (Math.abs(accumulatedPx) < WHEEL_NAV_DELTA_THRESHOLD_PX) return;
-
-      const now = Date.now();
-      if (now - lastNavAtMs < WHEEL_NAV_THROTTLE_MS) return; // keep accumulating; don't reset
-
-      lastNavAtMs = now;
-      const forward = accumulatedPx > 0;
-      accumulatedPx = 0;
-      if (forward) {
-        goForward();
-      } else {
-        goBack();
-      }
-    };
-
-    window.addEventListener('wheel', handleWheel, { passive: false });
-    return () => window.removeEventListener('wheel', handleWheel);
-  }, [goBack, goForward]);
+  // Arrow-key and mouse-wheel move browsing, shared with the Openings board.
+  useBoardNavigationInput({ containerRefs: [containerRef], goBack, goForward });
 
   const position = getPosition(state);
   const lastMove = getLastMove(state);

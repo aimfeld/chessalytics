@@ -131,6 +131,10 @@ export function OpeningsPage() {
 
   // ── Board state ─────────────────────────────────────────────────────────────
   const chess = useChessGame();
+  // Destructured out of `chess` before use: react-hooks/refs taints every
+  // property read off an object once one of them is used as a JSX `ref`, which
+  // would flag all ~30 other `chess.*` reads on this page.
+  const { desktopBoardRef, mobileBoardRef } = chess;
   const [boardFlipped, setBoardFlipped] = useState(false);
 
   // ── Filter state (shared across pages) ───────────────────────────────────────
@@ -944,13 +948,17 @@ export function OpeningsPage() {
         >
             <div className="flex flex-row items-start gap-6">
               <div className={getBoardContainerClassName(activeTab)} data-testid="openings-board-container">
-                <ChessBoard
-                  position={chess.position}
-                  onPieceDrop={chess.makeMove}
-                  flipped={boardFlipped}
-                  lastMove={chess.lastMove}
-                  arrows={boardArrows}
-                />
+                {/* Wraps the board only (not BoardControls): this ref scopes wheel
+                    navigation to the board surface — see useBoardNavigationInput. */}
+                <div ref={desktopBoardRef}>
+                  <ChessBoard
+                    position={chess.position}
+                    onPieceDrop={chess.makeMove}
+                    flipped={boardFlipped}
+                    lastMove={chess.lastMove}
+                    arrows={boardArrows}
+                  />
+                </div>
                 <BoardControls
                   onBack={chess.goBack}
                   onForward={chess.goForward}
@@ -1074,13 +1082,17 @@ export function OpeningsPage() {
                     tablet/narrow-desktop widths below `lg`, so BoardControls rendered wider
                     than the board and the settings column was pushed far to the right. */}
                 <div className="flex-1 min-w-0 max-w-[400px] flex flex-col gap-1">
-                  <ChessBoard
-                    position={chess.position}
-                    onPieceDrop={chess.makeMove}
-                    flipped={boardFlipped}
-                    lastMove={chess.lastMove}
-                    arrows={boardArrows}
-                  />
+                  {/* Same board-only wheel scoping as the desktop layout above. Both
+                      layouts stay mounted (one is CSS-hidden), hence a ref each. */}
+                  <div ref={mobileBoardRef}>
+                    <ChessBoard
+                      position={chess.position}
+                      onPieceDrop={chess.makeMove}
+                      flipped={boardFlipped}
+                      lastMove={chess.lastMove}
+                      arrows={boardArrows}
+                    />
+                  </div>
                   {/* Board controls aligned to chessboard width (excludes settings column) */}
                   <BoardControls
                     onBack={chess.goBack}

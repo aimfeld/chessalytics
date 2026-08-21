@@ -1,5 +1,6 @@
 import { useRef, useState, useCallback, useEffect } from 'react';
 import { Chess } from 'chess.js';
+import { useBoardNavigationInput } from '@/hooks/useBoardNavigationInput';
 import { computeHashes, hashToString } from '@/lib/zobrist';
 import { findOpening, preloadOpenings } from '@/lib/openings';
 import { MAX_EXPLORER_PLY } from '@/lib/explorer';
@@ -35,6 +36,17 @@ interface ChessGameState {
   openingName: Opening | null;
   /** Load a saved sequence of SAN moves onto a fresh board */
   loadMoves: (sans: string[]) => void;
+  /**
+   * Attach each as the `ref` of the element wrapping that layout's board.
+   * Scopes wheel navigation to the board surface and gates arrow-key
+   * navigation on a board being mounted — see useBoardNavigationInput.
+   * Exposed as callback refs rather than RefObjects so that consumers holding
+   * the whole hook result (`chess.position`, `chess.goBack`, …) don't trip
+   * react-hooks/refs, which taints every property read off an object known to
+   * carry a ref.
+   */
+  desktopBoardRef: (el: HTMLDivElement | null) => void;
+  mobileBoardRef: (el: HTMLDivElement | null) => void;
 }
 
 const STARTING_FEN = 'rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1';
@@ -268,24 +280,27 @@ export function useChessGame(): ChessGameState {
     [hashes],
   );
 
-  // Arrow key navigation: left = back, right = forward
-  useEffect(() => {
-    const handleKeyDown = (e: KeyboardEvent) => {
-      // Don't capture when user is typing in an input/textarea
-      const tag = (e.target as HTMLElement).tagName;
-      if (tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT') return;
-
-      if (e.key === 'ArrowLeft') {
-        e.preventDefault();
-        goBack();
-      } else if (e.key === 'ArrowRight') {
-        e.preventDefault();
-        goForward();
-      }
-    };
-    window.addEventListener('keydown', handleKeyDown);
-    return () => window.removeEventListener('keydown', handleKeyDown);
-  }, [goBack, goForward]);
+  // Arrow-key (left = back, right = forward) and mouse-wheel move browsing,
+  // shared with the analysis board. Replaces a weaker local keydown handler
+  // that guarded only INPUT/TEXTAREA/SELECT — no defaultPrevented, modifier,
+  // contentEditable or open-modal guard, and no held-key throttle.
+  // Two refs, not one: Openings keeps its desktop and mobile layouts mounted
+  // simultaneously and hides one with CSS (`hidden lg:flex` / `lg:hidden`), so
+  // a single ref would be claimed by whichever board React attaches last (the
+  // hidden mobile one) and wheel navigation would silently die on desktop.
+  const desktopContainerRef = useRef<HTMLDivElement | null>(null);
+  const mobileContainerRef = useRef<HTMLDivElement | null>(null);
+  useBoardNavigationInput({
+    containerRefs: [desktopContainerRef, mobileContainerRef],
+    goBack,
+    goForward,
+  });
+  const desktopBoardRef = useCallback((el: HTMLDivElement | null) => {
+    desktopContainerRef.current = el;
+  }, []);
+  const mobileBoardRef = useCallback((el: HTMLDivElement | null) => {
+    mobileContainerRef.current = el;
+  }, []);
 
   // Update opening name whenever the viewed ply changes
   useEffect(() => {
@@ -320,5 +335,7 @@ export function useChessGame(): ChessGameState {
     getHashForOpenings,
     openingName,
     loadMoves,
+    desktopBoardRef,
+    mobileBoardRef,
   };
 }
