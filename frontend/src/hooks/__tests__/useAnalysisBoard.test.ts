@@ -41,7 +41,7 @@
  *     or a silent goToNode.
  */
 
-import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { renderHook, act } from '@testing-library/react';
 import { Chess } from 'chess.js';
 import { useAnalysisBoard } from '../useAnalysisBoard';
@@ -943,5 +943,461 @@ describe('useAnalysisBoard', () => {
     const pvIds = [...result.current.pvNodeIds];
     expect(pvIds).toHaveLength(1);
     expect(result.current.nodes.get(pvIds[0]!)?.san).toBe('Nf6');
+  });
+});
+
+// ─── Quick 260821-kyz: window-scoped, guarded arrow-key navigation ──────────
+//
+// D-01: promoted from a container-scoped keydown handler to a window-scoped
+// one, so ArrowLeft/ArrowRight work without first clicking the board.
+// D-02: six guards, in order — not an arrow key; already defaultPrevented;
+// a modifier key held; the event target is a typing surface
+// (input/textarea/select/contentEditable); this hook instance has no
+// mounted container (containerRef.current === null — how useTrainFreePlay
+// opts out, D-05); an open modal dialog (PasteModal).
+
+describe('useAnalysisBoard — keyboard navigation', () => {
+  let board: HTMLDivElement;
+  // This project runs vitest without `globals: true`, so @testing-library/react's
+  // auto-cleanup (which relies on a GLOBAL `afterEach`) never registers — every
+  // renderHook() here mounts a real window-level keydown listener that outlives
+  // the test unless explicitly unmounted. Track every render's unmount and run
+  // them all in afterEach, or a stale listener from an earlier test fires (and
+  // calls e.preventDefault()) on a later test's dispatched event, making that
+  // later test's OWN listener see e.defaultPrevented and silently no-op.
+  const cleanupFns: Array<() => void> = [];
+
+  function renderBoard(fen: string = ROOT_FEN) {
+    const rendered = renderHook(() => useAnalysisBoard(fen));
+    cleanupFns.push(rendered.unmount);
+    return rendered;
+  }
+
+  beforeEach(() => {
+    mockPlaySound.mockClear();
+    mockUnlockAudio.mockClear();
+    board = document.createElement('div');
+    document.body.appendChild(board);
+  });
+
+  afterEach(() => {
+    while (cleanupFns.length > 0) {
+      cleanupFns.pop()!();
+    }
+    board.remove();
+    // Sweep any dialog/typing-surface elements a test injected directly onto
+    // document.body (not appended to `board`) so a failure mid-test can't
+    // leak state into the next test.
+    document.querySelectorAll('[role="dialog"], textarea, input, [contenteditable]').forEach((el) => {
+      el.remove();
+    });
+  });
+
+  /** Dispatch a bubbling, cancelable keydown from `target` (default: window) and report whether it ended up defaultPrevented. */
+  function dispatchKey(key: string, target: EventTarget = window, opts: KeyboardEventInit = {}): boolean {
+    const event = new KeyboardEvent('keydown', { key, bubbles: true, cancelable: true, ...opts });
+    act(() => {
+      target.dispatchEvent(event);
+    });
+    return event.defaultPrevented;
+  }
+
+  it('ArrowLeft/ArrowRight navigate the board without it ever being focused (the headline behavior)', () => {
+    const { result } = renderBoard();
+    act(() => { result.current.loadMainLine(MAIN_LINE_SANS, ROOT_FEN); });
+    result.current.containerRef.current = board;
+    const lastId = result.current.currentNodeId;
+
+    // Dispatched from document.body — the board div was never focused or clicked.
+    const prevented1 = dispatchKey('ArrowLeft', document.body);
+    const backId = result.current.currentNodeId;
+    expect(backId).not.toBe(lastId);
+    expect(prevented1).toBe(true);
+
+    const prevented2 = dispatchKey('ArrowRight', document.body);
+    expect(result.current.currentNodeId).toBe(lastId);
+    expect(prevented2).toBe(true);
+  });
+
+  it('with no mounted container (the useTrainFreePlay shape), arrow keys do nothing', () => {
+    const { result } = renderBoard();
+    act(() => { result.current.loadMainLine(MAIN_LINE_SANS, ROOT_FEN); });
+    const startId = result.current.currentNodeId;
+    // containerRef.current intentionally left null — the Train shape.
+
+    const prevented = dispatchKey('ArrowLeft', document.body);
+    expect(result.current.currentNodeId).toBe(startId);
+    expect(prevented).toBe(false);
+  });
+
+  it('arrow keys inside a textarea do not navigate', () => {
+    const { result } = renderBoard();
+    act(() => { result.current.loadMainLine(MAIN_LINE_SANS, ROOT_FEN); });
+    result.current.containerRef.current = board;
+    const startId = result.current.currentNodeId;
+
+    const textarea = document.createElement('textarea');
+    document.body.appendChild(textarea);
+    const prevented = dispatchKey('ArrowLeft', textarea);
+
+    expect(result.current.currentNodeId).toBe(startId);
+    expect(prevented).toBe(false);
+  });
+
+  it('arrow keys inside an input do not navigate', () => {
+    const { result } = renderBoard();
+    act(() => { result.current.loadMainLine(MAIN_LINE_SANS, ROOT_FEN); });
+    result.current.containerRef.current = board;
+    const startId = result.current.currentNodeId;
+
+    const input = document.createElement('input');
+    document.body.appendChild(input);
+    const prevented = dispatchKey('ArrowLeft', input);
+
+    expect(result.current.currentNodeId).toBe(startId);
+    expect(prevented).toBe(false);
+  });
+
+  it('arrow keys inside a contentEditable element do not navigate', () => {
+    const { result } = renderBoard();
+    act(() => { result.current.loadMainLine(MAIN_LINE_SANS, ROOT_FEN); });
+    result.current.containerRef.current = board;
+    const startId = result.current.currentNodeId;
+
+    const editable = document.createElement('div');
+    editable.setAttribute('contenteditable', 'true');
+    // jsdom does not always derive `isContentEditable` from the attribute —
+    // set it explicitly so the guard is exercised regardless.
+    Object.defineProperty(editable, 'isContentEditable', { value: true, configurable: true });
+    document.body.appendChild(editable);
+    const prevented = dispatchKey('ArrowLeft', editable);
+
+    expect(result.current.currentNodeId).toBe(startId);
+    expect(prevented).toBe(false);
+  });
+
+  it('arrow keys with a modifier held (ctrl/meta/alt) do not navigate', () => {
+    const { result } = renderBoard();
+    act(() => { result.current.loadMainLine(MAIN_LINE_SANS, ROOT_FEN); });
+    result.current.containerRef.current = board;
+    const startId = result.current.currentNodeId;
+
+    const modifiers: KeyboardEventInit[] = [{ ctrlKey: true }, { metaKey: true }, { altKey: true }];
+    for (const mod of modifiers) {
+      const prevented = dispatchKey('ArrowLeft', document.body, mod);
+      expect(result.current.currentNodeId).toBe(startId);
+      expect(prevented).toBe(false);
+    }
+  });
+
+  it('an event already consumed by another handler (defaultPrevented) is not intercepted', () => {
+    const { result } = renderBoard();
+    act(() => { result.current.loadMainLine(MAIN_LINE_SANS, ROOT_FEN); });
+    result.current.containerRef.current = board;
+    const startId = result.current.currentNodeId;
+
+    // A one-shot listener registered on `document` mimics a Radix content
+    // listener sitting between the event target and window in bubble order.
+    document.addEventListener('keydown', (e) => e.preventDefault(), { once: true });
+    act(() => {
+      document.body.dispatchEvent(
+        new KeyboardEvent('keydown', { key: 'ArrowLeft', bubbles: true, cancelable: true }),
+      );
+    });
+
+    expect(result.current.currentNodeId).toBe(startId);
+  });
+
+  it('arrow keys are ignored while a modal dialog is open, but work again once it is a non-modal popover', () => {
+    const { result } = renderBoard();
+    act(() => { result.current.loadMainLine(MAIN_LINE_SANS, ROOT_FEN); });
+    result.current.containerRef.current = board;
+    const startId = result.current.currentNodeId;
+
+    const dialog = document.createElement('div');
+    dialog.setAttribute('role', 'dialog');
+    dialog.setAttribute('aria-modal', 'true');
+    dialog.setAttribute('data-state', 'open');
+    document.body.appendChild(dialog);
+
+    expect(dispatchKey('ArrowLeft', document.body)).toBe(false);
+    expect(result.current.currentNodeId).toBe(startId);
+
+    // Radix popovers (e.g. a hovered info tooltip) share role="dialog" but
+    // are never aria-modal="true" — navigation must not be blocked behind one.
+    dialog.removeAttribute('aria-modal');
+    expect(dispatchKey('ArrowLeft', document.body)).toBe(true);
+    expect(result.current.currentNodeId).not.toBe(startId);
+  });
+
+  it('non-arrow keys cause no navigation and are not defaultPrevented', () => {
+    const { result } = renderBoard();
+    act(() => { result.current.loadMainLine(MAIN_LINE_SANS, ROOT_FEN); });
+    result.current.containerRef.current = board;
+    const startId = result.current.currentNodeId;
+
+    for (const key of ['a', 'ArrowUp']) {
+      const prevented = dispatchKey(key, document.body);
+      expect(result.current.currentNodeId).toBe(startId);
+      expect(prevented).toBe(false);
+    }
+  });
+
+  it('after unmount, arrow keys no longer navigate', () => {
+    // Bypasses renderBoard/cleanupFns: this test unmounts itself, and calling
+    // testing-library's unmount() a second time (from afterEach) is unsafe.
+    const { result, unmount } = renderHook(() => useAnalysisBoard(ROOT_FEN));
+    act(() => { result.current.loadMainLine(MAIN_LINE_SANS, ROOT_FEN); });
+    result.current.containerRef.current = board;
+    const startId = result.current.currentNodeId;
+
+    unmount();
+
+    const prevented = dispatchKey('ArrowLeft', document.body);
+    expect(result.current.currentNodeId).toBe(startId);
+    expect(prevented).toBe(false);
+  });
+
+  // Held-key auto-repeat throttling: the OS repeats keydown far faster than
+  // the board can render one step, which starved paint and froze the position
+  // until release. Repeats are rate limited (KEY_REPEAT_NAV_THROTTLE_MS = 90);
+  // deliberate presses (repeat: false) never are.
+  describe('held-key auto-repeat', () => {
+    const REPEAT_THROTTLE_GAP_MS = 91; // > the 90ms repeat throttle window
+    let nowMs: number;
+    let nowSpy: ReturnType<typeof vi.spyOn>;
+
+    beforeEach(() => {
+      nowMs = 1000;
+      nowSpy = vi.spyOn(Date, 'now').mockImplementation(() => nowMs);
+    });
+
+    afterEach(() => {
+      nowSpy.mockRestore();
+    });
+
+    it('a burst of repeat events inside the throttle window advances only one node', () => {
+      const { result } = renderBoard();
+      act(() => { result.current.loadMainLine(MAIN_LINE_SANS, ROOT_FEN); });
+      result.current.containerRef.current = board;
+      act(() => { result.current.goToRoot(); });
+
+      // A held ArrowRight: one initial press plus five OS repeats, all within
+      // a single throttle window.
+      dispatchKey('ArrowRight', document.body);
+      expect(result.current.currentNodeId).toBe(result.current.mainLine[0]);
+
+      for (let i = 0; i < 5; i++) {
+        nowMs += 10; // ~OS repeat interval, all under the 90ms throttle
+        const prevented = dispatchKey('ArrowRight', document.body, { repeat: true });
+        // Still preventDefault'd even when throttled, so the page never scrolls.
+        expect(prevented).toBe(true);
+      }
+
+      expect(result.current.currentNodeId).toBe(result.current.mainLine[0]);
+    });
+
+    it('repeats spaced beyond the throttle window each advance one node', () => {
+      const { result } = renderBoard();
+      act(() => { result.current.loadMainLine(MAIN_LINE_SANS, ROOT_FEN); });
+      result.current.containerRef.current = board;
+      act(() => { result.current.goToRoot(); });
+
+      dispatchKey('ArrowRight', document.body);
+      for (let i = 0; i < 2; i++) {
+        nowMs += REPEAT_THROTTLE_GAP_MS;
+        dispatchKey('ArrowRight', document.body, { repeat: true });
+      }
+
+      expect(result.current.currentNodeId).toBe(result.current.mainLine[2]);
+    });
+
+    it('deliberate (non-repeat) presses are never throttled, however fast they arrive', () => {
+      const { result } = renderBoard();
+      act(() => { result.current.loadMainLine(MAIN_LINE_SANS, ROOT_FEN); });
+      result.current.containerRef.current = board;
+      act(() => { result.current.goToRoot(); });
+
+      // Three discrete presses at the same instant — no time advance at all.
+      for (let i = 0; i < 3; i++) {
+        dispatchKey('ArrowRight', document.body);
+      }
+
+      expect(result.current.currentNodeId).toBe(result.current.mainLine[2]);
+    });
+  });
+});
+
+// ─── Quick 260821-kyz: board-scoped mouse-wheel navigation ──────────────────
+//
+// D-03: wheel navigation applies only while the pointer is over the board
+// container. Wheel down (deltaY > 0) = goForward, wheel up (deltaY < 0) =
+// goBack; preventDefault() over the board so the page never scrolls there.
+// D-04: an accumulated-delta threshold (WHEEL_NAV_DELTA_THRESHOLD_PX = 15)
+// plus a time throttle (WHEEL_NAV_THROTTLE_MS = 90) so a single trackpad
+// flick advances a handful of moves, not the whole game.
+
+describe('useAnalysisBoard — wheel navigation', () => {
+  let board: HTMLDivElement;
+  let child: HTMLSpanElement;
+  let nowMs: number;
+  let nowSpy: ReturnType<typeof vi.spyOn>;
+  // Same no-auto-cleanup hazard as the keyboard describe above: every
+  // renderHook() here mounts a real window-level wheel listener.
+  const cleanupFns: Array<() => void> = [];
+
+  // Test-side mirrors of the module-private thresholds (not exported):
+  // WHEEL_NAV_DELTA_THRESHOLD_PX = 15px, WHEEL_NAV_THROTTLE_MS = 90ms.
+  const ABOVE_THRESHOLD_DELTA_Y = 20; // > 15px threshold, single notch
+  const BELOW_THRESHOLD_DELTA_Y = 6; // < 15px threshold; three of these sum to 18 > 15
+  const THROTTLE_GAP_MS = 91; // > 90ms throttle window
+
+  function renderBoard(fen: string = ROOT_FEN) {
+    const rendered = renderHook(() => useAnalysisBoard(fen));
+    cleanupFns.push(rendered.unmount);
+    return rendered;
+  }
+
+  beforeEach(() => {
+    mockPlaySound.mockClear();
+    mockUnlockAudio.mockClear();
+    board = document.createElement('div');
+    child = document.createElement('span'); // a real descendant, like a chessboard square
+    board.appendChild(child);
+    document.body.appendChild(board);
+    nowMs = 0;
+    nowSpy = vi.spyOn(Date, 'now').mockImplementation(() => nowMs);
+  });
+
+  afterEach(() => {
+    while (cleanupFns.length > 0) {
+      cleanupFns.pop()!();
+    }
+    board.remove();
+    nowSpy.mockRestore();
+  });
+
+  /** Dispatch a bubbling, cancelable wheel event from `target` and report whether it ended up defaultPrevented. */
+  function dispatchWheel(deltaY: number, target: EventTarget, deltaMode = 0): boolean {
+    const event = new WheelEvent('wheel', { deltaY, deltaMode, bubbles: true, cancelable: true });
+    act(() => {
+      target.dispatchEvent(event);
+    });
+    return event.defaultPrevented;
+  }
+
+  it('wheel down over the board advances one node; wheel up retreats one node; both preventDefault', () => {
+    const { result } = renderBoard();
+    act(() => { result.current.loadMainLine(MAIN_LINE_SANS, ROOT_FEN); });
+    result.current.containerRef.current = board;
+    act(() => { result.current.goToNode(result.current.mainLine[0]!); });
+    const midId = result.current.currentNodeId;
+    const forwardId = result.current.mainLine[1]!;
+
+    nowMs = 1000;
+    const prevented1 = dispatchWheel(ABOVE_THRESHOLD_DELTA_Y, child);
+    expect(result.current.currentNodeId).toBe(forwardId);
+    expect(prevented1).toBe(true);
+
+    nowMs += THROTTLE_GAP_MS;
+    const prevented2 = dispatchWheel(-ABOVE_THRESHOLD_DELTA_Y, child);
+    expect(result.current.currentNodeId).toBe(midId);
+    expect(prevented2).toBe(true);
+  });
+
+  it('a wheel event outside the container does not navigate and is not defaultPrevented (page still scrolls)', () => {
+    const { result } = renderBoard();
+    act(() => { result.current.loadMainLine(MAIN_LINE_SANS, ROOT_FEN); });
+    result.current.containerRef.current = board;
+    const startId = result.current.currentNodeId;
+
+    const outside = document.createElement('div');
+    document.body.appendChild(outside);
+    nowMs = 1000;
+    const prevented = dispatchWheel(ABOVE_THRESHOLD_DELTA_Y, outside);
+
+    expect(result.current.currentNodeId).toBe(startId);
+    expect(prevented).toBe(false);
+    outside.remove();
+  });
+
+  it('with no mounted container (the useTrainFreePlay shape), wheel events do nothing', () => {
+    const { result } = renderBoard();
+    act(() => { result.current.loadMainLine(MAIN_LINE_SANS, ROOT_FEN); });
+    const startId = result.current.currentNodeId;
+    // containerRef.current intentionally left null — the Train shape.
+
+    nowMs = 1000;
+    const prevented = dispatchWheel(ABOVE_THRESHOLD_DELTA_Y, child);
+
+    expect(result.current.currentNodeId).toBe(startId);
+    expect(prevented).toBe(false);
+  });
+
+  it('sub-threshold deltas accumulate; the sum crossing the threshold fires exactly one step', () => {
+    const { result } = renderBoard();
+    act(() => { result.current.loadMainLine(MAIN_LINE_SANS, ROOT_FEN); });
+    result.current.containerRef.current = board;
+    act(() => { result.current.goToNode(result.current.mainLine[0]!); });
+    const startId = result.current.currentNodeId;
+    const forwardId = result.current.mainLine[1]!;
+
+    nowMs = 1000;
+    dispatchWheel(BELOW_THRESHOLD_DELTA_Y, child);
+    expect(result.current.currentNodeId).toBe(startId);
+    dispatchWheel(BELOW_THRESHOLD_DELTA_Y, child);
+    expect(result.current.currentNodeId).toBe(startId);
+    dispatchWheel(BELOW_THRESHOLD_DELTA_Y, child); // 6 + 6 + 6 = 18 > 15
+    expect(result.current.currentNodeId).toBe(forwardId);
+  });
+
+  it('the throttle window limits two same-instant events to one navigation; time passing unlocks the next', () => {
+    const { result } = renderBoard();
+    act(() => { result.current.loadMainLine(MAIN_LINE_SANS, ROOT_FEN); });
+    result.current.containerRef.current = board;
+    act(() => { result.current.goToNode(result.current.mainLine[0]!); });
+    const step1Id = result.current.mainLine[1]!;
+    const step2Id = result.current.mainLine[2]!;
+
+    nowMs = 1000;
+    dispatchWheel(ABOVE_THRESHOLD_DELTA_Y, child);
+    expect(result.current.currentNodeId).toBe(step1Id); // fires
+
+    dispatchWheel(ABOVE_THRESHOLD_DELTA_Y, child); // same instant — throttled
+    expect(result.current.currentNodeId).toBe(step1Id);
+
+    nowMs += THROTTLE_GAP_MS;
+    dispatchWheel(ABOVE_THRESHOLD_DELTA_Y, child); // throttle window passed — fires
+    expect(result.current.currentNodeId).toBe(step2Id);
+  });
+
+  it('deltaMode line units are normalized to pixels via the line-height multiplier', () => {
+    const { result } = renderBoard();
+    act(() => { result.current.loadMainLine(MAIN_LINE_SANS, ROOT_FEN); });
+    result.current.containerRef.current = board;
+    act(() => { result.current.goToNode(result.current.mainLine[0]!); });
+    const forwardId = result.current.mainLine[1]!;
+
+    nowMs = 1000;
+    // deltaY: 1 in line-unit mode (deltaMode 1) scales to 16px — above the
+    // 15px threshold in a single notch, proving the multiplier is applied.
+    dispatchWheel(1, child, 1);
+    expect(result.current.currentNodeId).toBe(forwardId);
+  });
+
+  it('after unmount, wheel events over the (still-attached) node do nothing', () => {
+    // Bypasses renderBoard/cleanupFns: this test unmounts itself, and calling
+    // testing-library's unmount() a second time (from afterEach) is unsafe.
+    const { result, unmount } = renderHook(() => useAnalysisBoard(ROOT_FEN));
+    act(() => { result.current.loadMainLine(MAIN_LINE_SANS, ROOT_FEN); });
+    result.current.containerRef.current = board;
+    const startId = result.current.currentNodeId;
+
+    unmount();
+
+    nowMs = 1000;
+    const prevented = dispatchWheel(ABOVE_THRESHOLD_DELTA_Y, child);
+    expect(result.current.currentNodeId).toBe(startId);
+    expect(prevented).toBe(false);
   });
 });

@@ -7,8 +7,14 @@
 # Source screenshots (raw, unprocessed)
 /screenshots
 
-# Stray root-level node_modules / vitest cache (frontend deps live under frontend/)
-/node_modules
+# node_modules at any depth. Unanchored (no leading slash) on purpose: the old
+# "/node_modules" only matched the repo root, so a stray install under scripts/
+# showed up as hundreds of unversioned files. frontend/ has its own .gitignore
+# entry too; this covers everywhere else.
+node_modules/
+
+# SEED-145 local working data (large ndjson ledgers)
+scripts/seed145/
 
 # Byte-compiled / optimized / DLL files
 __pycache__/
