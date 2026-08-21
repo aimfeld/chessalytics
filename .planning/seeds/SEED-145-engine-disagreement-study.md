@@ -226,6 +226,16 @@ sampler + `--workers` sweep + ledger loader) is cleared to start.
   `stage_b_ledger-worker-{0..5}.ndjson`, resume = union of all shards so
   worker count can change freely). Log: `scripts/seed145/data/stage_b_sweep.log`.
   Resume after any interruption: same command, from repo root.
+- **Session-death fix + shard repair 2026-08-21**: the laptop's wasm session
+  dies ~1,250 positions into a cycle (below `--recycle-after 1500`), and the
+  pre-fix worker ledgered the tail ~320 positions/cycle as error rows that
+  resume then skipped forever (5,128 positions lost in the first cycles, cell-
+  clustered because the manifest is cell-ordered). Fix: fatal wasm errors
+  (`memory access out of bounds` / `Aborted(`) now trigger an early recycle
+  WITHOUT ledgering the position (retries in the fresh process; an i=0 fatal
+  still ledgers so one bad row can't loop). Run
+  `node scripts/seed145/repair_shards.mjs` once on the sweep machine to strip
+  the old error rows (backs up shards as `*.pre-repair.bak`), then resume.
 - **Remaining on completion**: `stage_b_load.py --db benchmark` (recreates
   `seed145_entry_predictions`; smoke-validated incl. read-only MCP access),
   final row counts/skipped rows into this file, hand over to Stage C.

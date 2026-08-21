@@ -38,7 +38,11 @@
  * past the ~270k/process wasm OOB ceiling
  * (project_calibration_harness_wasm_oob_crash); the SEED-113 tensor-dispose
  * fix helps but a 2-day run is not bet on it. The supervisor also respawns on
- * crash, with a fast-crash-loop guard.
+ * crash, with a fast-crash-loop guard. If the wasm session dies MID-cycle
+ * (OOB/Aborted before --recycle-after is reached), the worker recycles early
+ * WITHOUT ledgering the failed position, so it retries in the fresh process —
+ * see isFatalSessionError. Error rows ledgered by the pre-fix version are
+ * reclaimed with repair_shards.mjs (run it once, then resume).
  *
  * Usage (from repo root; supervisor):
  *   node --import ./scripts/lib/frontend-alias-hook.mjs scripts/seed145/stage_b_sweep.mjs \
@@ -82,6 +86,16 @@ const FAST_CRASH_MS = 60_000;
 const MAX_FAST_CRASHES = 5;
 /** Exit code a worker uses to request a recycle-respawn (work remains). */
 const EXIT_RECYCLE = 42;
+
+/**
+ * Wasm SESSION-death errors (onnxruntime-web heap exhaustion). Once one fires,
+ * every later inference in the process fails instantly with "Aborted()" — the
+ * position is fine, the process is dead. Measured 2026-08-21: the laptop's
+ * session dies ~1,250 positions in, i.e. BELOW --recycle-after 1500, which
+ * burned the tail ~320 positions of each first cycle as ledgered error rows.
+ */
+const isFatalSessionError = (msg) =>
+  msg.includes('memory access out of bounds') || msg.includes('Aborted(');
 
 // ─── Shared helpers ─────────────────────────────────────────────────────────
 
@@ -175,6 +189,7 @@ async function runWorker(args) {
   const batch = pending.slice(0, args.recycleAfter);
   const started = performance.now();
   let errors = 0;
+  let sessionDead = false;
   try {
     for (let i = 0; i < batch.length; i++) {
       const row = batch[i];
@@ -233,10 +248,20 @@ async function runWorker(args) {
         out.fc_nodes_evaluated = snapshot.nodesEvaluated;
         out.fc_stop_reason = snapshot.stopReason;
       } catch (err) {
+        const msg = String(err && err.message ? err.message : err);
+        // Session death is NOT the position's fault: recycle WITHOUT ledgering
+        // so the fresh process retries it. Guard: at i === 0 the session is
+        // fresh, so a fatal error there IS this position (never infinite-loop
+        // on one row) — fall through and ledger it like any other failure.
+        if (isFatalSessionError(msg) && i > 0) {
+          log(`SESSION DEAD at game ${row.game_id} ${row.boundary} (${msg}) — early recycle, row will retry`);
+          sessionDead = true;
+          break;
+        }
         // Ledger the failure so a deterministic bad row never blocks resume;
         // Stage C counts and excludes error rows.
         errors++;
-        out.error = String(err && err.message ? err.message : err);
+        out.error = msg;
         log(`ERROR at game ${row.game_id} ${row.boundary}: ${out.error}`);
       }
       fs.appendFileSync(ledger, JSON.stringify(out) + '\n');
@@ -251,8 +276,9 @@ async function runWorker(args) {
     pool.quitAll();
   }
 
-  if (pending.length > batch.length) {
-    log(`recycling after ${batch.length} rows (${pending.length - batch.length} pending)`);
+  if (sessionDead || pending.length > batch.length) {
+    if (sessionDead) log('recycling early after wasm session death');
+    else log(`recycling after ${batch.length} rows (${pending.length - batch.length} pending)`);
     process.exit(EXIT_RECYCLE);
   }
   log('partition complete');
