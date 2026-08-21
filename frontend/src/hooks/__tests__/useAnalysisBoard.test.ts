@@ -41,7 +41,7 @@
  *     or a silent goToNode.
  */
 
-import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { renderHook, act } from '@testing-library/react';
 import { Chess } from 'chess.js';
 import { useAnalysisBoard } from '../useAnalysisBoard';
@@ -943,5 +943,218 @@ describe('useAnalysisBoard', () => {
     const pvIds = [...result.current.pvNodeIds];
     expect(pvIds).toHaveLength(1);
     expect(result.current.nodes.get(pvIds[0]!)?.san).toBe('Nf6');
+  });
+});
+
+// ─── Quick 260821-kyz: window-scoped, guarded arrow-key navigation ──────────
+//
+// D-01: promoted from a container-scoped keydown handler to a window-scoped
+// one, so ArrowLeft/ArrowRight work without first clicking the board.
+// D-02: six guards, in order — not an arrow key; already defaultPrevented;
+// a modifier key held; the event target is a typing surface
+// (input/textarea/select/contentEditable); this hook instance has no
+// mounted container (containerRef.current === null — how useTrainFreePlay
+// opts out, D-05); an open modal dialog (PasteModal).
+
+describe('useAnalysisBoard — keyboard navigation', () => {
+  let board: HTMLDivElement;
+  // This project runs vitest without `globals: true`, so @testing-library/react's
+  // auto-cleanup (which relies on a GLOBAL `afterEach`) never registers — every
+  // renderHook() here mounts a real window-level keydown listener that outlives
+  // the test unless explicitly unmounted. Track every render's unmount and run
+  // them all in afterEach, or a stale listener from an earlier test fires (and
+  // calls e.preventDefault()) on a later test's dispatched event, making that
+  // later test's OWN listener see e.defaultPrevented and silently no-op.
+  const cleanupFns: Array<() => void> = [];
+
+  function renderBoard(fen: string = ROOT_FEN) {
+    const rendered = renderHook(() => useAnalysisBoard(fen));
+    cleanupFns.push(rendered.unmount);
+    return rendered;
+  }
+
+  beforeEach(() => {
+    mockPlaySound.mockClear();
+    mockUnlockAudio.mockClear();
+    board = document.createElement('div');
+    document.body.appendChild(board);
+  });
+
+  afterEach(() => {
+    while (cleanupFns.length > 0) {
+      cleanupFns.pop()!();
+    }
+    board.remove();
+    // Sweep any dialog/typing-surface elements a test injected directly onto
+    // document.body (not appended to `board`) so a failure mid-test can't
+    // leak state into the next test.
+    document.querySelectorAll('[role="dialog"], textarea, input, [contenteditable]').forEach((el) => {
+      el.remove();
+    });
+  });
+
+  /** Dispatch a bubbling, cancelable keydown from `target` (default: window) and report whether it ended up defaultPrevented. */
+  function dispatchKey(key: string, target: EventTarget = window, opts: KeyboardEventInit = {}): boolean {
+    const event = new KeyboardEvent('keydown', { key, bubbles: true, cancelable: true, ...opts });
+    act(() => {
+      target.dispatchEvent(event);
+    });
+    return event.defaultPrevented;
+  }
+
+  it('ArrowLeft/ArrowRight navigate the board without it ever being focused (the headline behavior)', () => {
+    const { result } = renderBoard();
+    act(() => { result.current.loadMainLine(MAIN_LINE_SANS, ROOT_FEN); });
+    result.current.containerRef.current = board;
+    const lastId = result.current.currentNodeId;
+
+    // Dispatched from document.body — the board div was never focused or clicked.
+    const prevented1 = dispatchKey('ArrowLeft', document.body);
+    const backId = result.current.currentNodeId;
+    expect(backId).not.toBe(lastId);
+    expect(prevented1).toBe(true);
+
+    const prevented2 = dispatchKey('ArrowRight', document.body);
+    expect(result.current.currentNodeId).toBe(lastId);
+    expect(prevented2).toBe(true);
+  });
+
+  it('with no mounted container (the useTrainFreePlay shape), arrow keys do nothing', () => {
+    const { result } = renderBoard();
+    act(() => { result.current.loadMainLine(MAIN_LINE_SANS, ROOT_FEN); });
+    const startId = result.current.currentNodeId;
+    // containerRef.current intentionally left null — the Train shape.
+
+    const prevented = dispatchKey('ArrowLeft', document.body);
+    expect(result.current.currentNodeId).toBe(startId);
+    expect(prevented).toBe(false);
+  });
+
+  it('arrow keys inside a textarea do not navigate', () => {
+    const { result } = renderBoard();
+    act(() => { result.current.loadMainLine(MAIN_LINE_SANS, ROOT_FEN); });
+    result.current.containerRef.current = board;
+    const startId = result.current.currentNodeId;
+
+    const textarea = document.createElement('textarea');
+    document.body.appendChild(textarea);
+    const prevented = dispatchKey('ArrowLeft', textarea);
+
+    expect(result.current.currentNodeId).toBe(startId);
+    expect(prevented).toBe(false);
+  });
+
+  it('arrow keys inside an input do not navigate', () => {
+    const { result } = renderBoard();
+    act(() => { result.current.loadMainLine(MAIN_LINE_SANS, ROOT_FEN); });
+    result.current.containerRef.current = board;
+    const startId = result.current.currentNodeId;
+
+    const input = document.createElement('input');
+    document.body.appendChild(input);
+    const prevented = dispatchKey('ArrowLeft', input);
+
+    expect(result.current.currentNodeId).toBe(startId);
+    expect(prevented).toBe(false);
+  });
+
+  it('arrow keys inside a contentEditable element do not navigate', () => {
+    const { result } = renderBoard();
+    act(() => { result.current.loadMainLine(MAIN_LINE_SANS, ROOT_FEN); });
+    result.current.containerRef.current = board;
+    const startId = result.current.currentNodeId;
+
+    const editable = document.createElement('div');
+    editable.setAttribute('contenteditable', 'true');
+    // jsdom does not always derive `isContentEditable` from the attribute —
+    // set it explicitly so the guard is exercised regardless.
+    Object.defineProperty(editable, 'isContentEditable', { value: true, configurable: true });
+    document.body.appendChild(editable);
+    const prevented = dispatchKey('ArrowLeft', editable);
+
+    expect(result.current.currentNodeId).toBe(startId);
+    expect(prevented).toBe(false);
+  });
+
+  it('arrow keys with a modifier held (ctrl/meta/alt) do not navigate', () => {
+    const { result } = renderBoard();
+    act(() => { result.current.loadMainLine(MAIN_LINE_SANS, ROOT_FEN); });
+    result.current.containerRef.current = board;
+    const startId = result.current.currentNodeId;
+
+    const modifiers: KeyboardEventInit[] = [{ ctrlKey: true }, { metaKey: true }, { altKey: true }];
+    for (const mod of modifiers) {
+      const prevented = dispatchKey('ArrowLeft', document.body, mod);
+      expect(result.current.currentNodeId).toBe(startId);
+      expect(prevented).toBe(false);
+    }
+  });
+
+  it('an event already consumed by another handler (defaultPrevented) is not intercepted', () => {
+    const { result } = renderBoard();
+    act(() => { result.current.loadMainLine(MAIN_LINE_SANS, ROOT_FEN); });
+    result.current.containerRef.current = board;
+    const startId = result.current.currentNodeId;
+
+    // A one-shot listener registered on `document` mimics a Radix content
+    // listener sitting between the event target and window in bubble order.
+    document.addEventListener('keydown', (e) => e.preventDefault(), { once: true });
+    act(() => {
+      document.body.dispatchEvent(
+        new KeyboardEvent('keydown', { key: 'ArrowLeft', bubbles: true, cancelable: true }),
+      );
+    });
+
+    expect(result.current.currentNodeId).toBe(startId);
+  });
+
+  it('arrow keys are ignored while a modal dialog is open, but work again once it is a non-modal popover', () => {
+    const { result } = renderBoard();
+    act(() => { result.current.loadMainLine(MAIN_LINE_SANS, ROOT_FEN); });
+    result.current.containerRef.current = board;
+    const startId = result.current.currentNodeId;
+
+    const dialog = document.createElement('div');
+    dialog.setAttribute('role', 'dialog');
+    dialog.setAttribute('aria-modal', 'true');
+    dialog.setAttribute('data-state', 'open');
+    document.body.appendChild(dialog);
+
+    expect(dispatchKey('ArrowLeft', document.body)).toBe(false);
+    expect(result.current.currentNodeId).toBe(startId);
+
+    // Radix popovers (e.g. a hovered info tooltip) share role="dialog" but
+    // are never aria-modal="true" — navigation must not be blocked behind one.
+    dialog.removeAttribute('aria-modal');
+    expect(dispatchKey('ArrowLeft', document.body)).toBe(true);
+    expect(result.current.currentNodeId).not.toBe(startId);
+  });
+
+  it('non-arrow keys cause no navigation and are not defaultPrevented', () => {
+    const { result } = renderBoard();
+    act(() => { result.current.loadMainLine(MAIN_LINE_SANS, ROOT_FEN); });
+    result.current.containerRef.current = board;
+    const startId = result.current.currentNodeId;
+
+    for (const key of ['a', 'ArrowUp']) {
+      const prevented = dispatchKey(key, document.body);
+      expect(result.current.currentNodeId).toBe(startId);
+      expect(prevented).toBe(false);
+    }
+  });
+
+  it('after unmount, arrow keys no longer navigate', () => {
+    // Bypasses renderBoard/cleanupFns: this test unmounts itself, and calling
+    // testing-library's unmount() a second time (from afterEach) is unsafe.
+    const { result, unmount } = renderHook(() => useAnalysisBoard(ROOT_FEN));
+    act(() => { result.current.loadMainLine(MAIN_LINE_SANS, ROOT_FEN); });
+    result.current.containerRef.current = board;
+    const startId = result.current.currentNodeId;
+
+    unmount();
+
+    const prevented = dispatchKey('ArrowLeft', document.body);
+    expect(result.current.currentNodeId).toBe(startId);
+    expect(prevented).toBe(false);
   });
 });
