@@ -7,7 +7,11 @@
  * - No Zobrist hashing or opening lookup.
  * - Mid-line moves fork a new child node rather than truncating the main line (BOARD-01).
  * - Stores full FEN per node for O(1) goToNode — no root replay (BOARD-02).
- * - Container-scoped keyboard handler (same pattern as useTacticLine, not window-level).
+ * - Window-scoped keyboard handler (Quick 260821-kyz): promoted from
+ *   container-scoped so ArrowLeft/ArrowRight work without first clicking the
+ *   board (lichess parity). Guarded against defaultPrevented, modifier keys,
+ *   typing-surface targets, and an open modal dialog; containerRef.current
+ *   === null (useTrainFreePlay never attaches it) is what excludes Train.
  */
 
 import { useRef, useState, useCallback, useEffect } from 'react';
@@ -123,7 +127,31 @@ export interface AnalysisBoardReturn {
 
 const STARTING_FEN = 'rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1';
 
+/**
+ * CSS selector matching an open Radix modal dialog (PasteModal). `aria-modal="true"`
+ * is required in addition to `role="dialog"` because Radix popovers (e.g. a hovered
+ * info tooltip) also render `role="dialog"` but are never modal — without the
+ * aria-modal qualifier this guard would block board navigation behind a hovered
+ * popover, which is worse than the click-to-focus bug it exists to fix (D-02).
+ */
+const OPEN_MODAL_SELECTOR = '[role="dialog"][aria-modal="true"][data-state="open"]';
+
 // ─── Helpers ─────────────────────────────────────────────────────────────────
+
+/**
+ * True when `target` is an element the user is actively typing into (a text
+ * input, textarea, select, or contentEditable region) — arrow-key navigation
+ * must not hijack the caret there (D-02). Uses `instanceof` rather than a
+ * cast (unlike the useChessGame.ts / MoveListPanel.tsx precedents) so a
+ * non-Element target (e.g. `document` itself) returns false instead of throwing.
+ */
+function isTypingTarget(target: EventTarget | null): boolean {
+  if (!(target instanceof HTMLElement)) return false;
+  if (target.tagName === 'INPUT' || target.tagName === 'TEXTAREA' || target.tagName === 'SELECT') {
+    return true;
+  }
+  return target.isContentEditable;
+}
 
 function buildNode(
   id: NodeId,
@@ -724,24 +752,39 @@ export function useAnalysisBoard(
     playSound(event);
   }, [state.currentNodeId, state.nodes]);
 
-  // Container-scoped keyboard handler (ArrowLeft = goBack, ArrowRight = goForward).
-  // Scoped to containerRef — NOT window — to avoid clashing with page shortcuts.
-  // (Mirrors useTacticLine lines 181-197; goBack/goForward are stable callbacks
-  // with [] deps, so no stale closure on the handler.)
+  // Window-scoped, guarded keydown handler (ArrowLeft = goBack, ArrowRight =
+  // goForward). Promoted from container-scoped to window-scoped (D-01) so
+  // arrows work without first clicking the board — lichess parity. Six
+  // guards, cheapest first, keep this from hijacking keys that belong
+  // elsewhere: not an arrow key; already consumed (e.defaultPrevented, e.g. a
+  // Radix menu whose listener runs before this one in bubble order); a
+  // modifier is held (so browser shortcuts like Cmd+Left still work); the
+  // event target is a typing surface (input/textarea/select/contentEditable);
+  // this hook instance has no mounted container (containerRef.current ===
+  // null — how useTrainFreePlay opts out entirely, D-05, without a new hook
+  // prop); or a modal dialog is open (PasteModal). containerRef.current is
+  // read INSIDE the handler, not captured at effect-mount time, because the
+  // Analysis page swaps the mobile and desktop board wrappers without
+  // re-running this effect. goBack/goForward are stable [] callbacks, so this
+  // effect only re-runs on mount/unmount.
   useEffect(() => {
-    const container = containerRef.current;
-    if (!container) return;
     const handleKeyDown = (e: KeyboardEvent): void => {
+      if (e.key !== 'ArrowLeft' && e.key !== 'ArrowRight') return;
+      if (e.defaultPrevented) return;
+      if (e.ctrlKey || e.metaKey || e.altKey) return;
+      if (isTypingTarget(e.target)) return;
+      if (!containerRef.current) return;
+      if (document.querySelector(OPEN_MODAL_SELECTOR)) return;
+
+      e.preventDefault();
       if (e.key === 'ArrowLeft') {
-        e.preventDefault();
         goBack();
-      } else if (e.key === 'ArrowRight') {
-        e.preventDefault();
+      } else {
         goForward();
       }
     };
-    container.addEventListener('keydown', handleKeyDown);
-    return () => container.removeEventListener('keydown', handleKeyDown);
+    window.addEventListener('keydown', handleKeyDown);
+    return () => window.removeEventListener('keydown', handleKeyDown);
   }, [goBack, goForward]);
 
   const position = getPosition(state);
