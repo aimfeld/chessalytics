@@ -1158,3 +1158,177 @@ describe('useAnalysisBoard — keyboard navigation', () => {
     expect(prevented).toBe(false);
   });
 });
+
+// ─── Quick 260821-kyz: board-scoped mouse-wheel navigation ──────────────────
+//
+// D-03: wheel navigation applies only while the pointer is over the board
+// container. Wheel down (deltaY > 0) = goForward, wheel up (deltaY < 0) =
+// goBack; preventDefault() over the board so the page never scrolls there.
+// D-04: an accumulated-delta threshold (WHEEL_NAV_DELTA_THRESHOLD_PX = 15)
+// plus a time throttle (WHEEL_NAV_THROTTLE_MS = 90) so a single trackpad
+// flick advances a handful of moves, not the whole game.
+
+describe('useAnalysisBoard — wheel navigation', () => {
+  let board: HTMLDivElement;
+  let child: HTMLSpanElement;
+  let nowMs: number;
+  let nowSpy: ReturnType<typeof vi.spyOn>;
+  // Same no-auto-cleanup hazard as the keyboard describe above: every
+  // renderHook() here mounts a real window-level wheel listener.
+  const cleanupFns: Array<() => void> = [];
+
+  // Test-side mirrors of the module-private thresholds (not exported):
+  // WHEEL_NAV_DELTA_THRESHOLD_PX = 15px, WHEEL_NAV_THROTTLE_MS = 90ms.
+  const ABOVE_THRESHOLD_DELTA_Y = 20; // > 15px threshold, single notch
+  const BELOW_THRESHOLD_DELTA_Y = 6; // < 15px threshold; three of these sum to 18 > 15
+  const THROTTLE_GAP_MS = 91; // > 90ms throttle window
+
+  function renderBoard(fen: string = ROOT_FEN) {
+    const rendered = renderHook(() => useAnalysisBoard(fen));
+    cleanupFns.push(rendered.unmount);
+    return rendered;
+  }
+
+  beforeEach(() => {
+    mockPlaySound.mockClear();
+    mockUnlockAudio.mockClear();
+    board = document.createElement('div');
+    child = document.createElement('span'); // a real descendant, like a chessboard square
+    board.appendChild(child);
+    document.body.appendChild(board);
+    nowMs = 0;
+    nowSpy = vi.spyOn(Date, 'now').mockImplementation(() => nowMs);
+  });
+
+  afterEach(() => {
+    while (cleanupFns.length > 0) {
+      cleanupFns.pop()!();
+    }
+    board.remove();
+    nowSpy.mockRestore();
+  });
+
+  /** Dispatch a bubbling, cancelable wheel event from `target` and report whether it ended up defaultPrevented. */
+  function dispatchWheel(deltaY: number, target: EventTarget, deltaMode = 0): boolean {
+    const event = new WheelEvent('wheel', { deltaY, deltaMode, bubbles: true, cancelable: true });
+    act(() => {
+      target.dispatchEvent(event);
+    });
+    return event.defaultPrevented;
+  }
+
+  it('wheel down over the board advances one node; wheel up retreats one node; both preventDefault', () => {
+    const { result } = renderBoard();
+    act(() => { result.current.loadMainLine(MAIN_LINE_SANS, ROOT_FEN); });
+    result.current.containerRef.current = board;
+    act(() => { result.current.goToNode(result.current.mainLine[0]!); });
+    const midId = result.current.currentNodeId;
+    const forwardId = result.current.mainLine[1]!;
+
+    nowMs = 1000;
+    const prevented1 = dispatchWheel(ABOVE_THRESHOLD_DELTA_Y, child);
+    expect(result.current.currentNodeId).toBe(forwardId);
+    expect(prevented1).toBe(true);
+
+    nowMs += THROTTLE_GAP_MS;
+    const prevented2 = dispatchWheel(-ABOVE_THRESHOLD_DELTA_Y, child);
+    expect(result.current.currentNodeId).toBe(midId);
+    expect(prevented2).toBe(true);
+  });
+
+  it('a wheel event outside the container does not navigate and is not defaultPrevented (page still scrolls)', () => {
+    const { result } = renderBoard();
+    act(() => { result.current.loadMainLine(MAIN_LINE_SANS, ROOT_FEN); });
+    result.current.containerRef.current = board;
+    const startId = result.current.currentNodeId;
+
+    const outside = document.createElement('div');
+    document.body.appendChild(outside);
+    nowMs = 1000;
+    const prevented = dispatchWheel(ABOVE_THRESHOLD_DELTA_Y, outside);
+
+    expect(result.current.currentNodeId).toBe(startId);
+    expect(prevented).toBe(false);
+    outside.remove();
+  });
+
+  it('with no mounted container (the useTrainFreePlay shape), wheel events do nothing', () => {
+    const { result } = renderBoard();
+    act(() => { result.current.loadMainLine(MAIN_LINE_SANS, ROOT_FEN); });
+    const startId = result.current.currentNodeId;
+    // containerRef.current intentionally left null — the Train shape.
+
+    nowMs = 1000;
+    const prevented = dispatchWheel(ABOVE_THRESHOLD_DELTA_Y, child);
+
+    expect(result.current.currentNodeId).toBe(startId);
+    expect(prevented).toBe(false);
+  });
+
+  it('sub-threshold deltas accumulate; the sum crossing the threshold fires exactly one step', () => {
+    const { result } = renderBoard();
+    act(() => { result.current.loadMainLine(MAIN_LINE_SANS, ROOT_FEN); });
+    result.current.containerRef.current = board;
+    act(() => { result.current.goToNode(result.current.mainLine[0]!); });
+    const startId = result.current.currentNodeId;
+    const forwardId = result.current.mainLine[1]!;
+
+    nowMs = 1000;
+    dispatchWheel(BELOW_THRESHOLD_DELTA_Y, child);
+    expect(result.current.currentNodeId).toBe(startId);
+    dispatchWheel(BELOW_THRESHOLD_DELTA_Y, child);
+    expect(result.current.currentNodeId).toBe(startId);
+    dispatchWheel(BELOW_THRESHOLD_DELTA_Y, child); // 6 + 6 + 6 = 18 > 15
+    expect(result.current.currentNodeId).toBe(forwardId);
+  });
+
+  it('the throttle window limits two same-instant events to one navigation; time passing unlocks the next', () => {
+    const { result } = renderBoard();
+    act(() => { result.current.loadMainLine(MAIN_LINE_SANS, ROOT_FEN); });
+    result.current.containerRef.current = board;
+    act(() => { result.current.goToNode(result.current.mainLine[0]!); });
+    const step1Id = result.current.mainLine[1]!;
+    const step2Id = result.current.mainLine[2]!;
+
+    nowMs = 1000;
+    dispatchWheel(ABOVE_THRESHOLD_DELTA_Y, child);
+    expect(result.current.currentNodeId).toBe(step1Id); // fires
+
+    dispatchWheel(ABOVE_THRESHOLD_DELTA_Y, child); // same instant — throttled
+    expect(result.current.currentNodeId).toBe(step1Id);
+
+    nowMs += THROTTLE_GAP_MS;
+    dispatchWheel(ABOVE_THRESHOLD_DELTA_Y, child); // throttle window passed — fires
+    expect(result.current.currentNodeId).toBe(step2Id);
+  });
+
+  it('deltaMode line units are normalized to pixels via the line-height multiplier', () => {
+    const { result } = renderBoard();
+    act(() => { result.current.loadMainLine(MAIN_LINE_SANS, ROOT_FEN); });
+    result.current.containerRef.current = board;
+    act(() => { result.current.goToNode(result.current.mainLine[0]!); });
+    const forwardId = result.current.mainLine[1]!;
+
+    nowMs = 1000;
+    // deltaY: 1 in line-unit mode (deltaMode 1) scales to 16px — above the
+    // 15px threshold in a single notch, proving the multiplier is applied.
+    dispatchWheel(1, child, 1);
+    expect(result.current.currentNodeId).toBe(forwardId);
+  });
+
+  it('after unmount, wheel events over the (still-attached) node do nothing', () => {
+    // Bypasses renderBoard/cleanupFns: this test unmounts itself, and calling
+    // testing-library's unmount() a second time (from afterEach) is unsafe.
+    const { result, unmount } = renderHook(() => useAnalysisBoard(ROOT_FEN));
+    act(() => { result.current.loadMainLine(MAIN_LINE_SANS, ROOT_FEN); });
+    result.current.containerRef.current = board;
+    const startId = result.current.currentNodeId;
+
+    unmount();
+
+    nowMs = 1000;
+    const prevented = dispatchWheel(ABOVE_THRESHOLD_DELTA_Y, child);
+    expect(result.current.currentNodeId).toBe(startId);
+    expect(prevented).toBe(false);
+  });
+});
