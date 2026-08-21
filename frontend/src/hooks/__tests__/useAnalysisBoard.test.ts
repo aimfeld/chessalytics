@@ -1157,6 +1157,75 @@ describe('useAnalysisBoard — keyboard navigation', () => {
     expect(result.current.currentNodeId).toBe(startId);
     expect(prevented).toBe(false);
   });
+
+  // Held-key auto-repeat throttling: the OS repeats keydown far faster than
+  // the board can render one step, which starved paint and froze the position
+  // until release. Repeats are rate limited (KEY_REPEAT_NAV_THROTTLE_MS = 90);
+  // deliberate presses (repeat: false) never are.
+  describe('held-key auto-repeat', () => {
+    const REPEAT_THROTTLE_GAP_MS = 91; // > the 90ms repeat throttle window
+    let nowMs: number;
+    let nowSpy: ReturnType<typeof vi.spyOn>;
+
+    beforeEach(() => {
+      nowMs = 1000;
+      nowSpy = vi.spyOn(Date, 'now').mockImplementation(() => nowMs);
+    });
+
+    afterEach(() => {
+      nowSpy.mockRestore();
+    });
+
+    it('a burst of repeat events inside the throttle window advances only one node', () => {
+      const { result } = renderBoard();
+      act(() => { result.current.loadMainLine(MAIN_LINE_SANS, ROOT_FEN); });
+      result.current.containerRef.current = board;
+      act(() => { result.current.goToRoot(); });
+
+      // A held ArrowRight: one initial press plus five OS repeats, all within
+      // a single throttle window.
+      dispatchKey('ArrowRight', document.body);
+      expect(result.current.currentNodeId).toBe(result.current.mainLine[0]);
+
+      for (let i = 0; i < 5; i++) {
+        nowMs += 10; // ~OS repeat interval, all under the 90ms throttle
+        const prevented = dispatchKey('ArrowRight', document.body, { repeat: true });
+        // Still preventDefault'd even when throttled, so the page never scrolls.
+        expect(prevented).toBe(true);
+      }
+
+      expect(result.current.currentNodeId).toBe(result.current.mainLine[0]);
+    });
+
+    it('repeats spaced beyond the throttle window each advance one node', () => {
+      const { result } = renderBoard();
+      act(() => { result.current.loadMainLine(MAIN_LINE_SANS, ROOT_FEN); });
+      result.current.containerRef.current = board;
+      act(() => { result.current.goToRoot(); });
+
+      dispatchKey('ArrowRight', document.body);
+      for (let i = 0; i < 2; i++) {
+        nowMs += REPEAT_THROTTLE_GAP_MS;
+        dispatchKey('ArrowRight', document.body, { repeat: true });
+      }
+
+      expect(result.current.currentNodeId).toBe(result.current.mainLine[2]);
+    });
+
+    it('deliberate (non-repeat) presses are never throttled, however fast they arrive', () => {
+      const { result } = renderBoard();
+      act(() => { result.current.loadMainLine(MAIN_LINE_SANS, ROOT_FEN); });
+      result.current.containerRef.current = board;
+      act(() => { result.current.goToRoot(); });
+
+      // Three discrete presses at the same instant — no time advance at all.
+      for (let i = 0; i < 3; i++) {
+        dispatchKey('ArrowRight', document.body);
+      }
+
+      expect(result.current.currentNodeId).toBe(result.current.mainLine[2]);
+    });
+  });
 });
 
 // ─── Quick 260821-kyz: board-scoped mouse-wheel navigation ──────────────────

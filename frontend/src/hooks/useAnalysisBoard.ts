@@ -12,6 +12,8 @@
  *   board (lichess parity). Guarded against defaultPrevented, modifier keys,
  *   typing-surface targets, and an open modal dialog; containerRef.current
  *   === null (useTrainFreePlay never attaches it) is what excludes Train.
+ *   Auto-repeat keydowns (a held arrow key) are throttled so the board paints
+ *   between steps instead of freezing until release.
  * - Board-scoped wheel handler (Quick 260821-kyz): wheel down over the board
  *   goes forward, wheel up goes back, and the page never scrolls while the
  *   pointer is over the board. Rate limited by an accumulated-delta
@@ -140,6 +142,16 @@ const STARTING_FEN = 'rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1';
  * popover, which is worse than the click-to-focus bug it exists to fix (D-02).
  */
 const OPEN_MODAL_SELECTOR = '[role="dialog"][aria-modal="true"][data-state="open"]';
+
+/**
+ * Minimum gap (ms) between two navigation steps driven by an auto-repeating
+ * held arrow key. The OS repeat rate (~30/s) queues keydowns faster than the
+ * analysis board can render one, so the main thread never gets an idle slot to
+ * paint and the position appears frozen until the key is released (the whole
+ * burst then resolves at once, jumping to the end of the game). Throttling the
+ * repeats leaves paint time between steps, so a held key browses visibly.
+ */
+const KEY_REPEAT_NAV_THROTTLE_MS = 90;
 
 /** Accumulated wheel travel (px) required before one navigation step fires — filters trackpad micro-jitter (D-04). */
 const WHEEL_NAV_DELTA_THRESHOLD_PX = 15;
@@ -798,6 +810,8 @@ export function useAnalysisBoard(
   // re-running this effect. goBack/goForward are stable [] callbacks, so this
   // effect only re-runs on mount/unmount.
   useEffect(() => {
+    let lastNavAtMs = 0;
+
     const handleKeyDown = (e: KeyboardEvent): void => {
       if (e.key !== 'ArrowLeft' && e.key !== 'ArrowRight') return;
       if (e.defaultPrevented) return;
@@ -806,7 +820,19 @@ export function useAnalysisBoard(
       if (!containerRef.current) return;
       if (document.querySelector(OPEN_MODAL_SELECTOR)) return;
 
+      // Always prevent the arrow key's default page scroll, even for a repeat
+      // this handler throttles away — otherwise a held key scrolls the page
+      // between navigation steps.
       e.preventDefault();
+
+      // Throttle auto-repeats only (e.repeat): deliberate presses, however
+      // fast the user taps, always navigate. See KEY_REPEAT_NAV_THROTTLE_MS
+      // for why a held key otherwise froze the board until release. The
+      // timestamp is stamped on every navigation, repeat or not, so the first
+      // repeat is paced against the press that started the hold.
+      if (e.repeat && Date.now() - lastNavAtMs < KEY_REPEAT_NAV_THROTTLE_MS) return;
+      lastNavAtMs = Date.now();
+
       if (e.key === 'ArrowLeft') {
         goBack();
       } else {
