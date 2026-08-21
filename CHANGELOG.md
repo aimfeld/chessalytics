@@ -20,6 +20,8 @@ in `YYYY-MM-DD` (Europe/Zurich).
 
 - You can now paste a FEN or a full PGN on the analysis board to load any position or game from outside FlawChess, look at it without saving anything, and optionally run a full analysis on it. Pasted games never count toward your openings, endgames, or insights stats, and stay hidden in the Library until you turn on the Pasted filter. (Phase 208)
 
+- The analysis board now supports lichess-style move browsing: arrow keys work as soon as you land on the page, no need to click the board first, and scrolling the mouse wheel while hovering the board steps through the moves too.
+
 ### Changed
 
 - Train no longer serves a blunder whose second-best move still leaves the player clearly winning (+2 pawns or a forced mate), so the puzzle pool is ~24% smaller and a larger share of what remains has exactly one right move. (SEED-141)
