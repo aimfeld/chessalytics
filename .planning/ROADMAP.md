@@ -172,6 +172,7 @@
 | 209. Traffic-Surge Quick Wins (SEED-146, unassigned) | 4/4 | Complete    | 2026-08-15 |
 | 210. Custom-Start Games — Crash Containment & Insight Eviction (SEED-042, unassigned) | 3/3 | Complete    | 2026-08-15 |
 | 211. Vetted "Also Fine" Moves & Server-Key Grading (SEED-150, unassigned) | 3/3 | Complete    | 2026-08-16 |
+| 212. Benchmark Full-Game Analysis Lane (SEED-152, unassigned) | 0/0 | Not planned | - |
 
 ## Active Phases (unassigned milestone)
 
@@ -630,6 +631,141 @@ Plans:
 
 - [x] 211-03-PLAN.md — Re-establish Phase 205's free-play root-ply guarantee on the server
   key; operator check (wave 3)
+
+### Phase 212: Benchmark Full-Game Analysis Lane
+
+**Goal**: The benchmark DB stops being eval-only. Today all 641,855 games marked analyzed
+carry lichess `%eval` and nothing else — 50,338,518 positions have `eval_cp` while
+`best_move` and `pv` are NULL for every single one, and `game_best_moves` is empty. So
+every FlawChess-specific signal (best moves, PV, flaw blobs, tactic tags, gem/great tiers)
+is unavailable on the entire benchmark population, which rules out whole classes of data
+story and forces robustness checks to leave the population (see
+`stories/two-pawns-up/two-pawns-up-report-latest.md` §6, which had to borrow ~98 prod
+accounts clustered at 1400–2200 and concede that "the sign of the side tilt need not
+transfer"). After this phase, a capped, randomly-selected equal-footing slice of the
+benchmark DB has been through the real FlawChess pipeline, produced by the existing worker
+fleet against a **local backend pointed at the benchmark DB** — no prod-side changes, no
+product surface, no prod disk impact.
+
+**Depends on**: nothing new. Runs on the existing tier-3 drain, `scripts/remote_eval_worker.py`,
+and the benchmark Postgres on port 5433 (`bin/benchmark_db.sh`).
+
+**Source**: [SEED-152](../seeds/SEED-152-benchmark-full-game-analysis-lane.md) — planted
+2026-08-22 from a `/gsd-explore` session, revised the same day when the sibling-DB-on-prod
+topology was rejected. Carries the measured cost table, the storage/MVCC figures, and the
+locked population/cap/selection decisions.
+
+**Locked in the seed — do not re-open**: population is equal-footing only
+(`abs(white_rating - black_rating) <= 100`, consistent with
+`.planning/notes/benchmark-equal-footing-framing.md`); cap is **100 games per user per TC
+bucket** (the cap *is* the plan, not a fallback — uncapped bullet alone costs 44.6 days
+against 24.8 for the whole capped four-TC program); selection within a user is **random,
+not recency-ordered** (every benchmark metric buckets on rating-at-game-time, so a
+recency-biased cap would systematically shift users toward their peak rating and away from
+the `median_elo` their cell was selected on); TC order is classical → rapid → blitz →
+bullet, each completing before the next so the program is stoppable at any boundary; and
+both arms run (games with and without lichess evals).
+
+**Rejected topology, recorded**: a sibling DB on the prod host with a new lowest-priority
+claim lane in `eval_queue_service.py`. Killed because the queue service is bound to the
+single app DB via `async_session_maker`, so a sibling-DB lane means dual-DB routing through
+every worker-facing path (claim, atomic submit, flaw classify, best-move write, lease
+expiry) — the riskiest place in the codebase to touch (`[[project_atomic_eval_submit_incremental_lease]]`) —
+plus slice-out/slice-back merge scripts and prod MVCC exposure. The "remote workers can't
+reach Adrian's box" objection evaporated once the worker machines turned out to be on the
+same LAN.
+
+**Planning notes** (interactions the planner must resolve):
+
+- **Lichess-eval games are NOT cheaper — they are slightly more expensive.** Lichess never
+  supplies PV or best move; `eval_queue_service.py` enqueues them precisely because
+  `full_pv_completed_at IS NULL`. Phase 174-06 retired the old targets filter, so
+  `eval_drain.py:951` gives them the same full-ply MultiPV-2 pass as any engine game and
+  `:968` sets `dedup_hashes = []`, making them the only games that cannot use the opening
+  dedup cache. Only the stored eval *values* are preserved (`:836`). Budget them at 100%+
+  of an engine game. Half of classical (63,411 / 127,586) is already in this arm.
+
+- **Correct the seed's Maia claim before sizing the local backend.** The seed reads
+  `eval_queue_service.py:34` ("best-move backfill is backend-only — Maia inference cannot
+  run on the remote worker fleet") as meaning the whole tier-4b rung is backend work. That
+  docstring is now half-stale: Phase 177 BACK-02/03 added `/bestmove-lease` +
+  `/bestmove-submit` and `scripts/remote_eval_worker.py:1058-1150` computes the runner-up
+  **Stockfish** evals on the fleet; only the Maia inference itself (`app/services/maia_engine.py`)
+  runs in the backend process on submit. So the local instance carries Maia forward passes,
+  not the Stockfish half — cheaper than the seed implies, but still the reason a *local*
+  backend is needed at all.
+
+- **Both eval flags gate tier-4b.** `BEST_MOVE_BACKFILL_ENABLED` is checked *together with*
+  `EVAL_AUTO_DRAIN_ENABLED` (`app/core/config.py:83-98`), so the local instance must set
+  both — while confirming that turning on auto-drain locally doesn't have the in-process
+  drain racing the worker claim path in a way that defeats the point of the fleet.
+
+- **Eval-source homogeneity is a decision the classical tranche cannot outrun.** As
+  designed, the analyzed arm keeps lichess `%eval` and its flaws are classified from that
+  stored `eval_cp`, while the never-analyzed arm gets ours — so any analyzed-vs-unanalyzed
+  comparison (the §6 selection-bias check this phase exists to enable) confounds selection
+  bias with eval source. The MultiPV-2 pass computes our evals for the lichess arm anyway
+  and discards them. This is a research DB, not user data, so the fix is cheap (overwrite
+  `eval_cp`, or add a column and keep both). **Decide before the classical tranche runs**,
+  and if the lichess arm runs at all, run it *with* the homogenization or the Stockfish
+  price buys a confounded comparison.
+
+- **Storage and MVCC.** ~15 KB/game net (48 B/position for `pv`+`best_move` × ~67 plies,
+  11.2 KB `game_flaws`, 0.6 KB `game_best_moves`), so cap-100 scope ≈ 6 GB net. These are
+  `UPDATE`s, so each touched position leaves a dead row version (~13 KB/game): budget ~2×
+  local disk headroom during the run and plan a vacuum pass after.
+
+- **Throughput.** 16k games/day is a two-day observed peak with all machines up (prod did
+  17,326 on 2026-08-19, 15,685 on 2026-08-20; ~85% from Adrian's local box — see
+  `[[project_worker_fleet_topology]]`). Budget 60–70% sustained; the TC tranches make that
+  stretch the calendar, not the risk.
+
+**Success Criteria** (what must be TRUE):
+
+1. A `benchmark_selection` table in the benchmark DB materializes the capped
+   (100/user/TC), randomly-selected, equal-footing set as `(game_id, tc_tranche)`,
+   populated per TC tranche. The table itself is the reproducibility record a story cites —
+   not a seed plus a query that must replay identically.
+
+2. A single config-gated `WHERE EXISTS (... benchmark_selection ...)` narrows the tier-3
+   candidate query, off by default and verifiably inert in dev, CI, and prod. Without it
+   tier-3's global lottery would treat all 2.1M eq-footing games as pending.
+
+3. `scripts/remote_eval_worker.py` accepts an ordered URL list (primary + fallback) and
+   claims from the fallback only when the primary returns no work — strict per-claim prod
+   priority, so the next claim after prod work appears goes to prod at full core count. A
+   leased benchmark game simply finishes (~60s); no requeue logic exists or is needed.
+
+4. A second backend (`uvicorn app.main:app --port 8001`, `0.0.0.0` bind, worker-token auth)
+   runs against the benchmark DB on 5433 with the selection gate on, its Alembic head
+   verified to match, and produces the full pipeline output end to end on a small tranche:
+   `best_move` + `pv` on `game_positions`, `game_flaws` rows, `game_best_moves` rows.
+
+5. The eval-source homogeneity question is decided and implemented (or the lichess arm is
+   explicitly excluded from the tranche) **before** classical starts, with the choice and
+   its consequence for §6-style comparisons written down.
+
+6. The classical tranche completes — or is stopped at a TC boundary by operator choice —
+   with the resulting row counts recorded and a post-run vacuum performed on the benchmark
+   DB.
+
+**Requirements**: BENCHLANE-01..06 (minted at planning time, one per Success Criterion —
+this phase predates its milestone's `REQUIREMENTS.md`, same convention as Phases 206–211;
+the traceability table lives in `212-01-PLAN.md`).
+
+**Open question carried to `/gsd-discuss-phase`**: whether to re-analyze the lichess arm at
+all in the first tranche. It is half of classical and the most expensive per game;
+deferring it halves classical to ~27k games / 1.7 days, at the cost of leaving gem tiers
+unavailable on exactly the games that already have evals.
+
+**Not part of this phase** (recorded from the seed's adjacent finding):
+`benchmark_selected_users` holds 9,450 distinct users from the 2026-03 dump but only 4,760
+exist in `users` — roughly half the selected cohort was never imported. Recovering them
+costs an *import*, not Stockfish, and cluster-bootstrap CI width scales with the number of
+accounts, so it may be the cheaper statistical-power purchase. Worth checking before
+spending fleet weeks.
+
+**Plans**: 0 plans (not yet planned)
 
 ## Backlog
 
