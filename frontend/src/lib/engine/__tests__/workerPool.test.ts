@@ -18,6 +18,8 @@ import {
   MOBILE_POOL_SIZE,
   GRADE_CACHE_MAX,
   GRADING_WATCHDOG_TIMEOUT_MS,
+  GRADING_WATCHDOG_SUSPEND_FACTOR,
+  MAX_WATCHDOG_SUSPEND_REARMS,
   STOP_BESTMOVE_WATCHDOG_TIMEOUT_MS,
   type QueuedGradeRequest,
   type WorkerPool,
@@ -742,6 +744,87 @@ describe('createWorkerPool: watchdog (D-06)', () => {
     await vi.advanceTimersByTimeAsync(1);
     await gradePromise;
     expect(settled).toBe(true);
+  });
+
+  it('FLAWCHESS-9G: a watchdog timer that fires far past its deadline is treated as page suspension: re-armed, not killed', async () => {
+    const pool = createWorkerPool();
+    const gradePromise = pool.grade(TEST_FEN, ['e7e5']);
+    const worker = createdWorkers[0]!;
+    driveInit(worker);
+
+    let settled = false;
+    void gradePromise.then(() => {
+      settled = true;
+    });
+
+    // Jump the clock WITHOUT running timers, then fire the (stale) timer —
+    // simulates a page/tab suspension where the timer callback fires only
+    // once the page resumes, far past its nominal deadline.
+    vi.setSystemTime(Date.now() + GRADING_WATCHDOG_TIMEOUT_MS * 2);
+    await vi.advanceTimersByTimeAsync(GRADING_WATCHDOG_TIMEOUT_MS);
+
+    expect(Sentry.captureException).not.toHaveBeenCalled();
+    expect(worker.messages).not.toContain('stop');
+    expect(settled).toBe(false);
+
+    // The slot is still alive and still owns the request.
+    worker.simulateMessage('info depth 14 multipv 1 score cp 5 nodes 1000 pv e7e5');
+    worker.simulateMessage('bestmove e7e5');
+    const result = await gradePromise;
+    expect(result.size).toBe(1);
+    expect(result.has('e7e5')).toBe(true);
+  });
+
+  it('FLAWCHESS-9G: a near-on-time fire still kills the slot', async () => {
+    const pool = createWorkerPool();
+    const gradePromise = pool.grade(TEST_FEN, ['e7e5']);
+    const worker = createdWorkers[0]!;
+    driveInit(worker);
+
+    // Under fake-timer semantics the observed elapsed here is either exactly
+    // GRADING_WATCHDOG_TIMEOUT_MS or GRADING_WATCHDOG_TIMEOUT_MS + 10_000,
+    // both below the suspension threshold, so this must still take today's
+    // kill path.
+    const suspendThresholdMs = GRADING_WATCHDOG_TIMEOUT_MS * GRADING_WATCHDOG_SUSPEND_FACTOR;
+    expect(GRADING_WATCHDOG_TIMEOUT_MS + 10_000).toBeLessThan(suspendThresholdMs);
+    vi.setSystemTime(Date.now() + 10_000);
+    await vi.advanceTimersByTimeAsync(GRADING_WATCHDOG_TIMEOUT_MS);
+
+    const result = await gradePromise;
+    expect(worker.messages).toContain('stop');
+    expect(Sentry.captureException).toHaveBeenCalledTimes(1);
+    const [err] = vi.mocked(Sentry.captureException).mock.calls[0]!;
+    expect((err as Error).message).toBe('Stockfish worker pool: grading watchdog timeout');
+    expect(result.size).toBe(0);
+  });
+
+  it('FLAWCHESS-9G: suspend re-arms are bounded so a genuinely wedged worker on a repeatedly suspended page still reaches the kill path', async () => {
+    const pool = createWorkerPool();
+    const gradePromise = pool.grade(TEST_FEN, ['e7e5']);
+    const worker = createdWorkers[0]!;
+    driveInit(worker);
+
+    let settled = false;
+    void gradePromise.then(() => {
+      settled = true;
+    });
+
+    for (let i = 0; i < MAX_WATCHDOG_SUSPEND_REARMS; i++) {
+      vi.setSystemTime(Date.now() + GRADING_WATCHDOG_TIMEOUT_MS * 2);
+      await vi.advanceTimersByTimeAsync(GRADING_WATCHDOG_TIMEOUT_MS);
+      expect(settled).toBe(false);
+      expect(Sentry.captureException).not.toHaveBeenCalled();
+    }
+
+    // One more suspension-shaped fire exceeds the re-arm budget — kill path.
+    vi.setSystemTime(Date.now() + GRADING_WATCHDOG_TIMEOUT_MS * 2);
+    await vi.advanceTimersByTimeAsync(GRADING_WATCHDOG_TIMEOUT_MS);
+
+    const result = await gradePromise;
+    expect(settled).toBe(true);
+    expect(worker.messages).toContain('stop');
+    expect(Sentry.captureException).toHaveBeenCalledTimes(1);
+    expect(result.size).toBe(0);
   });
 });
 
