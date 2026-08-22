@@ -8,6 +8,8 @@ in `YYYY-MM-DD` (Europe/Zurich).
 
 ## [Unreleased]
 
+## [v2.13] Ways In & Honest Answers — 2026-08-22
+
 ### Added
 
 - Train now tells you when a session contains none of your own blunders instead of quietly handing you a full deck of red herrings. Those sessions are labeled as a warm-up, with a banner explaining what you are about to solve, and they still count toward your streak like any other session. This fires when you simply do not have enough analyzed material yet, not on a fixed session number. (Phase 206)
@@ -1343,7 +1345,8 @@ bookmarks, game cards, and rating / stats pages.
 - Rating history, global stats, openings W/D/L charts.
 - Multi-user auth with data isolation.
 
-[Unreleased]: https://github.com/flawchess/flawchess/compare/v2.12...HEAD
+[Unreleased]: https://github.com/flawchess/flawchess/compare/v2.13...HEAD
+[v2.13]: https://github.com/flawchess/flawchess/compare/v2.12...v2.13
 [v2.12]: https://github.com/flawchess/flawchess/compare/v2.11...v2.12
 [v2.11]: https://github.com/flawchess/flawchess/compare/v2.10...v2.11
 [v2.10]: https://github.com/flawchess/flawchess/compare/v2.9...v2.10
