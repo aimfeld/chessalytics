@@ -4,6 +4,7 @@ import { createRoot } from "react-dom/client";
 import * as Sentry from "@sentry/react";
 import "./index.css";
 import App from "./App.tsx";
+import { createSwUpdateChecker, SW_UPDATE_INTERVAL_MS } from "@/lib/swUpdate";
 
 // ── Service Worker update handling ────────────────────────────────────────
 // When a new service worker activates (after deploy), reload the page so the
@@ -27,17 +28,7 @@ if ("serviceWorker" in navigator) {
   // no fresh `load` and the interval is unreliable while suspended — that's how an
   // installed PWA kept showing a many-deploys-old layout. visibilitychange/focus
   // are the events that actually fire on resume, so we re-check the SW there too.
-  const SW_UPDATE_INTERVAL_MS = 60 * 60 * 1000; // hourly background safety net
-  const SW_UPDATE_DEBOUNCE_MS = 30 * 1000; // coalesce focus+visibility resume bursts
-
-  let lastUpdateCheckMs = 0;
-  const checkForSwUpdate = async () => {
-    const nowMs = Date.now();
-    if (nowMs - lastUpdateCheckMs < SW_UPDATE_DEBOUNCE_MS) return;
-    lastUpdateCheckMs = nowMs;
-    const reg = await navigator.serviceWorker.getRegistration();
-    await reg?.update();
-  };
+  const checkForSwUpdate = createSwUpdateChecker();
 
   setInterval(checkForSwUpdate, SW_UPDATE_INTERVAL_MS);
   document.addEventListener("visibilitychange", () => {
