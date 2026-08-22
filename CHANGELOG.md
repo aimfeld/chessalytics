@@ -64,6 +64,8 @@ in `YYYY-MM-DD` (Europe/Zurich).
 
 - A Train puzzle can no longer advertise a move as "Also fine" that deep analysis grades a blunder. The old list came from ranks 2–4 of a quick browser search on deliberately sharp positions, which sometimes promoted moves the source game's own analysis board correctly marked as mistakes. (Phase 211)
 
+- Analysis on mobile no longer permanently loses an engine worker when you background the tab and come back to it. And two harmless browser conditions — a service-worker update check on iOS, and a blocked push-key request — no longer surface as errors.
+
 ### Security
 
 - Cleared 11 build-toolchain vulnerability advisories (`fast-uri`, `ip-address`, `postcss`, `undici`, `@hono/node-server`, `hono`, `brace-expansion`, `js-yaml`) by pinning patched versions of transitive dependencies. All were development- and build-time only; none were reachable from the shipped app.

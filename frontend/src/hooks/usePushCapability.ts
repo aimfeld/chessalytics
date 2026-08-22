@@ -36,15 +36,33 @@ export interface PushCapability {
   permission: NotificationPermission;
 }
 
+/**
+ * Bug fix (FLAWCHESS-9P): 2 production events over 13 days, `/library/games`,
+ * Firefox/Linux — TanStack Query throws `<queryHash> data is undefined` when
+ * a queryFn resolves `undefined`. The backend cannot produce that
+ * (`app/routers/push.py` returns a Pydantic model or a 404), so the trigger
+ * is a 2xx whose body is not the expected JSON object (a browser extension or
+ * intermediary stub) — e.g. `''.application_server_key` yields `undefined`
+ * rather than throwing. This guard takes `unknown` so it is provably
+ * incapable of resolving `undefined` regardless of what the response body
+ * actually is. A malformed body now takes the same "push unconfigured" path
+ * as the 404 (D-12 / UI-SPEC E6) instead of feeding the global
+ * `QueryCache.onError` capture.
+ */
+function readVapidKey(response: unknown): string | null {
+  if (typeof response !== 'object' || response === null) return null;
+  const key = (response as { application_server_key?: unknown }).application_server_key;
+  return typeof key === 'string' && key.length > 0 ? key : null;
+}
+
 export function usePushCapability(options?: { enabled?: boolean }): PushCapability {
   const supported = isPushSupported();
 
   const query = useQuery<string | null>({
     queryKey: PUSH_VAPID_QUERY_KEY,
-    queryFn: async () => {
+    queryFn: async (): Promise<string | null> => {
       try {
-        const response = await pushApi.getVapidPublicKey();
-        return response.application_server_key;
+        return readVapidKey(await pushApi.getVapidPublicKey());
       } catch (error) {
         if (axios.isAxiosError(error) && error.response?.status === HTTP_NOT_FOUND) {
           return null; // D-12: unconfigured, not a user-facing error
