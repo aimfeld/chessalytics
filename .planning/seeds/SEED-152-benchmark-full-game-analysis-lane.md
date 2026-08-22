@@ -7,12 +7,13 @@ planted_during: /gsd-explore — "should we run our full game analysis on benchm
 trigger_when: the Chess Data Stories series needs FlawChess-pipeline data (best moves,
   gem/great tiers, flaw blobs, tactic tags) on benchmark-DB games — i.e. any story whose
   question cannot be answered from lichess `%eval` alone
-scope: medium — one slice-export script, one sibling DB on the prod host, one new
-  lowest-priority claim lane in eval_queue_service.py, one slice-import script. No
-  product surface, no user-facing change. The analysis itself is unattended fleet time.
+scope: medium — one selection script + table, one config-gated candidate filter, a
+  dual-URL fallback in remote_eval_worker.py, and a local backend instance pointed at
+  the benchmark DB. No prod-side changes, no product surface, no user-facing change.
+  The analysis itself is unattended fleet time.
 ---
 
-# SEED-152: Run FlawChess full-game analysis on benchmark-DB games (sibling-DB lane on prod)
+# SEED-152: Run FlawChess full-game analysis on benchmark-DB games (local backend + dual-URL workers)
 
 ## Why This Matters
 
@@ -91,8 +92,9 @@ Measured from prod, per analyzed game:
 **MVCC caveat:** these are `UPDATE`s on `game_positions`, so each touched position leaves a
 dead row version (~194 B in the benchmark DB's layout, ~13 KB/game). Expect the table to
 grow by roughly double the net figure before autovacuum reclaims the space, and it will not
-shrink without a `VACUUM FULL`. On the prod host (150 GB disk, 102 GB free as of
-2026-08-22) cap 100 is comfortable; full uncapped scope on top of a 51 GB base is not.
+shrink without a `VACUUM FULL`. With the local-backend design all writes (and the bloat)
+land directly in the local benchmark DB — budget roughly 2× the net figure of local disk
+headroom during the run, and plan a vacuum pass afterwards. Prod disk is untouched.
 
 ## Two Code Facts That Change the Cost Model
 
@@ -113,48 +115,89 @@ Both were assumed the other way during planting and are load-bearing for sizing:
 2. **Maia inference cannot run on the remote worker fleet** (`eval_queue_service.py:34`).
    Best-move / gem tiering is backend-only and gated behind `BEST_MOVE_BACKFILL_ENABLED`.
    Not a bottleneck in practice: on 2026-08-19/20 the prod backend kept `best_moves_completed_at`
-   in exact lockstep with `full_evals_completed_at` at 17,326/day. But it means the prod
-   backend, not the fleet, is the serial resource for the gem-tier half of the work.
+   in exact lockstep with `full_evals_completed_at` at 17,326/day. In the local-backend
+   design this means the local backend instance (Adrian's machine) carries the Maia
+   inference for the gem-tier half of the work; prod's lockstep numbers say that's cheap
+   relative to the Stockfish evals.
 
-## Build Shape
+## Build Shape (revised 2026-08-22: local backend + dual-URL workers)
 
-The analysis is unattended fleet time; the actual work is plumbing.
+The original sibling-DB-on-prod design is superseded — see "Rejected topology" below.
+The analysis is unattended fleet time; the actual work is four small pieces, none of
+them prod-side:
 
-1. **Slice out.** Export the capped, randomly-selected eq-footing game set (~397k games plus
-   their `game_positions` rows) from the local benchmark DB. ~2–3 GB over the wire, not the
-   51 GB full DB.
-2. **Sibling DB on prod.** Host the slice as a *separate database* on the prod Postgres
-   instance, not merged into the prod schema. This is the key isolation property: prod's
-   `games` / `game_positions` never bloat, so hash-lookup performance, index size, and the
-   2 GB `shared_buffers` cache-hit ratio are untouched. (Merging would take prod from
-   808k games / 55.5M positions to ~3.4x that.)
-3. **New claim lane.** `eval_queue_service.py` needs a lane below `TIER_BESTMOVE_BACKFILL`
-   (tier 5) that draws from the sibling DB **only when the prod backlog is empty**. Note the
-   existing tier-3 lottery is a *global* Efraimidis–Spirakis draw over users with pending
-   work, so this is a genuinely new path, not a parameter. Workers already accept
-   `--base-url` (`scripts/remote_eval_worker.py`), so no worker change is expected.
-4. **Slice back.** Return only the produced columns and rows (`game_positions.eval_cp`/
-   `best_move`/`pv`, `game_flaws`, `game_best_moves`, and the `games` completion stamps) to
-   the local benchmark DB, then drop the sibling DB from prod to reclaim the space.
+1. **Selection script → `benchmark_selection` table.** Materialize the capped,
+   randomly-selected eq-footing set (~397k games) as a table `(game_id, tc_tranche)`
+   in the benchmark DB, populated per-TC tranche (classical first, then rapid, blitz,
+   bullet). The materialized table IS the reproducibility record — a story cites the
+   table, not a seed+query that must replay identically.
+2. **Config-gated candidate filter.** One `WHERE EXISTS (SELECT 1 FROM
+   benchmark_selection ...)` added to the tier-3 candidate query behind a config flag
+   (e.g. `BENCHMARK_SELECTION_GATE_ENABLED`), off everywhere except the local
+   benchmark backend. Without it, tier-3's global lottery would see all 2.1M
+   eq-footing games (plus everything else) as pending.
+3. **Dual-URL worker fallback.** Patch `scripts/remote_eval_worker.py` to accept an
+   ordered URL list (`--base-url https://flawchess.com --fallback-url
+   http://<lan-ip>:8001`): each claim cycle polls prod first and only claims from the
+   benchmark backend when prod returns no work. This is strict per-claim prod
+   priority — the moment prod work appears, the next claim goes there at full core
+   count. It replaces the old open questions about a "backlog empty" predicate and
+   interruptibility: a leased benchmark game (1 game, ~60s) simply finishes; no
+   requeue logic.
+4. **Local backend instance.** Run a second `uvicorn app.main:app --port 8001` on
+   Adrian's machine with `DATABASE_URL` pointed at the local benchmark DB (port 5433),
+   `BEST_MOVE_BACKFILL_ENABLED=true` (this instance carries the Maia/gem-tier work,
+   which is backend-only), and the selection gate on. Verify the benchmark DB's
+   Alembic head matches the backend before starting; run migrations against 5433 if
+   not. Results land directly in the benchmark DB as they are produced — no slice-out,
+   no slice-back, no merge script, no prod disk impact.
 
-Rationale for the sibling-DB topology over the two alternatives considered: pointing the
-fleet at a locally-hosted API against the benchmark DB fails because remote workers cannot
-reach Adrian's box without joining the tailscale network, and the prod backlog is now
-usually empty anyway — the fleet's idle capacity is the resource being harvested.
+**Topology.** Adrian's machine hosts the benchmark DB and the local backend (and can
+optionally run a dual-URL worker itself; the backend's Stockfish workers run under
+SCHED_IDLE, so co-residency is safe for API latency, though a local worker competes
+with the two other boxes for claims, which is fine). The two gaming machines on the
+LAN run the dual-URL worker and reach the local backend via its LAN IP (`0.0.0.0`
+bind + worker token auth) — no tailscale needed. What the fleet-topology memory
+records as "one 4-worker box at 194.191.211.24" is in fact these several machines
+NAT'd behind one IP.
+
+**Rejected topology (recorded for the record):** the originally-planned sibling DB on
+the prod host with a new lowest-priority claim lane in `eval_queue_service.py`.
+Killed for two reasons: (a) the queue service is bound to the single app DB via
+`async_session_maker`, so a sibling-DB lane means dual-DB routing through *every*
+worker-facing path (claim, atomic submit, flaw classify, best-move write, lease
+expiry) — the riskiest place in the codebase to add it (see
+[[project_atomic_eval_submit_incremental_lease]]); (b) it needs slice-out and
+slice-back scripts whose cross-DB row merge is the most error-prone piece, plus prod
+disk/MVCC exposure. The "remote workers can't reach Adrian's box" objection that
+motivated it evaporated once the worker machines turned out to be on the same LAN.
+If some future worker is genuinely off-LAN, the fallback is a second backend
+container on the prod host serving a sliced sibling DB with the same dual-URL worker
+(no queue-service changes) — the worker patch is shared between both designs.
 
 ## Open Questions
 
-- **Lane trigger definition.** "Prod backlog empty" needs a precise predicate. Strictly
-  zero pending work, or a low-water mark with hysteresis so a single arriving prod job
-  doesn't thrash the lane?
-- **Interruptibility.** A TC tranche runs for days. What happens to leased benchmark games
-  when a prod import arrives — finish the lease, or requeue immediately?
-- **Randomness reproducibility.** The random within-user cap needs a fixed seed recorded
-  with the slice, so the selected set is reconstructible when a story cites it.
+- **Eval-source homogeneity for the lichess arm.** As designed, the analyzed arm keeps
+  lichess `%eval` (preserved per `eval_drain.py:836`) and flaws are classified from
+  stored `eval_cp` — so analyzed-arm flaws derive from *lichess's* Stockfish while the
+  never-analyzed arm gets *ours*. Any analyzed-vs-unanalyzed comparison (the §6
+  selection-bias check this seed exists to enable) then confounds selection bias with
+  eval source. The MultiPV-2 pass computes our evals for lichess-arm games anyway and
+  discards them; since this is a research DB (not user data), the fix is cheap: store
+  our engine evals for the lichess arm too (overwrite `eval_cp`, or add a column and
+  keep both). Decide before the classical tranche runs.
 - **Whether to re-analyze the lichess arm at all in the first tranche.** It is half of
   classical and the most expensive per game. Deferring it would halve classical to ~27k
   games / 1.7 days, at the cost of leaving gem tiers unavailable on the games that already
-  have evals.
+  have evals. If it does run, run it *with* the eval-source homogenization above, or the
+  Stockfish price buys a confounded comparison.
+- **Local backend config details.** Confirm the local instance runs cleanly with a
+  minimal Stockfish pool (default `STOCKFISH_POOL_SIZE=1`; the fleet does the evals) and
+  with import/auth surfaces effectively unused; check what `EVAL_AUTO_DRAIN_ENABLED`
+  should be so the local drain doesn't bypass the worker claim path unintentionally.
+- **Sustained throughput.** 16k/day is a two-day observed peak with all machines up;
+  budget ~60–70% sustained over a multi-week run. The TC-ordered tranches make the
+  program stoppable at any boundary, so this only stretches the calendar, not the risk.
 
 ## Related
 
