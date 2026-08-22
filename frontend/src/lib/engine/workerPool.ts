@@ -91,6 +91,26 @@ export const MOBILE_CORE_THRESHOLD = 4;
 export const GRADING_WATCHDOG_TIMEOUT_MS = 60_000;
 
 /**
+ * Bug fix (FLAWCHESS-9G): multiple of `GRADING_WATCHDOG_TIMEOUT_MS` past which
+ * a watchdog fire is attributed to page/tab suspension rather than a wedged
+ * worker. A backgrounded mobile tab suspends the page AND its workers; on
+ * resume, the elapsed `setTimeout` fires immediately even though the worker
+ * never received CPU time, and treating that as a fault permanently killed a
+ * healthy slot (4 production events over 20 days, 3 of 4 on mobile browsers,
+ * all on /analysis).
+ */
+export const GRADING_WATCHDOG_SUSPEND_FACTOR = 1.5;
+
+/**
+ * Bug fix (FLAWCHESS-9G): per-dispatch cap on suspend re-arms (see
+ * `GRADING_WATCHDOG_SUSPEND_FACTOR`) — keeps a genuinely wedged worker on a
+ * repeatedly suspended page from re-arming forever; after this many
+ * suspension-attributed fires for the SAME dispatch, `fireWatchdog` falls
+ * through to the normal kill path instead of re-arming again.
+ */
+export const MAX_WATCHDOG_SUSPEND_REARMS = 3;
+
+/**
  * Bug fix (quick 260731-s0z, FIX-4): host-side "stop-bestmove" watchdog (ms),
  * armed instead of a bare `clearSlotWatchdog` whenever this pool sends `stop`
  * to a slot (the abort in-flight branch and `stopAll()`'s thinking branch).
@@ -140,6 +160,10 @@ export interface PoolWorkerSlot {
   accumulator: Map<string, MoveGrade>;
   /** D-06: handle for the in-flight `GRADING_WATCHDOG_TIMEOUT_MS` timer, or null when idle/no timer running. Started in `sendGo`, cleared by every path that takes the slot out of the `thinking` state. */
   watchdogTimer: ReturnType<typeof setTimeout> | null;
+  /** FLAWCHESS-9G: wall-clock stamp of the moment the grading watchdog was (re-)armed. Only meaningful while a grading watchdog is in flight. */
+  armedAtMs: number;
+  /** FLAWCHESS-9G: suspend re-arms consumed by the current dispatch (see `MAX_WATCHDOG_SUSPEND_REARMS`). Reset to 0 on every fresh `sendGo` dispatch. */
+  watchdogSuspendRearms: number;
 }
 
 /** The public surface `createWorkerPool()` returns — implements `EngineProviders.grade` (D-08). */
@@ -485,6 +509,32 @@ export function createWorkerPool(): WorkerPool {
    */
   function fireWatchdog(slot: PoolWorkerSlot): void {
     slot.watchdogTimer = null;
+
+    // Bug fix (FLAWCHESS-9G): 4 production events over 20 days, 3 of 4 on
+    // mobile browsers, all on /analysis — a backgrounded/suspended tab
+    // freezes its workers along with the page, so the elapsed `setTimeout`
+    // fires immediately on resume even though the worker never ran and is
+    // not actually wedged. Treating that as a fault is a false positive:
+    // `dead` is never cleared until `terminate()`, so one spurious fire
+    // permanently shrinks the pool for the rest of the session. A fire this
+    // far past deadline is attributed to suspension instead and silently
+    // re-armed (bounded by `MAX_WATCHDOG_SUSPEND_REARMS` so a genuinely
+    // wedged worker on a repeatedly suspended page still reaches the kill
+    // path below). Non-goal: `fireStopWatchdog`/`armStopWatchdog` are
+    // deliberately left unchanged — a slot in `'stopping'` has already been
+    // sent `stop` and its request is being abandoned, and no production
+    // Sentry event points at that path. `clearSlotWatchdog` is untouched.
+    const elapsedMs = Date.now() - slot.armedAtMs;
+    if (
+      elapsedMs > GRADING_WATCHDOG_TIMEOUT_MS * GRADING_WATCHDOG_SUSPEND_FACTOR &&
+      slot.watchdogSuspendRearms < MAX_WATCHDOG_SUSPEND_REARMS
+    ) {
+      slot.watchdogSuspendRearms++;
+      slot.armedAtMs = Date.now();
+      slot.watchdogTimer = setTimeout(() => fireWatchdog(slot), GRADING_WATCHDOG_TIMEOUT_MS);
+      return;
+    }
+
     // Best-effort: ask the worker to stop. It may never respond — that's
     // exactly why this fired — so this is not awaited or relied upon.
     slot.worker.postMessage('stop');
@@ -552,6 +602,10 @@ export function createWorkerPool(): WorkerPool {
     slot.worker.postMessage(buildGradeGoCommand(req.gradingDepth, req.candidateUcis));
     slot.state = 'thinking';
     clearSlotWatchdog(slot); // defensive: a stale timer must never coexist with a fresh dispatch
+    // FLAWCHESS-9G: a fresh dispatch is the only place the suspend-rearm
+    // counter resets — each grading request gets its own re-arm budget.
+    slot.armedAtMs = Date.now();
+    slot.watchdogSuspendRearms = 0;
     slot.watchdogTimer = setTimeout(() => fireWatchdog(slot), GRADING_WATCHDOG_TIMEOUT_MS);
   }
 
@@ -660,6 +714,8 @@ export function createWorkerPool(): WorkerPool {
       current: null,
       accumulator: new Map(),
       watchdogTimer: null,
+      armedAtMs: 0,
+      watchdogSuspendRearms: 0,
     };
     worker.onmessage = (e: MessageEvent<string>) => handleLine(slot, e.data);
     // WR-03/WR-04: an async script-load failure (404, CSP block, syntax
