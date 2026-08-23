@@ -153,6 +153,15 @@ class Settings(BaseSettings):
     # failing that, the primary token) applies as before.
     EVAL_FALLBACK_OPERATOR_TOKEN: str = ""
 
+    # The benchmark :8001 instance's OWN operator token (Phase 212). Read by
+    # bin/run_benchmark_backend.sh, which passes it as that process's
+    # EVAL_OPERATOR_TOKEN on the command line; declared here so it is documented
+    # alongside the other two rather than being an undeclared .env key. No
+    # backend reads this name directly, so -- like EVAL_FALLBACK_OPERATOR_TOKEN
+    # and unlike the BENCHMARK_* flags -- it is safe to keep in .env. Worker
+    # boxes present the same value as EVAL_FALLBACK_OPERATOR_TOKEN.
+    EVAL_BENCHMARK_OPERATOR_TOKEN: str = ""
+
     # Expected Stockfish version string (Phase 120 D-5 version gate).
     # e.g. "Stockfish 18". Empty = any version accepted (dev/CI).
     # Prod sets to the version installed on the server.
