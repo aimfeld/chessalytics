@@ -57,6 +57,8 @@ import {
   encodeBoard,
   maskAndSoftmax,
   eloToInput,
+  softmaxWdl,
+  expectedScore,
   NUM_SQUARES,
   PLANES_PER_SQUARE,
   POLICY_VOCAB_SIZE,
@@ -117,6 +119,9 @@ export const ADJUDICATION_WATCHDOG_TIMEOUT_MS = 20_000;
  * being silently invisible for an entire multi-hour sweep.
  */
 export const adjudicationFallbackStats = { neutralFallbackCount: 0 };
+
+/** The value head is a 3-logit [Loss, Draw, Win] vector (Maia-3 ONNX contract). */
+const WDL_LOGITS_COUNT = 3;
 
 /**
  * Bounds the per-(fen, elo) inference memo below so a long harness run cannot
@@ -209,22 +214,26 @@ export function resetMaiaInstrumentationStats() {
 const maiaRunMemo = new Map();
 
 /**
- * ONE Maia inference per distinct (fen, elo) — the harness's version of the
- * co-located caching the app enforces. Returns the raw policy-vocab slice,
- * copied out of wasm memory with `.slice()` before the tensors are disposed.
+ * ONE Maia inference per distinct (fen, eloSelf, eloOppo) — the harness's
+ * version of the co-located caching the app enforces. Returns the raw
+ * policy-vocab slice AND the 3-logit value head, both copied out of wasm
+ * memory with `.slice()` before the tensors are disposed.
+ *
+ * `eloOppo` defaults to `elo` (the pre-SEED-145 symmetric BOT-03 behavior, so
+ * every existing caller is byte-for-byte unchanged); the SEED-145 study path
+ * passes both players' real ratings (E-12).
  */
-async function runMaia(session, ort, fen, elo) {
-  const memoKey = `${fen}|${elo}`;
+async function runMaia(session, ort, fen, elo, eloOppo = elo) {
+  const memoKey = `${fen}|${elo}|${eloOppo}`;
   const cached = maiaRunMemo.get(memoKey);
   if (cached) return cached;
 
   const promise = (async () => {
     const boardTokens = encodeBoard(fen);
-    const eloInput = Float32Array.of(eloToInput(elo));
     const feeds = {
       tokens: new ort.Tensor('float32', boardTokens, [1, NUM_SQUARES, PLANES_PER_SQUARE]),
-      elo_self: new ort.Tensor('float32', eloInput, [1]),
-      elo_oppo: new ort.Tensor('float32', eloInput, [1]), // symmetric self/oppo ELO — BOT-03
+      elo_self: new ort.Tensor('float32', Float32Array.of(eloToInput(elo)), [1]),
+      elo_oppo: new ort.Tensor('float32', Float32Array.of(eloToInput(eloOppo)), [1]),
     };
     let result;
     // maiaInflightStats (198-DISPATCH-02): raised BEFORE the real inference
@@ -238,10 +247,15 @@ async function runMaia(session, ort, fen, elo) {
       result = await session.run(feeds);
       maiaInferenceStats.count++;
       maiaCpuStats.totalMs += performance.now() - startedAt;
-      // `.slice()` copies the head out of wasm memory so the output tensors
+      // `.slice()` copies the heads out of wasm memory so the output tensors
       // can be disposed in `finally` below without invalidating what we return.
       return {
         policySlice: result.logits_move.data.slice(0, POLICY_VOCAB_SIZE),
+        // Raw [Loss, Draw, Win] logits (CONTRACT §e order — NOT W/D/L);
+        // `nodeValueHead` below softmaxes them. Copied here (3 floats) rather
+        // than in a second inference so policy and value callers share one
+        // memoized `session.run`.
+        valueLogits: result.logits_value.data.slice(0, WDL_LOGITS_COUNT),
       };
     } finally {
       // BUG FIX (SEED-113, 2026-07-21): onnxruntime-web ort.Tensor buffers live in the
@@ -365,6 +379,26 @@ async function nodePolicy(session, ort, fen, elo, side) {
     if (uci !== null) uciProbs[uci] = prob;
   }
   return uciProbs;
+}
+
+/**
+ * Maia value head at `fen` for a mover rated `eloSelf` facing an opponent
+ * rated `eloOppo` (SEED-145 Gate 0; E-12: both real ratings, no forced
+ * symmetry). Returns `{ wdl, expectedScore }` where `wdl` is the softmaxed
+ * [Loss, Draw, Win] head as a `{ win, draw, loss }` vector and
+ * `expectedScore` is `win + 0.5·draw`, both from the POV of the SIDE TO MOVE
+ * at `fen` (encodeBoard mirrors the board to the mover's POV, so the head's
+ * "Win" is always the mover's win — normalize to a single POV frame before
+ * comparing against white-POV `eval_cp`, seed Trap 1).
+ *
+ * Shares `runMaia`'s memoized inference with `nodePolicy`: asking for both
+ * the policy and the value of one (fen, eloSelf, eloOppo) costs ONE
+ * `session.run`.
+ */
+export async function nodeValueHead(session, ort, fen, eloSelf, eloOppo = eloSelf) {
+  const { valueLogits } = await runMaia(session, ort, fen, eloSelf, eloOppo);
+  const wdl = softmaxWdl(valueLogits);
+  return { wdl, expectedScore: expectedScore(wdl) };
 }
 
 /**

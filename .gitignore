@@ -7,14 +7,10 @@
 # Source screenshots (raw, unprocessed)
 /screenshots
 
-# node_modules at any depth. Unanchored (no leading slash) on purpose: the old
-# "/node_modules" only matched the repo root, so a stray install under scripts/
-# showed up as hundreds of unversioned files. frontend/ has its own .gitignore
-# entry too; this covers everywhere else.
-node_modules/
-
-# SEED-145 local working data (large ndjson ledgers)
-scripts/seed145/
+# Stray root-level node_modules / vitest cache (frontend deps live under frontend/)
+/node_modules
+# Harness-only native deps (scripts/package.json — onnxruntime-node)
+/scripts/node_modules
 
 # Byte-compiled / optimized / DLL files
 __pycache__/
@@ -246,3 +242,15 @@ reports/data/persona-recal-*/
 
 # GSD runtime sentinels (dispatch isolation markers)
 .gsd/
+
+# SEED-145 (engine_disagreement_study) working data. Bulk ledgers/manifests/logs stay
+# local; only the small gate0_* ledgers and the .gz Stage B manifest are committed.
+# Blanket-ignoring the study dir instead would silently swallow new SOURCE files.
+scripts/engine_disagreement_study/data/*.ndjson
+scripts/engine_disagreement_study/data/*.log
+scripts/engine_disagreement_study/data/*.bak
+!scripts/engine_disagreement_study/data/gate0_*.ndjson
+
+# Analysis notebook chart exports (analysis/README.md, "Sharing charts with Claude")
+analysis/out/*
+!analysis/out/.gitkeep

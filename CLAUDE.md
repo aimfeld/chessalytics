@@ -45,7 +45,7 @@ uv run pytest tests/test_foo.py::test_bar  # Run a single test (serial — -n au
 uv run pytest -n auto -x         # Full suite, stop on first failure
 uv run ruff check .             # Lint
 uv run ruff format .            # Format
-uv run ty check app/ tests/     # Type check (must pass with zero errors)
+uv run ty check app/ tests/ scripts/     # Type check (must pass with zero errors)
 uv run alembic upgrade head     # Run migrations
 uv run alembic revision --autogenerate -m "description"  # Create migration
 
@@ -79,9 +79,9 @@ keeps serial execution (D-02) — `-n auto` is a local-only convenience.
 Run all of these and resolve every output before integrating work into `main`. This is the safety net that replaces pre-merge CI (see Version Control).
 
 ```bash
-uv run ruff format app/ tests/         # apply formatting (not just --check)
-uv run ruff check app/ tests/ --fix    # apply autofixable lint
-uv run ty check app/ tests/            # type check, zero errors required
+uv run ruff format app/ tests/ scripts/         # apply formatting (not just --check)
+uv run ruff check . --fix    # apply autofixable lint
+uv run ty check app/ tests/ scripts/            # type check, zero errors required
 uv run pytest -n auto -x               # full backend suite (parallel), stop on first failure
 ( cd frontend && npm run lint && npm test -- --run )  # frontend lint + tests
 ```
@@ -279,7 +279,7 @@ These apply to both backend and frontend code. For frontend-only rules, see the 
 
 - **No magic numbers** — extract thresholds, limits, and configuration values into named constants. Example: `const MIN_GAMES_FOR_COLOR = 10` not a bare `10` in a conditional.
 - **Type safety** — leverage TypeScript's type system and Python type hints fully. Avoid `any`, prefer explicit types for function signatures, props, and return values. Use discriminated unions over loose string types. On the backend, use Pydantic models for validation and typed dataclasses/TypedDicts where appropriate. Never use bare `str` for fields with a fixed set of values — use `Literal["a", "b", "c"]` in Pydantic schemas, function signatures, and return types. This applies to both schemas and service/repository function parameters.
-- **ty compliance** — all backend code must pass `uv run ty check app/ tests/` with zero errors. ty runs in CI between ruff and pytest and blocks the build. When writing new code:
+- **ty compliance** — all backend code must pass `uv run ty check app/ tests/ scripts/` with zero errors. ty runs in CI between ruff and pytest and blocks the build. When writing new code:
   - Add explicit return type annotations on all functions.
   - Use `Sequence[str]` (not `list[str]`) for function parameters that accept `list[Literal[...]]` values — list is invariant, Sequence is covariant.
   - Use Pydantic models at system boundaries (external API input/output) and TypedDicts for internal structured data (filter params, accumulators). See `app/schemas/normalization.py` and `app/services/stats_service.py` for examples.

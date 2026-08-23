@@ -123,7 +123,14 @@ Current leanings (not validated):
 
 **Why deferred:** No analysis notebook exists yet to drive the decision. Pre-emptive lib choice without a real workload risks optimizing the wrong axis (e.g. picking polars for speed when the actual workload is plot-iteration time, not query time).
 
-**Resolved:** _(open)_
+**Resolved:** 2026-08-23 — **polars + plotly**, documented in `analysis/README.md`. Settled by building the first real notebook (SEED-145's three-arm comparison) rather than by the planned three-way spike, which the "no real workload yet" concern above had correctly identified as the thing to wait for.
+
+What the actual workload decided:
+- **polars** — the driving dataset is 140k NDJSON ledger rows read straight off disk, and `pl.read_ndjson` + `pl.concat(how="diagonal_relaxed")` handled per-shard schema drift in one line. The DB path (`pl.read_database` over a psycopg DBAPI connection) works without connectorx/adbc, so nothing extra entered the dep set.
+- **plotly** — chosen over altair on the >10k-point objection raised above, which is real here: reliability diagrams bin 20k–32k rows per boundary. The verbosity downside stands and is unremarkable in practice.
+- **`kaleido`** was added, unplanned and load-bearing: `fig.write_image()` is how a chart becomes something Claude can `Read`. Claude cannot see a rendered notebook in a browser, so without static export the whole interactive story is human-only. That consideration was absent from this question as originally framed and is the most transferable finding.
+
+Not tested against pandas — the polars call was uncontroversial once the workload turned out to be file-shaped rather than ecosystem-shaped (no sklearn/seaborn involvement materialised).
 
 ---
 

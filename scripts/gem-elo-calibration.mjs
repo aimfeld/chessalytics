@@ -35,7 +35,8 @@ import fs from 'node:fs';
 // Maia ONNX session + Stockfish UCI process bring-up now lives in
 // scripts/lib/node-engine-providers.mjs, imported here AND by the Phase 168
 // calibration harness — never duplicated (behavior-preserving refactor).
-import { resolveFrontendModule, createMaiaSession, spawnStockfish } from './lib/node-engine-providers.mjs';
+import { resolveFrontendModule, createMaiaSession } from './lib/node-engine-providers.mjs';
+import { createStockfishPool } from './lib/stockfish-pool.mjs';
 
 // ─── Imports from LIVE frontend source (via the @/ alias hook) — D-03 ─────────
 // GemGrade/MoverColor are type-only in gemMove.ts/liveFlaw.ts — NOT imported as
@@ -73,6 +74,13 @@ const DEFAULT_SAMPLE_SIZE = 3000;
 const DEFAULT_SEED = 1;
 const DEFAULT_MOVETIME_MS = 3000;
 const DEFAULT_MULTIPV_CAP = 32;
+/**
+ * Consecutive per-position failures after which the sweep aborts. The pool
+ * replaces a dead engine, so isolated failures are expected and skippable; a
+ * RUN of them means the environment is broken, and finishing would emit a
+ * near-empty TSV indistinguishable from a completed sweep.
+ */
+const MAX_CONSECUTIVE_FAILURES = 10;
 const DEFAULT_CSV_PATH = path.join(REPO_ROOT, 'temp/brilliants_no_stalemates.csv');
 const DEFAULT_OUT_DIR = path.join(REPO_ROOT, 'reports/data');
 const DEFAULT_RUNGS = [600, 1000, 1400, 1800, 2200, 2600];
@@ -629,51 +637,62 @@ async function main() {
   // CR-01: guard Stockfish spawn through TSV-writer creation in one
   // try/catch — without this, an `openTsvWriter` failure after Stockfish has
   // already spawned would leak that live child process (nothing outside this
-  // block ever calls `.terminate()` on it).
-  let stockfish;
+  // block ever calls `.quitAll()` on it).
+  //
+  // A size-1 SHARED pool rather than a bare `spawnStockfish`: this harness runs
+  // for hours, and the pool replaces an engine whose child process dies instead
+  // of leaving every remaining position to fail. No `hashMb` — this script
+  // never configured Hash, so it keeps Stockfish's default.
+  let pool;
   let tsvWriter;
   try {
-    stockfish = await spawnStockfish();
+    pool = await createStockfishPool({ size: 1 });
     tsvWriter = openTsvWriter(tsvPath, args.rungs);
   } catch (err) {
-    stockfish?.terminate();
+    pool?.quitAll();
     throw err;
   }
 
   const rows = [];
   let missingMaiaProbCount = 0;
   let failedPositions = 0;
+  let consecutiveFailures = 0;
 
   try {
     for (let i = 0; i < sampled.length; i++) {
       process.stdout.write(`\r[gem-elo-calibration] grading position ${i + 1}/${sampled.length}...`);
       try {
-        const { row, missingMaiaProbCount: missing } = await gradeSampledPosition({
-          sample: sampled[i],
-          stockfish,
-          maiaCtx,
-          Chess,
-          args,
-        });
+        const { row, missingMaiaProbCount: missing } = await pool.run((stockfish) =>
+          gradeSampledPosition({ sample: sampled[i], stockfish, maiaCtx, Chess, args }),
+        );
         missingMaiaProbCount += missing;
+        consecutiveFailures = 0;
         rows.push(row);
         tsvWriter.writeRow(row); // WR-01: durable per-position append
       } catch (err) {
         // WR-01: one bad position (e.g. a Stockfish search timeout) must not
-        // abort the whole sweep. Skip it, resync the engine, and continue.
+        // abort the whole sweep. Skip it and continue — the explicit
+        // `stopAndSync()` that used to live here is now the pool's job
+        // (`withEngine` resyncs on the throw path, and replaces the engine
+        // outright if its process died).
         failedPositions++;
+        consecutiveFailures++;
         process.stdout.write('\n');
         console.warn(`[gem-elo-calibration] position ${i + 1} failed, skipping: ${err.message}`);
-        try {
-          await stockfish.stopAndSync();
-        } catch (syncErr) {
-          console.error(`[gem-elo-calibration] engine resync failed, aborting: ${syncErr.message}`);
-          throw syncErr; // engine is unrecoverable — stop rather than emit garbage
+        // The pool recovers from a dead engine, but not from an environment
+        // where every replacement also dies — and a run that quietly skips
+        // every remaining position would emit a near-empty TSV that looks like
+        // a completed sweep. Replaces the old "engine resync failed, aborting".
+        if (consecutiveFailures >= MAX_CONSECUTIVE_FAILURES) {
+          console.error(
+            `[gem-elo-calibration] ${consecutiveFailures} consecutive failures — aborting rather than emitting garbage`,
+          );
+          throw err;
         }
       }
     }
   } finally {
-    stockfish.terminate();
+    pool.quitAll();
     await tsvWriter.close();
   }
   process.stdout.write('\n');

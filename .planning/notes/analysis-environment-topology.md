@@ -106,3 +106,95 @@ Sources:
   supports WASM export → standalone HTML). Defer until there's a need.
 - CI for `analysis/` (lint, typecheck, notebook-runs-clean). Likely
   not worth it until the directory has >5 notebooks.
+
+---
+
+## Superseded 2026-08-23 — the uv-workspace decision was reversed on contact
+
+SEED-028 shipped, but **not** with the workspace shape decided above. `analysis/`
+is a **standalone uv project with its own `analysis/.venv`**, not a
+`[tool.uv.workspace]` member sharing the root venv. The rest of the note (the
+`db.py` helper, the marimo rationale, notebooks-as-`.py`) held up and shipped
+as written.
+
+Three things killed the shared-venv/workspace shape:
+
+1. **`Dockerfile` breaks.** Its cacheable dependency layer bind-mounts only
+   `uv.lock` and `pyproject.toml`, then runs `uv sync --locked`. A workspace root
+   must be able to read every member's `pyproject.toml`, so declaring
+   `members = ["analysis"]` fails the production image build unless both
+   Dockerfiles are edited to mount `analysis/pyproject.toml` — pulling a
+   notebook-only concern into the prod build for no benefit.
+2. **The shared venv gets pruned.** `bin/run_local.sh` runs
+   `uv sync --group maia-inference`, which uninstalls anything outside the root's
+   declared set. Marimo would vanish on every local app start (that file already
+   documents the same footgun for `maia-inference`).
+3. **The "one shared venv avoids duplicate installs" argument was wrong about
+   the direction of the cost.** The duplication it avoids is small; what it buys
+   in exchange is notebook deps (marimo, polars, plotly, kaleido) entering
+   `uv.lock`, the CI sync, and the production image. Isolation is the point, and
+   the user's stated requirement was "don't muddy the primary environment."
+
+Consequences worth knowing:
+
+- Every command carries `--project analysis`, e.g.
+  `uv run --project analysis marimo edit analysis/notebooks/<study>/<study>.py`.
+- **PyCharm Workspace mode is not applicable** — there is no uv workspace to
+  detect. PyCharm instead auto-created a `flawchess-analysis` module with
+  `analysis/.venv` as its SDK, which works. But in the pyproject.toml-based
+  project model, module dependencies are *derived from pyproject.toml*, so the
+  analysis module cannot be given a dependency on the root module through the UI
+  (Project Dependencies shows it disabled: "Dependencies are managed by
+  pyproject.toml").
+- That last point settled the note's "occasional imports from `app/`" assumption:
+  `analysis/db.py` does **not** import from `app`. It reads the
+  `DATABASE_URL_{DEV,BENCHMARK,PROD}` keys from the repo-root `.env` and requires
+  them, so there are no default URLs to drift. Where a notebook genuinely must
+  reuse an app primitive (the study notebook imports `LICHESS_K` and the mate
+  mapping from `app/services/eval_utils.py` rather than re-deriving a sigmoid),
+  it does a `sys.path` insert plus a `# noinspection PyUnresolvedReferences`, and
+  guards the reuse with an assert cell.
+- `ty` needs `analysis/.venv/lib/python3.13/site-packages` in
+  `[tool.ty.environment] extra-paths` in the ROOT `pyproject.toml`, because the
+  PyCharm LSP runs one ty server rooted at the repo with the root venv. That path
+  hardcodes `python3.13` and needs a bump when the analysis venv moves to 3.14.
+
+### Deferred choices, now settled
+
+- **DataFrame lib: polars.** **Plotting lib: plotly** (+ `kaleido` for static
+  PNG export). Q-006 can be closed.
+- **CI for `analysis/`: still deferred**, unchanged — not worth it below ~5
+  notebooks. Note that `marimo export html <nb>.py` executes every cell
+  headlessly and is the natural smoke test if that changes.
+- **Reports promotion path: still deferred.** `analysis/out/` (gitignored) is
+  where exported figures land for now; it exists mainly so Claude can `Read` a
+  rendered chart, since it cannot see notebook output in a browser.
+
+---
+
+## Amended 2026-08-23 — `notebooks/` layer dropped, study slug convention fixed
+
+The `analysis/notebooks/<study>/` nesting is gone: notebooks now sit at
+`analysis/<study>/<study>.py`. With `analysis/` holding only `db.py`, `out/`,
+and the study dirs, the extra level bought nothing, and removing it makes the
+`analysis/<study>` ↔ `scripts/<study>` ↔ `stories/<slug>` correspondence
+visible at a glance. Commands above that read `analysis/notebooks/...` should be
+read as `analysis/...`.
+
+Alongside it, `scripts/seed145/` became `scripts/engine_disagreement_study/`, and
+the three-directory split is now documented in `analysis/README.md` ("Where a
+study's pieces live"). Two rules worth restating here:
+
+- **The split is by runtime environment, not by topic.** A study's generation
+  scripts import `app/` + SQLAlchemy (root venv) or the Node harness
+  (`scripts/node_modules`, frontend aliases); neither is installable in
+  `analysis/.venv`. Consolidating a study into one directory would break the one
+  property that makes `analysis/` useful — everything in it runs with
+  `uv run --project analysis`.
+- **Slug spelling: underscores in code trees, dashes in `stories/`.** `scripts/`
+  and `analysis/` dirs must stay importable (a dashed directory never can be);
+  `stories/` names a URL.
+
+Not renamed, deliberately: the RNG seed strings (`seed145-gate0`,
+`seed145-stage-b`, …) and the benchmark DB table `seed145_entry_predictions`.
+Changing either would alter sampling or orphan already-loaded rows.

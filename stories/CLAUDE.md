@@ -9,6 +9,7 @@ The blog is named **Chess Data Stories** (not "FlawChess Data Stories"): use tha
 - One directory per story: `stories/<slug>/index.html` (kebab-case slug = URL). Self-contained pages: inline CSS/JS, vanilla SVG charts, no CDNs or JS libraries. The only allowed external resources are Google Fonts (Fredoka, for the brand label) and the Umami analytics tag (below).
 - **Co-locate the technical report**: the report a story summarizes lives next to it as `stories/<slug>/<slug>-report.md` (short name, e.g. `two-pawns-up-report-latest.md`), not under `reports/`. The story footer links to it via its GitHub blob URL.
 - Add a card for every new story to `stories/index.html`, including its publication date.
+- **Generation scripts do NOT live here.** `.github/workflows/pages.yml` uploads `stories/` verbatim, so anything in a story directory is served publicly — a `.py` file next to `index.html` ends up at `https://stories.flawchess.com/<slug>/<file>.py`. Scripts that produce a report belong in `scripts/<study>/` (underscored slug: `scripts/two_pawns_up/`), which is also where their root-venv dependencies (`app/`, SQLAlchemy) actually resolve. The report `.md` still co-locates with the story; only the code moves. See `analysis/README.md`, "Where a study's pieces live", for the three-directory split.
 
 ## SEO & sharing (required for every story)
 

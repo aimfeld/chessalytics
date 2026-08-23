@@ -1,0 +1,7 @@
+# Seed-145 analysis outputs are produced on both Linux and Windows machines.
+# Python writers open files in text mode, so a Windows run emits CRLF and every
+# data file shows up as modified with a zero-line diff. Pin LF on checkout and
+# normalize on commit. The gzipped manifest must be exempt: git's text
+# auto-detection can misclassify it and strip CR bytes when diffing.
+scripts/engine_disagreement_study/data/** text eol=lf
+scripts/engine_disagreement_study/data/**.gz binary

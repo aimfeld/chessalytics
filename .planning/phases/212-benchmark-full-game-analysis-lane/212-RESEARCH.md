@@ -568,7 +568,7 @@ Not applicable in the usual sense — this is not a "check whether the ecosystem
 - `tests/test_benchmark_ingest.py`, `tests/services/test_eval_queue.py` (existence + shape confirmed, spot-read)
 - `pyproject.toml` (pytest config, lines 64-84)
 - `.planning/phases/212-benchmark-full-game-analysis-lane/212-CONTEXT.md` (full document — the primary decision source for this phase)
-- `.planning/seeds/SEED-152-benchmark-full-game-analysis-lane.md` (full document)
+- `../../seeds/closed/SEED-152-benchmark-full-game-analysis-lane.md` (full document)
 - `.planning/ROADMAP.md` § "Phase 212" (full section, ~9KB)
 - `.planning/notes/benchmark-equal-footing-framing.md` (read, confirms the ±100 rule's provenance)
 - Live environment: `docker ps`, `pg_isready -h localhost -p 5432/5433`, `uv --version`, `docker --version` (all run this session)

@@ -90,8 +90,8 @@ import { pathToFileURL } from 'node:url';
 import path from 'node:path';
 import fs from 'node:fs';
 
-import { spawnStockfish, STOCKFISH_INIT_TIMEOUT_MS } from './lib/node-engine-providers.mjs';
 import { createMaiaSession } from './lib/node-engine-providers.mjs';
+import { createStockfishPool } from './lib/stockfish-pool.mjs';
 import {
   makeNodeProviders,
   maiaInferenceStats,
@@ -392,28 +392,13 @@ function hashProbeRowFields(stats, hashProbeEvery) {
 }
 
 async function createDepthPool(size, hashProbeEvery = 0) {
-  const engines = await Promise.all(Array.from({ length: size }, () => spawnStockfish()));
-  for (const engine of engines) {
-    engine.send(`setoption name Hash value ${WORKER_HASH_MB}`);
-    engine.send('isready');
-    await engine.waitFor((line) => line === 'readyok', STOCKFISH_INIT_TIMEOUT_MS);
-  }
-  const busy = new Map(engines.map((engine) => [engine, false]));
-  const waiters = [];
-
-  const acquire = () => {
-    const free = engines.find((engine) => !busy.get(engine));
-    if (free !== undefined) {
-      busy.set(free, true);
-      return Promise.resolve(free);
-    }
-    return new Promise((resolve) => waiters.push(resolve));
-  };
-  const release = (engine) => {
-    const next = waiters.shift();
-    if (next !== undefined) next(engine);
-    else busy.set(engine, false);
-  };
+  // The SHARED pool (`lib/stockfish-pool.mjs`) rather than a private
+  // acquire/release copy: it evicts and respawns an engine whose child process
+  // dies, which a hand-rolled pool did not. `hashMb` pins Hash to the browser
+  // worker's value on the initial engines AND on any replacement — a harness
+  // that healed into a default-Hash engine would change the transposition
+  // table this script exists to measure, silently and mid-run.
+  const pool = await createStockfishPool({ size, hashMb: WORKER_HASH_MB });
 
   /**
    * Shared grade body (Task 2 factor-out) — mirrors `workerPool.ts`'s
@@ -432,20 +417,40 @@ async function createDepthPool(size, hashProbeEvery = 0) {
    */
   const runGradeAtDepth = async (depth, fen, candidateUcis, stats) => {
     if (candidateUcis.length === 0) return new Map(); // workerPool.ts WR-05
-    const engine = await acquire();
-    try {
-      const { grades, elapsedMs } = await runOneGo(engine, depth, fen, candidateUcis);
-      stats.ms += elapsedMs;
-      stats.calls++;
-      stats.candidates += candidateUcis.length;
 
-      if (hashProbeEvery > 0 && stats.calls % hashProbeEvery === 0) {
-        await probeHashDivergence(engine, depth, fen, candidateUcis, grades, stats);
+    // The ordinal is claimed at ENTRY, not after the `go` resolves, so every
+    // call gets a unique one even while `size` calls are in flight — two
+    // concurrent calls could otherwise read the same counter and both probe.
+    // `stats` is per-pass (makeGradeStats), so probe selection stays per-pass
+    // and deterministic at a fixed concurrency, as the doc comment promises.
+    const ordinal = ++stats.calls;
+    const willProbe = hashProbeEvery > 0 && ordinal % hashProbeEvery === 0;
+
+    // D-11 retry safety: `pool.run` may re-invoke this body after a `waitFor`
+    // timeout, so nothing inside it may touch `stats` — a retried attempt would
+    // double-count grade_cpu_ms and hash probes, corrupting the very numbers
+    // this harness produces. Each attempt accumulates into its OWN scratch
+    // object; only the attempt that actually resolves is merged in below. The
+    // probe must stay INSIDE the callback: it compares a warm-hash result
+    // against a Clear-Hash one on the SAME engine, so re-acquiring for it could
+    // land on a different engine and measure nothing.
+    const { grades, scratch } = await pool.run(async (engine) => {
+      const attempt = makeGradeStats();
+      const { grades: attemptGrades, elapsedMs } = await runOneGo(engine, depth, fen, candidateUcis);
+      attempt.ms += elapsedMs;
+      if (willProbe) {
+        await probeHashDivergence(engine, depth, fen, candidateUcis, attemptGrades, attempt);
       }
-      return grades;
-    } finally {
-      release(engine);
-    }
+      return { grades: attemptGrades, scratch: attempt };
+    });
+
+    stats.ms += scratch.ms;
+    stats.candidates += candidateUcis.length;
+    stats.hashProbes += scratch.hashProbes;
+    stats.hashProbesDivergent += scratch.hashProbesDivergent;
+    stats.hashProbeMaxAbsCp = Math.max(stats.hashProbeMaxAbsCp, scratch.hashProbeMaxAbsCp);
+    stats.hashProbeScoreDiffSum += scratch.hashProbeScoreDiffSum;
+    return grades;
   };
 
   /**
@@ -468,20 +473,12 @@ async function createDepthPool(size, hashProbeEvery = 0) {
   const gradeAtLadder = (stats) => (fen, candidateUcis, signal, depth) =>
     runGradeAtDepth(depth ?? GRADING_ROOT_DEPTH, fen, candidateUcis, stats);
 
-  /** Clears every engine's transposition table so each (position, depth) run starts clean. */
-  const resetAll = async () => {
-    for (const engine of engines) {
-      engine.send('ucinewgame');
-      engine.send('isready');
-      await engine.waitFor((line) => line === 'readyok', STOCKFISH_INIT_TIMEOUT_MS);
-    }
-  };
-
   return {
     gradeAtDepth,
     gradeAtLadder,
-    resetAll,
-    quitAll: () => engines.forEach((engine) => engine.terminate()),
+    /** Clears every engine's transposition table so each (position, depth) run starts clean. */
+    resetAll: () => pool.newGameAll(),
+    quitAll: () => pool.quitAll(),
   };
 }
 

@@ -67,7 +67,7 @@
  * current sets, or a `game_index` whose recorded opening/color does not match
  * the seed-derived value (a corrupt/mis-ordered ledger) — T-180-05.
  */
-import { pathToFileURL } from 'node:url';
+import { fileURLToPath, pathToFileURL } from 'node:url';
 import { execFileSync } from 'node:child_process';
 import path from 'node:path';
 import fs from 'node:fs';
@@ -100,7 +100,9 @@ import {
 } from '@/lib/engine/botBudget';
 import { MAIA_ELO_LADDER } from '@/lib/maiaEncoding';
 
-const __dirname = path.dirname(new URL(import.meta.url).pathname);
+// fileURLToPath (not URL.pathname): URL.pathname yields '/C:/...' on Windows,
+// which path.resolve then mangles — the Stage B sweep runs on a Windows laptop.
+const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const REPO_ROOT = path.resolve(__dirname, '..');
 
 // ─── D-11: fixed per-move search budget (mirrors useFlawChessEngine.ts) ────────
