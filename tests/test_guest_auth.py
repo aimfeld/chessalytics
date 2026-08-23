@@ -104,6 +104,24 @@ class TestGuestService:
         assert len(token) > 0
 
     @pytest.mark.asyncio
+    async def test_create_guest_user_is_promoted_defaults_false(self, db_session):
+        """A freshly created guest has is_promoted False, read fresh from the database.
+
+        This default is the floor the whole conversion metric rests on — a guest
+        row must never start out looking already-converted.
+        """
+        from sqlalchemy import select
+
+        from app.models.user import User
+        from app.services.guest_service import create_guest_user
+
+        user, _token = await create_guest_user(db_session)
+        assert user.is_promoted is False
+
+        result = await db_session.execute(select(User.is_promoted).where(User.id == user.id))
+        assert result.scalar_one() is False
+
+    @pytest.mark.asyncio
     async def test_refresh_guest_token_returns_token(self, db_session):
         """refresh_guest_token returns a non-empty token string for guest users."""
         from app.services.guest_service import create_guest_user, refresh_guest_token
@@ -306,6 +324,26 @@ class TestPromoteGuestWithPassword:
         assert updated_user.is_guest is False
         assert updated_user.email == new_email
         assert updated_user.is_verified is True
+
+    @pytest.mark.asyncio
+    async def test_promotion_sets_is_promoted_in_database(self, db_session):
+        """is_promoted=True is persisted for the email/password path too.
+
+        Previously this promotion was indistinguishable from a direct signup;
+        asserted via a fresh Core select, not the returned object, since the
+        latter can be served from the identity map instead of proving the write.
+        """
+        from sqlalchemy import select
+
+        from app.models.user import User
+        from app.services.guest_service import create_guest_user, promote_guest_with_password
+
+        user, _token = await create_guest_user(db_session)
+        new_email = unique_email("promoted_dbread")
+        await promote_guest_with_password(db_session, user, new_email, "SecurePass1!")
+
+        result = await db_session.execute(select(User.is_promoted).where(User.id == user.id))
+        assert result.scalar_one() is True
 
     @pytest.mark.asyncio
     async def test_promotion_hashes_password(self, db_session):
