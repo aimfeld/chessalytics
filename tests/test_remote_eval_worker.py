@@ -46,6 +46,7 @@ from scripts.remote_eval_worker import (
     WORKER_SCHEMA_VERSION,
     _BackendTarget,
     _build_backend_targets,
+    _resolve_fallback_token,
     _build_blob_walk_targets,
     _eval_atomic_blob_nodes,
     _eval_atomic_game,
@@ -1573,6 +1574,41 @@ def test_fallback_url_and_token_accepted(monkeypatch: pytest.MonkeyPatch) -> Non
     args = parse_args()
     assert args.fallback_url == "http://localhost:8001"
     assert args.fallback_token == "tok"
+
+
+def test_resolve_fallback_token_cli_wins_over_env() -> None:
+    """An explicit --fallback-token beats EVAL_FALLBACK_OPERATOR_TOKEN, mirroring
+    how --token beats EVAL_OPERATOR_TOKEN."""
+    assert _resolve_fallback_token("http://localhost:8001", "cli-tok", "env-tok") == "cli-tok"
+
+
+def test_resolve_fallback_token_falls_back_to_env() -> None:
+    """With --fallback-token omitted, the .env value is used -- the whole point of
+    the setting: a worker box needs no token flag at all."""
+    assert _resolve_fallback_token("http://localhost:8001", None, "env-tok") == "env-tok"
+
+
+def test_resolve_fallback_token_empty_env_means_reuse_primary() -> None:
+    """An unset (empty-string) env var resolves to None, NOT "", so
+    _build_backend_targets keeps its documented reuse-the-primary-token behavior.
+    An empty string would authenticate as an empty token and 403."""
+    assert _resolve_fallback_token("http://localhost:8001", None, "") is None
+
+
+def test_resolve_fallback_token_ignored_without_fallback_url() -> None:
+    """With no --fallback-url there is no second target, so the env var is not
+    consulted -- a stray value must not look meaningful when it changes nothing."""
+    assert _resolve_fallback_token(None, None, "env-tok") is None
+
+
+def test_env_fallback_token_reaches_the_fallback_target() -> None:
+    """End to end through the pair: an env-sourced token lands on the fallback
+    target and leaves the primary's token alone."""
+    resolved = _resolve_fallback_token("http://localhost:8001", None, "env-tok")
+    targets = _build_backend_targets(
+        "https://flawchess.com", "primary-tok", "http://localhost:8001", resolved
+    )
+    assert [t.token for t in targets] == ["primary-tok", "env-tok"]
 
 
 async def test_single_target_call_sequence_unchanged() -> None:

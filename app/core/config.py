@@ -144,6 +144,15 @@ class Settings(BaseSettings):
     # Prod sets a strong random secret in .env.
     EVAL_OPERATOR_TOKEN: str = ""
 
+    # Operator token the remote eval worker presents to its FALLBACK backend
+    # (Phase 212 D-13), i.e. the benchmark instance's own EVAL_OPERATOR_TOKEN.
+    # Read ONLY by scripts/remote_eval_worker.py as the default for
+    # --fallback-token; no backend ever reads this name, so unlike the benchmark
+    # gate flags it is safe to keep in .env -- a dev backend loading the same
+    # .env is unaffected by it. Empty = no default, so --fallback-token (or,
+    # failing that, the primary token) applies as before.
+    EVAL_FALLBACK_OPERATOR_TOKEN: str = ""
+
     # Expected Stockfish version string (Phase 120 D-5 version gate).
     # e.g. "Stockfish 18". Empty = any version accepted (dev/CI).
     # Prod sets to the version installed on the server.

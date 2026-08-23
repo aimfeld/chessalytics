@@ -1306,6 +1306,32 @@ class _BackendTarget:
     label: str
 
 
+def _resolve_fallback_token(
+    fallback_url: str | None,
+    cli_fallback_token: str | None,
+    env_fallback_token: str,
+) -> str | None:
+    """Precedence for the fallback backend's token: `--fallback-token`, then
+    `EVAL_FALLBACK_OPERATOR_TOKEN`, then None (meaning "reuse the primary token",
+    `_build_backend_targets`'s documented default).
+
+    Mirrors how the primary token resolves (`--token` then
+    `EVAL_OPERATOR_TOKEN`), which had no fallback-side equivalent, so the only
+    way to give a fallback instance its own token was a CLI flag on every worker
+    box. Resolved after parse rather than as an argparse default so the secret
+    never lands in `--help` or the parsed namespace.
+
+    Returns None untouched when `fallback_url` is unset: with no fallback target
+    there is nothing to authenticate against, and consuming the env var there
+    would let a stray value change nothing while looking like it should.
+    """
+    if fallback_url is None:
+        return None
+    if cli_fallback_token is not None:
+        return cli_fallback_token
+    return env_fallback_token or None
+
+
 def _build_backend_targets(
     base_url: str,
     token: str,
@@ -1318,8 +1344,9 @@ def _build_backend_targets(
     prod first, fallback second -- when set. When `fallback_token` is omitted
     (None) but `fallback_url` is set, the fallback target reuses the primary's
     resolved `token` (documented in `--fallback-token`'s help text): an operator
-    who wants a DISTINCT benchmark-instance token must pass `--fallback-token`
-    explicitly.
+    who wants a DISTINCT benchmark-instance token must supply it, either via
+    `--fallback-token` or via `EVAL_FALLBACK_OPERATOR_TOKEN` in the environment /
+    .env, which `main()` resolves into `fallback_token` before calling this.
     """
     targets = [_BackendTarget(base_url=base_url, token=token, label="primary")]
     if fallback_url is not None:
@@ -1549,9 +1576,11 @@ def parse_args() -> argparse.Namespace:
         metavar="TOKEN",
         help=(
             "Operator token for the fallback backend's X-Operator-Token header. "
-            "Optional — defaults to the primary token (--token / EVAL_OPERATOR_TOKEN) "
-            "when omitted, so an instance with its own EVAL_OPERATOR_TOKEN must pass "
-            "this explicitly. Requires --fallback-url."
+            "Optional — falls back to EVAL_FALLBACK_OPERATOR_TOKEN from the "
+            "environment or the .env file, then to the primary token (--token / "
+            "EVAL_OPERATOR_TOKEN). A fallback instance with its own distinct token "
+            "must therefore set one of the two, or it will present the primary "
+            "token and fail that instance's auth check. Requires --fallback-url."
         ),
     )
     args = parser.parse_args()
@@ -1644,6 +1673,10 @@ def main() -> int:
             file=sys.stderr,
         )
         return 1
+
+    args.fallback_token = _resolve_fallback_token(
+        args.fallback_url, args.fallback_token, settings.EVAL_FALLBACK_OPERATOR_TOKEN
+    )
 
     if settings.SENTRY_DSN:
         sentry_sdk.init(
