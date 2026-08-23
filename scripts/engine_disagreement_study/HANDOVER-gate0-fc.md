@@ -9,13 +9,13 @@ not platform work; commit directly to the branch as you go).
 1. `.planning/seeds/SEED-145-engine-disagreement-study.md` — the design source of truth
    (decisions E-01..E-13, Gate 0 checklist, Measured Facts, Traps, Implementation
    Requirements). Three of six Gate 0 items are already checked off.
-2. `scripts/seed145/` — what exists: `verify_value_head.mjs` (passing),
+2. `scripts/engine_disagreement_study/` — what exists: `verify_value_head.mjs` (passing),
    `sample_gate0_positions.py` (sampler), `gate0_disagreement_probe.mjs` (done: 24% MG /
    10% EG disagreement), `data/gate0_manifest.ndjson` (1,168 rows, committed).
 
 ## Task 1: FC node-budget convergence + cost measurement (the main event)
 
-Build `scripts/seed145/gate0_fc_convergence.mjs`: run the FlawChess engine's
+Build `scripts/engine_disagreement_study/gate0_fc_convergence.mjs`: run the FlawChess engine's
 `practicalScore` at node budgets **@50, @100, and @400** on the ~200 endgame-entry rows
 of the Gate 0 manifest (subsample the 442 endgame rows deterministically, spread over
 cells), and measure seconds/position at each budget.
@@ -35,7 +35,7 @@ cells), and measure seconds/position at each budget.
   filter), don't refactor the frontend engine.
 - **Output per (position, budget)**: `practicalScore` (NOTE: root-side-to-move POV,
   types.ts D-06 — normalize; DB evals are white-POV), top move, wall-clock ms. Append to
-  an NDJSON ledger `scripts/seed145/data/gate0_fc_ledger.ndjson`.
+  an NDJSON ledger `scripts/engine_disagreement_study/data/gate0_fc_ledger.ndjson`.
 - **Deliverable numbers**: @50-vs-@400 and @100-vs-@400 agreement (MAE of expected
   score + rank correlation + favored-side flip rate), and seconds/position at @100.
   Decision table (seed E-07/E-08): @100 tracks @400 and cost is acceptable → keep

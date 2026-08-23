@@ -15,7 +15,7 @@ outputs, and the error message — Stage C filters `error IS NULL`.
 
 Usage:
     bin/benchmark_db.sh start
-    uv run python scripts/seed145/stage_b_load.py --db benchmark
+    uv run python scripts/engine_disagreement_study/stage_b_load.py --db benchmark
 """
 
 from __future__ import annotations

@@ -45,7 +45,7 @@
  * reclaimed with repair_shards.mjs (run it once, then resume).
  *
  * Usage (from repo root; supervisor):
- *   node --import ./scripts/lib/frontend-alias-hook.mjs scripts/seed145/stage_b_sweep.mjs \
+ *   node --import ./scripts/lib/frontend-alias-hook.mjs scripts/engine_disagreement_study/stage_b_sweep.mjs \
  *     --workers 6 [--ort native|wasm] [--recycle-after 1500] [--stockfish-procs 4] \
  *     [--limit N] [--manifest PATH]
  *

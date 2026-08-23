@@ -14,7 +14,7 @@
  * backups don't match the sweep's shard regex, so resume ignores them.
  *
  * Usage (from repo root, on the machine holding the live shards):
- *   node scripts/seed145/repair_shards.mjs [--data-dir PATH] [--dry-run]
+ *   node scripts/engine_disagreement_study/repair_shards.mjs [--data-dir PATH] [--dry-run]
  */
 import fs from 'node:fs';
 import path from 'node:path';

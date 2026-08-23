@@ -23,7 +23,7 @@
  * disagreements (whose favorite actually scored) — direction-of-effect
  * preview only, not a result.
  *
- * Usage: node --import ./scripts/lib/frontend-alias-hook.mjs scripts/seed145/gate0_disagreement_probe.mjs
+ * Usage: node --import ./scripts/lib/frontend-alias-hook.mjs scripts/engine_disagreement_study/gate0_disagreement_probe.mjs
  */
 import fs from 'node:fs';
 import path from 'node:path';

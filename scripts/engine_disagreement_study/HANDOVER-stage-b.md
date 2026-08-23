@@ -13,7 +13,7 @@ full study dataset: sample → sweep → load. Analysis/report/story is Stage C.
    both human-model arms get the symmetric MEAN rating, never per-player ratings**),
    Implementation Requirements (the `--workers` process-sharding design is specified
    there), Measured Facts, and Traps.
-2. `scripts/seed145/` — Gate 0 scripts are the reference implementations:
+2. `scripts/engine_disagreement_study/` — Gate 0 scripts are the reference implementations:
    - `gate0_fc_convergence.mjs` — THE config reference for running `mctsSearch`
      headlessly (budget shape, providers, mean-rating `elo: {w: mean, b: mean}`,
      `concurrency: 4`, maxPlies 8, no stopRule/extraRootMoves, default temperature,
@@ -148,9 +148,9 @@ states; reverting either half turns it into a multi-minute hang.
 **To finish the run:**
 
 ```bash
-node scripts/seed145/repair_shards.mjs --dry-run    # expect 1,098 error rows dropped
-node scripts/seed145/repair_shards.mjs
-node --import ./scripts/lib/frontend-alias-hook.mjs scripts/seed145/stage_b_sweep.mjs --workers N ...
+node scripts/engine_disagreement_study/repair_shards.mjs --dry-run    # expect 1,098 error rows dropped
+node scripts/engine_disagreement_study/repair_shards.mjs
+node --import ./scripts/lib/frontend-alias-hook.mjs scripts/engine_disagreement_study/stage_b_sweep.mjs --workers N ...
 ```
 
 ~3,979 positions x ~10.24 s = ~11.3 process-hours (~2 h at 6 workers). Stage C

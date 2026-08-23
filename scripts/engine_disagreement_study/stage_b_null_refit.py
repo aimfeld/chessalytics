@@ -14,7 +14,7 @@ Pure CPU over the manifest — no DB, no engine. Runs any time after the
 sampler; does not need the sweep.
 
 Usage:
-    uv run python scripts/seed145/stage_b_null_refit.py
+    uv run python scripts/engine_disagreement_study/stage_b_null_refit.py
 """
 
 from __future__ import annotations
@@ -30,8 +30,8 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 from gate0_null_baselines import evaluate_boundary  # noqa: E402
 
-DEFAULT_MANIFEST = "scripts/seed145/data/stage_b_manifest.ndjson"
-DEFAULT_OUT = "scripts/seed145/data/stage_b_null_baselines.json"
+DEFAULT_MANIFEST = "scripts/engine_disagreement_study/data/stage_b_manifest.ndjson"
+DEFAULT_OUT = "scripts/engine_disagreement_study/data/stage_b_null_baselines.json"
 
 
 def main() -> None:

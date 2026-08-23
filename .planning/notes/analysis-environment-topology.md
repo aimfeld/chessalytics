@@ -169,3 +169,32 @@ Consequences worth knowing:
 - **Reports promotion path: still deferred.** `analysis/out/` (gitignored) is
   where exported figures land for now; it exists mainly so Claude can `Read` a
   rendered chart, since it cannot see notebook output in a browser.
+
+---
+
+## Amended 2026-08-23 — `notebooks/` layer dropped, study slug convention fixed
+
+The `analysis/notebooks/<study>/` nesting is gone: notebooks now sit at
+`analysis/<study>/<study>.py`. With `analysis/` holding only `db.py`, `out/`,
+and the study dirs, the extra level bought nothing, and removing it makes the
+`analysis/<study>` ↔ `scripts/<study>` ↔ `stories/<slug>` correspondence
+visible at a glance. Commands above that read `analysis/notebooks/...` should be
+read as `analysis/...`.
+
+Alongside it, `scripts/seed145/` became `scripts/engine_disagreement_study/`, and
+the three-directory split is now documented in `analysis/README.md` ("Where a
+study's pieces live"). Two rules worth restating here:
+
+- **The split is by runtime environment, not by topic.** A study's generation
+  scripts import `app/` + SQLAlchemy (root venv) or the Node harness
+  (`scripts/node_modules`, frontend aliases); neither is installable in
+  `analysis/.venv`. Consolidating a study into one directory would break the one
+  property that makes `analysis/` useful — everything in it runs with
+  `uv run --project analysis`.
+- **Slug spelling: underscores in code trees, dashes in `stories/`.** `scripts/`
+  and `analysis/` dirs must stay importable (a dashed directory never can be);
+  `stories/` names a URL.
+
+Not renamed, deliberately: the RNG seed strings (`seed145-gate0`,
+`seed145-stage-b`, …) and the benchmark DB table `seed145_entry_predictions`.
+Changing either would alter sampling or orphan already-loaded rows.

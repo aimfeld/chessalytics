@@ -39,7 +39,7 @@
  * per-budget mean seconds, ETA.
  *
  * Usage:
- *   node --import ./scripts/lib/frontend-alias-hook.mjs scripts/seed145/gate0_fc_convergence.mjs \
+ *   node --import ./scripts/lib/frontend-alias-hook.mjs scripts/engine_disagreement_study/gate0_fc_convergence.mjs \
  *     [--positions 200] [--stockfish-procs 4] [--resume] [--analyze-only] [--limit N]
  */
 import fs from 'node:fs';

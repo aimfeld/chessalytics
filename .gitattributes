@@ -3,5 +3,5 @@
 # data file shows up as modified with a zero-line diff. Pin LF on checkout and
 # normalize on commit. The gzipped manifest must be exempt: git's text
 # auto-detection can misclassify it and strip CR bytes when diffing.
-scripts/seed145/data/** text eol=lf
-scripts/seed145/data/**.gz binary
+scripts/engine_disagreement_study/data/** text eol=lf
+scripts/engine_disagreement_study/data/**.gz binary

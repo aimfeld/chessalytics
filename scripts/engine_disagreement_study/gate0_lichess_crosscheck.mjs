@@ -25,7 +25,7 @@
  * the pool for the rest of the run).
  *
  * Usage:
- *   node --import ./scripts/lib/frontend-alias-hook.mjs scripts/seed145/gate0_lichess_crosscheck.mjs \
+ *   node --import ./scripts/lib/frontend-alias-hook.mjs scripts/engine_disagreement_study/gate0_lichess_crosscheck.mjs \
  *     [--procs 4] [--resume] [--analyze-only]
  */
 import fs from 'node:fs';

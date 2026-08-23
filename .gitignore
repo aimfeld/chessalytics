@@ -11,8 +11,6 @@
 /node_modules
 # Harness-only native deps (scripts/package.json — onnxruntime-node)
 /scripts/node_modules
-# SEED-145 local working data (large ndjson ledgers)
-scripts/seed145/
 
 # Byte-compiled / optimized / DLL files
 __pycache__/
@@ -245,10 +243,13 @@ reports/data/persona-recal-*/
 # GSD runtime sentinels (dispatch isolation markers)
 .gsd/
 
-# SEED-145 Stage B bulk data: manifest committed as .gz only; sweep ledger shards stay local until Stage C
-scripts/seed145/data/stage_b_manifest.ndjson
-scripts/seed145/data/stage_b_ledger-worker-*.ndjson
-scripts/seed145/data/*.log
+# SEED-145 (engine_disagreement_study) working data. Bulk ledgers/manifests/logs stay
+# local; only the small gate0_* ledgers and the .gz Stage B manifest are committed.
+# Blanket-ignoring the study dir instead would silently swallow new SOURCE files.
+scripts/engine_disagreement_study/data/*.ndjson
+scripts/engine_disagreement_study/data/*.log
+scripts/engine_disagreement_study/data/*.bak
+!scripts/engine_disagreement_study/data/gate0_*.ndjson
 
 # Analysis notebook chart exports (analysis/README.md, "Sharing charts with Claude")
 analysis/out/*

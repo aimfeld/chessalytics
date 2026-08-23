@@ -32,7 +32,7 @@ workstation.
 From the repo root:
 
 ```bash
-node --import ./scripts/lib/frontend-alias-hook.mjs scripts/seed145/stage_b_sweep.mjs \
+node --import ./scripts/lib/frontend-alias-hook.mjs scripts/engine_disagreement_study/stage_b_sweep.mjs \
   --workers 2 --limit 40
 ```
 
@@ -43,8 +43,8 @@ nothing is ever recomputed, so the smoke test wastes nothing.
 ## The real run
 
 ```bash
-node --import ./scripts/lib/frontend-alias-hook.mjs scripts/seed145/stage_b_sweep.mjs \
-  --workers 12 2>&1 | tee -a scripts/seed145/data/stage_b_sweep-laptop.log
+node --import ./scripts/lib/frontend-alias-hook.mjs scripts/engine_disagreement_study/stage_b_sweep.mjs \
+  --workers 12 2>&1 | tee -a scripts/engine_disagreement_study/data/stage_b_sweep-laptop.log
 ```
 
 - **`--workers 12`** assumes ~32 GB RAM (each worker ≈ 1.5 GB: own Maia wasm
@@ -72,7 +72,7 @@ recomputed, done rows are skipped regardless of which worker produced them.
 Bring the shards back via git — gzip them first (plain they are ~110 MB):
 
 ```bash
-cd scripts/seed145/data
+cd scripts/engine_disagreement_study/data
 gzip -k9 stage_b_ledger-worker-*.ndjson
 git add -f stage_b_ledger-worker-*.ndjson.gz
 git add stage_b_sweep-laptop.log
@@ -85,6 +85,6 @@ do NOT `git add` the grown plain shards — the .gz copies are the return
 vehicle. Leave the plain files dirty or `git checkout --` them after gzipping.)
 
 Then, back on the workstation: `git pull`, `gunzip -kf` the shard .gz files,
-run `uv run python scripts/seed145/stage_b_load.py --db benchmark`, update the
+run `uv run python scripts/engine_disagreement_study/stage_b_load.py --db benchmark`, update the
 seed's Stage B section with final counts + wall-clock, and hand over to
 Stage C.

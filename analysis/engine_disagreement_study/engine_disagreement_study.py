@@ -1,10 +1,10 @@
 """SEED-145 — Stockfish vs Maia vs FlawChess at the two phase boundaries.
 
-Reads the Stage B sweep ledgers straight off disk (scripts/seed145/data/*.ndjson)
+Reads the Stage B sweep ledgers straight off disk (scripts/engine_disagreement_study/data/*.ndjson)
 and reproduces the headline scoring interactively: per-arm Brier, paired ΔBrier
 z-tests, reliability diagrams, and the Murphy calibration/resolution split.
 
-Run it:  uv run --project analysis marimo edit analysis/notebooks/engine_disagreement_study/engine_disagreement_study.py
+Run it:  uv run --project analysis marimo edit analysis/engine_disagreement_study/engine_disagreement_study.py
 """
 
 import marimo
@@ -31,7 +31,7 @@ def _():
     from plotly.subplots import make_subplots
     import polars as pl
 
-    REPO_ROOT = Path(__file__).resolve().parents[3]
+    REPO_ROOT = Path(__file__).resolve().parents[2]
     if str(REPO_ROOT) not in sys.path:
         sys.path.insert(0, str(REPO_ROOT))
 
@@ -47,7 +47,7 @@ def _():
         eval_mate_to_expected_score,
     )
 
-    LEDGER_DIR = REPO_ROOT / "scripts" / "seed145" / "data"
+    LEDGER_DIR = REPO_ROOT / "scripts" / "engine_disagreement_study" / "data"
     return (
         LEDGER_DIR,
         LICHESS_K,

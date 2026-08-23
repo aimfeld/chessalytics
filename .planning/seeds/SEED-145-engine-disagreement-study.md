@@ -164,7 +164,7 @@ sampler + `--workers` sweep + ledger loader) is cleared to start.
 - [x] **Extend the Node Maia provider to emit the value head** — DONE 2026-08-20
       (branch `study/seed-145-engine-outcome-prediction`): `nodeValueHead` in
       `calibration-providers.mjs` (shares `runMaia`'s memoized inference with the policy),
-      E-12 `elo_oppo` included. `scripts/seed145/verify_value_head.mjs` passes: LDW-order
+      E-12 `elo_oppo` included. `scripts/engine_disagreement_study/verify_value_head.mjs` passes: LDW-order
       (KQK pair 0.98/0.03), color-mirror invariance (exact), `elo_oppo` reaches the model
       (start pos @1500: 0.88 vs 800-oppo, 0.08 vs 2400-oppo). KQK conversion rises
       0.70→0.99 across 800→2400 self-ELO. Browser eval-bar float check: optional
@@ -214,7 +214,7 @@ sampler + `--workers` sweep + ledger loader) is cleared to start.
   per-boundary by design). Rows carry the E-10 additions: `move_san` (the
   human's actual next move), `oppo_clock_seconds` (prev-ply clock), and
   `material_white`. Manifest committed as
-  `scripts/seed145/data/stage_b_manifest.ndjson.gz` (8.4 MB; the sweep reads
+  `scripts/engine_disagreement_study/data/stage_b_manifest.ndjson.gz` (8.4 MB; the sweep reads
   .gz directly, so a machine without the benchmark DB just needs the repo).
 - **E-14 refit at Stage B scale DONE 2026-08-20** (`stage_b_null_refit.py`,
   eval half, headline basis) — these SUPERSEDE the Gate 0 floors as the
@@ -224,7 +224,7 @@ sampler + `--workers` sweep + ledger loader) is cleared to start.
 - **Sweep STARTED 2026-08-20 ~23:45** (`stage_b_sweep.mjs --workers 6`,
   16-thread workstation, recycle-after 1,500, 4 SF procs/worker; shards
   `stage_b_ledger-worker-{0..5}.ndjson`, resume = union of all shards so
-  worker count can change freely). Log: `scripts/seed145/data/stage_b_sweep.log`.
+  worker count can change freely). Log: `scripts/engine_disagreement_study/data/stage_b_sweep.log`.
   Resume after any interruption: same command, from repo root.
 - **Session-death fix + shard repair 2026-08-21**: the laptop's wasm session
   dies ~1,250 positions into a cycle (below `--recycle-after 1500`), and the
@@ -234,7 +234,7 @@ sampler + `--workers` sweep + ledger loader) is cleared to start.
   (`memory access out of bounds` / `Aborted(`) now trigger an early recycle
   WITHOUT ledgering the position (retries in the fresh process; an i=0 fatal
   still ledgers so one bad row can't loop). Run
-  `node scripts/seed145/repair_shards.mjs` once on the sweep machine to strip
+  `node scripts/engine_disagreement_study/repair_shards.mjs` once on the sweep machine to strip
   the old error rows (backs up shards as `*.pre-repair.bak`), then resume.
 - **Native ORT backend 2026-08-21** (root fix for the wasm crash class): the
   sweep now takes `--ort native|wasm` (default wasm). `native` =
@@ -282,7 +282,7 @@ sampler + `--workers` sweep + ledger loader) is cleared to start.
   DB (commit/copy the manifest, bring the shards back for loading).
 - Work happens on branch `study/seed-145-engine-outcome-prediction` (no GSD phase —
   study, not platform work); squash-merge to `main` when the report lands.
-- Study scripts live in `scripts/seed145/`.
+- Study scripts live in `scripts/engine_disagreement_study/`.
 
 ## Measured Facts
 

@@ -15,9 +15,9 @@ entry-eval lane used to place the evals we read back).
 
 Usage:
     bin/benchmark_db.sh start
-    uv run python scripts/seed145/sample_gate0_positions.py --db benchmark
-    uv run python scripts/seed145/sample_gate0_positions.py --db benchmark \
-        --games-per-cell 40 --out scripts/seed145/data/gate0_manifest.ndjson
+    uv run python scripts/engine_disagreement_study/sample_gate0_positions.py --db benchmark
+    uv run python scripts/engine_disagreement_study/sample_gate0_positions.py --db benchmark \
+        --games-per-cell 40 --out scripts/engine_disagreement_study/data/gate0_manifest.ndjson
 
 --lichess-only (Gate 0 quick-scan vs lichess cross-check, E-09): restricts the
 frame to games whose entry-ply evals came from LICHESS server analysis
@@ -48,11 +48,11 @@ from app.services.eval_entry import _snapshot_boards  # noqa: E402
 
 DEFAULT_GAMES_PER_CELL = 40
 DEFAULT_SEED = "seed145-gate0"
-DEFAULT_OUT = "scripts/seed145/data/gate0_manifest.ndjson"
+DEFAULT_OUT = "scripts/engine_disagreement_study/data/gate0_manifest.ndjson"
 # --lichess-only defaults: ~10 games/cell x 20 cells x ~1.7 boundaries/game
 # yields the ~300 entry positions the E-09 cross-check needs.
 LICHESS_ONLY_GAMES_PER_CELL = 10
-LICHESS_ONLY_OUT = "scripts/seed145/data/gate0_lichess_manifest.ndjson"
+LICHESS_ONLY_OUT = "scripts/engine_disagreement_study/data/gate0_lichess_manifest.ndjson"
 # Print a progress line every this many games during FEN reconstruction.
 PROGRESS_EVERY_GAMES = 100
 

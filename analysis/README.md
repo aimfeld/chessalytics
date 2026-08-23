@@ -22,9 +22,9 @@ Every command below therefore carries `--project analysis`.
 
 ```bash
 uv sync --project analysis    # create/update analysis/.venv
-uv run --project analysis marimo edit analysis/notebooks/   # notebook browser
+uv run --project analysis marimo edit analysis/    # notebook browser
 uv run --project analysis marimo edit \
-    analysis/notebooks/engine_disagreement_study/engine_disagreement_study.py
+    analysis/engine_disagreement_study/engine_disagreement_study.py
 ```
 
 In PyCharm, add `analysis/.venv` as a second interpreter scoped to this directory
@@ -56,6 +56,25 @@ Not every dataset lives in a database: `engine_disagreement_study.py` reads
 NDJSON sweep ledgers straight off disk with `pl.read_ndjson`, which is usually
 faster than loading them into Postgres first.
 
+## Where a study's pieces live
+
+A study spans three directories, split by **runtime environment**, not by topic.
+`analysis/` holds only what runs in `analysis/.venv`; everything that needs the
+root venv (SQLAlchemy, `app/`) or the Node harness (`scripts/node_modules`,
+frontend aliases) stays in `scripts/`.
+
+| Directory | Environment | Holds |
+|---|---|---|
+| `scripts/<study>/` | root venv + `scripts/node_modules` | generation: samplers, sweeps, loaders, `data/` ledgers |
+| `analysis/<study>/` | `analysis/.venv` | EDA: the marimo notebook, read-only |
+| `stories/<slug>/` | none (static site) | publication: self-contained HTML + the report it summarizes |
+
+**Slug spelling: underscores in the code trees, dashes in `stories/`.**
+`scripts/` and `analysis/` directories sit on `sys.path` and must stay
+importable (`scripts/benchmarks/` already is, as `scripts.benchmarks`), and a
+dashed directory can never be imported. `stories/` names a URL, where dashes are
+the convention. One slug, two spellings, a mechanical `s/-/_/`.
+
 ## Sharing charts with Claude
 
 Claude reads files, not rendered notebook output — an interactive plotly figure in
@@ -72,7 +91,7 @@ runs after an edit.
 
 ## Conventions
 
-- **One directory per study.** `notebooks/<study>/<study>.py`, so a notebook can
+- **One directory per study.** `analysis/<study>/<study>.py`, so a notebook can
   grow companion files (exported figures, a cached extract, a second view)
   without cluttering the others.
 - **Reuse the app's own primitives.** `engine_disagreement_study.py` imports
@@ -80,8 +99,9 @@ runs after an edit.
   hand-rolling a sigmoid, and asserts its vectorised polars version still
   matches. Copy that pattern: a notebook that silently redefines a project
   constant will eventually publish a wrong number.
-- **Read-only.** Notebooks query and plot. Anything that writes to a database
-  belongs in `scripts/`.
+- **Read-only.** Notebooks query and plot. Anything that writes to a database —
+  or needs a dependency outside `analysis/pyproject.toml` — belongs in
+  `scripts/<study>/`, which runs in the root venv.
 - **Polars, not pandas.** Chosen for the lazy/streaming path on the larger
   benchmark tables; the API is close enough that pandas habits transfer.
 

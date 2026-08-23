@@ -25,7 +25,7 @@ without the benchmark DB).
 
 Usage:
     bin/benchmark_db.sh start
-    uv run python scripts/seed145/stage_b_sample.py --db benchmark
+    uv run python scripts/engine_disagreement_study/stage_b_sample.py --db benchmark
 """
 
 from __future__ import annotations
@@ -63,7 +63,7 @@ from sample_gate0_positions import (  # noqa: E402
 # E-07: user-approved at the Gate 0 checkpoint (no trim, no FC-only subset).
 DEFAULT_GAMES_PER_CELL = 5000
 DEFAULT_SEED = "seed145-stage-b"
-DEFAULT_OUT = "scripts/seed145/data/stage_b_manifest.ndjson"
+DEFAULT_OUT = "scripts/engine_disagreement_study/data/stage_b_manifest.ndjson"
 # Games per DB round-trip during the entry-rows/clocks/PGN fetch loop.
 BATCH_GAMES = 2000
 PROGRESS_EVERY_GAMES = 2000

@@ -20,7 +20,7 @@
  * softmax/expectedScore code via the `@/` alias) remains a manual Gate 0
  * spot-check; this script covers everything checkable without a browser.
  *
- * Usage: node --import ./scripts/lib/frontend-alias-hook.mjs scripts/seed145/verify_value_head.mjs
+ * Usage: node --import ./scripts/lib/frontend-alias-hook.mjs scripts/engine_disagreement_study/verify_value_head.mjs
  */
 import { createMaiaSession } from '../lib/node-engine-providers.mjs';
 import { nodeValueHead } from '../lib/calibration-providers.mjs';

@@ -26,8 +26,8 @@ clock_seconds, fetched here separately.
 
 Usage:
     bin/benchmark_db.sh start
-    uv run python scripts/seed145/gate0_null_baselines.py --db benchmark
-    uv run python scripts/seed145/gate0_null_baselines.py --refit-only
+    uv run python scripts/engine_disagreement_study/gate0_null_baselines.py --db benchmark
+    uv run python scripts/engine_disagreement_study/gate0_null_baselines.py --refit-only
 """
 
 from __future__ import annotations
@@ -65,8 +65,8 @@ from sample_gate0_positions import (  # noqa: E402
 
 DEFAULT_GAMES_PER_CELL = 250
 DEFAULT_SEED = "seed145-gate0-null"
-DEFAULT_MANIFEST = "scripts/seed145/data/gate0_null_manifest.ndjson"
-DEFAULT_OUT = "scripts/seed145/data/gate0_null_baselines.json"
+DEFAULT_MANIFEST = "scripts/engine_disagreement_study/data/gate0_null_manifest.ndjson"
+DEFAULT_OUT = "scripts/engine_disagreement_study/data/gate0_null_baselines.json"
 PROGRESS_EVERY_GAMES = 500
 
 # Standard piece values (pawn units) for the material-balance feature.
