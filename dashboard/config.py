@@ -17,10 +17,12 @@ POLL_INTERVAL_SECONDS: Final[int] = 60
 # constant here and rendered as an annotation on every time chart.
 LAUNCH_DATE: Final[str] = "2026-07-23"
 
-# The date users.is_promoted started recording (see the migration in
+# The date users.promoted_at started recording (see the migration in
 # alembic/versions/). Production only begins stamping rows at the first
 # deploy on or after this date, so guest-conversion history before it is a
-# floor (Google-only, recovered by the migration backfill), not the true rate.
+# floor (Google-only, recovered by the migration backfill with the row's
+# signup date standing in for the unrecoverable true promotion date), not
+# the true rate.
 IS_PROMOTED_SINCE: Final[str] = "2026-08-23"
 
 # Bot ratings with fewer games than this are dropped from the score-by-rating

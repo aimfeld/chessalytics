@@ -52,9 +52,14 @@ keeps the last good snapshot, marks itself stale, and says what to do.
 - A guest promoted to a registered account keeps its original row and
   `created_at` (`app/services/guest_service.py`), so it counts as registered in
   the funnel. Both promotion paths (Google and email/password) stamp
-  `users.is_promoted` on that same row, and the conversion metric reads that
-  column directly. The migration backfill recovered history only for Google
-  promotions (the pre-flag detection rule: not a guest, empty password hash),
-  so the series before the flag shipped (`IS_PROMOTED_SINCE` in `config.py`)
-  remains a floor, not the true rate.
+  `users.promoted_at` on that same row (a nullable timestamp, not a boolean,
+  so it also supports a promotion-date time series and time-to-conversion),
+  and the conversion metric reads `promoted_at IS NOT NULL` directly. The
+  migration backfill recovered history only for Google promotions (the
+  pre-flag detection rule: not a guest, empty password hash) — and even for
+  those, `promoted_at` was set to the row's `created_at` (signup date), not
+  the true historical promotion date, which is unrecoverable. So the series
+  before the flag shipped (`IS_PROMOTED_SINCE` in `config.py`) remains a
+  floor, not the true rate, and any promotion-timing metric is only
+  meaningful for rows promoted on or after that date.
 - `LAUNCH_DATE` in `config.py` is a real-world event, not derived from the data.

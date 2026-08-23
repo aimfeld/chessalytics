@@ -15,18 +15,21 @@ from sqlalchemy.ext.asyncio import AsyncConnection
 
 from dashboard.config import FUNNEL_GAMES_THRESHOLD, MIN_GAMES_PER_ELO
 
-# is_promoted is stamped by app/services/guest_service.py on both promotion
-# paths (Google and email/password) in the same UPDATE that flips is_guest.
-# Rows created before the column shipped were backfilled from the old
-# Google-only detection rule (empty password hash), so the early part of the
-# series is a floor rather than the true rate — see config.IS_PROMOTED_SINCE.
-_PROMOTED_GUEST = "u.is_promoted"
+# promoted_at is stamped by app/services/guest_service.py on both promotion
+# paths (Google and email/password) in the same UPDATE that flips is_guest;
+# NULL means never promoted. Rows created before the column shipped were
+# backfilled from the old Google-only detection rule (empty password hash)
+# with promoted_at set to the row's created_at (signup date, not the true
+# historical promotion date — that is unrecoverable), so the early part of
+# the series is a floor rather than the true rate, and a promotion-date time
+# series is only meaningful from config.IS_PROMOTED_SINCE onward.
+_PROMOTED_GUEST = "u.promoted_at IS NOT NULL"
 
 # Cohort for the conversion queries below: rows that are still guest sessions,
 # plus rows that were guest sessions and have since been promoted in place.
-# Must use is_promoted (not the old password-hash test) or email/password
+# Must use promoted_at (not the old password-hash test) or email/password
 # converts fall out of the denominator and inflate the rate.
-_GUEST_COHORT = "(u.is_guest OR u.is_promoted)"
+_GUEST_COHORT = "(u.is_guest OR u.promoted_at IS NOT NULL)"
 
 
 class Payload(TypedDict):
@@ -368,7 +371,7 @@ async def fetch_stickiness(conn: AsyncConnection, first_day: datetime.date) -> l
 
 
 async def fetch_conversion(conn: AsyncConnection, first_day: datetime.date) -> dict[str, Any]:
-    """Guest -> registered conversion, from the stamped is_promoted flag."""
+    """Guest -> registered conversion, from the stamped promoted_at column."""
     row = (
         await _rows(
             conn,
