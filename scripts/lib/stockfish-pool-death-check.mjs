@@ -29,6 +29,7 @@
  */
 import { execFileSync } from 'node:child_process';
 import { createStockfishPool } from './stockfish-pool.mjs';
+import { StockfishUciEngine } from './node-engine-providers.mjs';
 
 /** Any legal FEN — the check is about process lifecycle, not chess. */
 const FENS = [
@@ -37,6 +38,8 @@ const FENS = [
   '2rq1rk1/pp1bppbp/3p1np1/8/2BNP3/2N1BP2/PPPQ2PP/2KR3R b - - 4 12',
 ];
 const POOL_SIZE = 2;
+/** Non-default Hash for case 3 — any value the pool would not otherwise send. */
+const TEST_HASH_MB = 8;
 /** A healthy `evalPosition` is tens of ms; the pre-fix failure mode is >= 30 s. */
 const HEALTHY_MS = 5_000;
 /** Respawn is a wasm Stockfish boot plus a UCI handshake — generous but bounded. */
@@ -116,6 +119,36 @@ await probeBurstOfFour('post-busy-kill');
 pool.quitAll();
 await sleep(500);
 check(children().length === 0, `quitAll reaped every child (got ${children().length})`);
+
+console.log('\n=== case 3: a REPLACEMENT inherits the pool config (hashMb) ===');
+// No UCI command reads an option's CURRENT value back (`uci` lists defaults),
+// so observe what the pool SENDS. A pool that heals into a default-Hash engine
+// would silently run a measurement harness on two different configurations.
+const sent = [];
+const realSend = StockfishUciEngine.prototype.send;
+StockfishUciEngine.prototype.send = function patchedSend(command) {
+  sent.push(command);
+  return realSend.call(this, command);
+};
+try {
+  const configured = await createStockfishPool({ size: 1, hashMb: TEST_HASH_MB });
+  const hashCommands = () => sent.filter((c) => c === `setoption name Hash value ${TEST_HASH_MB}`).length;
+  check(hashCommands() === 1, `initial engine configured with Hash ${TEST_HASH_MB} (got ${hashCommands()})`);
+  await configured.evalPosition(FENS[0]);
+  process.kill(Number(children()[0]), 'SIGKILL');
+  await sleep(HEAL_WAIT_MS);
+  check(hashCommands() === 2, `replacement re-applied Hash ${TEST_HASH_MB} (got ${hashCommands()} total)`);
+  const ms = Math.round(await (async () => {
+    const t = performance.now();
+    await configured.evalPosition(FENS[0]);
+    return performance.now() - t;
+  })());
+  check(ms < HEALTHY_MS, `configured pool still healthy after the respawn (${ms}ms)`);
+  configured.quitAll();
+} finally {
+  StockfishUciEngine.prototype.send = realSend;
+}
+await sleep(500);
 
 console.log(`\n${problems.length === 0 ? 'ALL PASS' : `${problems.length} FAILURE(S)`}`);
 process.exit(problems.length === 0 ? 0 : 1);

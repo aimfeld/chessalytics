@@ -19,8 +19,10 @@
  *
  * Resumable (seed Implementation Requirements): NDJSON ledger appended per
  * position, --resume skips ledgered rows. Progress with ETA. Runs a small
- * pool of independent Stockfish processes (each `go` is serialized per
- * process; positions fan out round-robin).
+ * pool of independent Stockfish processes (`lib/stockfish-pool.mjs` — each
+ * `go` is serialized per process; positions are pulled from a shared queue,
+ * and an engine whose child process dies is replaced rather than poisoning
+ * the pool for the rest of the run).
  *
  * Usage:
  *   node --import ./scripts/lib/frontend-alias-hook.mjs scripts/seed145/gate0_lichess_crosscheck.mjs \
@@ -29,7 +31,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 
-import { spawnStockfish } from '../lib/node-engine-providers.mjs';
+import { createStockfishPool } from '../lib/stockfish-pool.mjs';
 import { parseInfoLine } from '@/hooks/uciParser';
 
 const __dirname = path.dirname(new URL(import.meta.url).pathname);
@@ -223,17 +225,27 @@ async function main() {
   const todo = manifest.filter((r) => !done.has(rowKey(r)));
   console.log(`[lichess-crosscheck] ${manifest.length} manifest rows, ${done.size} done, ${todo.length} to run`);
 
-  const engines = await Promise.all(Array.from({ length: args.procs }, () => spawnStockfish()));
+  // The SHARED pool (`lib/stockfish-pool.mjs`) rather than raw `spawnStockfish`
+  // handles: it evicts and respawns an engine whose child process dies, where
+  // this loop previously would have failed the whole run (or, worse, waited out
+  // the `waitFor` watchdog on a corpse for every remaining row). No `hashMb` —
+  // this script never configured Hash, so it keeps Stockfish's default.
+  const pool = await createStockfishPool({ size: args.procs });
   const started = performance.now();
   let completed = 0;
+  let nextIndex = 0;
   try {
-    // Round-robin fan-out: each engine works its own slice sequentially (one
-    // `go` per process at a time), all slices in parallel.
+    // `args.procs` fan-out over a SHARED queue rather than the previous
+    // round-robin slices: identical work, but no straggler slice at the end,
+    // and `evalDepth15` opens with `Clear Hash` so which engine takes a row was
+    // never observable in the result anyway.
     await Promise.all(
-      engines.map(async (engine, e) => {
-        for (let i = e; i < todo.length; i += engines.length) {
+      Array.from({ length: args.procs }, async () => {
+        for (;;) {
+          const i = nextIndex++;
+          if (i >= todo.length) return;
           const row = todo[i];
-          const ours = await evalDepth15(engine, row.fen);
+          const ours = await pool.run((engine) => evalDepth15(engine, row.fen));
           fs.appendFileSync(
             LEDGER_PATH,
             JSON.stringify({
@@ -262,7 +274,7 @@ async function main() {
       }),
     );
   } finally {
-    for (const engine of engines) engine.terminate();
+    pool.quitAll();
   }
   analyze(loadLedger());
 }

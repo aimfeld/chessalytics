@@ -77,8 +77,8 @@ import path from 'node:path';
 import fs from 'node:fs';
 import os from 'node:os';
 
-import { spawnStockfish, STOCKFISH_INIT_TIMEOUT_MS } from './lib/node-engine-providers.mjs';
 import { createMaiaSession } from './lib/node-engine-providers.mjs';
+import { createStockfishPool } from './lib/stockfish-pool.mjs';
 import {
   makeNodeProviders,
   maiaCpuStats,
@@ -278,48 +278,24 @@ async function runOneGo(engine, depth, fen, candidateUcis) {
  * script never sweeps depths — it has exactly one grading path).
  */
 async function createGradePool(size) {
-  const engines = await Promise.all(Array.from({ length: size }, () => spawnStockfish()));
-  for (const engine of engines) {
-    engine.send(`setoption name Hash value ${WORKER_HASH_MB}`);
-    engine.send('isready');
-    await engine.waitFor((line) => line === 'readyok', STOCKFISH_INIT_TIMEOUT_MS);
-  }
-  const busy = new Map(engines.map((engine) => [engine, false]));
-  const waiters = [];
+  // The SHARED pool (`lib/stockfish-pool.mjs`) rather than a private
+  // acquire/release copy: it evicts and respawns an engine whose child process
+  // dies, which a hand-rolled pool did not — one lost child used to poison the
+  // pool for the rest of a run. `hashMb` pins Hash to the browser worker's
+  // value on the initial engines AND on any replacement, so healing cannot
+  // silently change the transposition-table size mid-measurement.
+  const pool = await createStockfishPool({ size, hashMb: WORKER_HASH_MB });
 
-  const acquire = () => {
-    const free = engines.find((engine) => !busy.get(engine));
-    if (free !== undefined) {
-      busy.set(free, true);
-      return Promise.resolve(free);
-    }
-    return new Promise((resolve) => waiters.push(resolve));
-  };
-  const release = (engine) => {
-    const next = waiters.shift();
-    if (next !== undefined) next(engine);
-    else busy.set(engine, false);
-  };
-
+  // `pool.run` (not `pool.grade`): the shared `nodeGrade` wrapper sends its own
+  // Skill Level / UCI_LimitStrength / Clear Hash preamble, whereas this script
+  // must mirror `workerPool.ts`'s `sendGo` EXACTLY (module header's
+  // LOAD-BEARING note) — `runOneGo` is that mirror and stays the grading path.
   const grade = async (fen, candidateUcis, signal, depth) => {
     if (candidateUcis.length === 0) return new Map(); // mirror workerPool.ts WR-05
-    const engine = await acquire();
-    try {
-      return await runOneGo(engine, depth ?? GRADING_ROOT_DEPTH, fen, candidateUcis);
-    } finally {
-      release(engine);
-    }
+    return pool.run((engine) => runOneGo(engine, depth ?? GRADING_ROOT_DEPTH, fen, candidateUcis));
   };
 
-  const resetAll = async () => {
-    for (const engine of engines) {
-      engine.send('ucinewgame');
-      engine.send('isready');
-      await engine.waitFor((line) => line === 'readyok', STOCKFISH_INIT_TIMEOUT_MS);
-    }
-  };
-
-  return { grade, resetAll, quitAll: () => engines.forEach((engine) => engine.terminate()) };
+  return { grade, resetAll: () => pool.newGameAll(), quitAll: () => pool.quitAll() };
 }
 
 // ─── Self-test (parseArgs only, no engines) ──────────────────────────────────

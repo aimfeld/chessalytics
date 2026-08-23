@@ -100,6 +100,32 @@ function releaseEngine(pool, engine) {
 }
 
 /**
+ * Spawn one engine and apply the pool's per-engine UCI configuration.
+ *
+ * `hashMb` exists because the measurement harnesses that mirror
+ * `workerPool.ts` must pin Hash to the browser worker's `WORKER_HASH_MB`;
+ * Stockfish's own default would silently change the transposition-table size
+ * out from under a harness whose whole point is to reproduce shipped behavior.
+ * It is applied HERE rather than at the call site so a respawned replacement is
+ * configured identically — a pool that heals into a differently-configured
+ * engine mid-run is worse than one that never heals, because the divergence is
+ * invisible in the output.
+ */
+async function spawnConfigured(hashMb) {
+  const engine = await spawnStockfish();
+  if (hashMb === null) return engine;
+  try {
+    engine.send(`setoption name Hash value ${hashMb}`);
+    engine.send('isready');
+    await engine.waitFor((line) => line === 'readyok', STOCKFISH_INIT_TIMEOUT_MS);
+  } catch (err) {
+    engine.terminate(); // never leak a live child whose configuration failed
+    throw err;
+  }
+  return engine;
+}
+
+/**
  * Replaces an engine the moment it dies, rather than waiting for a release.
  *
  * An engine that dies while BUSY is caught by the release path anyway (its
@@ -134,7 +160,7 @@ async function replaceDeadEngine(pool, dead) {
 
   for (let attempt = 1; attempt <= ENGINE_RESPAWN_ATTEMPTS; attempt++) {
     try {
-      const fresh = await spawnStockfish();
+      const fresh = await spawnConfigured(pool.hashMb);
       if (pool.shuttingDown) {
         // quitAll() ran while this spawn was in flight. Pushing now would leak a
         // live child (spawn is not detached, but the parent exits right after
@@ -220,16 +246,19 @@ async function withEngine(pool, fn) {
  * a free engine), `newGameAll` (D-09 determinism: clears every engine's
  * transposition table at a game boundary), and `quitAll`.
  */
-export async function createStockfishPool({ size = STOCKFISH_POOL_DEFAULT_SIZE } = {}) {
+export async function createStockfishPool({ size = STOCKFISH_POOL_DEFAULT_SIZE, hashMb = null } = {}) {
   if (!Number.isInteger(size) || size < 1) {
     throw new Error(`createStockfishPool: size must be a positive integer, got ${JSON.stringify(size)}`);
+  }
+  if (hashMb !== null && (!Number.isInteger(hashMb) || hashMb < 1)) {
+    throw new Error(`createStockfishPool: hashMb must be a positive integer or null, got ${JSON.stringify(hashMb)}`);
   }
   // CR-02: Promise.all rejects on the FIRST failing spawnStockfish(), which
   // would silently discard every OTHER already-spawned sibling engine (live
   // child process, UCI handshake done) with no reference left to terminate
   // it. Promise.allSettled lets us inspect every outcome and terminate every
   // fulfilled engine before rethrowing the first rejection.
-  const results = await Promise.allSettled(Array.from({ length: size }, () => spawnStockfish()));
+  const results = await Promise.allSettled(Array.from({ length: size }, () => spawnConfigured(hashMb)));
   const failed = results.find((r) => r.status === 'rejected');
   if (failed) {
     for (const r of results) {
@@ -246,6 +275,7 @@ export async function createStockfishPool({ size = STOCKFISH_POOL_DEFAULT_SIZE }
     waiters: [],
     fatal: null,
     shuttingDown: false,
+    hashMb,
   };
   for (const engine of engines) watchForDeath(pool, engine);
 
@@ -285,6 +315,25 @@ export async function createStockfishPool({ size = STOCKFISH_POOL_DEFAULT_SIZE }
      * `bestmove` line is already awaited, so this adds ZERO extra engine work.
      */
     evalPositionWithBest: (fen) => withEngine(pool, (engine) => evalPositionCpWithBest(engine, fen)),
+
+    /**
+     * Escape hatch: run arbitrary UCI work against a pooled engine, with the
+     * pool's acquire/release, timeout retry, and dead-engine eviction applied.
+     *
+     * The named wrappers above cover the shipped call shapes. Harnesses that
+     * measure something else — an UNRESTRICTED `go`, a same-engine hash probe
+     * that issues two searches, a bespoke depth-15 scan — used to hand-roll a
+     * private acquire/release pool over `spawnStockfish` instead, which is what
+     * left five scripts without any dead-engine recovery. Reach for this rather
+     * than building a sixth.
+     *
+     * `fn` receives a `StockfishUciEngine` and must leave it quiescent (its own
+     * `go` awaited to `bestmove`); `withEngine` resyncs on the throw path, but
+     * a resolved `fn` that left a search running would corrupt the next caller.
+     * `fn` may be re-invoked from the start on a `waitFor` timeout (D-11), so
+     * keep any accumulator it owns inside the function body.
+     */
+    run: (fn) => withEngine(pool, fn),
 
     /** Stockfish-skill anchor move at `skillLevel` (D-07 anchor). */
     skillMove: (fen, skillLevel) => withEngine(pool, (engine) => stockfishSkillMove(engine, fen, skillLevel)),
