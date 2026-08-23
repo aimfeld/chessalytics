@@ -46,6 +46,7 @@ from scripts.remote_eval_worker import (
     WORKER_SCHEMA_VERSION,
     _BackendTarget,
     _build_backend_targets,
+    _describe_exc,
     _resolve_fallback_token,
     _build_blob_walk_targets,
     _eval_atomic_blob_nodes,
@@ -1574,6 +1575,54 @@ def test_fallback_url_and_token_accepted(monkeypatch: pytest.MonkeyPatch) -> Non
     args = parse_args()
     assert args.fallback_url == "http://localhost:8001"
     assert args.fallback_token == "tok"
+
+
+def _probe_request() -> httpx.Request:
+    return httpx.Request("POST", "http://192.168.50.179:8001/api/eval/remote/atomic-lease")
+
+
+def test_describe_exc_names_connect_timeout_target() -> None:
+    """A ConnectTimeout has an EMPTY str() -- the exact case that produced a bare
+    "Cycle failed" -- so the class name and target must still identify it."""
+    out = _describe_exc(httpx.ConnectTimeout("", request=_probe_request()))
+    assert "ConnectTimeout" in out
+    assert "192.168.50.179:8001" in out
+
+
+def test_describe_exc_surfaces_http_status_and_path() -> None:
+    """403 vs 404 vs 5xx is the key discriminator (wrong token / wrong URL /
+    unhealthy backend), so the status code and path must both appear."""
+    req = _probe_request()
+    out = _describe_exc(
+        httpx.HTTPStatusError("x", request=req, response=httpx.Response(403, request=req))
+    )
+    assert "403" in out
+    assert "/api/eval/remote/atomic-lease" in out
+
+
+def test_describe_exc_keeps_connect_error_detail() -> None:
+    """A ConnectError DOES carry a useful message ("Connection refused"); it must
+    survive alongside the class name, not be replaced by it."""
+    out = _describe_exc(
+        httpx.ConnectError("[Errno 111] Connection refused", request=_probe_request())
+    )
+    assert "Connection refused" in out
+    assert "ConnectError" in out
+
+
+def test_describe_exc_survives_request_error_with_no_request() -> None:
+    """httpx.RequestError.request RAISES RuntimeError when unset rather than
+    returning None, so a truthiness check on it crashes the failure handler that
+    is reporting the failure. Regression: this shape reaches _handle_transient_failure
+    whenever a RequestError is raised outside a send."""
+    out = _describe_exc(httpx.ConnectError("connection refused"))
+    assert "ConnectError" in out
+    assert "connection refused" in out
+
+
+def test_describe_exc_handles_non_httpx_exception() -> None:
+    """A non-httpx bug must not crash the failure handler that is reporting it."""
+    assert _describe_exc(ValueError("some other bug")) == "ValueError: some other bug"
 
 
 def test_resolve_fallback_token_cli_wins_over_env() -> None:

@@ -893,6 +893,38 @@ async def _run_loop(
                 break
 
 
+def _describe_exc(exc: BaseException) -> str:
+    """One-line, operator-actionable rendering of a transient cycle failure.
+
+    An HTTP status is the single most useful discriminator (403 = wrong operator
+    token, 404 = wrong URL/path, 5xx = the backend is up but unhealthy), and
+    `httpx.HTTPStatusError`'s own `str()` is three lines with a docs link, so the
+    status and target are pulled out explicitly. Connect/timeout errors carry an
+    empty `str()`, which is exactly the case that produced a bare "Cycle failed",
+    so the class name is always included as the floor.
+    """
+    if isinstance(exc, httpx.HTTPStatusError):
+        return (
+            f"HTTP {exc.response.status_code} from "
+            f"{exc.request.url.host}:{exc.request.url.port or ''} "
+            f"{exc.request.url.path}"
+        )
+    if isinstance(exc, httpx.RequestError):
+        # `.request` RAISES RuntimeError when unset rather than returning None, so
+        # a truthiness check on it crashes the failure handler that is reporting
+        # the failure. A RequestError raised outside a send (or constructed in a
+        # test) has no request attached, so this branch is reachable in practice.
+        try:
+            url = exc.request.url
+            target = f" to {url.host}:{url.port or ''}"
+        except RuntimeError:
+            target = ""
+        detail = f": {exc}" if str(exc) else ""
+        return f"{type(exc).__name__}{target}{detail}"
+    detail = f": {exc}" if str(exc) else ""
+    return f"{type(exc).__name__}{detail}"
+
+
 def _handle_transient_failure(
     exc: BaseException,
     streak_start: float | None,
@@ -920,7 +952,14 @@ def _handle_transient_failure(
             level="warning",
         )
         streak_alerted = True
-    _log(f"Cycle failed (transient, {round(elapsed)}s streak). Backing off...")
+    # The exception used to be dropped here, leaving a bare "Cycle failed" that
+    # could not distinguish an unreachable fallback backend from a prod auth
+    # failure or a blip -- undiagnosable from the log alone, which is the only
+    # thing an operator on a remote worker box has. httpx exceptions carry the
+    # request URL but never headers, so the operator token cannot leak here.
+    _log(
+        f"Cycle failed (transient, {round(elapsed)}s streak): {_describe_exc(exc)}. Backing off..."
+    )
     return streak_start, streak_alerted
 
 
