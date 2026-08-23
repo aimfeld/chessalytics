@@ -1,7 +1,9 @@
 ---
 id: SEED-028
-status: open
+status: closed
 planted: 2026-05-27
+closed: 2026-08-23
+closed_during: /gsd-explore session on SEED-145's negative result — the study needed EDA, which fired this seed
 planted_during: v1.18 (Phase 94.4 peer-relative percentile chip)
 scope: tooling / cross-milestone
 ---
@@ -105,3 +107,43 @@ flow actually works end-to-end.
 
 - [[analysis-environment-topology]] — decided topology + research findings
 - Research Q-006 — polars vs pandas + plotting lib for marimo
+
+## Outcome (closed 2026-08-23)
+
+Shipped. What landed:
+
+```
+analysis/pyproject.toml    marimo, polars, plotly, kaleido, psycopg[binary], dotenv
+analysis/uv.lock
+analysis/db.py             connect("dev"|"benchmark"|"prod") -> psycopg.Connection
+analysis/README.md
+analysis/notebooks/engine_disagreement_study/engine_disagreement_study.py
+analysis/out/              gitignored; exported figures
+```
+
+**Item 1 of "What To Build" was reversed.** `analysis/` is a standalone uv
+project with its own `analysis/.venv`, NOT a `[tool.uv.workspace]` member — the
+workspace shape breaks `Dockerfile`'s bind-mounted dep layer and gets pruned by
+`bin/run_local.sh`'s `uv sync --group maia-inference`. Full reasoning appended to
+[[analysis-environment-topology]] under "Superseded 2026-08-23". Item 6 (PyCharm
+Workspace mode) is void as a consequence; PyCharm auto-created a
+`flawchess-analysis` module with the analysis venv as its SDK instead.
+
+**Item 3 changed shape too.** `db.py` exposes `connect()` (a context manager) and
+`conn_str()` rather than `get_conn`/`get_conn_str`, and does not import from
+`app` — it reads `DATABASE_URL_{DEV,BENCHMARK,PROD}` from the repo-root `.env`
+and requires them, so no default URLs exist to drift. The prod reachability check
+landed as specified, generalised to all three targets: a socket probe that fails
+with the exact `bin/...` command that fixes it.
+
+**Item 4:** the starter notebook is a real analysis, not `example_cohort_query.py`
+— SEED-145's three-arm comparison (Brier, paired ΔBrier z-tests, reliability
+diagrams, Murphy calibration/resolution decomposition) read from NDJSON sweep
+ledgers rather than a DB. It doubles as the convention reference.
+
+Deferred items settled: **polars + plotly** (closes research Q-006). CI for
+`analysis/` and the reports-promotion path stay deferred, unchanged.
+
+Estimate was ~30-60 min; actual was in that range for the environment, with the
+extra time going to PyCharm's pyproject-based project model rather than to the
+library choices.

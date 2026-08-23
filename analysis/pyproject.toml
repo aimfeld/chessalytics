@@ -1,0 +1,38 @@
+[project]
+name = "flawchess-analysis"
+version = "0.1.0"
+description = "Interactive data-exploration environment (marimo notebooks) for FlawChess"
+requires-python = ">=3.13"
+dependencies = [
+    "marimo>=0.9",
+    "polars>=1.0",
+    "plotly>=5.24",
+    # Static PNG export for plotly figures. Load-bearing: it is how a chart gets
+    # into a form Claude can read (see README, "Sharing charts with Claude").
+    "kaleido>=1.0",
+    # Sync driver on purpose — polars.read_database wants a DBAPI2 connection,
+    # and notebook ergonomics gain nothing from asyncpg.
+    "psycopg[binary]>=3.2",
+    # Needed only so `analysis/db.py` can import app.core.config.db_url_for_target
+    # (the single source of truth for the four DATABASE_URL_* targets) without
+    # duplicating the URLs here. app/core/config.py imports nothing heavier.
+    "pydantic-settings>=2.0.0",
+    "python-dotenv>=1.0.0",
+    "numpy",
+]
+
+# Deliberately a STANDALONE uv project, not a `[tool.uv.workspace]` member of the
+# root (which is what SEED-028 originally sketched). Two reasons the workspace
+# layout does not survive contact with this repo:
+#
+#   1. Dockerfile's cacheable dep layer bind-mounts ONLY uv.lock + pyproject.toml
+#      and runs `uv sync --locked`. A workspace root must be able to read every
+#      member's pyproject.toml, so declaring `members = ["analysis"]` breaks the
+#      production image build unless the Dockerfiles are also edited.
+#   2. A shared .venv gets pruned constantly: `bin/run_local.sh` runs
+#      `uv sync --group maia-inference`, which would uninstall marimo on every
+#      local app start (the same pruning footgun that file already documents).
+#
+# Own project => own analysis/.venv => zero blast radius on the app, CI, or deploy.
+[tool.uv]
+package = false

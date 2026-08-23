@@ -249,3 +249,7 @@ reports/data/persona-recal-*/
 scripts/seed145/data/stage_b_manifest.ndjson
 scripts/seed145/data/stage_b_ledger-worker-*.ndjson
 scripts/seed145/data/*.log
+
+# Analysis notebook chart exports (analysis/README.md, "Sharing charts with Claude")
+analysis/out/*
+!analysis/out/.gitkeep
