@@ -118,3 +118,40 @@ Commit sampler + sweep + loader + the loaded-table confirmation, update the seed
 rows), and hand over to Stage C (scoring: paired Brier/log-loss vs the E-14 floors,
 calibration curves, the E-11 disagreement headline, report + story per
 `stories/CLAUDE.md`).
+
+## Incident 2026-08-23: dead Stockfish children, 3,979 positions to redo
+
+The first full sweep did NOT finish. Workers 4 and 10 each lost a Stockfish
+child process mid-run, and `scripts/lib/stockfish-pool.mjs` had no eviction path:
+a dead engine stayed in the pool, `child.stdin.write()` on its destroyed stream
+neither threw nor delivered, and every request routed to it burned the 30 s
+`waitFor` watchdog x `ENGINE_RETRY_ATTEMPTS` before failing the position.
+
+- **w4** died at row 2596, ledgered 404 error rows, then hit its
+  `--recycle-after 1500` boundary at row 3000 and finished clean on a fresh pool.
+- **w10** died at row 5210 in its LAST cycle — no recycle left, so it ran to the
+  end of its partition at ~30 s/position. The supervisor's collapsing rate/ETA
+  (8.5 -> 0.5 rows/min, ETA 5.8h -> 99h) was reporting that honestly, not a bug.
+
+State when the run stopped: 136,679 clean / 1,098 ledgered as `error` /
+2,881 never attempted, out of 140,658. The loss is CELL-CORRELATED, not random —
+blitz and bullet lost no never-attempted rows while several rapid/classical cells
+lost 6.2-6.3% each — so dropping it would bias the study. It must be re-run.
+
+**Fixed** in `stockfish-pool.mjs` + `node-engine-providers.mjs`: engines carry a
+`dead` flag, `send()` refuses to write to a corpse, and the pool evicts and
+respawns a dead engine (from its `onDeath` hook when idle, from the release path
+when busy). A lost child now costs one position instead of a partition. Verified
+by `scripts/lib/stockfish-pool-death-check.mjs`, which SIGKILLs a child in both
+states; reverting either half turns it into a multi-minute hang.
+
+**To finish the run:**
+
+```bash
+node scripts/seed145/repair_shards.mjs --dry-run    # expect 1,098 error rows dropped
+node scripts/seed145/repair_shards.mjs
+node --import ./scripts/lib/frontend-alias-hook.mjs scripts/seed145/stage_b_sweep.mjs --workers N ...
+```
+
+~3,979 positions x ~10.24 s = ~11.3 process-hours (~2 h at 6 workers). Stage C
+must confirm the final per-cell counts match the manifest before scoring.

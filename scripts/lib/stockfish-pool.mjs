@@ -27,6 +27,16 @@
  * place up to `ENGINE_RETRY_ATTEMPTS` times via `runWithRetry`, reusing
  * `stopAndSync()` between attempts, so a single slow reply degrades to a
  * retry rather than aborting the whole multi-hour sweep.
+ *
+ * BUG FIX (SEED-145 Stage B, 2026-08-23): D-11's retry-in-place assumed the
+ * engine was slow, never gone. When a child process actually EXITS, retrying
+ * on it is hopeless and the pool used to keep it forever — one crashed child
+ * poisoned the pool for the rest of the run, costing every request routed to
+ * it `ENGINE_RETRY_ATTEMPTS` x the 30 s watchdog before failing. Sweep workers
+ * 4 and 10 ledgered 1,098 positions as bogus `Stockfish response timeout`
+ * errors that way. The pool now EVICTS a dead engine on release and respawns a
+ * replacement into its place (`replaceDeadEngine`), so a lost child costs one
+ * position instead of a partition.
  */
 import { spawnStockfish, STOCKFISH_INIT_TIMEOUT_MS } from './node-engine-providers.mjs';
 import { nodeGrade, evalPositionCp, evalPositionCpWithBest } from './calibration-providers.mjs';
@@ -47,6 +57,11 @@ export const ENGINE_RETRY_ATTEMPTS = 2;
 /** Matches `StockfishUciEngine.waitFor`'s rejection message — the only error class D-11 retries. */
 const TIMEOUT_ERROR_PATTERN = /Stockfish response timeout after/;
 
+/** Respawn attempts for a replacement engine before the slot is written off. */
+const ENGINE_RESPAWN_ATTEMPTS = 3;
+/** Backoff between respawn attempts — a box that just OOM-killed a child needs a moment. */
+const ENGINE_RESPAWN_BACKOFF_MS = 2_000;
+
 /**
  * Acquires the next free engine, or queues the caller until one is released
  * (mirrors `workerPool.ts`'s pending-array + `dispatchNext` free-slot scan,
@@ -54,22 +69,102 @@ const TIMEOUT_ERROR_PATTERN = /Stockfish response timeout after/;
  * atomic `go` round-trip, not a priority-ordered MCTS grade queue).
  */
 function acquireEngine(pool) {
-  const free = pool.engines.find((engine) => !pool.busy.get(engine));
+  if (pool.fatal) return Promise.reject(pool.fatal);
+  const free = pool.engines.find((engine) => !engine.dead && !pool.busy.get(engine));
   if (free !== undefined) {
     pool.busy.set(free, true);
     return Promise.resolve(free);
   }
-  return new Promise((resolve) => pool.waiters.push(resolve));
+  // No free engine right now. This also covers the transient window where every
+  // engine died and its replacement is still spawning — the waiter is served by
+  // `replaceDeadEngine`'s release, or rejected if the pool can't be rebuilt.
+  return new Promise((resolve, reject) => pool.waiters.push({ resolve, reject }));
 }
 
-/** Releases an engine back to the pool — hands it directly to the next FIFO waiter if one is queued. */
+/**
+ * Releases an engine back to the pool — hands it directly to the next FIFO
+ * waiter if one is queued. A DEAD engine is never handed on: it is evicted and
+ * asynchronously replaced (see the bug-fix note in this file's header).
+ */
 function releaseEngine(pool, engine) {
+  if (engine.dead) {
+    void replaceDeadEngine(pool, engine);
+    return;
+  }
   const nextWaiter = pool.waiters.shift();
   if (nextWaiter !== undefined) {
-    nextWaiter(engine); // stays "busy": handed straight to the waiting request.
+    nextWaiter.resolve(engine); // stays "busy": handed straight to the waiting request.
     return;
   }
   pool.busy.set(engine, false);
+}
+
+/**
+ * Replaces an engine the moment it dies, rather than waiting for a release.
+ *
+ * An engine that dies while BUSY is caught by the release path anyway (its
+ * in-flight caller is rejected, then releases it). An engine that dies while
+ * IDLE is not: `acquireEngine` skips dead engines, so it would never be
+ * acquired, never released, and never replaced — the pool would quietly run at
+ * reduced size for the rest of a multi-day sweep with nothing in the output
+ * saying so. `replaceDeadEngine` is idempotent (it no-ops once the engine is out
+ * of `pool.engines`), so a death that fires both paths still replaces once.
+ */
+function watchForDeath(pool, engine) {
+  engine.onDeath(() => void replaceDeadEngine(pool, engine));
+}
+
+/**
+ * Drops `dead` out of the pool and spawns a replacement into it, retrying a few
+ * times with backoff. Slot ORDER is irrelevant (acquire does a free-scan, not an
+ * index lookup), so this removes and re-pushes rather than juggling indices.
+ *
+ * If every respawn attempt fails and no engine is left, the pool is marked fatal
+ * and every queued waiter is rejected — a caller blocking forever on a pool that
+ * can never serve it again is strictly worse than a loud failure, and for the
+ * sweep it means the worker exits and the supervisor respawns it fresh.
+ */
+async function replaceDeadEngine(pool, dead) {
+  if (pool.shuttingDown) return;
+  const slot = pool.engines.indexOf(dead);
+  if (slot === -1) return; // already evicted by a concurrent release or its death hook
+  pool.engines.splice(slot, 1);
+  pool.busy.delete(dead);
+  dead.terminate(); // idempotent: reaps the child (if any) and unlinks its temp .cjs/.wasm
+
+  for (let attempt = 1; attempt <= ENGINE_RESPAWN_ATTEMPTS; attempt++) {
+    try {
+      const fresh = await spawnStockfish();
+      if (pool.shuttingDown) {
+        // quitAll() ran while this spawn was in flight. Pushing now would leak a
+        // live child (spawn is not detached, but the parent exits right after
+        // quitAll, so the child is merely reparented, not reaped) plus its temp
+        // .cjs/.wasm copies.
+        fresh.terminate();
+        return;
+      }
+      pool.engines.push(fresh);
+      watchForDeath(pool, fresh);
+      pool.busy.set(fresh, true); // released immediately below, straight to a waiter if one is queued
+      console.warn(
+        `[stockfish-pool] replaced dead engine (${dead.deadReason ?? 'unknown cause'}) — ` +
+          `${pool.engines.length} engine(s) in pool`,
+      );
+      releaseEngine(pool, fresh);
+      return;
+    } catch (err) {
+      if (attempt < ENGINE_RESPAWN_ATTEMPTS) {
+        await new Promise((resolve) => setTimeout(resolve, ENGINE_RESPAWN_BACKOFF_MS));
+        continue;
+      }
+      console.warn(`[stockfish-pool] respawn failed ${ENGINE_RESPAWN_ATTEMPTS}x: ${err.message}`);
+      if (pool.engines.length === 0) {
+        pool.fatal = new Error(`Stockfish pool is empty — every engine died and respawn failed: ${err.message}`);
+        for (const waiter of pool.waiters.splice(0)) waiter.reject(pool.fatal);
+      }
+      return;
+    }
+  }
 }
 
 /**
@@ -89,7 +184,10 @@ async function runWithRetry(engine, fn) {
     } catch (err) {
       lastErr = err;
       const isTimeout = err instanceof Error && TIMEOUT_ERROR_PATTERN.test(err.message);
-      if (!isTimeout || attempt === ENGINE_RETRY_ATTEMPTS) throw err;
+      // A dead engine can't answer a retry — `stopAndSync` below would throw and
+      // every attempt would just burn another watchdog. Surface it now so
+      // `withEngine`'s release path evicts and replaces the engine.
+      if (!isTimeout || engine.dead || attempt === ENGINE_RETRY_ATTEMPTS) throw err;
       await engine.stopAndSync();
     }
   }
@@ -109,7 +207,7 @@ async function withEngine(pool, fn) {
     // gem-elo-calibration.mjs's per-position catch block); swallow a failed
     // resync here since the engine's own error/exit handlers already surface
     // an unrecoverable process death, and this path must not mask `err`.
-    await engine.stopAndSync().catch(() => {});
+    if (!engine.dead) await engine.stopAndSync().catch(() => {});
     throw err;
   } finally {
     releaseEngine(pool, engine);
@@ -140,7 +238,16 @@ export async function createStockfishPool({ size = STOCKFISH_POOL_DEFAULT_SIZE }
     throw failed.reason;
   }
   const engines = results.map((r) => r.value);
-  const pool = { engines, busy: new Map(engines.map((engine) => [engine, false])), waiters: [] };
+  // `fatal` latches once the pool can no longer be rebuilt (see `replaceDeadEngine`);
+  // `shuttingDown` stops an in-flight respawn from leaking a child past quitAll().
+  const pool = {
+    engines,
+    busy: new Map(engines.map((engine) => [engine, false])),
+    waiters: [],
+    fatal: null,
+    shuttingDown: false,
+  };
+  for (const engine of engines) watchForDeath(pool, engine);
 
   return {
     size,
@@ -184,8 +291,12 @@ export async function createStockfishPool({ size = STOCKFISH_POOL_DEFAULT_SIZE }
 
     /** Clears every engine's transposition table at a game boundary (D-09 determinism — Plan 02's fix, pool-wide). */
     async newGameAll() {
+      // Snapshot: `pool.engines` is mutated live by `replaceDeadEngine`. A
+      // replacement engine is born with an empty transposition table anyway, so
+      // missing one mid-respawn cannot break D-09 determinism.
       await Promise.all(
-        engines.map(async (engine) => {
+        [...pool.engines].map(async (engine) => {
+          if (engine.dead) return;
           engine.send('ucinewgame');
           engine.send('isready');
           await engine.waitFor((line) => line === 'readyok', STOCKFISH_INIT_TIMEOUT_MS);
@@ -193,9 +304,10 @@ export async function createStockfishPool({ size = STOCKFISH_POOL_DEFAULT_SIZE }
       );
     },
 
-    /** Terminates every process in the pool. */
+    /** Terminates every process in the pool and stops any in-flight respawn. */
     quitAll() {
-      for (const engine of engines) engine.terminate();
+      pool.shuttingDown = true;
+      for (const engine of [...pool.engines]) engine.terminate();
     },
   };
 }

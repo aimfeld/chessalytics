@@ -99,6 +99,9 @@ export async function createMaiaSession({ backend = 'wasm' } = {}) {
 
 /** Thin line-buffered UCI stdin/stdout wrapper around the spawned Stockfish child process. */
 export class StockfishUciEngine {
+  /** Guards `#die`'s listener notification so one death notifies subscribers once. */
+  #notifiedDeath = false;
+
   /**
    * `tempFilePaths` (WR-04): the `.cjs`/`.wasm` temp copies `spawnStockfish`
    * made for this process — retained here (not just at spawn time) so
@@ -110,6 +113,32 @@ export class StockfishUciEngine {
     this.lineListeners = new Set();
     this.tempFilePaths = tempFilePaths;
     this.quitting = false; // set by terminate() so the exit handler below doesn't treat a clean quit as a crash
+    /**
+     * Set once this engine's child process is gone (crash, unexpected exit, or
+     * our own terminate()). A dead engine can never serve another `go`, so both
+     * `send()` below and `stockfish-pool.mjs` check this flag: the pool evicts
+     * and replaces the engine instead of handing the corpse to the next caller.
+     *
+     * BUG (SEED-145 Stage B, 2026-08-23): without this flag a child that exited
+     * mid-sweep stayed in the pool forever. `child.stdin.write()` on a destroyed
+     * stream neither throws nor delivers, so every subsequent request waited out
+     * the full `waitFor` watchdog (30 s), x ENGINE_RETRY_ATTEMPTS, and then
+     * failed the position. Workers 4 and 10 lost 1,098 positions that way;
+     * worker 10 had no self-recycle left and ground to ~30 s/position for the
+     * rest of its partition.
+     */
+    this.dead = false;
+    /** Human-readable cause of death, used as the message when `send()` refuses to write. */
+    this.deadReason = null;
+    /**
+     * Callbacks fired by `#die` (crash paths only — NOT an intentional
+     * `terminate()`). `stockfish-pool.mjs` subscribes so it can replace an
+     * engine that dies while IDLE: such an engine is never acquired again, so
+     * it would never reach the release path that normally triggers eviction,
+     * and the pool would silently shrink for the rest of the run.
+     */
+    this.deathListeners = new Set();
+    this.#notifiedDeath = false;
     // WR-03: reject-with-cleanup callbacks for every in-flight waitFor(), so an
     // unexpected process death fails the pending caller immediately instead of
     // surfacing as an unhandled 'error' event or a full timeoutMs wait.
@@ -124,22 +153,58 @@ export class StockfishUciEngine {
       }
     });
     this.child.on('error', (err) => {
-      this.#failPendingWaiters(new Error(`Stockfish process error: ${err.message}`));
+      this.#die(`Stockfish process error: ${err.message}`);
     });
     this.child.on('exit', (code, signal) => {
-      if (this.quitting) return; // expected — terminate() already told us to ignore this
-      this.#failPendingWaiters(new Error(`Stockfish process exited unexpectedly (code=${code}, signal=${signal})`));
+      if (this.quitting) {
+        this.dead = true; // expected shutdown: still unusable, but not a crash to report
+        return;
+      }
+      this.#die(`Stockfish process exited unexpectedly (code=${code}, signal=${signal})`);
     });
     this.child.stdin.on('error', (err) => {
-      this.#failPendingWaiters(new Error(`Stockfish stdin error (process likely exited): ${err.message}`));
+      this.#die(`Stockfish stdin error (process likely exited): ${err.message}`);
     });
+  }
+
+  /** Marks the engine unusable, fails every in-flight waitFor(), and notifies death listeners. */
+  #die(reason) {
+    this.dead = true;
+    this.deadReason ??= reason;
+    this.#failPendingWaiters(new Error(reason));
+    // One death fires several handlers ('exit' plus a stdin EPIPE, typically) —
+    // notify subscribers exactly once so the pool never respawns two replacements.
+    if (this.#notifiedDeath) return;
+    this.#notifiedDeath = true;
+    for (const listener of [...this.deathListeners]) listener(this);
+  }
+
+  /**
+   * Subscribes to this engine's unexpected death. Fires immediately if it is
+   * already dead, so a subscriber can never miss a death that raced its own
+   * registration. Returns an unsubscribe function.
+   */
+  onDeath(listener) {
+    if (this.dead) {
+      listener(this);
+      return () => {};
+    }
+    this.deathListeners.add(listener);
+    return () => this.deathListeners.delete(listener);
   }
 
   #failPendingWaiters(err) {
     for (const rejectWithCleanup of [...this.pendingWaiters]) rejectWithCleanup(err);
   }
 
+  /**
+   * Throws immediately on a dead engine rather than writing into a destroyed
+   * stdin. That write is silently discarded by Node, so the caller's `waitFor`
+   * would otherwise block for the full watchdog before failing — see the `dead`
+   * doc comment above for what that cost the SEED-145 sweep.
+   */
   send(command) {
+    if (this.dead) throw new Error(this.deadReason ?? 'Stockfish process is dead');
     this.child.stdin.write(`${command}\n`);
   }
 
@@ -195,13 +260,18 @@ export class StockfishUciEngine {
   /** Kills the process AND deletes its temp `.cjs`/`.wasm` copies (WR-04) — always safe to call more than once. */
   terminate() {
     this.quitting = true; // WR-03: tells the 'exit' handler this shutdown is expected, not a crash
-    this.send('quit');
+    if (!this.dead) this.send('quit'); // send() throws on a dead engine; a corpse needs no `quit`
+    this.dead = true;
+    this.deadReason ??= 'Stockfish engine was terminated';
     this.child.kill();
     for (const filePath of this.tempFilePaths) {
       fs.rmSync(filePath, { force: true });
     }
   }
 }
+
+/** Monotonic per-process spawn counter — see the `runId` comment in `spawnStockfish`. */
+let spawnCounter = 0;
 
 export async function spawnStockfish() {
   const engineDir = path.resolve(FRONTEND_DIR, 'public/engine');
@@ -214,7 +284,10 @@ export async function spawnStockfish() {
   // ext) + '.wasm')` — i.e. same directory, SAME basename minus extension — so
   // the .wasm copy must be renamed to match the .cjs basename exactly, not just
   // co-located under its original name.
-  const runId = `node-engine-providers-stockfish-${process.pid}-${Date.now()}`;
+  // The counter matters as much as the timestamp: the pool respawns replacement
+  // engines, and two respawns in the same millisecond would otherwise share a
+  // temp basename and clobber each other's .cjs/.wasm copies.
+  const runId = `node-engine-providers-stockfish-${process.pid}-${Date.now()}-${spawnCounter++}`;
   const cjsPath = path.join(os.tmpdir(), `${runId}.cjs`);
   const wasmPath = path.join(os.tmpdir(), `${runId}.wasm`);
   fs.copyFileSync(srcJsPath, cjsPath);
