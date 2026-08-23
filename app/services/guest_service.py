@@ -74,9 +74,9 @@ async def promote_guest_with_password(
 ) -> tuple[User, str]:
     """Promote a guest account to a full email/password account in-place.
 
-    Updates the user row: sets is_guest=False, is_verified=True, stores the new
-    email and an argon2id-hashed password. Issues a standard 7-day JWT via
-    auth_backend (not the guest 30-day strategy).
+    Updates the user row: sets is_guest=False, is_verified=True, is_promoted=True,
+    stores the new email and an argon2id-hashed password. Issues a standard 7-day
+    JWT via auth_backend (not the guest 30-day strategy).
 
     Raises:
         ValueError: if the user is not a guest
@@ -107,6 +107,7 @@ async def promote_guest_with_password(
             hashed_password=hashed_password,
             is_guest=False,
             is_verified=True,
+            is_promoted=True,
         )
     )
     await session.commit()
@@ -134,10 +135,10 @@ async def promote_guest_with_google(
 ) -> tuple[User, str]:
     """Promote a guest account to a Google-linked full account in-place.
 
-    Updates the user row: sets is_guest=False, is_verified=True, stores the Google
-    email, and clears hashed_password (Google users authenticate via OAuth only).
-    Inserts an OAuthAccount row linking the Google account to this user's ID.
-    Issues a standard 7-day JWT via auth_backend.
+    Updates the user row: sets is_guest=False, is_verified=True, is_promoted=True,
+    stores the Google email, and clears hashed_password (Google users authenticate
+    via OAuth only). Inserts an OAuthAccount row linking the Google account to this
+    user's ID. Issues a standard 7-day JWT via auth_backend.
 
     Raises:
         ValueError: if the user is not a guest
@@ -162,6 +163,7 @@ async def promote_guest_with_google(
             hashed_password="",  # Google users have no password
             is_guest=False,
             is_verified=True,
+            is_promoted=True,
         )
     )
 

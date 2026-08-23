@@ -38,6 +38,17 @@ class User(SQLAlchemyBaseUserTable[int], Base):
         default=False,
     )
 
+    # Marks a row that began life as a guest session and was promoted in place to a
+    # full account. Set by app/services/guest_service.py on both promotion paths
+    # (Google and email/password), so the activity dashboard can count guest
+    # conversions without inspecting credential state.
+    is_promoted: Mapped[bool] = mapped_column(
+        Boolean,
+        nullable=False,
+        server_default=text("false"),
+        default=False,
+    )
+
     oauth_accounts: Mapped[List["OAuthAccount"]] = relationship(  # ty: ignore[unresolved-reference]
         "OAuthAccount", lazy="joined"
     )

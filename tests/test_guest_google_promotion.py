@@ -93,6 +93,34 @@ class TestPromoteGuestWithGoogle:
         assert updated_user.email == account_email
         assert updated_user.is_verified is True
         assert updated_user.hashed_password == ""
+        assert updated_user.is_promoted is True
+
+    @pytest.mark.asyncio
+    async def test_promotion_sets_is_promoted_in_database(self, db_session):
+        """is_promoted=True is persisted, not just present on the returned ORM object.
+
+        Reads back via a Core select rather than the returned user, since the
+        latter can be served from the identity map instead of proving the write.
+        """
+        from sqlalchemy import select
+
+        from app.models.user import User
+        from app.services.guest_service import create_guest_user, promote_guest_with_google
+
+        user, _token = await create_guest_user(db_session)
+        account_email = unique_email("gpromo_dbread")
+        await promote_guest_with_google(
+            db_session,
+            user,
+            account_id="google_sub_dbread",
+            account_email=account_email,
+            access_token="fake_access",
+            expires_at=None,
+            refresh_token=None,
+        )
+
+        result = await db_session.execute(select(User.is_promoted).where(User.id == user.id))
+        assert result.scalar_one() is True
 
     @pytest.mark.asyncio
     async def test_promotion_creates_oauth_account(self, db_session):
