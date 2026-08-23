@@ -23,7 +23,7 @@ LAUNCH_DATE: Final[str] = "2026-07-23"
 # floor (Google-only, recovered by the migration backfill with the row's
 # signup date standing in for the unrecoverable true promotion date), not
 # the true rate.
-IS_PROMOTED_SINCE: Final[str] = "2026-08-23"
+PROMOTED_AT_SINCE: Final[str] = "2026-08-23"
 
 # Bot ratings with fewer games than this are dropped from the score-by-rating
 # chart — below it a single session swings the number by tens of points.

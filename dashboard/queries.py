@@ -22,7 +22,7 @@ from dashboard.config import FUNNEL_GAMES_THRESHOLD, MIN_GAMES_PER_ELO
 # with promoted_at set to the row's created_at (signup date, not the true
 # historical promotion date — that is unrecoverable), so the early part of
 # the series is a floor rather than the true rate, and a promotion-date time
-# series is only meaningful from config.IS_PROMOTED_SINCE onward.
+# series is only meaningful from config.PROMOTED_AT_SINCE onward.
 _PROMOTED_GUEST = "u.promoted_at IS NOT NULL"
 
 # Cohort for the conversion queries below: rows that are still guest sessions,

@@ -59,7 +59,7 @@ keeps the last good snapshot, marks itself stale, and says what to do.
   pre-flag detection rule: not a guest, empty password hash) — and even for
   those, `promoted_at` was set to the row's `created_at` (signup date), not
   the true historical promotion date, which is unrecoverable. So the series
-  before the flag shipped (`IS_PROMOTED_SINCE` in `config.py`) remains a
+  before the flag shipped (`PROMOTED_AT_SINCE` in `config.py`) remains a
   floor, not the true rate, and any promotion-timing metric is only
   meaningful for rows promoted on or after that date.
 - `LAUNCH_DATE` in `config.py` is a real-world event, not derived from the data.
