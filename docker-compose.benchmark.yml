@@ -26,6 +26,14 @@ services:
       - "effective_io_concurrency=200"
       - "-c"
       - "track_io_timing=on"
+    # Docker's 64 MB /dev/shm default is exhausted by parallel-query DSM
+    # segments and surfaces as a MISLEADING "No space left on device" /
+    # asyncpg.DiskFullError while the volume has hundreds of GB free. Hit on
+    # 2026-08-23 by a hash join over `games` during the classical tranche. This
+    # is a Docker option, NOT a Postgres flag, and prod carries the same 256m
+    # for the same reason. A bare `docker compose restart db` does NOT apply a
+    # changed shm_size -- the container must be recreated.
+    shm_size: "256m"
     environment:
       POSTGRES_USER: postgres
       POSTGRES_PASSWORD: postgres

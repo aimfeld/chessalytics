@@ -1,0 +1,78 @@
+{
+  "generated_at": "2026-08-20T20:55:33+0200",
+  "config": {
+    "games_per_cell": 250,
+    "seed": "seed145-gate0-null",
+    "features": "[1, material_white, elo_diff/100, clock_diff/60, clock_total/60, stm_white]",
+    "fit": "per (boundary, tc) weighted IRLS, draws as two half-weight rows",
+    "split": "md5(game_id) parity; metrics are eval-half only"
+  },
+  "middlegame": {
+    "n_rows": 4564,
+    "n_clocked": 4564,
+    "tc_fits": [
+      "blitz",
+      "bullet",
+      "classical",
+      "rapid"
+    ],
+    "headline": {
+      "elo_only": {
+        "n_eval": 1699,
+        "brier": 0.2281539680926589,
+        "log_loss": 0.6868132512485071
+      },
+      "material_rating_clock_logistic": {
+        "n_eval": 1699,
+        "brier": 0.22566387967707305,
+        "log_loss": 0.6840338046830803
+      }
+    },
+    "with_flags": {
+      "elo_only": {
+        "n_eval": 2286,
+        "brier": 0.23149044391842657,
+        "log_loss": 0.6876155125132777
+      },
+      "material_rating_clock_logistic": {
+        "n_eval": 2286,
+        "brier": 0.2239777378363739,
+        "log_loss": 0.6746580725841976
+      }
+    }
+  },
+  "endgame": {
+    "n_rows": 2884,
+    "n_clocked": 2884,
+    "tc_fits": [
+      "blitz",
+      "bullet",
+      "classical",
+      "rapid"
+    ],
+    "headline": {
+      "elo_only": {
+        "n_eval": 1017,
+        "brier": 0.22066791552566875,
+        "log_loss": 0.6886012367118818
+      },
+      "material_rating_clock_logistic": {
+        "n_eval": 1017,
+        "brier": 0.18510498631961456,
+        "log_loss": 0.6164940145593578
+      }
+    },
+    "with_flags": {
+      "elo_only": {
+        "n_eval": 1421,
+        "brier": 0.22640784278368115,
+        "log_loss": 0.690342282220636
+      },
+      "material_rating_clock_logistic": {
+        "n_eval": 1421,
+        "brier": 0.1874380677134731,
+        "log_loss": 0.6106251964122148
+      }
+    }
+  }
+}

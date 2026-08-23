@@ -45,6 +45,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.models.game import Game
 from app.models.game_position import GamePosition
 from app.repositories.game_flaws_repository import bulk_insert_game_flaws, flaw_record_to_row
+from app.services.eval_utils import selection_gate_clause
 from app.services.flaws_service import classify_game_flaws
 from app.services.zobrist import PlyData
 
@@ -396,6 +397,42 @@ async def _apply_eval_results(
 # ---------------------------------------------------------------------------
 
 
+def _entry_claim_sql() -> str:
+    """Return the entry-ply canonical claim UPDATE statement, gated when the flag is on.
+
+    Phase 212 BENCHLANE-02/D-09 (212-07): extracted from _claim_entry_eval_games
+    so the byte-identity and narrowing proofs in tests/test_eval_worker_endpoints.py
+    can import and assert on this statement directly, mirroring the tier-3/tier-4
+    byte-identity technique in tests/services/test_eval_queue.py. Gate-off output
+    is byte-identical to the pre-212-07 inline literal -- no alias, no reformatting,
+    only the {gate} suffix ever changes.
+
+    The gate is applied inside the candidate subquery's WHERE (the lease-expiry
+    disjunction line), narrowing which rows are ELIGIBLE TO BE CLAIMED -- never on
+    the outer UPDATE target -- matching every other lottery/claim site's pattern
+    of gating the candidate predicate, not the write target.
+
+    WR-03 lock-step: this predicate MUST stay identical to
+    _entry_lease_backlog_probe_sql's (app/routers/eval_remote.py) so a probe that
+    passes still implies a claimable row exists. If you change one, change both.
+    """
+    gate = selection_gate_clause("games")
+    return f"""
+            UPDATE games
+            SET entry_eval_lease_expiry = now() + (:ttl || ' seconds')::interval,
+                entry_eval_leased_by = :worker_id
+            WHERE id IN (
+                SELECT id FROM games
+                WHERE evals_completed_at IS NULL
+                  AND (entry_eval_lease_expiry IS NULL OR entry_eval_lease_expiry < now()){(" " + gate) if gate else ""}
+                ORDER BY id DESC
+                LIMIT :batch
+                FOR UPDATE SKIP LOCKED
+            )
+            RETURNING id
+        """
+
+
 async def _claim_entry_eval_games(
     session: AsyncSession, worker_id: str, batch_size: int, ttl_seconds: int
 ) -> list[int]:
@@ -404,6 +441,8 @@ async def _claim_entry_eval_games(
 
     Shared by _pick_pending_game_ids (server pool, D-01) and /entry-lease (remote
     workers, D-05/D-07). This is the ONE canonical claim — do not write a second copy.
+    Phase 212 BENCHLANE-02/D-09 (212-07): also the one edit that gates both of
+    those consumers against benchmark_selection when the gate is on.
 
     SEED-051 D-3 shape: UPDATE … WHERE id IN (SELECT … FOR UPDATE SKIP LOCKED) RETURNING.
     Mirrors _claim_queued_job (eval_queue_service.py) in both bound-param discipline
@@ -415,20 +454,7 @@ async def _claim_entry_eval_games(
     reclaimed when entry_eval_lease_expiry < now() (TTL reclaim, D-04).
     """
     result = await session.execute(
-        sa.text("""
-            UPDATE games
-            SET entry_eval_lease_expiry = now() + (:ttl || ' seconds')::interval,
-                entry_eval_leased_by = :worker_id
-            WHERE id IN (
-                SELECT id FROM games
-                WHERE evals_completed_at IS NULL
-                  AND (entry_eval_lease_expiry IS NULL OR entry_eval_lease_expiry < now())
-                ORDER BY id DESC
-                LIMIT :batch
-                FOR UPDATE SKIP LOCKED
-            )
-            RETURNING id
-        """),
+        sa.text(_entry_claim_sql()),
         {"ttl": str(ttl_seconds), "worker_id": worker_id, "batch": batch_size},
     )
     return [row[0] for row in result.all()]

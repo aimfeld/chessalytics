@@ -69,7 +69,7 @@ import { pathToFileURL } from 'node:url';
 import path from 'node:path';
 import fs from 'node:fs';
 
-import { spawnStockfish, STOCKFISH_INIT_TIMEOUT_MS } from './lib/node-engine-providers.mjs';
+import { createStockfishPool } from './lib/stockfish-pool.mjs';
 import { createMaiaSession } from './lib/node-engine-providers.mjs';
 import { makeNodeProviders } from './lib/calibration-providers.mjs';
 import { OPENING_BOOK } from './lib/calibration-openings.mjs';
@@ -208,37 +208,6 @@ function sideToMove(fen) {
   return fen.split(' ')[1] === 'b' ? 'b' : 'w';
 }
 
-// ─── Stockfish pool (direct engine acquire/release — the pre-filter probe
-// needs an UNRESTRICTED go, which the shared searchmoves-restricted grade
-// wrapper below cannot express) ──────────────────────────────────────────
-
-async function createStockfishPool(size) {
-  const engines = await Promise.all(Array.from({ length: size }, () => spawnStockfish()));
-  for (const engine of engines) {
-    engine.send(`setoption name Hash value ${WORKER_HASH_MB}`);
-    engine.send('isready');
-    await engine.waitFor((line) => line === 'readyok', STOCKFISH_INIT_TIMEOUT_MS);
-  }
-  const busy = new Map(engines.map((engine) => [engine, false]));
-  const waiters = [];
-
-  const acquire = () => {
-    const free = engines.find((engine) => !busy.get(engine));
-    if (free !== undefined) {
-      busy.set(free, true);
-      return Promise.resolve(free);
-    }
-    return new Promise((resolve) => waiters.push(resolve));
-  };
-  const release = (engine) => {
-    const next = waiters.shift();
-    if (next !== undefined) next(engine);
-    else busy.set(engine, false);
-  };
-
-  return { acquire, release, quitAll: () => engines.forEach((engine) => engine.terminate()) };
-}
-
 /**
  * One searchmoves-restricted grading `go` at `depth` on an acquired engine —
  * mirrors `workerPool.ts`'s `sendGo`/`handleLine` exactly (UCI-keyed by
@@ -276,7 +245,7 @@ async function runOneGo(engine, depth, fen, candidateUcis) {
  * The searchmoves-restricted `EngineProviders.grade` used by `mctsSearch`,
  * wrapped around the SHIPPED `GradeCache` (INJECT-05): every call reads
  * through `gradeCache.read()` first and only dispatches a fresh `go` (via
- * `runOneGo` on a pool-acquired engine) on a miss, writing the result back
+ * `runOneGo` on a pooled engine via `pool.run`) on a miss, writing the result back
  * through `gradeCache.write()`. This is the harness's ONLY cache — there is
  * no local reimplementation of the read gate, keying, or LRU touch anywhere
  * in this file.
@@ -287,14 +256,9 @@ function makeCachedPoolGrade(pool, gradeCache) {
     const resolvedDepth = depth ?? GRADING_ROOT_DEPTH;
     const hit = gradeCache.read(fen, candidateUcis, resolvedDepth);
     if (hit) return hit;
-    const engine = await pool.acquire();
-    try {
-      const grades = await runOneGo(engine, resolvedDepth, fen, candidateUcis);
-      gradeCache.write(fen, resolvedDepth, grades);
-      return grades;
-    } finally {
-      pool.release(engine);
-    }
+    const grades = await pool.run((engine) => runOneGo(engine, resolvedDepth, fen, candidateUcis));
+    gradeCache.write(fen, resolvedDepth, grades);
+    return grades;
   };
 }
 
@@ -305,16 +269,15 @@ function makeCachedPoolGrade(pool, gradeCache) {
  * move, not a grade of a caller-supplied candidate set.
  */
 async function stockfishTopMove(pool, fen) {
-  const engine = await pool.acquire();
-  try {
+  // `pool.run` is the shared pool's escape hatch for exactly this: work the
+  // named wrappers cannot express. `pool.grade` would impose searchmoves.
+  return pool.run(async (engine) => {
     engine.send('setoption name MultiPV value 1');
     engine.send(`position fen ${fen}`);
     engine.send(`go depth ${GRADING_ROOT_DEPTH}`);
     const bestmoveLine = await engine.waitFor((line) => line.startsWith('bestmove'), GRADE_WATCHDOG_MS);
     return parseBestmove(bestmoveLine);
-  } finally {
-    pool.release(engine);
-  }
+  });
 }
 
 // ─── Main ────────────────────────────────────────────────────────────────
@@ -328,7 +291,10 @@ async function main() {
 
   const candidates = resolvePositions(args);
   const { session, ort } = await createMaiaSession();
-  const pool = await createStockfishPool(args.procs);
+  // The SHARED pool: it evicts and respawns an engine whose child process dies
+  // (a hand-rolled acquire/release copy did not), and `hashMb` pins Hash to the
+  // browser worker's value on replacements as well as the initial engines.
+  const pool = await createStockfishPool({ size: args.procs, hashMb: WORKER_HASH_MB });
   // A throwaway grade function — only .policy() is used from this instance,
   // for the pre-filter's raw Maia probability read.
   const policyProviders = makeNodeProviders(session, ort, async () => new Map());

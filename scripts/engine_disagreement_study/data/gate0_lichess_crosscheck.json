@@ -1,0 +1,46 @@
+{
+  "generated_at": "2026-08-20T18:17:45.785Z",
+  "config": {
+    "depth": 15,
+    "engine": "vendored stockfish-18-lite-single (WASM)"
+  },
+  "all": {
+    "n": 316,
+    "cp_pairs": 300,
+    "pearson_cp": 0.9350756324385859,
+    "median_abs_dcp": 38,
+    "p90_abs_dcp": 179,
+    "judged": 309,
+    "favored_side_flips": 35,
+    "favored_side_flip_rate": 0.11326860841423948,
+    "confident_judged": 183,
+    "confident_flips": 7,
+    "confident_flip_rate": 0.03825136612021858
+  },
+  "middlegame": {
+    "n": 194,
+    "cp_pairs": 193,
+    "pearson_cp": 0.8866808560850237,
+    "median_abs_dcp": 36,
+    "p90_abs_dcp": 180,
+    "judged": 190,
+    "favored_side_flips": 30,
+    "favored_side_flip_rate": 0.15789473684210525,
+    "confident_judged": 90,
+    "confident_flips": 7,
+    "confident_flip_rate": 0.07777777777777778
+  },
+  "endgame": {
+    "n": 122,
+    "cp_pairs": 107,
+    "pearson_cp": 0.9755421107204975,
+    "median_abs_dcp": 53,
+    "p90_abs_dcp": 172,
+    "judged": 119,
+    "favored_side_flips": 5,
+    "favored_side_flip_rate": 0.04201680672268908,
+    "confident_judged": 93,
+    "confident_flips": 0,
+    "confident_flip_rate": 0
+  }
+}

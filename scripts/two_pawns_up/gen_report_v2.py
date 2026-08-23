@@ -26,8 +26,8 @@ numbers from the published report; any mismatch aborts the run.
 
 Usage:
     bin/benchmark_db.sh start
-    uv run python stories/two-pawns-up/gen_report_v2.py            # benchmark DB
-    uv run python stories/two-pawns-up/gen_report_v2.py --db dev   # smoke only
+    uv run python scripts/two_pawns_up/gen_report_v2.py            # benchmark DB
+    uv run python scripts/two_pawns_up/gen_report_v2.py --db dev   # smoke only
 
 Output: markdown tables for both bases plus v1→v2 delta tables on stdout, and a
 JSON dump of every table via --json PATH.

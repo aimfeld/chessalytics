@@ -24,8 +24,8 @@ This is the paired-not-pooled lesson of report §6.2 applied throughout.
 
 Usage:
     bin/prod_db_tunnel.sh              # tunnel must be up
-    uv run python stories/two-pawns-up/prod_selection_bias.py            # prod
-    uv run python stories/two-pawns-up/prod_selection_bias.py --db dev   # smoke
+    uv run python scripts/two_pawns_up/prod_selection_bias.py            # prod
+    uv run python scripts/two_pawns_up/prod_selection_bias.py --db dev   # smoke
 """
 
 from __future__ import annotations
@@ -35,6 +35,7 @@ import asyncio
 import random
 import sys
 from collections import defaultdict
+from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -213,8 +214,8 @@ UserArms = dict[int, dict[bool, list[int]]]
 
 def collect(
     rows: list[ProdFact],
-    trial: "callable[[ProdFact], bool]",
-    success: "callable[[ProdFact], float]",
+    trial: Callable[[ProdFact], bool],
+    success: Callable[[ProdFact], float],
 ) -> UserArms:
     arms: UserArms = defaultdict(lambda: {True: [0, 0], False: [0, 0]})
     for r in rows:

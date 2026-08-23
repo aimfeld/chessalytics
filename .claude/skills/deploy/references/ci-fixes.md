@@ -31,7 +31,7 @@ uv add '<package-name>>=<safe-version>'
 
 # Verify nothing broke
 uv run pytest -x
-uv run ty check app/ tests/
+uv run ty check app/ tests/ scripts/
 
 git add pyproject.toml uv.lock
 git commit -m "fix(deps): bump <package> to <version> for CVE-XXXX-YYYY"
@@ -67,7 +67,7 @@ If `npm audit fix` proposes a `--force` resolution that introduces a breaking ma
 Symptom: CI step "ruff format --check" fails with "Would reformat: ...".
 
 ```bash
-uv run ruff format app/ tests/
+uv run ruff format app/ tests/ scripts/
 git add -u
 git commit -m "style: apply ruff format"
 git push origin main
@@ -78,9 +78,9 @@ This is the single most common preventable CI failure on this project — see CL
 ## CI: ruff lint errors
 
 ```bash
-uv run ruff check app/ tests/ --fix
+uv run ruff check . --fix
 # Inspect remaining errors that --fix couldn't resolve
-uv run ruff check app/ tests/
+uv run ruff check .
 ```
 
 Auto-fixable issues commit cleanly. For manual fixes (unused imports flagged but actually needed, type narrowing, etc.), apply the smallest change that makes the rule pass. If a rule needs to be suppressed, use `# noqa: <rule-code>` with a brief reason on the same line.
@@ -94,7 +94,7 @@ git push origin main
 ## CI: ty type errors
 
 ```bash
-uv run ty check app/ tests/
+uv run ty check app/ tests/ scripts/
 ```
 
 Address each error. Common patterns from CLAUDE.md:
@@ -252,7 +252,7 @@ git push origin main
 If the hook blocks the push because of a ty error, fix the error (don't `--no-verify`). The hook exists to catch the most common preventable CI failure.
 
 ```bash
-uv run ty check app/ tests/    # see the exact error
+uv run ty check app/ tests/ scripts/    # see the exact error
 # fix
 git add -u
 git commit -m "fix(types): <description>"

@@ -86,6 +86,17 @@ line-length = 100
 # scripts/ importing scripts/ reads as unresolved-import without this.
 extra-paths = ["scripts"]
 
+# analysis/ is a deliberately standalone uv project with its own venv (see
+# analysis/pyproject.toml), so its marimo/polars/plotly/psycopg imports cannot
+# resolve against the root .venv. Exclude the tree instead of pointing
+# extra-paths at analysis/.venv: ty validates every extra-paths entry at
+# startup and hard-fails ("does not point to a directory") when one is missing,
+# which broke CI — the runner never creates analysis/.venv. The old comment
+# claiming this only affected the IDE was wrong; the failure is independent of
+# which paths you ask ty to check.
+[tool.ty.src]
+exclude = ["analysis"]
+
 [tool.ty.rules]
 # Warn on unused suppression comments so stale ignores don't accumulate
 unused-ignore-comment = "warn"

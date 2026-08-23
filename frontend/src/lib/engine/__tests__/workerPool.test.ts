@@ -21,6 +21,8 @@ import {
   GRADING_WATCHDOG_SUSPEND_FACTOR,
   MAX_WATCHDOG_SUSPEND_REARMS,
   STOP_BESTMOVE_WATCHDOG_TIMEOUT_MS,
+  MAX_SLOT_RESPAWNS,
+  INIT_WATCHDOG_TIMEOUT_MS,
   type QueuedGradeRequest,
   type WorkerPool,
   type MoveGrade,
@@ -516,8 +518,11 @@ describe('createWorkerPool: gradingDepth parameter plumbing (LADDER-02/04)', () 
 // ─── createWorkerPool: D-06 grading watchdog ───────────────────────────────
 
 describe('createWorkerPool: watchdog (D-06)', () => {
+  /** What `stubDesktopSizing(6)` below resolves to via `computePoolSize()`. */
+  const POOL_SIZE = 4;
+
   beforeEach(() => {
-    stubDesktopSizing(6); // computePoolSize() -> 4 slots
+    stubDesktopSizing(6); // computePoolSize() -> POOL_SIZE slots
     stubWorkerCtor();
     vi.useFakeTimers();
     vi.mocked(Sentry.captureException).mockClear();
@@ -578,8 +583,16 @@ describe('createWorkerPool: watchdog (D-06)', () => {
     expect(worker.messages).not.toContain(`position fen ${TEST_FEN_2}`);
   });
 
-  it('once every slot has gone out of service via the watchdog, still-pending requests are drained empty rather than left to hang', async () => {
-    const pool = createWorkerPool();
+  /**
+   * Fill every slot, leave one extra request genuinely pending, then let the
+   * grading watchdog kill the whole pool. Returns the promises plus the
+   * replacement workers the deaths spawned.
+   */
+  async function killWholePoolWithOnePending(pool: WorkerPool): Promise<{
+    dispatched: Promise<Map<string, MoveGrade>>[];
+    pendingReq: Promise<Map<string, MoveGrade>>;
+    replacements: MockWorker[];
+  }> {
     // 4 slots (stubDesktopSizing(6)) — dispatch 4 requests (one per slot) plus
     // a 5th that can never be assigned a slot and stays genuinely pending.
     const dispatched = [
@@ -588,14 +601,65 @@ describe('createWorkerPool: watchdog (D-06)', () => {
       pool.grade(TEST_FEN, ['e2e4']),
       pool.grade(TEST_FEN, ['e2e4']),
     ];
-    const pendingReq = pool.grade(TEST_FEN, ['e2e4']);
-    expect(createdWorkers.length).toBe(4);
+    // `g1f3` sorts AFTER `e2e4`, and dequeueHighestPriority breaks an all-equal
+    // priority/depth tie by ascending candidateUcis[0] — so this is the request
+    // that loses the race for a slot and stays genuinely pending. (A candidate
+    // sorting first would be dispatched and one of the four above would strand
+    // instead, quietly inverting what this helper's callers assert.)
+    const pendingReq = pool.grade(TEST_FEN_2, ['g1f3']);
+    expect(createdWorkers.length).toBe(POOL_SIZE);
     for (const w of createdWorkers) driveInit(w); // each readyok dispatches the next queued request in turn
 
     await vi.advanceTimersByTimeAsync(GRADING_WATCHDOG_TIMEOUT_MS);
 
-    const settled = await Promise.all([...dispatched, pendingReq]);
-    for (const m of settled) expect(m.size).toBe(0);
+    // Every dispatched request settles empty on its own slot's watchdog fire.
+    for (const m of await Promise.all(dispatched)) expect(m.size).toBe(0);
+    return { dispatched, pendingReq, replacements: createdWorkers.slice(POOL_SIZE) };
+  }
+
+  it('a slot killed by the watchdog is REPLACED, and the replacement services the still-pending request once it boots', async () => {
+    const pool = createWorkerPool();
+    const { pendingReq, replacements } = await killWholePoolWithOnePending(pool);
+
+    // The fix: four deaths produce four replacement workers, rather than
+    // shrinking the pool to nothing for the rest of the page visit.
+    expect(replacements.length).toBe(POOL_SIZE);
+    for (const w of replacements) driveInit(w);
+
+    // `readyok` on a replacement dispatches the request that was stranded.
+    const servingWorker = replacements.find((w) => w.messages.includes(`position fen ${TEST_FEN_2}`));
+    expect(servingWorker).toBeDefined();
+    servingWorker!.simulateMessage('info depth 14 multipv 1 score cp 12 nodes 1000 pv g1f3');
+    servingWorker!.simulateMessage('bestmove g1f3');
+
+    // Real grades, not the empty Map a drained request would have resolved with.
+    // TEST_FEN_2 is black to move, so the engine's +12 negates to white-POV -12.
+    const grades = await pendingReq;
+    expect(grades.get('g1f3')).toEqual({ evalCp: -12, evalMate: null, depth: 14 });
+  });
+
+  it('when replacements never boot, the respawn budget bounds the churn and still-pending requests are drained empty rather than left to hang', async () => {
+    const pool = createWorkerPool();
+    const { pendingReq } = await killWholePoolWithOnePending(pool);
+
+    // No replacement is ever driven through init, so each one times out via
+    // INIT_WATCHDOG_TIMEOUT_MS and respawns again until MAX_SLOT_RESPAWNS is
+    // spent — at which point the slots are dropped, the pool is empty, and the
+    // stranded request is drained. Each wave retires one respawn per slot, plus
+    // a final wave that finds the budget empty. Derived from the constants
+    // rather than hard-coded so retuning either one cannot silently under-run
+    // this advance (and it stays cheap — a long fake-clock span slows the whole
+    // suite enough to trip unrelated 5s test timeouts).
+    const waves = Math.ceil(MAX_SLOT_RESPAWNS / POOL_SIZE) + 1;
+    await vi.advanceTimersByTimeAsync(INIT_WATCHDOG_TIMEOUT_MS * waves);
+
+    expect((await pendingReq).size).toBe(0);
+    // The budget is a hard ceiling on worker construction: 4 initial slots plus
+    // at most MAX_SLOT_RESPAWNS replacements, however long the churn runs.
+    expect(createdWorkers.length).toBe(POOL_SIZE + MAX_SLOT_RESPAWNS);
+    // And a request arriving after the pool has emptied still resolves rather
+    // than enqueuing into a queue nothing will ever service.
+    expect((await pool.grade(TEST_FEN, ['e2e4'])).size).toBe(0);
   });
 
   it('a bestmove arriving before the deadline settles the request with real grades and disarms the timer — no capture after the deadline', async () => {
@@ -724,7 +788,15 @@ describe('createWorkerPool: watchdog (D-06)', () => {
 
     vi.mocked(Sentry.captureException).mockClear();
     await vi.advanceTimersByTimeAsync(GRADING_WATCHDOG_TIMEOUT_MS);
-    expect(Sentry.captureException).not.toHaveBeenCalled();
+    // Asserted by MESSAGE, not by call count: the dead slot is now REPLACED,
+    // and the replacement (deliberately never driven through init here) reports
+    // its own `replacement worker init timeout` inside the same window. Those
+    // are legitimate and separately grouped. The bogus capture this test exists
+    // to forbid is a second GRADING-watchdog fire on an already-dead slot.
+    const messages = vi
+      .mocked(Sentry.captureException)
+      .mock.calls.map(([err]) => (err as Error).message);
+    expect(messages).not.toContain('Stockfish worker pool: grading watchdog timeout');
   });
 
   it('settles empty exactly at GRADING_WATCHDOG_TIMEOUT_MS; one tick earlier the request is still unsettled', async () => {

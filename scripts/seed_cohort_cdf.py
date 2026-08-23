@@ -28,8 +28,7 @@ import logging
 from pathlib import Path
 
 from sqlalchemy import text
-from sqlalchemy.ext.asyncio import AsyncSession, create_async_engine
-from sqlalchemy.orm import sessionmaker
+from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 
 from app.core.config import settings
 
@@ -71,7 +70,7 @@ def _parse_row(row: dict[str, str]) -> dict[str, object]:
 async def seed_cohort_cdf() -> int:
     """Read TSV and upsert rows into benchmark_cohort_cdf. Returns count of upserted rows."""
     engine = create_async_engine(settings.DATABASE_URL)
-    async_session = sessionmaker(engine, class_=AsyncSession, expire_on_commit=False)
+    async_session = async_sessionmaker(engine, expire_on_commit=False)
 
     inserted = 0
     errors = 0
@@ -88,7 +87,7 @@ async def seed_cohort_cdf() -> int:
                     continue
 
                 result = await session.execute(text(_INSERT_SQL), params)
-                if result.rowcount > 0:
+                if result.rowcount > 0:  # ty: ignore[unresolved-attribute]  # SQLAlchemy DML result carries rowcount
                     inserted += 1
 
         await session.commit()

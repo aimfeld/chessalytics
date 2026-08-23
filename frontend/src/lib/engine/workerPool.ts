@@ -120,11 +120,50 @@ export const MAX_WATCHDOG_SUSPEND_REARMS = 3;
  * guard, and nothing reached Sentry. A `stop` must produce `bestmove`
  * near-immediately (the search polls the stop flag between nodes), so this
  * bound is an order of magnitude tighter than `GRADING_WATCHDOG_TIMEOUT_MS` —
- * a false positive costs one permanently dead slot (Sentry-visible via
+ * a false positive costs one worker respawn (Sentry-visible via
  * `fireStopWatchdog`), and this constant is the tuning knob if that is ever
  * observed in production.
  */
 export const STOP_BESTMOVE_WATCHDOG_TIMEOUT_MS = 10_000;
+
+/**
+ * Bug fix (2026-08-23): total slot respawns allowed over ONE pool's lifetime.
+ *
+ * A slot marked `dead` used to stay dead until `terminate()` — and `terminate()`
+ * only runs on the React effect cleanup, i.e. when the user leaves the analysis
+ * or bot page. So a single worker fault silently shrank the pool for the whole
+ * visit: not wrong answers, but fewer parallel grades, and for the BOT a
+ * deadline-bounded search on a smaller pool reaches fewer nodes and can pick a
+ * different move. `replaceDeadSlot` now spawns a replacement instead.
+ *
+ * The cap exists because the respawn paths are not all slow: `worker.onerror`
+ * fires immediately for a 404/CSP-blocked engine script, so an uncapped respawn
+ * would spin constructing workers. Once the budget is spent the pool degrades
+ * exactly as it did before this fix — smaller, then drained — rather than
+ * looping. Sized for a couple of full-pool wipes at the desktop maximum of 4
+ * slots; a healthy session should never spend more than one or two.
+ */
+export const MAX_SLOT_RESPAWNS = 8;
+
+/**
+ * Bug fix (2026-08-23): bound (ms) on a REPLACEMENT slot's UCI init handshake.
+ *
+ * Respawning re-opened a hang that the FIX-3 dead-pool guard used to close by
+ * accident. Once every slot was dead, `grade()` resolved new requests empty
+ * immediately; now a fresh slot sits in the pool, so `noLiveSlotRemains()` is
+ * false and the request enqueues. That is correct as long as the replacement
+ * actually boots — but a worker that CONSTRUCTS and then goes silent (never
+ * `uciok`, never an `error` event — the shape a memory-starved mobile device
+ * produces) would strand the queue forever. This watchdog turns that silence
+ * into an ordinary slot death, which the respawn budget then bounds.
+ *
+ * Armed only on replacements, not on `ensureSpawned`'s initial slots: this
+ * closes exactly the hazard the respawn introduces, and leaves the pre-existing
+ * (and separate) question of a never-booting FIRST worker alone. Generous
+ * relative to a cold WASM compile on slow mobile hardware, since it only ever
+ * matters when something is already broken.
+ */
+export const INIT_WATCHDOG_TIMEOUT_MS = 30_000;
 
 // ─── Types ──────────────────────────────────────────────────────────────────
 
@@ -152,7 +191,7 @@ export interface PoolWorkerSlot {
   stopPending: boolean;
   /** True once this slot's UCI init sequence (uciok -> Hash -> isready -> readyok) completes. */
   isReady: boolean;
-  /** True once this slot's worker has fired an `error` event — permanently out of service (WR-04). */
+  /** True once this slot's worker has failed (an `error` event, WR-04, or a watchdog fire) — out of service. The slot itself is replaced by `replaceDeadSlot`; this flag gates dispatch until then and stays set on the discarded slot object forever. */
   dead: boolean;
   /** The request currently assigned to this slot, or null when free. */
   current: QueuedGradeRequest | null;
@@ -189,7 +228,7 @@ export interface WorkerPool {
   ): Promise<Map<string, MoveGrade>>;
   /** Send `stop` to every thinking slot and resolve (empty) every pending request. */
   stopAll(): void;
-  /** Stop + `worker.terminate()` every slot; a later `grade()` call re-spawns the pool. */
+  /** Stop + `worker.terminate()` every slot; a later `grade()` call re-spawns the pool (and resets the `MAX_SLOT_RESPAWNS` budget). */
   terminate(): void;
   /**
    * Spawn the Stockfish worker pool with NO search and no movetime spend, so
@@ -489,6 +528,8 @@ export function createWorkerPool(): WorkerPool {
   const pending: QueuedGradeRequest[] = [];
   const gradeCache = createGradeCache();
   let spawned = false;
+  /** Respawns consumed so far — see `MAX_SLOT_RESPAWNS`. */
+  let slotRespawns = 0;
 
   /** Clear a slot's in-flight watchdog timer, if any. Idempotent. Extracted so the call sites that take a slot out of `thinking` cannot drift apart — bestmove, abort, `stopAll`, `terminate`, `onerror`, and the defensive clear in `sendGo`. */
   function clearSlotWatchdog(slot: PoolWorkerSlot): void {
@@ -503,9 +544,10 @@ export function createWorkerPool(): WorkerPool {
    * `GRADING_WATCHDOG_TIMEOUT_MS` — a genuinely hung/wedged worker, not a
    * merely slow position. Treated as a worker fault, mirroring `onerror`
    * exactly (reusing `dead` rather than inventing a new lifecycle state is
-   * deliberate: a 60s grading `go` with no `bestmove` is not recoverable
-   * within this pool instance, `dispatchNext` already skips non-`isReady`
-   * slots, and `onerror` already proves this exact degradation path).
+   * deliberate: a 60s grading `go` with no `bestmove` is not recoverable on
+   * THAT worker, `dispatchNext` already skips non-`isReady` slots, and
+   * `onerror` already proves this exact degradation path). The slot is not
+   * lost with it — `replaceDeadSlot` spawns a fresh worker into its place.
    */
   function fireWatchdog(slot: PoolWorkerSlot): void {
     slot.watchdogTimer = null;
@@ -514,9 +556,10 @@ export function createWorkerPool(): WorkerPool {
     // mobile browsers, all on /analysis — a backgrounded/suspended tab
     // freezes its workers along with the page, so the elapsed `setTimeout`
     // fires immediately on resume even though the worker never ran and is
-    // not actually wedged. Treating that as a fault is a false positive:
-    // `dead` is never cleared until `terminate()`, so one spurious fire
-    // permanently shrinks the pool for the rest of the session. A fire this
+    // not actually wedged. Treating that as a fault is a false positive that
+    // costs a needless worker respawn (before `replaceDeadSlot` existed it
+    // permanently shrank the pool for the rest of the session, and it still
+    // spends `MAX_SLOT_RESPAWNS` budget). A fire this
     // far past deadline is attributed to suspension instead and silently
     // re-armed (bounded by `MAX_WATCHDOG_SUSPEND_REARMS` so a genuinely
     // wedged worker on a repeatedly suspended page still reaches the kill
@@ -550,7 +593,7 @@ export function createWorkerPool(): WorkerPool {
     // exists to eliminate, only rarer and harder to reproduce (D-06).
     slot.current?.resolve(new Map());
     slot.current = null;
-    if (noLiveSlotRemains()) drainPending();
+    replaceDeadSlot(slot);
   }
 
   /**
@@ -591,7 +634,7 @@ export function createWorkerPool(): WorkerPool {
     slot.dead = true;
     slot.current?.resolve(new Map());
     slot.current = null;
-    if (noLiveSlotRemains()) drainPending();
+    replaceDeadSlot(slot);
   }
 
   function sendGo(slot: PoolWorkerSlot, req: QueuedGradeRequest): void {
@@ -632,6 +675,7 @@ export function createWorkerPool(): WorkerPool {
     }
 
     if (line === 'readyok') {
+      clearSlotWatchdog(slot); // disarms a replacement slot's init watchdog, if one is armed
       slot.isReady = true;
       dispatchNext();
       return;
@@ -690,9 +734,94 @@ export function createWorkerPool(): WorkerPool {
     }
   }
 
-  /** True once every spawned slot has permanently failed via onerror — no worker will ever service a request. */
+  /** True once every slot currently in the pool is dead — no worker will service a request until one is replaced. */
   function noLiveSlotRemains(): boolean {
     return slots.length > 0 && slots.every((slot) => slot.dead);
+  }
+
+  /**
+   * Bound a REPLACEMENT slot's init handshake (see `INIT_WATCHDOG_TIMEOUT_MS`).
+   * Reuses `watchdogTimer`: a slot in init is neither `thinking` nor
+   * `stopping`, so the field is free, and the `readyok` branch of `handleLine`
+   * disarms it — the same field-sharing argument FIX-4 made for the
+   * stop-bestmove bound.
+   */
+  function armInitWatchdog(slot: PoolWorkerSlot): void {
+    slot.armedAtMs = Date.now();
+    slot.watchdogTimer = setTimeout(() => fireInitWatchdog(slot), INIT_WATCHDOG_TIMEOUT_MS);
+  }
+
+  /** A replacement worker never finished its UCI handshake — treat it as any other slot death. */
+  function fireInitWatchdog(slot: PoolWorkerSlot): void {
+    slot.watchdogTimer = null;
+    // STATIC message — no interpolated data (CLAUDE.md Sentry grouping rule).
+    Sentry.captureException(new Error('Stockfish worker pool: replacement worker init timeout'), {
+      tags: { source: 'stockfish-worker-pool' },
+    });
+    slot.isReady = false;
+    slot.dead = true;
+    replaceDeadSlot(slot);
+  }
+
+  /**
+   * Replace a slot whose worker has permanently failed, so one fault costs a
+   * worker rather than a slot for the rest of the page visit (see
+   * `MAX_SLOT_RESPAWNS`). Called by every death path — `worker.onerror`,
+   * `fireWatchdog`, `fireStopWatchdog` — AFTER each has settled the slot's
+   * in-flight request and marked it `dead`.
+   *
+   * Replaces the three call sites' former `if (noLiveSlotRemains()) drainPending()`
+   * and keeps that guarantee: pending requests are still drained when no live
+   * slot is left, which now means the respawn failed or the budget is spent. A
+   * successful respawn deliberately does NOT drain — the fresh worker will
+   * service the queue once its `readyok` lands.
+   *
+   * Two details that are load-bearing rather than defensive:
+   *  - The dead worker is TERMINATED, not just dropped. `fireWatchdog` fires on
+   *    a wedged-but-alive worker, which would otherwise keep its Stockfish heap
+   *    and whatever it is chewing on for the rest of the visit.
+   *  - Its handlers are detached FIRST. A wedged worker can still emit a late
+   *    line or error, and that must not reach a slot no longer in the pool —
+   *    `handleLine` would flip `isReady` on an orphan, and a late `onerror`
+   *    would spend respawn budget on a slot already replaced.
+   */
+  function replaceDeadSlot(slot: PoolWorkerSlot): void {
+    const idx = slots.indexOf(slot);
+    if (idx === -1) return; // already replaced, or the pool was terminated under us
+    clearSlotWatchdog(slot);
+    slot.worker.onmessage = null;
+    slot.worker.onerror = null;
+    slot.worker.terminate();
+
+    if (slotRespawns >= MAX_SLOT_RESPAWNS) {
+      slots.splice(idx, 1);
+    } else {
+      slotRespawns++;
+      try {
+        const fresh = createSlot();
+        slots[idx] = fresh;
+        armInitWatchdog(fresh);
+      } catch (err) {
+        // Same graceful-degradation floor as `ensureSpawned` (Pitfall 1): a
+        // Worker constructor that throws leaves a smaller live pool, never an
+        // exception escaping a death handler.
+        Sentry.captureException(err instanceof Error ? err : new Error(String(err)), {
+          tags: { source: 'stockfish-worker-pool' },
+        });
+        slots.splice(idx, 1);
+      }
+    }
+
+    // `noLiveSlotRemains()` is false for an EMPTY pool (it requires
+    // `slots.length > 0`), so the emptiness case has to be tested separately —
+    // otherwise splicing out the last slot would skip the drain and hang every
+    // queued request.
+    if (slots.length === 0 || noLiveSlotRemains()) {
+      drainPending();
+      return;
+    }
+    // A sibling may have been idle while this slot held the queue up.
+    dispatchNext();
   }
 
   /** Resolve (empty) every still-pending request — nothing will ever dispatch them. */
@@ -736,7 +865,7 @@ export function createWorkerPool(): WorkerPool {
       slot.dead = true;
       slot.current?.resolve(new Map());
       slot.current = null;
-      if (noLiveSlotRemains()) drainPending();
+      replaceDeadSlot(slot);
     };
     worker.postMessage('uci');
     return slot;
@@ -903,6 +1032,7 @@ export function createWorkerPool(): WorkerPool {
     }
     slots.length = 0;
     spawned = false;
+    slotRespawns = 0; // a re-spawned pool starts with a fresh respawn budget
   }
 
   /** Prewarm: spawn the pool without searching. See `WorkerPool.warm()`. */

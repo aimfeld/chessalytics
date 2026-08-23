@@ -3151,3 +3151,619 @@ class TestTier3Step1PredicateShape:
                         )
         finally:
             await _delete_games(queue_session_maker, [complete_game])
+
+
+# ─── Phase 212 BENCHLANE-02/D-09/D-10: benchmark selection gate ──────────────
+
+
+class TestBenchmarkSelectionGate:
+    """D-10: gate inertness proven two ways -- byte-identical predicate when
+    off, and the narrowing actually bites when on.
+
+    Phase 212-02 (D-09) extended these byte-identity pins from tier-3 alone to
+    all FOUR lottery predicate sites the worker fleet can reach:
+    _claim_tier3_derived (Step 1 + Step 2, pinned in 212-01),
+    _claim_tier4_blob (Stage 1 + Stage 2), and _claim_tier4_bestmove
+    (Stage 1 + Stage 2). A refactor that reformats any one of these six
+    predicate strings -- even one that preserves semantics -- is exactly the
+    failure this class exists to catch (SC2): the byte-identity assertions
+    below are direct `==` comparisons against frozen literals, not
+    normalized-whitespace equality, so a stray space or reordered clause
+    fails loudly rather than passing a "looks equivalent" review.
+    """
+
+    async def test_benchmark_selection_gate_off_byte_identical(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """With BENCHMARK_SELECTION_GATE_ENABLED=False, _claim_tier3_derived's
+        Step 1 candidate_where_sql and Step 2 game_where_sql are byte-identical
+        to the pre-gate baseline. Direct string equality (==), not
+        normalized-whitespace equality — an empty _selection_gate_clause() must
+        leave no trailing whitespace or blank line. Changing
+        _selection_gate_clause() to return a single space (instead of "") makes
+        this fail.
+        """
+        import typing
+
+        from sqlalchemy.ext.asyncio import AsyncSession
+
+        import app.services.eval_queue_service as svc
+
+        monkeypatch.setattr(svc.settings, "BENCHMARK_SELECTION_GATE_ENABLED", False)
+
+        captured: dict[str, str] = {}
+
+        async def _fake_user_pick(session: object, **kwargs: object) -> int:
+            captured["candidate_where_sql"] = typing.cast(str, kwargs["candidate_where_sql"])
+            return 42
+
+        async def _fake_game_pick(session: object, **kwargs: object) -> None:
+            captured["game_where_sql"] = typing.cast(str, kwargs["game_where_sql"])
+            return None
+
+        monkeypatch.setattr(svc, "_es_weighted_user_pick", _fake_user_pick)
+        monkeypatch.setattr(svc, "_es_weighted_game_pick", _fake_game_pick)
+
+        class _UnusedSession:
+            pass
+
+        result = await svc._claim_tier3_derived(typing.cast(AsyncSession, _UnusedSession()))
+        assert result is None, "Step 2's fake returns None -> race short-circuit"
+
+        # Frozen pre-gate baseline (Quick 260729-a86 HEAD template) — never
+        # copy-pasted from post-change output.
+        expected_step1 = """
+            (u.is_guest = false AND EXISTS (
+                SELECT 1 FROM games g
+                WHERE g.user_id = u.id
+                  AND g.full_evals_completed_at IS NULL
+                  AND g.lichess_evals_at IS NULL
+            ))
+            OR
+            EXISTS (
+                SELECT 1 FROM games g
+                WHERE g.user_id = u.id
+                  AND g.full_pv_completed_at IS NULL
+                  AND g.lichess_evals_at IS NOT NULL
+            )
+        """
+        assert captured["candidate_where_sql"] == expected_step1, (
+            "Step 1 candidate_where_sql must stay byte-identical when the gate is off"
+        )
+
+        expected_step2 = (
+            "g.user_id = :picked_user"
+            " AND ("
+            "  (EXISTS (SELECT 1 FROM users u WHERE u.id = :picked_user AND u.is_guest = false)"
+            "   AND g.full_evals_completed_at IS NULL"
+            "   AND g.lichess_evals_at IS NULL)"
+            "  OR"
+            "  (g.full_pv_completed_at IS NULL AND g.lichess_evals_at IS NOT NULL)"
+            " )"
+        )
+        assert captured["game_where_sql"] == expected_step2, (
+            "Step 2 game_where_sql must stay byte-identical when the gate is off"
+        )
+
+    async def test_benchmark_selection_gate_on_narrows_tier3(
+        self,
+        tier2_test_users: dict[str, int],
+        queue_session_maker: async_sessionmaker[AsyncSession],
+        monkeypatch: pytest.MonkeyPatch,
+        test_engine: object,
+    ) -> None:
+        """With the gate on and one benchmark_selection row present, the tier-3
+        claim returns only that game — a second otherwise-eligible game (same
+        user, same needs-engine shape) is never returned."""
+        from typing import cast
+
+        from sqlalchemy import Table
+        from sqlalchemy.ext.asyncio import AsyncEngine
+
+        import app.services.eval_queue_service as svc
+        from app.models.benchmark_selection import BenchmarkSelection
+        from app.models.user import User
+
+        engine = cast(AsyncEngine, test_engine)
+        bench_table = cast(Table, BenchmarkSelection.__table__)
+        async with engine.begin() as conn:
+            await conn.run_sync(
+                lambda sync_conn: BenchmarkSelection.metadata.create_all(
+                    sync_conn, tables=[bench_table], checkfirst=True
+                )
+            )
+
+        user_id = tier2_test_users["user"]
+        now = datetime.now(timezone.utc)
+
+        async with queue_session_maker() as session:
+            await session.execute(
+                sa_update(User).where(User.id == user_id).values(last_activity=now)
+            )
+            await session.commit()
+
+        selected_game = await _insert_game(
+            queue_session_maker,
+            user_id,
+            full_evals_completed_at=None,
+            lichess_evals_at=None,
+            played_at=now,
+        )
+        unselected_game = await _insert_game(
+            queue_session_maker,
+            user_id,
+            full_evals_completed_at=None,
+            lichess_evals_at=None,
+            played_at=now,
+        )
+
+        async with queue_session_maker() as session:
+            session.add(
+                BenchmarkSelection(
+                    game_id=selected_game,
+                    user_id=user_id,
+                    tc_tranche="blitz",
+                    lichess_arm=False,
+                )
+            )
+            await session.commit()
+
+        monkeypatch.setattr(svc.settings, "BENCHMARK_SELECTION_GATE_ENABLED", True)
+
+        try:
+            n_draws = 15
+            for i in range(n_draws):
+                async with queue_session_maker() as session:
+                    result = await svc._claim_tier3_derived(session)
+                if result is not None:
+                    assert result[0] == selected_game, (
+                        f"Draw {i}: gate-on claim must only ever return the "
+                        f"benchmark_selection-listed game {selected_game}; "
+                        f"got {result[0]}"
+                    )
+                    assert result[0] != unselected_game, (
+                        f"Draw {i}: unselected game {unselected_game} must "
+                        "never be returned while the gate is on"
+                    )
+        finally:
+            monkeypatch.setattr(svc.settings, "BENCHMARK_SELECTION_GATE_ENABLED", False)
+            async with queue_session_maker() as session:
+                await session.execute(
+                    delete(BenchmarkSelection).where(
+                        BenchmarkSelection.game_id.in_([selected_game, unselected_game])
+                    )
+                )
+                await session.commit()
+            await _delete_games(queue_session_maker, [selected_game, unselected_game])
+
+    async def test_benchmark_selection_gate_off_byte_identical_tier4_blob(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """With BENCHMARK_SELECTION_GATE_ENABLED=False, _claim_tier4_blob's
+        Stage 1 candidate_exists_sql and Stage 2 game_where_sql are
+        byte-identical to the pre-gate (SEED-125) baseline."""
+        import typing
+
+        from sqlalchemy.ext.asyncio import AsyncSession
+
+        import app.services.eval_queue_service as svc
+
+        monkeypatch.setattr(svc.settings, "BENCHMARK_SELECTION_GATE_ENABLED", False)
+
+        captured: dict[str, str] = {}
+
+        async def _fake_user_pick(session: object, **kwargs: object) -> int:
+            captured["candidate_exists_sql"] = typing.cast(str, kwargs["candidate_exists_sql"])
+            return 42
+
+        async def _fake_game_pick(session: object, **kwargs: object) -> None:
+            captured["game_where_sql"] = typing.cast(str, kwargs["game_where_sql"])
+            return None
+
+        monkeypatch.setattr(svc, "_es_weighted_user_pick", _fake_user_pick)
+        monkeypatch.setattr(svc, "_es_weighted_game_pick", _fake_game_pick)
+
+        class _UnusedSession:
+            pass
+
+        result = await svc._claim_tier4_blob(typing.cast(AsyncSession, _UnusedSession()))
+        assert result is None, "Stage 2's fake returns None -> None short-circuit"
+
+        # Frozen pre-gate baseline (SEED-125 games-only predicate) — never
+        # copy-pasted from post-change output.
+        expected_stage1 = """
+                SELECT 1 FROM games g
+                WHERE g.user_id = u.id
+                  AND g.full_evals_completed_at IS NOT NULL
+                  AND g.blobs_completed_at IS NULL
+        """
+        assert captured["candidate_exists_sql"] == expected_stage1, (
+            "Stage 1 candidate_exists_sql must stay byte-identical when the gate is off"
+        )
+
+        expected_stage2 = (
+            "g.user_id = :picked_user"
+            " AND g.full_evals_completed_at IS NOT NULL"
+            " AND g.blobs_completed_at IS NULL"
+        )
+        assert captured["game_where_sql"] == expected_stage2, (
+            "Stage 2 game_where_sql must stay byte-identical when the gate is off"
+        )
+
+    async def test_benchmark_selection_gate_off_byte_identical_tier4_bestmove(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """With BENCHMARK_SELECTION_GATE_ENABLED=False, _claim_tier4_bestmove's
+        Stage 1 candidate_exists_sql and Stage 2 game_where_sql are
+        byte-identical to the pre-gate (Phase 176 / Quick 260719-fsz) baseline."""
+        import typing
+
+        from sqlalchemy.ext.asyncio import AsyncSession
+
+        import app.services.eval_queue_service as svc
+
+        monkeypatch.setattr(svc.settings, "BENCHMARK_SELECTION_GATE_ENABLED", False)
+
+        captured: dict[str, str] = {}
+
+        async def _fake_user_pick(session: object, **kwargs: object) -> int:
+            captured["candidate_exists_sql"] = typing.cast(str, kwargs["candidate_exists_sql"])
+            return 42
+
+        async def _fake_game_pick(session: object, **kwargs: object) -> None:
+            captured["game_where_sql"] = typing.cast(str, kwargs["game_where_sql"])
+            return None
+
+        monkeypatch.setattr(svc, "_es_weighted_user_pick", _fake_user_pick)
+        monkeypatch.setattr(svc, "_es_weighted_game_pick", _fake_game_pick)
+
+        class _UnusedSession:
+            pass
+
+        result = await svc._claim_tier4_bestmove(typing.cast(AsyncSession, _UnusedSession()))
+        assert result is None, "Stage 2's fake returns None -> None short-circuit"
+
+        expected_stage1 = """
+                SELECT 1 FROM games g
+                WHERE g.user_id = u.id
+                  AND g.full_pv_completed_at IS NOT NULL
+                  AND g.best_moves_completed_at IS NULL
+        """
+        assert captured["candidate_exists_sql"] == expected_stage1, (
+            "Stage 1 candidate_exists_sql must stay byte-identical when the gate is off"
+        )
+
+        expected_stage2 = (
+            "g.user_id = :picked_user"
+            " AND g.full_pv_completed_at IS NOT NULL"
+            " AND g.best_moves_completed_at IS NULL"
+        )
+        assert captured["game_where_sql"] == expected_stage2, (
+            "Stage 2 game_where_sql must stay byte-identical when the gate is off"
+        )
+
+    async def test_benchmark_selection_gate_on_narrows_tier4_blob(
+        self,
+        tier4_test_users: dict[str, int],
+        queue_session_maker: async_sessionmaker[AsyncSession],
+        monkeypatch: pytest.MonkeyPatch,
+        test_engine: object,
+    ) -> None:
+        """With the gate on and one benchmark_selection row present, the
+        tier-4-blob claim returns only that game — a second otherwise-eligible
+        game (same user, same blob-pending shape) is never returned."""
+        from typing import cast
+
+        from sqlalchemy import Table
+        from sqlalchemy.ext.asyncio import AsyncEngine
+
+        import app.services.eval_queue_service as svc
+        from app.models.benchmark_selection import BenchmarkSelection
+
+        engine = cast(AsyncEngine, test_engine)
+        bench_table = cast(Table, BenchmarkSelection.__table__)
+        async with engine.begin() as conn:
+            await conn.run_sync(
+                lambda sync_conn: BenchmarkSelection.metadata.create_all(
+                    sync_conn, tables=[bench_table], checkfirst=True
+                )
+            )
+
+        user_id = tier4_test_users["user"]
+        now = datetime.now(timezone.utc)
+
+        selected_game = await _insert_game(
+            queue_session_maker,
+            user_id,
+            full_evals_completed_at=now,
+        )
+        unselected_game = await _insert_game(
+            queue_session_maker,
+            user_id,
+            full_evals_completed_at=now,
+        )
+
+        async with queue_session_maker() as session:
+            session.add(
+                BenchmarkSelection(
+                    game_id=selected_game,
+                    user_id=user_id,
+                    tc_tranche="blitz",
+                    lichess_arm=False,
+                )
+            )
+            await session.commit()
+
+        monkeypatch.setattr(svc.settings, "BENCHMARK_SELECTION_GATE_ENABLED", True)
+
+        try:
+            n_draws = 15
+            for i in range(n_draws):
+                async with queue_session_maker() as session:
+                    result = await svc._claim_tier4_blob(session)
+                if result is not None:
+                    assert result[0] == selected_game, (
+                        f"Draw {i}: gate-on tier4-blob claim must only ever "
+                        f"return the benchmark_selection-listed game "
+                        f"{selected_game}; got {result[0]}"
+                    )
+                    assert result[0] != unselected_game, (
+                        f"Draw {i}: unselected game {unselected_game} must "
+                        "never be returned while the gate is on"
+                    )
+        finally:
+            monkeypatch.setattr(svc.settings, "BENCHMARK_SELECTION_GATE_ENABLED", False)
+            async with queue_session_maker() as session:
+                await session.execute(
+                    delete(BenchmarkSelection).where(
+                        BenchmarkSelection.game_id.in_([selected_game, unselected_game])
+                    )
+                )
+                await session.commit()
+            await _delete_games(queue_session_maker, [selected_game, unselected_game])
+
+    async def test_benchmark_selection_gate_on_narrows_tier4_bestmove(
+        self,
+        tier4_test_users: dict[str, int],
+        queue_session_maker: async_sessionmaker[AsyncSession],
+        monkeypatch: pytest.MonkeyPatch,
+        test_engine: object,
+    ) -> None:
+        """With the gate on and one benchmark_selection row present, the
+        tier-4b best-move claim returns only that game — a second
+        otherwise-eligible game (same user, same best-move-pending shape) is
+        never returned."""
+        from typing import cast
+
+        from sqlalchemy import Table
+        from sqlalchemy.ext.asyncio import AsyncEngine
+
+        import app.services.eval_queue_service as svc
+        from app.models.benchmark_selection import BenchmarkSelection
+
+        engine = cast(AsyncEngine, test_engine)
+        bench_table = cast(Table, BenchmarkSelection.__table__)
+        async with engine.begin() as conn:
+            await conn.run_sync(
+                lambda sync_conn: BenchmarkSelection.metadata.create_all(
+                    sync_conn, tables=[bench_table], checkfirst=True
+                )
+            )
+
+        user_id = tier4_test_users["user"]
+        now = datetime.now(timezone.utc)
+
+        selected_game = await _insert_game(
+            queue_session_maker,
+            user_id,
+            full_pv_completed_at=now,
+        )
+        unselected_game = await _insert_game(
+            queue_session_maker,
+            user_id,
+            full_pv_completed_at=now,
+        )
+
+        async with queue_session_maker() as session:
+            session.add(
+                BenchmarkSelection(
+                    game_id=selected_game,
+                    user_id=user_id,
+                    tc_tranche="blitz",
+                    lichess_arm=False,
+                )
+            )
+            await session.commit()
+
+        monkeypatch.setattr(svc.settings, "BENCHMARK_SELECTION_GATE_ENABLED", True)
+
+        try:
+            n_draws = 15
+            for i in range(n_draws):
+                async with queue_session_maker() as session:
+                    result = await svc._claim_tier4_bestmove(session)
+                if result is not None:
+                    assert result[0] == selected_game, (
+                        f"Draw {i}: gate-on tier4b claim must only ever "
+                        f"return the benchmark_selection-listed game "
+                        f"{selected_game}; got {result[0]}"
+                    )
+                    assert result[0] != unselected_game, (
+                        f"Draw {i}: unselected game {unselected_game} must "
+                        "never be returned while the gate is on"
+                    )
+        finally:
+            monkeypatch.setattr(svc.settings, "BENCHMARK_SELECTION_GATE_ENABLED", False)
+            async with queue_session_maker() as session:
+                await session.execute(
+                    delete(BenchmarkSelection).where(
+                        BenchmarkSelection.game_id.in_([selected_game, unselected_game])
+                    )
+                )
+                await session.commit()
+            await _delete_games(queue_session_maker, [selected_game, unselected_game])
+
+    async def test_benchmark_selection_gate_on_empty_table_returns_no_candidate(
+        self,
+        tier4_test_users: dict[str, int],
+        queue_session_maker: async_sessionmaker[AsyncSession],
+        monkeypatch: pytest.MonkeyPatch,
+        test_engine: object,
+    ) -> None:
+        """With the gate on and benchmark_selection created but holding zero
+        rows, all four lottery lanes return no candidate — the worker sees a
+        204 rather than falling through to the ungated global candidate set."""
+        from typing import cast
+
+        from sqlalchemy import Table
+        from sqlalchemy.ext.asyncio import AsyncEngine
+
+        import app.services.eval_queue_service as svc
+        from app.models.benchmark_selection import BenchmarkSelection
+
+        engine = cast(AsyncEngine, test_engine)
+        bench_table = cast(Table, BenchmarkSelection.__table__)
+        async with engine.begin() as conn:
+            await conn.run_sync(
+                lambda sync_conn: BenchmarkSelection.metadata.create_all(
+                    sync_conn, tables=[bench_table], checkfirst=True
+                )
+            )
+
+        # Ensure the table is genuinely empty for this test regardless of any
+        # sibling test's cleanup order.
+        async with queue_session_maker() as session:
+            await session.execute(delete(BenchmarkSelection))
+            await session.commit()
+
+        user_id = tier4_test_users["user"]
+        now = datetime.now(timezone.utc)
+
+        needs_engine_game = await _insert_game(
+            queue_session_maker,
+            user_id,
+            full_evals_completed_at=None,
+            lichess_evals_at=None,
+            played_at=now,
+        )
+        blob_pending_game = await _insert_game(
+            queue_session_maker,
+            user_id,
+            full_evals_completed_at=now,
+        )
+        bestmove_pending_game = await _insert_game(
+            queue_session_maker,
+            user_id,
+            full_pv_completed_at=now,
+        )
+
+        monkeypatch.setattr(svc.settings, "BENCHMARK_SELECTION_GATE_ENABLED", True)
+
+        try:
+            async with queue_session_maker() as session:
+                tier3_result = await svc._claim_tier3_derived(session)
+            assert tier3_result is None, (
+                f"Expected no tier-3 candidate with an empty benchmark_selection "
+                f"table; got {tier3_result}"
+            )
+
+            async with queue_session_maker() as session:
+                tier4_blob_result = await svc._claim_tier4_blob(session)
+            assert tier4_blob_result is None, (
+                f"Expected no tier-4-blob candidate with an empty "
+                f"benchmark_selection table; got {tier4_blob_result}"
+            )
+
+            async with queue_session_maker() as session:
+                tier4_bestmove_result = await svc._claim_tier4_bestmove(session)
+            assert tier4_bestmove_result is None, (
+                f"Expected no tier-4b candidate with an empty benchmark_selection "
+                f"table; got {tier4_bestmove_result}"
+            )
+        finally:
+            monkeypatch.setattr(svc.settings, "BENCHMARK_SELECTION_GATE_ENABLED", False)
+            await _delete_games(
+                queue_session_maker,
+                [needs_engine_game, blob_pending_game, bestmove_pending_game],
+            )
+
+    async def test_benchmark_selection_gate_ignores_tc_tranche(
+        self,
+        tier4_test_users: dict[str, int],
+        queue_session_maker: async_sessionmaker[AsyncSession],
+        monkeypatch: pytest.MonkeyPatch,
+        test_engine: object,
+    ) -> None:
+        """A game selected under tc_tranche='rapid' is claimable even while a
+        different tranche is nominally "in flight" — the gate predicate keys
+        only on bs.game_id = g.id and carries no tc_tranche filter (D-09).
+        This pins the deliberate no-tranche-filter decision so a future
+        reader does not "fix" it into a tranche-scoped predicate and quietly
+        break cross-tranche resumes."""
+        from typing import cast
+
+        from sqlalchemy import Table
+        from sqlalchemy.ext.asyncio import AsyncEngine
+
+        import app.services.eval_queue_service as svc
+        from app.models.benchmark_selection import BenchmarkSelection
+
+        engine = cast(AsyncEngine, test_engine)
+        bench_table = cast(Table, BenchmarkSelection.__table__)
+        async with engine.begin() as conn:
+            await conn.run_sync(
+                lambda sync_conn: BenchmarkSelection.metadata.create_all(
+                    sync_conn, tables=[bench_table], checkfirst=True
+                )
+            )
+
+        user_id = tier4_test_users["user"]
+        now = datetime.now(timezone.utc)
+
+        selected_game = await _insert_game(
+            queue_session_maker,
+            user_id,
+            full_evals_completed_at=now,
+        )
+
+        async with queue_session_maker() as session:
+            session.add(
+                BenchmarkSelection(
+                    game_id=selected_game,
+                    user_id=user_id,
+                    tc_tranche="rapid",
+                    lichess_arm=False,
+                )
+            )
+            await session.commit()
+
+        monkeypatch.setattr(svc.settings, "BENCHMARK_SELECTION_GATE_ENABLED", True)
+
+        try:
+            n_draws = 15
+            claimed = False
+            for _ in range(n_draws):
+                async with queue_session_maker() as session:
+                    result = await svc._claim_tier4_blob(session)
+                if result is not None:
+                    assert result[0] == selected_game, (
+                        f"Only game present in benchmark_selection is "
+                        f"{selected_game}; got {result[0]}"
+                    )
+                    claimed = True
+            assert claimed, (
+                "A game selected under tc_tranche='rapid' must be claimable "
+                "regardless of which tranche is nominally running -- the gate "
+                "carries no tc_tranche filter (D-09)"
+            )
+        finally:
+            monkeypatch.setattr(svc.settings, "BENCHMARK_SELECTION_GATE_ENABLED", False)
+            async with queue_session_maker() as session:
+                await session.execute(
+                    delete(BenchmarkSelection).where(BenchmarkSelection.game_id == selected_game)
+                )
+                await session.commit()
+            await _delete_games(queue_session_maker, [selected_game])
