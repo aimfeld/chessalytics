@@ -4,16 +4,16 @@ milestone: v2.13
 current_phase: 212
 current_phase_name: Benchmark Full-Game Analysis Lane
 status: executing
-stopped_at: Phase 212 wave 5 — 212-06 halted at checkpoint; gap plans 212-07..10 created
-last_updated: "2026-08-22T22:47:35.228Z"
-last_activity: 2026-08-22
-last_activity_desc: Phase 212 execution resumed (wave continue)
-state_head: 8bdbfee04923127f5988455e2616d949901e9b08
+stopped_at: "Phase 212 wave 9 — code shipped to main; 212-10 Task 2 (classical tranche) in flight, Task 3 blocked until it ends"
+last_updated: "2026-08-23T09:05:00.000Z"
+last_activity: 2026-08-23
+last_activity_desc: "Phase 212 code squash-merged to main; classical tranche running at 0.2%"
+state_head: ab235e724c410bd793a56af77c9fc08da5def112
 progress:
   total_phases: 1
   completed_phases: 0
   total_plans: 10
-  completed_plans: 8
+  completed_plans: 9
 milestone_name: Ways In & Honest Answers
 ---
 
@@ -21,12 +21,51 @@ milestone_name: Ways In & Honest Answers
 
 ## Current Position
 
-Phase: 212 (Benchmark Full-Game Analysis Lane) — EXECUTING
-Plan: 2 of 6
-rounds — round 2 shipped the D-01 amendment: soft puzzles serve [deep best, second-best su])
-Status: Ready to execute
-backend 4348 passed / 19 skipped, frontend 3497 passed, ruff/ty/tsc/lint/knip clean;
-WINDOWS.md #6 fixed — ORACLE-01 unskipped)
+Phase: 212 (Benchmark Full-Game Analysis Lane) — **CODE SHIPPED, TRANCHE IN FLIGHT**
+Plans: 9 of 10 complete
+Status: not complete — BENCHLANE-06 needs a run, and the run is ~3.4 days long
+
+All phase-212 code is squash-merged to `main` (`4cf72842d`, 26 files / ~5,300 insertions)
+and the phase branch `gsd/phase-212-benchmark-full-game-analysis-lane` is deleted after
+confirming `main` contained everything it held. Follow-on fixes landed on `main` after
+the merge (worker target logging, `EVAL_FALLBACK_OPERATOR_TOKEN` /
+`EVAL_BENCHMARK_OPERATOR_TOKEN`, transient-failure diagnostics,
+`bin/run_benchmark_backend.sh`). Full pre-merge gate was green: backend 4437 passed /
+19 skipped, frontend 3563 passed, ruff/ty/eslint clean.
+
+**What is left is not code.** 212-10 Task 1 was authorized 2026-08-23 (`start`, second
+presentation) after the blocker from the first presentation was fixed; Task 2 — the
+classical tranche itself — is running now at **0.2%** (46 / 27,020 lichess-arm,
+62 / 23,717 engine-arm). Task 3 (record, vacuum, three invariant proofs) cannot run until
+the drain completes or is stopped at the classical TC boundary. `212-VERIFICATION.md`
+correctly still reads `gaps_found`.
+
+The blocker that forced the first checkpoint to defer: 212-08's finding that the tier-3
+branch (b) lane stamped a game complete after ONE analyzed ply. Root-caused and fixed in
+`d7b40e30a` — two SEED-076-era read-path heuristics misread homogenization's forced-False
+`is_lichess_eval_game` as proof that import-populated evals were prior-round engine work.
+Proven on a real drain: nine lichess-arm games at **98.3%** mean `best_move` coverage
+against 1 cell per game before. Production was never affected
+(`BENCHMARK_HOMOGENIZE_EVAL_SOURCE` defaults False and is set in no dotfile). Debug
+session archived at `.planning/debug/resolved/tier3-branch-b-one-ply-stamp.md`.
+
+**Two things a later reader must not get wrong:**
+
+1. **The leak abort criterion changed.** The frozen "corpus-wide `evals_completed_at`
+   must equal 1,846,458" predicate is RETIRED — it predates 212-07's gating of the
+   entry-ply lane and now fires on correct behavior (it tripped +9,342 during the smoke
+   run with every one of those games inside `benchmark_selection`). Monitor
+   **`stamped_but_unselected`** instead, baseline **1,805,063**.
+2. **212-06 must not be run.** Its Tasks 2/3 are fully superseded by 212-08/09/10; it
+   should be retired with a note at phase close.
+
+Also inert until acted on: the `shm_size: "256m"` fix in
+`docker-compose.benchmark.yml` needs the benchmark DB container recreated (a bare
+`restart` will not apply it) — do it at a boundary, not mid-tranche. Until then prefix
+analytic queries with `SET max_parallel_workers_per_gather = 0`.
+
+Next: when the tranche ends, run 212-10 Task 3, write `212-10-SUMMARY.md`, retire 212-06,
+then close the phase.
 
 Previous phase: 209 (traffic-surge-quick-wins) — COMPLETE 2026-08-15. The last open plan
 (209-04, the Cloudflare CDN cutover) was operator work; verified live: flawchess.com is on
