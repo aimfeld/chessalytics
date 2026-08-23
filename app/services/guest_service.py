@@ -74,9 +74,10 @@ async def promote_guest_with_password(
 ) -> tuple[User, str]:
     """Promote a guest account to a full email/password account in-place.
 
-    Updates the user row: sets is_guest=False, is_verified=True, is_promoted=True,
-    stores the new email and an argon2id-hashed password. Issues a standard 7-day
-    JWT via auth_backend (not the guest 30-day strategy).
+    Updates the user row: sets is_guest=False, is_verified=True,
+    promoted_at=now(), stores the new email and an argon2id-hashed password.
+    Issues a standard 7-day JWT via auth_backend (not the guest 30-day
+    strategy).
 
     Raises:
         ValueError: if the user is not a guest
@@ -107,7 +108,7 @@ async def promote_guest_with_password(
             hashed_password=hashed_password,
             is_guest=False,
             is_verified=True,
-            is_promoted=True,
+            promoted_at=func.now(),
         )
     )
     await session.commit()
@@ -116,6 +117,14 @@ async def promote_guest_with_password(
     # session.get returns User | None, but we just committed the update so the user exists
     updated = await session.get(User, user.id)
     assert updated is not None, f"User {user.id} not found after promotion commit"
+    # BUG FIX: promoted_at=func.now() above is a SQL expression, not a Python
+    # literal, so SQLAlchemy's session-sync ("evaluate") strategy cannot mirror
+    # it onto the in-session identity-mapped object — it marks promoted_at
+    # expired instead. A bare attribute read would then trigger a synchronous
+    # lazy load and raise MissingGreenlet under AsyncSession. Refreshing here
+    # makes every field on the returned object, including promoted_at, safe
+    # for callers (and tests) to read directly.
+    await session.refresh(updated)
 
     # Issue a standard 7-day JWT (not the guest 30-day strategy)
     strategy = auth_backend.get_strategy()
@@ -135,10 +144,11 @@ async def promote_guest_with_google(
 ) -> tuple[User, str]:
     """Promote a guest account to a Google-linked full account in-place.
 
-    Updates the user row: sets is_guest=False, is_verified=True, is_promoted=True,
-    stores the Google email, and clears hashed_password (Google users authenticate
-    via OAuth only). Inserts an OAuthAccount row linking the Google account to this
-    user's ID. Issues a standard 7-day JWT via auth_backend.
+    Updates the user row: sets is_guest=False, is_verified=True,
+    promoted_at=now(), stores the Google email, and clears hashed_password
+    (Google users authenticate via OAuth only). Inserts an OAuthAccount row
+    linking the Google account to this user's ID. Issues a standard 7-day
+    JWT via auth_backend.
 
     Raises:
         ValueError: if the user is not a guest
@@ -163,7 +173,7 @@ async def promote_guest_with_google(
             hashed_password="",  # Google users have no password
             is_guest=False,
             is_verified=True,
-            is_promoted=True,
+            promoted_at=func.now(),
         )
     )
 
@@ -190,6 +200,14 @@ async def promote_guest_with_google(
     # Re-fetch the updated user so callers see current field values
     updated = await session.get(User, user.id)
     assert updated is not None, f"User {user.id} not found after Google promotion commit"
+    # BUG FIX: promoted_at=func.now() above is a SQL expression, not a Python
+    # literal, so SQLAlchemy's session-sync ("evaluate") strategy cannot mirror
+    # it onto the in-session identity-mapped object — it marks promoted_at
+    # expired instead. A bare attribute read would then trigger a synchronous
+    # lazy load and raise MissingGreenlet under AsyncSession. Refreshing here
+    # makes every field on the returned object, including promoted_at, safe
+    # for callers (and tests) to read directly.
+    await session.refresh(updated)
 
     # Issue a standard 7-day JWT (not the guest 30-day strategy)
     strategy = auth_backend.get_strategy()

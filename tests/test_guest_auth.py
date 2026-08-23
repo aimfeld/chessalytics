@@ -104,8 +104,8 @@ class TestGuestService:
         assert len(token) > 0
 
     @pytest.mark.asyncio
-    async def test_create_guest_user_is_promoted_defaults_false(self, db_session):
-        """A freshly created guest has is_promoted False, read fresh from the database.
+    async def test_create_guest_user_promoted_at_defaults_null(self, db_session):
+        """A freshly created guest has promoted_at NULL, read fresh from the database.
 
         This default is the floor the whole conversion metric rests on — a guest
         row must never start out looking already-converted.
@@ -116,10 +116,10 @@ class TestGuestService:
         from app.services.guest_service import create_guest_user
 
         user, _token = await create_guest_user(db_session)
-        assert user.is_promoted is False
+        assert user.promoted_at is None
 
-        result = await db_session.execute(select(User.is_promoted).where(User.id == user.id))
-        assert result.scalar_one() is False
+        result = await db_session.execute(select(User.promoted_at).where(User.id == user.id))
+        assert result.scalar_one() is None
 
     @pytest.mark.asyncio
     async def test_refresh_guest_token_returns_token(self, db_session):
@@ -326,13 +326,18 @@ class TestPromoteGuestWithPassword:
         assert updated_user.is_verified is True
 
     @pytest.mark.asyncio
-    async def test_promotion_sets_is_promoted_in_database(self, db_session):
-        """is_promoted=True is persisted for the email/password path too.
+    async def test_promotion_sets_promoted_at_in_database(self, db_session):
+        """promoted_at is persisted as a sane recent timestamp for the
+        email/password path too.
 
         Previously this promotion was indistinguishable from a direct signup;
         asserted via a fresh Core select, not the returned object, since the
-        latter can be served from the identity map instead of proving the write.
+        latter can be served from the identity map instead of proving the
+        write. Checked against a tolerance window (not in the future, not
+        stale) rather than merely non-NULL.
         """
+        from datetime import datetime, timedelta, timezone
+
         from sqlalchemy import select
 
         from app.models.user import User
@@ -340,10 +345,14 @@ class TestPromoteGuestWithPassword:
 
         user, _token = await create_guest_user(db_session)
         new_email = unique_email("promoted_dbread")
+        before = datetime.now(timezone.utc)
         await promote_guest_with_password(db_session, user, new_email, "SecurePass1!")
+        after = datetime.now(timezone.utc)
 
-        result = await db_session.execute(select(User.is_promoted).where(User.id == user.id))
-        assert result.scalar_one() is True
+        result = await db_session.execute(select(User.promoted_at).where(User.id == user.id))
+        promoted_at = result.scalar_one()
+        assert promoted_at is not None
+        assert before - timedelta(seconds=5) <= promoted_at <= after + timedelta(seconds=5)
 
     @pytest.mark.asyncio
     async def test_promotion_hashes_password(self, db_session):
