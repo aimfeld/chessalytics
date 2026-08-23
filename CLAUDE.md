@@ -79,7 +79,7 @@ keeps serial execution (D-02) — `-n auto` is a local-only convenience.
 Run all of these and resolve every output before integrating work into `main`. This is the safety net that replaces pre-merge CI (see Version Control).
 
 ```bash
-uv run ruff format app/ tests/         # apply formatting (not just --check)
+uv run ruff format app/ tests/ scripts/         # apply formatting (not just --check)
 uv run ruff check app/ tests/ --fix    # apply autofixable lint
 uv run ty check app/ tests/ scripts/            # type check, zero errors required
 uv run pytest -n auto -x               # full backend suite (parallel), stop on first failure

@@ -67,7 +67,7 @@ If `npm audit fix` proposes a `--force` resolution that introduces a breaking ma
 Symptom: CI step "ruff format --check" fails with "Would reformat: ...".
 
 ```bash
-uv run ruff format app/ tests/
+uv run ruff format app/ tests/ scripts/
 git add -u
 git commit -m "style: apply ruff format"
 git push origin main

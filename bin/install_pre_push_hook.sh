@@ -36,7 +36,7 @@ if [[ -z "${RUN_GATE:-}" ]]; then
 fi
 
 echo "→ pre-push: ruff format --check"
-uv run ruff format --check app/ tests/
+uv run ruff format --check app/ tests/ scripts/
 
 echo "→ pre-push: ruff check"
 uv run ruff check app/ tests/

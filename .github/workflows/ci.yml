@@ -83,7 +83,7 @@ jobs:
         run: uv run ruff check .
 
       - name: Format check (ruff)
-        run: uv run ruff format --check app/ tests/
+        run: uv run ruff format --check app/ tests/ scripts/
 
       - name: Type check (ty)
         run: uv run ty check app/ tests/ scripts/
