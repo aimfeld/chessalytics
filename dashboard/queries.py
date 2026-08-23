@@ -15,12 +15,21 @@ from sqlalchemy.ext.asyncio import AsyncConnection
 
 from dashboard.config import FUNNEL_GAMES_THRESHOLD, MIN_GAMES_PER_ELO
 
-# A guest promoted via Google has its password cleared (see
-# app/services/guest_service.py:promote_guest_with_google), which leaves a
-# permanent mark on the row. Email/password promotion writes a normal argon2
-# hash and is indistinguishable from a direct signup, so this predicate is a
-# floor on guest conversion, never the full count.
-_PROMOTED_GUEST = "NOT u.is_guest AND u.hashed_password = ''"
+# promoted_at is stamped by app/services/guest_service.py on both promotion
+# paths (Google and email/password) in the same UPDATE that flips is_guest;
+# NULL means never promoted. Rows created before the column shipped were
+# backfilled from the old Google-only detection rule (empty password hash)
+# with promoted_at set to the row's created_at (signup date, not the true
+# historical promotion date — that is unrecoverable), so the early part of
+# the series is a floor rather than the true rate, and a promotion-date time
+# series is only meaningful from config.PROMOTED_AT_SINCE onward.
+_PROMOTED_GUEST = "u.promoted_at IS NOT NULL"
+
+# Cohort for the conversion queries below: rows that are still guest sessions,
+# plus rows that were guest sessions and have since been promoted in place.
+# Must use promoted_at (not the old password-hash test) or email/password
+# converts fall out of the denominator and inflate the rate.
+_GUEST_COHORT = "(u.is_guest OR u.promoted_at IS NOT NULL)"
 
 
 class Payload(TypedDict):
@@ -28,6 +37,7 @@ class Payload(TypedDict):
 
     generated_at: str
     launch_date: str
+    promoted_since: str
     poll_interval_seconds: int
     days: list[str]
     last_complete_index: int
@@ -361,7 +371,7 @@ async def fetch_stickiness(conn: AsyncConnection, first_day: datetime.date) -> l
 
 
 async def fetch_conversion(conn: AsyncConnection, first_day: datetime.date) -> dict[str, Any]:
-    """Guest -> registered conversion, measurable on the Google path only."""
+    """Guest -> registered conversion, from the stamped promoted_at column."""
     row = (
         await _rows(
             conn,
@@ -369,7 +379,7 @@ async def fetch_conversion(conn: AsyncConnection, first_day: datetime.date) -> d
             WITH u AS (
               SELECT id, ({_PROMOTED_GUEST}) AS converted
               FROM users u
-              WHERE created_at >= CAST(:first AS date) AND (is_guest OR hashed_password = '')),
+              WHERE created_at >= CAST(:first AS date) AND {_GUEST_COHORT}),
             a AS (SELECT user_id, count(DISTINCT activity_date) AS days FROM user_activity GROUP BY 1)
             SELECT count(*) AS sessions,
                    count(*) FILTER (WHERE u.converted) AS converted,
@@ -399,7 +409,7 @@ async def fetch_conversion_compare(
             WITH u AS (
               SELECT id, ({_PROMOTED_GUEST}) AS converted
               FROM users u
-              WHERE created_at >= CAST(:first AS date) AND (is_guest OR hashed_password = '')),
+              WHERE created_at >= CAST(:first AS date) AND {_GUEST_COHORT}),
             j AS (SELECT user_id, coalesce(sum(games_imported), 0) AS total FROM import_jobs GROUP BY 1),
             b AS (SELECT g.user_id, count(*) AS n FROM bot_game_settings s
                   JOIN games g ON g.id = s.game_id GROUP BY 1),

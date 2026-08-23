@@ -93,6 +93,44 @@ class TestPromoteGuestWithGoogle:
         assert updated_user.email == account_email
         assert updated_user.is_verified is True
         assert updated_user.hashed_password == ""
+        assert updated_user.promoted_at is not None
+
+    @pytest.mark.asyncio
+    async def test_promotion_sets_promoted_at_in_database(self, db_session):
+        """promoted_at is persisted as a sane recent timestamp, not just present
+        on the returned ORM object.
+
+        Reads back via a Core select rather than the returned user, since the
+        latter can be served from the identity map instead of proving the write.
+        Also checked against a tolerance window (not in the future, not stale)
+        rather than merely non-NULL, since a wrong-but-non-NULL value would
+        otherwise pass silently.
+        """
+        from datetime import datetime, timedelta, timezone
+
+        from sqlalchemy import select
+
+        from app.models.user import User
+        from app.services.guest_service import create_guest_user, promote_guest_with_google
+
+        user, _token = await create_guest_user(db_session)
+        account_email = unique_email("gpromo_dbread")
+        before = datetime.now(timezone.utc)
+        await promote_guest_with_google(
+            db_session,
+            user,
+            account_id="google_sub_dbread",
+            account_email=account_email,
+            access_token="fake_access",
+            expires_at=None,
+            refresh_token=None,
+        )
+        after = datetime.now(timezone.utc)
+
+        result = await db_session.execute(select(User.promoted_at).where(User.id == user.id))
+        promoted_at = result.scalar_one()
+        assert promoted_at is not None
+        assert before - timedelta(seconds=5) <= promoted_at <= after + timedelta(seconds=5)
 
     @pytest.mark.asyncio
     async def test_promotion_creates_oauth_account(self, db_session):

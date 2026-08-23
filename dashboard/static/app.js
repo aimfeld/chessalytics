@@ -98,6 +98,7 @@ function chrome(){
   $("#cav-partial").textContent=long(last);
   $("#cav-launch").textContent=long(D.launch_date);
   $("#cav-funnel").textContent=long(DAYS[0]);
+  $("#cav-promoted").textContent=long(D.promoted_since);
   const li=DAYS.indexOf(D.launch_date), su=SIGNUPS.find(r=>r[0]===D.launch_date);
   const im=IMPORTS.find(r=>r[0]===D.launch_date);
   $("#cav-launch-detail").textContent = su

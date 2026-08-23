@@ -17,6 +17,11 @@ uv run python -m dashboard.server      # http://127.0.0.1:8899
 Options: `--port`, `--host`, `--cache-seconds`. Stop the tunnel afterwards with
 `bin/prod_db_tunnel.sh stop`.
 
+There is no autoreload: the process serves the payload shape it started with,
+while `static/` is read from disk per request. After changing anything under
+`dashboard/`, restart the server — otherwise new page JS runs against an old
+payload and fields added in that change read as `undefined`.
+
 The page polls `/api/stats` every 60 seconds and shows the last refresh time in
 the masthead; "Refresh now" forces a re-query. If the tunnel is down the page
 keeps the last good snapshot, marks itself stale, and says what to do.
@@ -51,7 +56,15 @@ keeps the last good snapshot, marks itself stale, and says what to do.
 - The current day is always partial.
 - A guest promoted to a registered account keeps its original row and
   `created_at` (`app/services/guest_service.py`), so it counts as registered in
-  the funnel. Only Google promotions are countable — that path clears the
-  password field; email/password promotion is indistinguishable from a direct
-  signup, which makes the conversion rate a floor.
+  the funnel. Both promotion paths (Google and email/password) stamp
+  `users.promoted_at` on that same row (a nullable timestamp, not a boolean,
+  so it also supports a promotion-date time series and time-to-conversion),
+  and the conversion metric reads `promoted_at IS NOT NULL` directly. The
+  migration backfill recovered history only for Google promotions (the
+  pre-flag detection rule: not a guest, empty password hash) — and even for
+  those, `promoted_at` was set to the row's `created_at` (signup date), not
+  the true historical promotion date, which is unrecoverable. So the series
+  before the flag shipped (`PROMOTED_AT_SINCE` in `config.py`) remains a
+  floor, not the true rate, and any promotion-timing metric is only
+  meaningful for rows promoted on or after that date.
 - `LAUNCH_DATE` in `config.py` is a real-world event, not derived from the data.

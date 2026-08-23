@@ -31,6 +31,7 @@ from dashboard import queries
 from dashboard.config import (
     CACHE_TTL_SECONDS,
     HOST,
+    PROMOTED_AT_SINCE,
     LAUNCH_DATE,
     POLL_INTERVAL_SECONDS,
     PORT,
@@ -74,6 +75,7 @@ async def build_payload(engine: AsyncEngine) -> queries.Payload:
         return queries.Payload(
             generated_at=datetime.datetime.now(datetime.timezone.utc).isoformat(),
             launch_date=LAUNCH_DATE,
+            promoted_since=PROMOTED_AT_SINCE,
             poll_interval_seconds=POLL_INTERVAL_SECONDS,
             days=days,
             last_complete_index=last_complete,
