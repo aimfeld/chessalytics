@@ -31,7 +31,7 @@ uv add '<package-name>>=<safe-version>'
 
 # Verify nothing broke
 uv run pytest -x
-uv run ty check app/ tests/
+uv run ty check app/ tests/ scripts/
 
 git add pyproject.toml uv.lock
 git commit -m "fix(deps): bump <package> to <version> for CVE-XXXX-YYYY"
@@ -94,7 +94,7 @@ git push origin main
 ## CI: ty type errors
 
 ```bash
-uv run ty check app/ tests/
+uv run ty check app/ tests/ scripts/
 ```
 
 Address each error. Common patterns from CLAUDE.md:
@@ -252,7 +252,7 @@ git push origin main
 If the hook blocks the push because of a ty error, fix the error (don't `--no-verify`). The hook exists to catch the most common preventable CI failure.
 
 ```bash
-uv run ty check app/ tests/    # see the exact error
+uv run ty check app/ tests/ scripts/    # see the exact error
 # fix
 git add -u
 git commit -m "fix(types): <description>"

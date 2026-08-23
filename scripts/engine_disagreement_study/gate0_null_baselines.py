@@ -321,6 +321,10 @@ async def main() -> None:
                 fh.write(json.dumps(row) + "\n")
         _log(f"{len(manifest)} manifest rows -> {manifest_path}")
 
+    by_boundary: dict[str, dict[str, Any]] = {
+        "middlegame": evaluate_boundary(manifest, "middlegame"),
+        "endgame": evaluate_boundary(manifest, "endgame"),
+    }
     summary = {
         "generated_at": time.strftime("%Y-%m-%dT%H:%M:%S%z"),
         "config": {
@@ -330,15 +334,14 @@ async def main() -> None:
             "fit": "per (boundary, tc) weighted IRLS, draws as two half-weight rows",
             "split": "md5(game_id) parity; metrics are eval-half only",
         },
-        "middlegame": evaluate_boundary(manifest, "middlegame"),
-        "endgame": evaluate_boundary(manifest, "endgame"),
+        **by_boundary,
     }
     out_path = Path(args.out)
     out_path.write_text(json.dumps(summary, indent=2) + "\n")
 
     print("\n=== E-14 null baselines (eval half, headline basis) ===")
     for boundary in ("middlegame", "endgame"):
-        s = summary[boundary]
+        s = by_boundary[boundary]
         h = s["headline"]
         print(
             f"{boundary:<12} n={s['n_rows']:<6} "

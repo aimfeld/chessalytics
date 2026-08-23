@@ -90,7 +90,7 @@ extra-paths = [
     # analysis/pyproject.toml). The ty LSP in PyCharm runs one server rooted here
     # with the root .venv, so marimo/polars/plotly/psycopg in analysis/** read as
     # unresolved-import without this. Only affects the IDE and a whole-repo
-    # `ty check .`; the CI gate is `ty check app/ tests/`.
+    # `ty check .`; the CI gate is `ty check app/ tests/ scripts/`.
     "analysis/.venv/lib/python3.13/site-packages",
 ]
 

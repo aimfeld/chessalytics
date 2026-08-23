@@ -42,6 +42,7 @@ import re
 import tempfile
 from dataclasses import dataclass
 from pathlib import Path
+from typing import TypedDict
 
 _REPO_ROOT = Path(__file__).resolve().parent.parent
 
@@ -282,7 +283,19 @@ def _attribute_and_aggregate(
     return cells, total_orphan_segments, total_orphan_plies
 
 
-def parse_run_log(log_path: Path, ledger_path: Path) -> dict[str, object]:
+class RunLogSummary(TypedDict):
+    """Shape of a parsed run.log. Was `dict[str, object]`, which made every
+    `result["cells"][...]` read a type error (object is not subscriptable) and
+    forced an ignore comment at the one call site that indexed it."""
+
+    cells: dict[tuple[int, float], dict[str, float | int]]
+    skipped_line_count: int
+    total_lines_matched: int
+    orphan_segment_count: int
+    orphan_ply_count: int
+
+
+def parse_run_log(log_path: Path, ledger_path: Path) -> RunLogSummary:
     """Parses one harness run.log against its sibling raw ledger, returning
     per-(bot_elo, bot_blend) timing aggregates plus the skipped-line count
     and any crash-orphaned segments discarded along the way. Cell keys in
@@ -315,7 +328,7 @@ def find_ledger_path(out_dir: Path) -> Path:
     return candidates[0]
 
 
-def parse_run_log_dir(out_dir: Path) -> dict[str, object]:
+def parse_run_log_dir(out_dir: Path) -> RunLogSummary:
     """Convenience wrapper: run.log + its auto-discovered sibling ledger,
     both read from the same sweep out-dir."""
     return parse_run_log(out_dir / "run.log", find_ledger_path(out_dir))
@@ -488,10 +501,7 @@ def main(argv: list[str] | None = None) -> None:
 
     result = parse_run_log_dir(Path(args.out_dir))
     printable = {
-        "cells": {
-            f"{elo},{blend}": agg
-            for (elo, blend), agg in result["cells"].items()  # type: ignore[union-attr]
-        },
+        "cells": {f"{elo},{blend}": agg for (elo, blend), agg in result["cells"].items()},
         "skipped_line_count": result["skipped_line_count"],
         "total_lines_matched": result["total_lines_matched"],
         "orphan_segment_count": result["orphan_segment_count"],

@@ -86,7 +86,7 @@ jobs:
         run: uv run ruff format --check app/ tests/
 
       - name: Type check (ty)
-        run: uv run ty check app/ tests/
+        run: uv run ty check app/ tests/ scripts/
 
       - name: Install Stockfish (for engine wrapper tests)
         # Mirrors Dockerfile: download pinned sf_18 binary from GitHub releases instead of

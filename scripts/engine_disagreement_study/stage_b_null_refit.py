@@ -24,6 +24,7 @@ import json
 import sys
 import time
 from pathlib import Path
+from typing import Any
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent.parent))
 sys.path.insert(0, str(Path(__file__).resolve().parent))
@@ -44,6 +45,10 @@ def main() -> None:
     manifest = [json.loads(line) for line in manifest_path.read_text().splitlines() if line]
     print(f"[null-refit] {len(manifest)} manifest rows from {manifest_path}", flush=True)
 
+    by_boundary: dict[str, dict[str, Any]] = {
+        "middlegame": evaluate_boundary(manifest, "middlegame"),
+        "endgame": evaluate_boundary(manifest, "endgame"),
+    }
     summary = {
         "generated_at": time.strftime("%Y-%m-%dT%H:%M:%S%z"),
         "config": {
@@ -52,15 +57,14 @@ def main() -> None:
             "fit": "per (boundary, tc) weighted IRLS, draws as two half-weight rows",
             "split": "md5(game_id) parity; metrics are eval-half only",
         },
-        "middlegame": evaluate_boundary(manifest, "middlegame"),
-        "endgame": evaluate_boundary(manifest, "endgame"),
+        **by_boundary,
     }
     out_path = Path(args.out)
     out_path.write_text(json.dumps(summary, indent=2) + "\n")
 
     print("\n=== E-14 null floors at Stage B scale (eval half, headline basis) ===")
     for boundary in ("middlegame", "endgame"):
-        s = summary[boundary]
+        s = by_boundary[boundary]
         h = s["headline"]
         print(
             f"{boundary:<12} n={s['n_rows']:<7} "

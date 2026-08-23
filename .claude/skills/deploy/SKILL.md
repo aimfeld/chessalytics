@@ -54,7 +54,7 @@ Then run the pre-PR gates locally so CI doesn't have to bounce them back:
 ```bash
 uv run ruff format app/ tests/
 uv run ruff check app/ tests/ --fix
-uv run ty check app/ tests/
+uv run ty check app/ tests/ scripts/
 npm --prefix frontend run lint
 ```
 

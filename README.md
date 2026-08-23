@@ -268,7 +268,7 @@ npx vitest run --coverage                           # Terminal + HTML at coverag
 ```bash
 uv run ruff check .           # Backend lint
 uv run ruff format .          # Backend format
-uv run ty check app/ tests/   # Backend type check (zero errors required)
+uv run ty check app/ tests/ scripts/   # Backend type check (zero errors required)
 cd frontend && npm run lint   # Frontend lint
 ```
 
@@ -299,7 +299,7 @@ Release notes are published per milestone on the [GitHub Releases](https://githu
 Contributions are welcome. Please open an issue to discuss a feature or bug before submitting a pull request — this keeps effort aligned and avoids duplicate work.
 
 Code style:
-- Python: [Ruff](https://docs.astral.sh/ruff/) for linting and formatting, [ty](https://github.com/astral-sh/ty) for static type checking — `uv run ty check app/ tests/` must pass with zero errors
+- Python: [Ruff](https://docs.astral.sh/ruff/) for linting and formatting, [ty](https://github.com/astral-sh/ty) for static type checking — `uv run ty check app/ tests/ scripts/` must pass with zero errors
 - TypeScript: ESLint (`npm run lint` in the `frontend/` directory)
 
 ## License

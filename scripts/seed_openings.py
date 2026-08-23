@@ -25,8 +25,7 @@ from pathlib import Path
 import chess
 import chess.pgn
 from sqlalchemy import text
-from sqlalchemy.ext.asyncio import AsyncSession, create_async_engine
-from sqlalchemy.orm import sessionmaker
+from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 
 from app.core.config import settings
 from app.services.zobrist import compute_hashes
@@ -61,7 +60,7 @@ def pgn_to_fen_ply_hashes(pgn_str: str) -> tuple[str, int, int, int, int]:
 async def seed_openings() -> int:
     """Read TSV and insert rows into openings table. Returns count of inserted rows."""
     engine = create_async_engine(settings.DATABASE_URL)
-    async_session = sessionmaker(engine, class_=AsyncSession, expire_on_commit=False)
+    async_session = async_sessionmaker(engine, expire_on_commit=False)
 
     inserted = 0
     skipped = 0
@@ -102,7 +101,7 @@ async def seed_openings() -> int:
                         "black_hash": black_hash,
                     },
                 )
-                if result.rowcount > 0:
+                if result.rowcount > 0:  # ty: ignore[unresolved-attribute]  # SQLAlchemy DML result carries rowcount
                     # Can't distinguish insert vs update with ON CONFLICT DO UPDATE
                     inserted += 1
                 else:
