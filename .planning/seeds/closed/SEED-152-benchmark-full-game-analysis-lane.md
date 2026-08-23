@@ -29,7 +29,7 @@ Two consequences for the data-story series:
    find a move only 8% of players would find") need Maia probabilities against our own
    best-move and second-best data. Lichess evals cannot answer them at any sample size.
 
-2. **Robustness checks have to leave the population.** `stories/two-pawns-up/two-pawns-up-report-latest.md`
+2. **Robustness checks have to leave the population.** `../../../stories/two-pawns-up/two-pawns-up-report-latest.md`
    §6 could only test analysis-request selection bias by borrowing ~98 prod accounts
    clustered at 1400–2200, and its own Limits paragraph concedes "the sign of the side tilt
    need not transfer." A benchmark DB with its own evals on never-analyzed games would let
@@ -43,7 +43,7 @@ Decided in the planting session. These are settled, not options:
 
 - **Population:** equal-footing games only, `abs(white_rating - black_rating) <= 100`.
   Consistent with the benchmark zone-calibration framing already in force (see
-  `.planning/notes/benchmark-equal-footing-framing.md`).
+  `../../notes/benchmark-equal-footing-framing.md`).
 - **Cap:** 100 games per user per time-control bucket.
 - **Selection within a user:** **random**, not `ORDER BY played_at DESC`. A recency-biased
   cap concentrates each user's sample at the end of their history, where their rating has
@@ -136,7 +136,7 @@ them prod-side:
    (e.g. `BENCHMARK_SELECTION_GATE_ENABLED`), off everywhere except the local
    benchmark backend. Without it, tier-3's global lottery would see all 2.1M
    eq-footing games (plus everything else) as pending.
-3. **Dual-URL worker fallback.** Patch `scripts/remote_eval_worker.py` to accept an
+3. **Dual-URL worker fallback.** Patch `../../../scripts/remote_eval_worker.py` to accept an
    ordered URL list (`--base-url https://flawchess.com --fallback-url
    http://<lan-ip>:8001`): each claim cycle polls prod first and only claims from the
    benchmark backend when prod returns no work. This is strict per-claim prod
@@ -201,10 +201,10 @@ container on the prod host serving a sliced sibling DB with the same dual-URL wo
 
 ## Related
 
-- `.planning/notes/benchmark-equal-footing-framing.md` — where the ±100 rule comes from
-- `stories/two-pawns-up/two-pawns-up-report-latest.md` §6 — the selection-bias check this
+- `../../notes/benchmark-equal-footing-framing.md` — where the ±100 rule comes from
+- `../../../stories/two-pawns-up/two-pawns-up-report-latest.md` §6 — the selection-bias check this
   would let run in-population
-- `.planning/notes/distributed-user-compute-rejected.md` — why the answer is server-side
+- `../../notes/distributed-user-compute-rejected.md` — why the answer is server-side
   fleet capacity, not crowd compute
 - [[project_worker_fleet_topology]], [[project_eval_completion_columns]],
   [[project_bestmove_backfill_two_populations]], [[project_atomic_eval_submit_incremental_lease]]
