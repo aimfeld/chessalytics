@@ -28,6 +28,7 @@ def _():
 
     import numpy as np
     import plotly.graph_objects as go
+    from plotly.subplots import make_subplots
     import polars as pl
 
     REPO_ROOT = Path(__file__).resolve().parents[3]
@@ -54,6 +55,7 @@ def _():
         eval_mate_to_expected_score,
         go,
         hashlib,
+        make_subplots,
         np,
         pl,
     )
@@ -134,10 +136,18 @@ def _(LICHESS_K, hashlib, pl, raw):
     )
 
     ARMS = {"SF": "sf_score_white", "Maia": "maia_score_white", "FC": "fc_score_white"}
+    # The app's engine identity colors (frontend/src/lib/theme.ts: STOCKFISH_ACCENT,
+    # MAIA_ACCENT, FLAWCHESS_ENGINE_ACCENT), converted oklch -> hex because plotly
+    # has no oklch parser. Defined once so every figure below reads the same.
+    ARM_COLORS = {
+        "SF": "#2B7AD6",  # oklch(0.58 0.16 255) — blue
+        "Maia": "#7D5BE6",  # oklch(0.58 0.20 290) — violet
+        "FC": "#E6AC3D",  # oklch(0.78 0.14 80) — gold/amber
+    }
     rows.select("boundary", "flagged", "is_eval_half").group_by(
         "boundary", "flagged", "is_eval_half"
     ).len().sort("boundary", "flagged", "is_eval_half")
-    return ARMS, rows
+    return ARMS, ARM_COLORS, rows
 
 
 @app.cell
@@ -193,6 +203,150 @@ def _(basis, half, pl, rows):
 
 
 @app.cell
+def _(ARMS, ARM_COLORS, basis, frame, go, half, make_subplots, mo, np, pl):
+    # Headline plot: at endgame entry, does what an engine predicted actually
+    # happen? Left panel bins each arm's prediction into five plain-language
+    # buckets and shows the real average white score in that bucket; the dashed
+    # line is what a perfect forecaster would show. Right panel collapses the
+    # whole thing to one number per arm (Brier skill score = share of outcome
+    # variance explained, vs. always guessing the base rate), because on this
+    # data all three arms sit almost on the diagonal and the ranking only shows
+    # up in the summary.
+    _eg = frame.filter(pl.col("boundary") == "endgame")
+    _y = _eg["white_score"].to_numpy()
+    _base = float(((_y - _y.mean()) ** 2).mean())
+
+    _edges = np.array([0.0, 0.2, 0.4, 0.6, 0.8, 1.0])
+    _labels = [
+        "Black clearly better<br>(0.0–0.2)",
+        "Black better<br>(0.2–0.4)",
+        "Balanced<br>(0.4–0.6)",
+        "White better<br>(0.6–0.8)",
+        "White clearly better<br>(0.8–1.0)",
+    ]
+    _mid = [0.1, 0.3, 0.5, 0.7, 0.9]
+
+    _fig = make_subplots(
+        rows=1,
+        cols=2,
+        column_widths=[0.68, 0.32],
+        horizontal_spacing=0.12,
+        subplot_titles=(
+            "What the engine said → what actually happened",
+            "Predictive power (higher = better)",
+        ),
+    )
+
+    _skill = {}
+    for _name, _col in ARMS.items():
+        _p = _eg[_col].to_numpy()
+        _skill[_name] = 1.0 - float(((_p - _y) ** 2).mean()) / _base
+        _idx = np.clip(np.digitize(_p, _edges) - 1, 0, len(_mid) - 1)
+        _actual, _n = [], []
+        for _k in range(len(_mid)):
+            _m = _idx == _k
+            _actual.append(float(_y[_m].mean()) if _m.any() else None)
+            _n.append(int(_m.sum()))
+        _fig.add_trace(
+            go.Bar(
+                x=_labels,
+                y=_actual,
+                name=_name,
+                marker_color=ARM_COLORS[_name],
+                customdata=_n,
+                hovertemplate=(
+                    "<b>%{fullData.name}</b><br>said: %{x}<br>"
+                    "white actually scored %{y:.2f}<br>%{customdata:,} positions<extra></extra>"
+                ),
+            ),
+            row=1,
+            col=1,
+        )
+
+    _fig.add_trace(
+        go.Scatter(
+            x=_labels,
+            y=_mid,
+            mode="lines+markers",
+            name="perfect prediction",
+            line=dict(dash="dash", color="#444"),
+            marker=dict(symbol="diamond", size=9, color="#444"),
+            hovertemplate="perfect: %{y:.2f}<extra></extra>",
+        ),
+        row=1,
+        col=1,
+    )
+
+    _order = sorted(_skill, key=_skill.get)
+    _fig.add_trace(
+        go.Bar(
+            x=[_skill[k] for k in _order],
+            y=_order,
+            orientation="h",
+            marker_color=[ARM_COLORS[k] for k in _order],
+            text=[f"{_skill[k]:.1%}" for k in _order],
+            textposition="outside",
+            showlegend=False,
+            hovertemplate="<b>%{y}</b><br>explains %{x:.1%} of the outcome<extra></extra>",
+        ),
+        row=1,
+        col=2,
+    )
+
+    _fig.update_yaxes(
+        title_text="actual white score (1 = white won)",
+        range=[0, 1],
+        row=1,
+        col=1,
+    )
+    _fig.update_xaxes(title_text="the engine's call at endgame entry", row=1, col=1)
+    _fig.update_xaxes(
+        title_text="share of outcome variance explained",
+        tickformat=".0%",
+        range=[0, max(_skill.values()) * 1.25],
+        row=1,
+        col=2,
+    )
+    # The legend lives under the chart: a horizontal legend above the plot
+    # collided with both the figure title and the two subplot titles.
+    _fig.update_layout(
+        barmode="group",
+        height=560,
+        template="plotly_white",
+        legend=dict(orientation="h", yanchor="top", y=-0.26, x=0.5, xanchor="center"),
+        margin=dict(t=80, b=150),
+        title=dict(
+            text=(
+                f"Endgame entry — prediction vs. reality<br>"
+                f"<span style='font-size:13px;color:#666'>{_eg.height:,} positions "
+                f"· {basis.value} · {half.value} split</span>"
+            ),
+            x=0,
+            xanchor="left",
+            y=0.96,
+            yanchor="top",
+        ),
+    )
+    _fig.update_annotations(selector=dict(yref="paper"), yshift=-6)
+
+    mo.vstack(
+        [
+            mo.ui.plotly(_fig),
+            mo.md(
+                "**How to read it.** Left: group the positions by what the engine "
+                "said, then look at how they really ended. Bars on the dashed line "
+                "mean the engine's number meant what it said. Right: one number per "
+                "engine — how much of the outcome it actually explains compared with "
+                "always guessing the average result. All three are well calibrated "
+                "here, so the ranking lives in the right-hand panel."
+            ),
+        ]
+    )
+
+    return
+
+
+@app.cell
 def _(ARMS, frame, mo, pl):
     _brier = (
         frame.group_by("boundary")
@@ -241,7 +395,7 @@ def _(ARMS, frame, mo, np, pl):
 
 
 @app.cell
-def _(ARMS, frame, go, mo, n_bins, np, pl):
+def _(ARMS, ARM_COLORS, frame, go, mo, n_bins, np, pl):
     # Reliability diagram: does an arm's stated probability mean what it says?
     # A well-calibrated arm sits on the diagonal; an arm shrunk toward 50%
     # (the suspicion about the hybrid) shows an S that is flatter than y = x.
@@ -276,6 +430,8 @@ def _(ARMS, frame, go, mo, n_bins, np, pl):
                     y=_py,
                     mode="lines+markers",
                     name=_name,
+                    line=dict(color=ARM_COLORS[_name]),
+                    marker=dict(color=ARM_COLORS[_name]),
                     customdata=_n,
                     hovertemplate="pred %{x:.3f}<br>actual %{y:.3f}<br>n=%{customdata}<extra>%{fullData.name}</extra>",
                 )
