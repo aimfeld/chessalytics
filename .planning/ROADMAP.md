@@ -173,7 +173,7 @@
 | 209. Traffic-Surge Quick Wins (SEED-146, v2.13) | 4/4 | Complete    | 2026-08-15 |
 | 210. Custom-Start Games — Crash Containment & Insight Eviction (SEED-042, v2.13) | 3/3 | Complete    | 2026-08-15 |
 | 211. Vetted "Also Fine" Moves & Server-Key Grading (SEED-150, v2.13) | 3/3 | Complete    | 2026-08-16 |
-| 212. Benchmark Full-Game Analysis Lane (SEED-152, unassigned) | 0/0 | Not planned | - |
+| 212. Benchmark Full-Game Analysis Lane (SEED-152, unassigned) | 9/10 | Code shipped, tranche in flight | 2026-08-23 |
 
 ## Active Phases (unassigned milestone)
 
@@ -314,6 +314,34 @@ spending fleet weeks.
 
 **Plans**: 10 plans (6 original + 4 gap closure from `212-VERIFICATION.md`)
 
+**Status 2026-08-23 — code shipped, tranche in flight. The phase is NOT complete.**
+
+All code is squash-merged to `main` (`4cf72842d`) and the phase branch is deleted;
+`main` also carries follow-on fixes made after the merge. What remains is not code:
+BENCHLANE-06 requires a *run*, and the classical tranche is roughly 3.4 days of fleet
+time that started 2026-08-23 and is at **0.2%** (46 / 27,020 lichess-arm,
+62 / 23,717 engine-arm).
+
+`212-VERIFICATION.md` still reads `gaps_found`; its three open `missing:` items are
+exactly the ones only the run can close — a completed-or-stopped-at-boundary tranche,
+the record report under `reports/benchmark-lane/`, and the quantified post-run vacuum.
+
+Blocking the close, in order:
+
+1. The tranche completes, or is deliberately stopped at the classical TC boundary
+   (a first-class outcome, not a compromise).
+2. 212-10 Task 3 runs: `record`, targeted `VACUUM (ANALYZE)`, and the three invariant
+   proofs (leak gate flat, homogenized overwrite with a surviving lichess marker,
+   stop-state stated unambiguously in prose).
+3. 212-06 is retired with a note — its Tasks 2/3 are fully superseded by 212-08/09/10.
+   It should not be run.
+
+Carried into the run: monitor the leak gate with the **`stamped_but_unselected`** query
+(baseline **1,805,063**), never the retired corpus-wide `evals_completed_at` count, which
+now trips on correct gated behavior. The `shm_size` fix in
+`docker-compose.benchmark.yml` stays inert until the benchmark DB container is
+recreated — do that at a boundary, not mid-tranche.
+
 Plans:
 **Wave 1**
 
@@ -350,7 +378,7 @@ Plans:
 
 **Wave 9** *(blocked on Wave 8 completion)*
 
-- [ ] 212-10-PLAN.md — Classical tranche run: decision gate, execute, record, vacuum (wave 9)
+- [ ] 212-10-PLAN.md — Classical tranche run: decision gate, execute, record, vacuum (wave 9) — *Task 1 authorized 2026-08-23 (`start`), Task 2 IN FLIGHT, Task 3 blocked until the drain ends*
 
 ## Backlog
 
