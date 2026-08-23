@@ -84,15 +84,18 @@ line-length = 100
 # Scripts in scripts/ are run as `python scripts/foo.py`, so sibling modules
 # resolve via sys.path[0] at runtime. ty has no such implicit path, so
 # scripts/ importing scripts/ reads as unresolved-import without this.
-extra-paths = [
-    "scripts",
-    # analysis/ is a deliberately standalone uv project with its own venv (see
-    # analysis/pyproject.toml). The ty LSP in PyCharm runs one server rooted here
-    # with the root .venv, so marimo/polars/plotly/psycopg in analysis/** read as
-    # unresolved-import without this. Only affects the IDE and a whole-repo
-    # `ty check .`; the CI gate is `ty check app/ tests/ scripts/`.
-    "analysis/.venv/lib/python3.13/site-packages",
-]
+extra-paths = ["scripts"]
+
+# analysis/ is a deliberately standalone uv project with its own venv (see
+# analysis/pyproject.toml), so its marimo/polars/plotly/psycopg imports cannot
+# resolve against the root .venv. Exclude the tree instead of pointing
+# extra-paths at analysis/.venv: ty validates every extra-paths entry at
+# startup and hard-fails ("does not point to a directory") when one is missing,
+# which broke CI — the runner never creates analysis/.venv. The old comment
+# claiming this only affected the IDE was wrong; the failure is independent of
+# which paths you ask ty to check.
+[tool.ty.src]
+exclude = ["analysis"]
 
 [tool.ty.rules]
 # Warn on unused suppression comments so stale ignores don't accumulate
