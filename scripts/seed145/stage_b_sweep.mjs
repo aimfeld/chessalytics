@@ -72,8 +72,14 @@ const HOOK_PATH = path.join(REPO_ROOT, 'scripts', 'lib', 'frontend-alias-hook.mj
 const SCRIPT_PATH = path.join(__dirname, 'stage_b_sweep.mjs');
 const DATA_DIR = path.join(__dirname, 'data');
 const DEFAULT_MANIFEST = path.join(DATA_DIR, 'stage_b_manifest.ndjson');
-const shardPath = (i) => path.join(DATA_DIR, `stage_b_ledger-worker-${i}.ndjson`);
-const SHARD_GLOB_RE = /^stage_b_ledger-worker-\d+\.ndjson$/;
+/**
+ * Ledger namespace. A run with a non-default prefix (the T=2.0 temperature
+ * subsample) gets its OWN shards and its OWN resume set, so it can never read
+ * the default T=1 rows as "already done" nor append into them.
+ */
+const DEFAULT_LEDGER_PREFIX = 'stage_b_ledger';
+const shardPath = (prefix, i) => path.join(DATA_DIR, `${prefix}-worker-${i}.ndjson`);
+const shardGlobRe = (prefix) => new RegExp(`^${prefix}-worker-\\d+\\.ndjson$`);
 
 /** E-08: FC node budget, convergence-verified vs @400 (MAE 0.0070, Spearman 0.999). */
 const FC_NODE_BUDGET = 100;
@@ -115,6 +121,8 @@ function parseArgs(argv) {
     limit: null,
     manifest: DEFAULT_MANIFEST,
     ort: 'wasm',
+    ledgerPrefix: DEFAULT_LEDGER_PREFIX,
+    policyTemperature: null,
   };
   for (let i = 0; i < argv.length; i++) {
     const token = argv[i];
@@ -125,10 +133,23 @@ function parseArgs(argv) {
     else if (token === '--limit') args.limit = Number.parseInt(argv[++i], 10);
     else if (token === '--manifest') args.manifest = path.resolve(argv[i + 1]), i++;
     else if (token === '--ort') args.ort = argv[++i];
+    else if (token === '--ledger-prefix') args.ledgerPrefix = argv[++i];
+    else if (token === '--policy-temperature')
+      args.policyTemperature = Number.parseFloat(argv[++i]);
     else throw new Error(`Unknown flag ${token}`);
   }
   if (args.workers === null || !(args.workers >= 1)) throw new Error('--workers N is required');
   if (args.ort !== 'wasm' && args.ort !== 'native') throw new Error(`--ort must be wasm|native, got ${args.ort}`);
+  if (!/^[A-Za-z0-9_-]+$/.test(args.ledgerPrefix))
+    throw new Error(`--ledger-prefix must be [A-Za-z0-9_-]+, got ${args.ledgerPrefix}`);
+  // A non-default temperature MUST get its own ledger namespace, else its rows
+  // land in the T=1 dataset indistinguishably (rows written before this flag
+  // existed carry no policy_temperature field and are all T=1).
+  if (args.policyTemperature !== null) {
+    if (!(args.policyTemperature > 0)) throw new Error('--policy-temperature must be > 0');
+    if (args.ledgerPrefix === DEFAULT_LEDGER_PREFIX)
+      throw new Error('--policy-temperature requires a non-default --ledger-prefix');
+  }
   return args;
 }
 
@@ -145,11 +166,12 @@ function readManifestLines(manifestPath) {
 const unitKey = (gameId, boundary) => `${gameId}|${boundary}`;
 
 /** Union of done (game_id|boundary) keys across ALL worker shards. */
-function loadDoneKeys() {
+function loadDoneKeys(prefix) {
   const done = new Set();
+  const re = shardGlobRe(prefix);
   if (!fs.existsSync(DATA_DIR)) return done;
   for (const name of fs.readdirSync(DATA_DIR)) {
-    if (!SHARD_GLOB_RE.test(name)) continue;
+    if (!re.test(name)) continue;
     for (const line of fs.readFileSync(path.join(DATA_DIR, name), 'utf8').split('\n')) {
       if (!line) continue;
       try {
@@ -176,7 +198,7 @@ async function runWorker(args) {
     if (idx % args.workers !== args.workerIndex) continue;
     myRows.push(JSON.parse(lines[idx]));
   }
-  const done = loadDoneKeys();
+  const done = loadDoneKeys(args.ledgerPrefix);
   const pending = myRows.filter((r) => !done.has(unitKey(r.game_id, r.boundary)));
   log(`${myRows.length} rows in partition, ${pending.length} pending`);
   if (pending.length === 0) {
@@ -194,7 +216,7 @@ async function runWorker(args) {
   const { ort, session } = await createMaiaSession({ backend: args.ort });
   const pool = await createStockfishPool({ size: args.stockfishProcs });
   const providers = makeNodeProviders(session, ort, pool.grade);
-  const ledger = shardPath(args.workerIndex);
+  const ledger = shardPath(args.ledgerPrefix, args.workerIndex);
 
   const batch = pending.slice(0, args.recycleAfter);
   const started = performance.now();
@@ -208,6 +230,7 @@ async function runWorker(args) {
       const out = {
         ...row,
         fc_node_budget: FC_NODE_BUDGET,
+        policy_temperature: args.policyTemperature,
         ort_backend: args.ort,
         maia_score_stm: null,
         maia_score_white: null,
@@ -245,6 +268,13 @@ async function runWorker(args) {
             maxPlies: FLAWCHESS_ENGINE_MAX_PLIES,
             concurrency: pool.size,
             elo: { w: meanRating, b: meanRating },
+            // Omitted entirely at the default so the search's
+            // `temperature !== DEFAULT_POLICY_TEMPERATURE` no-op short-circuit
+            // still fires — passing an explicit 1 would be equivalent but this
+            // keeps the default run byte-identical to the T=1 sweep.
+            ...(args.policyTemperature !== null
+              ? { policyTemperature: args.policyTemperature }
+              : {}),
           },
           providers,
           () => {},
@@ -299,13 +329,14 @@ async function runWorker(args) {
 // ─── Supervisor ─────────────────────────────────────────────────────────────
 
 /** Incremental newline counter over the worker shards (cheap aggregate progress). */
-function makeShardCounter() {
+function makeShardCounter(prefix) {
   const offsets = new Map();
+  const re = shardGlobRe(prefix);
   let count = 0;
   return () => {
     if (!fs.existsSync(DATA_DIR)) return count;
     for (const name of fs.readdirSync(DATA_DIR)) {
-      if (!SHARD_GLOB_RE.test(name)) continue;
+      if (!re.test(name)) continue;
       const file = path.join(DATA_DIR, name);
       const size = fs.statSync(file).size;
       const prev = offsets.get(name) ?? 0;
@@ -327,10 +358,11 @@ function makeShardCounter() {
 async function runSupervisor(args) {
   const lines = readManifestLines(args.manifest);
   const total = args.limit !== null ? Math.min(args.limit, lines.length) : lines.length;
-  const alreadyDone = loadDoneKeys().size;
+  const alreadyDone = loadDoneKeys(args.ledgerPrefix).size;
   console.log(
     `[supervisor] ${total} manifest rows, ${alreadyDone} already ledgered, ` +
-      `${args.workers} workers (ort ${args.ort}, recycle-after ${args.recycleAfter}, ${args.stockfishProcs} SF procs each)`,
+      `${args.workers} workers (ort ${args.ort}, recycle-after ${args.recycleAfter}, ${args.stockfishProcs} SF procs each, ` +
+      `ledger ${args.ledgerPrefix}, policyTemperature ${args.policyTemperature ?? 'default (1)'})`,
   );
 
   const children = new Map();
@@ -361,6 +393,11 @@ async function runSupervisor(args) {
         args.manifest,
         '--ort',
         args.ort,
+        '--ledger-prefix',
+        args.ledgerPrefix,
+        ...(args.policyTemperature !== null
+          ? ['--policy-temperature', String(args.policyTemperature)]
+          : []),
         ...(args.limit !== null ? ['--limit', String(args.limit)] : []),
       ],
       { cwd: REPO_ROOT, stdio: ['ignore', 'inherit', 'inherit'] },
@@ -412,7 +449,7 @@ async function runSupervisor(args) {
   process.on('SIGINT', () => shutdown('SIGINT'));
   process.on('SIGTERM', () => shutdown('SIGTERM'));
 
-  const countShardRows = makeShardCounter();
+  const countShardRows = makeShardCounter(args.ledgerPrefix);
   const startedAt = Date.now();
   const samples = [[startedAt, countShardRows()]];
   const ticker = setInterval(() => {
