@@ -51,7 +51,10 @@ keeps the last good snapshot, marks itself stale, and says what to do.
 - The current day is always partial.
 - A guest promoted to a registered account keeps its original row and
   `created_at` (`app/services/guest_service.py`), so it counts as registered in
-  the funnel. Only Google promotions are countable — that path clears the
-  password field; email/password promotion is indistinguishable from a direct
-  signup, which makes the conversion rate a floor.
+  the funnel. Both promotion paths (Google and email/password) stamp
+  `users.is_promoted` on that same row, and the conversion metric reads that
+  column directly. The migration backfill recovered history only for Google
+  promotions (the pre-flag detection rule: not a guest, empty password hash),
+  so the series before the flag shipped (`IS_PROMOTED_SINCE` in `config.py`)
+  remains a floor, not the true rate.
 - `LAUNCH_DATE` in `config.py` is a real-world event, not derived from the data.
