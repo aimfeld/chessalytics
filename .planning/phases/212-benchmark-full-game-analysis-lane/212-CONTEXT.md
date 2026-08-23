@@ -228,7 +228,7 @@ confounded unless the arms are homogenized. That settles the "is it worth it" qu
 **Downstream agents MUST read these before planning or implementing.**
 
 ### Phase source and locked design
-- `.planning/seeds/SEED-152-benchmark-full-game-analysis-lane.md` — the locked
+- `../../seeds/closed/SEED-152-benchmark-full-game-analysis-lane.md` — the locked
   population/cap/selection decisions, the measured cost table, the storage/MVCC figures,
   and the rejected sibling-DB topology. **Two "code facts that change the cost model" in it
   are load-bearing for sizing.**
