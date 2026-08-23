@@ -80,6 +80,7 @@ from app.services.best_move_candidates import (
     pinned_elo_for_mover,
 )
 from app.services.flaws_service import FlawRecord, classify_game_flaws, count_game_severities
+from app.services.eval_utils import derive_is_lichess_eval_game
 from app.services.forcing_line_gate import PvNode
 from app.services.maia_engine import score_move
 from app.services.normalization import is_correspondence_time_control
@@ -484,7 +485,11 @@ async def _batch_update_eval_rows(
     await session.execute(sql, params)
 
 
-def _is_engine_hole(target: _FullPlyEvalTarget, preserve_existing_evals: bool) -> bool:
+def _is_engine_hole(
+    target: _FullPlyEvalTarget,
+    preserve_existing_evals: bool,
+    stored_eval_predates_engine: bool = False,
+) -> bool:
     """Decide whether a NULL post-move eval is a genuine engine hole (WR-04).
 
     Extracted from `_apply_full_eval_results`'s per-target loop to drop one
@@ -496,15 +501,34 @@ def _is_engine_hole(target: _FullPlyEvalTarget, preserve_existing_evals: bool) -
     Returns False (not a hole — do not count, do not overwrite) when:
     - target.ends_game: the after-position is the game-over terminal, a
       deliberately unevaluable position (SEED-049), not a transient failure.
-    - preserve_existing_evals and the row already carries a non-NULL DB eval:
-      an incremental re-lease (SEED-076) omitted this position because it was
-      already filled by a prior partial submit; the worker's None here is
-      "not resent," not a fresh failure.
+    - preserve_existing_evals and NOT stored_eval_predates_engine and the row
+      already carries a non-NULL DB eval: an incremental re-lease (SEED-076)
+      omitted this position because it was already filled by a prior partial
+      submit; the worker's None here is "not resent," not a fresh failure.
+
+    stored_eval_predates_engine (tier3-branch-b-one-ply-stamp fix,
+    derive_raw_lichess_eval_game — homogenization-invariant, see its docstring):
+    True means this target's pre-existing DB eval_cp/eval_mate, if any, was
+    written by lichess IMPORT, never by this pipeline's own engine — the
+    "already resolved by a prior round" trust above does NOT apply, so a NULL
+    result here is a genuine hole even though the row's stale imported eval_cp
+    is non-NULL. Without this guard (the pre-fix behavior — this parameter
+    defaulted away entirely), a homogenized lichess-arm game's every un-leased
+    ply looked "already resolved" via its untouched import eval_cp, so
+    failed_ply_count came back 0 and the game was stamped complete after a
+    single analyzed ply regardless of length. Defaults to False (a genuine
+    engine game never has import-sourced data, so this is always correctly
+    False for that population — zero blast radius there).
+
     Returns True (a genuine hole, counted toward failed_ply_count) otherwise.
     """
     if target.ends_game:
         return False
-    if preserve_existing_evals and (target.eval_cp is not None or target.eval_mate is not None):
+    if (
+        preserve_existing_evals
+        and not stored_eval_predates_engine
+        and (target.eval_cp is not None or target.eval_mate is not None)
+    ):
         return False
     return True
 
@@ -532,7 +556,11 @@ def _is_lichess_best_move_hole(target: _FullPlyEvalTarget, preserve_existing_eva
     return True
 
 
-def _count_prior_holes(targets: Sequence[_FullPlyEvalTarget], is_lichess_eval_game: bool) -> int:
+def _count_prior_holes(
+    targets: Sequence[_FullPlyEvalTarget],
+    is_lichess_eval_game: bool,
+    stored_eval_predates_engine: bool = False,
+) -> int:
     """Count plies that were ALREADY unresolved in the DB before this write (SEED-139 D-02).
 
     Mirrors `_is_engine_hole` / `_is_lichess_best_move_hole` exactly, but reads the
@@ -542,9 +570,14 @@ def _count_prior_holes(targets: Sequence[_FullPlyEvalTarget], is_lichess_eval_ga
     this same write just produced and could never show progress, so `targets` is the
     ONLY correct source for the prior count. Pure — no I/O, no session.
 
-    lichess-eval games: a target counts as a prior hole when its `stored_best_move`
-    is None (mirrors `_is_lichess_best_move_hole`'s resolved-ply signal). engine
-    games: a target counts when it is not `ends_game` and both `eval_cp` and
+    lichess-eval games (is_lichess_eval_game=True) OR stored_eval_predates_engine=True
+    (tier3-branch-b-one-ply-stamp fix — derive_raw_lichess_eval_game, homogenization-
+    invariant: True for a homogenized lichess-arm game even though is_lichess_eval_game
+    reads False for it): a target counts as a prior hole when its `stored_best_move`
+    is None (mirrors `_is_lichess_best_move_hole`'s resolved-ply signal) — eval_cp is
+    NOT a trustworthy "already resolved" signal for either population, since it is
+    populated at IMPORT time, not by an engine call. Plain engine games (neither flag
+    set): a target counts when it is not `ends_game` and both `eval_cp` and
     `eval_mate` are None (mirrors `_is_engine_hole`'s hole signal). The terminal
     donor target has no game_positions row and is never counted.
     """
@@ -552,7 +585,7 @@ def _count_prior_holes(targets: Sequence[_FullPlyEvalTarget], is_lichess_eval_ga
     for target in targets:
         if target.is_terminal:
             continue
-        if is_lichess_eval_game:
+        if is_lichess_eval_game or stored_eval_predates_engine:
             if target.stored_best_move is None:
                 prior_holes += 1
         elif not target.ends_game and target.eval_cp is None and target.eval_mate is None:
@@ -567,6 +600,7 @@ async def _apply_full_eval_results(
     engine_result_map: dict[int, tuple[int | None, int | None, str | None, str | None]],
     is_lichess_eval_game: bool,
     preserve_existing_evals: bool = False,
+    stored_eval_predates_engine: bool = False,
 ) -> int:
     """Write POST-MOVE evals + best_move to GamePosition rows (WR-04; SEED-044).
 
@@ -577,6 +611,14 @@ async def _apply_full_eval_results(
     is then treated as already-resolved: NOT counted as a hole and NOT overwritten. The
     local drain leaves this False (it re-evaluates the whole game each tick), so its
     behavior is unchanged (zero blast radius).
+
+    stored_eval_predates_engine (tier3-branch-b-one-ply-stamp fix — see
+    derive_raw_lichess_eval_game and `_is_engine_hole`'s docstrings): threaded through
+    to `_is_engine_hole` so a homogenized lichess-arm game's import-populated eval_cp
+    (present even though is_lichess_eval_game reads False for it under
+    BENCHMARK_HOMOGENIZE_EVAL_SOURCE) is never mistaken for "already resolved by a
+    prior engine round." Defaults to False — zero blast radius for real engine games,
+    which never have import-sourced data.
 
     Batched single-round-trip writes replace the former per-row UPDATE loop
     (FLAWCHESS-6B N+1 fix). UPDATEs run sequentially against the caller-owned
@@ -675,7 +717,7 @@ async def _apply_full_eval_results(
             # docstring for the full rationale). best_move is written whenever
             # available in EVERY case here, independent of hole status (SEED-044) —
             # only failed_ply_count's increment is conditional on the hole decision.
-            if _is_engine_hole(target, preserve_existing_evals):
+            if _is_engine_hole(target, preserve_existing_evals, stored_eval_predates_engine):
                 failed_ply_count += 1
             if best_move is not None:
                 bm_only_rows.append((ply, best_move))
@@ -2341,7 +2383,9 @@ async def _apply_bestmove_submit(
             )
         pgn_text: str = game.pgn
         # Quick 260719-fsz: needed for the best_cp source decision below.
-        is_lichess_eval_game = game.lichess_evals_at is not None
+        # Phase 212 D-03: routed through the single derivation point so
+        # BENCHMARK_HOMOGENIZE_EVAL_SOURCE can force this False everywhere.
+        is_lichess_eval_game = derive_is_lichess_eval_game(game.lichess_evals_at)
         gp_result = await read_session.execute(
             select(
                 GamePosition.ply,
@@ -2487,6 +2531,7 @@ async def apply_full_eval(
     source: Literal["full_eval_drain", "remote_eval_worker"],
     on_path_c_capacity_reached: Callable[[int, int, int, str], None],
     preserve_existing_evals: bool = False,
+    stored_eval_predates_engine: bool = False,
     blobs_pending: bool = False,
     update_opening_cache: bool = False,
     upsert_opening_cache_fn: (
@@ -2549,6 +2594,12 @@ async def apply_full_eval(
     response payload (a cheap indexed COUNT); the drain tick has no such need and
     defaults this off to avoid adding an unnecessary query to its per-tick cost.
 
+    stored_eval_predates_engine (tier3-branch-b-one-ply-stamp fix): threaded to both
+    `_apply_full_eval_results` (via `_is_engine_hole`) and `_count_prior_holes` below
+    — see `_is_engine_hole`'s docstring. Only `_apply_atomic_submit` (the only caller
+    that ever passes preserve_existing_evals=True) needs to pass a real value; the
+    drain tick's default (False) is inert because it never sets preserve_existing_evals.
+
     Returns:
         (failed_ply_count, stamp_complete, flaws_written) — flaws_written is 0
         when count_flaws_written is False.
@@ -2560,6 +2611,7 @@ async def apply_full_eval(
         engine_result_map,
         is_lichess_eval_game,
         preserve_existing_evals=preserve_existing_evals,
+        stored_eval_predates_engine=stored_eval_predates_engine,
     )
 
     await _classify_and_fill_oracle(
@@ -2618,7 +2670,9 @@ async def apply_full_eval(
     # loop would never charge an attempt (a D-116-07 violation). Passing None
     # keeps the drain's existing per-submit charge with zero blast radius.
     prior_failed_ply_count = (
-        _count_prior_holes(targets, is_lichess_eval_game) if preserve_existing_evals else None
+        _count_prior_holes(targets, is_lichess_eval_game, stored_eval_predates_engine)
+        if preserve_existing_evals
+        else None
     )
 
     # R1: shared Path A/B'/B/C completion decision + guarded eval_jobs stamp.

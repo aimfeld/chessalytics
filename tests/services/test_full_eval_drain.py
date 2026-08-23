@@ -4776,6 +4776,151 @@ class TestBatchedWriteRegression:
         finally:
             await _delete_games(full_drain_session_maker, [game_id])
 
+    async def test_homogenized_preserve_existing_evals_does_not_trust_stale_import_eval(
+        self,
+        full_drain_test_user_jq1: int,
+        full_drain_session_maker: async_sessionmaker[AsyncSession],
+    ) -> None:
+        """tier3-branch-b-one-ply-stamp regression: a homogenized lichess-arm
+        game's engine (is_lichess_eval_game=False) branch must not trust a
+        pre-existing eval_cp as "already resolved by a prior engine round" when
+        that eval_cp actually came from lichess IMPORT (BENCHMARK_HOMOGENIZE_EVAL_SOURCE
+        forces is_lichess_eval_game=False for these games — D-03 — but never
+        clears the imported %eval columns — D-04).
+
+        Ply 0's row already carries eval_cp=999 (the import value, never
+        engine-touched) and no best_move. The worker fails to resubmit this
+        ply this round (engine_result_map has no entry covering it). Before
+        the fix, `_is_engine_hole`'s `preserve_existing_evals` guard could not
+        distinguish "already resolved by our own engine" from "still holds raw
+        import data" — so this genuine failure was silently swallowed as
+        already-resolved, and (via `apply_completion_decision`'s Path A)
+        the game was stamped complete with a permanent best_move hole.
+
+        Mutation guard: dropping `stored_eval_predates_engine` from
+        `_is_engine_hole`'s guard condition (i.e. reverting to the pre-fix
+        `preserve_existing_evals and (eval_cp is not None or eval_mate is not
+        None)`) makes Case 2 return 0, failing this test.
+        """
+        from app.services import eval_drain
+
+        game_id = await _insert_game(
+            full_drain_session_maker,
+            full_drain_test_user_jq1,
+            pgn=_TWO_MOVE_PGN,
+        )
+        # Ply 0 already carries a stale, import-sourced %eval (999) and no best_move —
+        # the exact shape a homogenized lichess-arm game has before our engine has
+        # ever touched it.
+        await _insert_game_positions(
+            full_drain_session_maker,
+            full_drain_test_user_jq1,
+            game_id,
+            [
+                {
+                    "ply": 0,
+                    "full_hash": 0x51A1E000,
+                    "eval_cp": 999,
+                    "eval_mate": None,
+                    "best_move": None,
+                }
+            ],
+        )
+
+        board = chess.Board()
+        target = eval_drain._FullPlyEvalTarget(
+            game_id=game_id,
+            ply=0,
+            full_hash=0x51A1E000,
+            board=board,
+            eval_cp=999,
+            eval_mate=None,
+        )
+        # Terminal donor at ply 1 (Cases 1/2 only — see _post_move_eval's SEED-044
+        # +1 shift): row 0's post-move eval is pos_eval[1]. Omitting a ply=1 target
+        # entirely from `targets` also yields (None, None) via _post_move_eval's own
+        # default, so Cases 1/2 pass `[target]` alone (no donor needed to prove a
+        # hole); Case 3 needs a REAL ply=1 target so its engine_result_map[1] entry
+        # actually gets resolved into pos_eval.
+        terminal_donor = eval_drain._FullPlyEvalTarget(
+            game_id=game_id,
+            ply=1,
+            full_hash=0,
+            board=board,
+            eval_cp=None,
+            eval_mate=None,
+            is_terminal=True,
+        )
+        # Worker submits nothing this round — a genuine per-ply failure. No
+        # engine_result_map entry means pos_eval[1] (row 0's post-move eval)
+        # never resolves.
+        empty_engine_result_map: dict[
+            int, tuple[int | None, int | None, str | None, str | None]
+        ] = {}
+
+        try:
+            # Case 1 (parity, zero blast radius): a REAL engine game (never
+            # lichess-sourced, stored_eval_predates_engine defaults False) keeps
+            # today's SEED-076 behavior — the stale-but-genuinely-engine-written
+            # eval_cp is trusted as already-resolved, NOT a fresh hole.
+            async with full_drain_session_maker() as session:
+                failed = await eval_drain._apply_full_eval_results(
+                    session,
+                    [target],
+                    {},
+                    empty_engine_result_map,
+                    False,  # is_lichess_eval_game
+                    preserve_existing_evals=True,
+                )
+                await session.rollback()
+            assert failed == 0, (
+                "a real engine game's pre-existing eval_cp must still be trusted as "
+                "already-resolved under preserve_existing_evals (unchanged SEED-076 "
+                "behavior — stored_eval_predates_engine defaults False)"
+            )
+
+            # Case 2 (the fix): stored_eval_predates_engine=True — the SAME stale
+            # eval_cp must now count as a genuine hole, not an already-resolved ply.
+            async with full_drain_session_maker() as session:
+                failed = await eval_drain._apply_full_eval_results(
+                    session,
+                    [target],
+                    {},
+                    empty_engine_result_map,
+                    False,  # is_lichess_eval_game
+                    preserve_existing_evals=True,
+                    stored_eval_predates_engine=True,
+                )
+                await session.rollback()
+            assert failed == 1, (
+                "a homogenized lichess-arm game's import-populated eval_cp must NOT "
+                "be trusted as already-resolved-by-our-engine — a worker failure on "
+                "this ply is a genuine hole"
+            )
+
+            # Case 3 (sanity): the SAME ply, but the worker DID resolve it this
+            # round (engine_result_map now covers the post-move donor ply 1, which
+            # needs a real ply=1 target present so _apply_full_eval_results
+            # actually resolves it into pos_eval — see terminal_donor above) —
+            # correctly resolved, regardless of stored_eval_predates_engine.
+            async with full_drain_session_maker() as session:
+                failed = await eval_drain._apply_full_eval_results(
+                    session,
+                    [target, terminal_donor],
+                    {},
+                    {1: (42, None, "e2e4", None)},
+                    False,
+                    preserve_existing_evals=True,
+                    stored_eval_predates_engine=True,
+                )
+                await session.rollback()
+            assert failed == 0, (
+                "a ply the worker DID resolve this round is never a hole, "
+                "independent of stored_eval_predates_engine"
+            )
+        finally:
+            await _delete_games(full_drain_session_maker, [game_id])
+
 
 # ─── Phase 142 MPV-02: blob population ────────────────────────────────────────
 

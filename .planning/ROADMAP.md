@@ -312,7 +312,45 @@ costs an *import*, not Stockfish, and cluster-bootstrap CI width scales with the
 accounts, so it may be the cheaper statistical-power purchase. Worth checking before
 spending fleet weeks.
 
-**Plans**: 0 plans (not yet planned)
+**Plans**: 10 plans (6 original + 4 gap closure from `212-VERIFICATION.md`)
+
+Plans:
+**Wave 1**
+
+- [x] 212-01-PLAN.md — Tracer: gated selection spine, one game end to end (wave 1)
+
+**Wave 2** *(blocked on Wave 1 completion)*
+
+- [x] 212-02-PLAN.md — Gate hardening: all lottery lanes + fail-closed boot assertion (wave 2)
+- [x] 212-03-PLAN.md — Dual-URL worker fallback with strict prod priority (wave 2)
+
+**Wave 3** *(blocked on Wave 2 completion)*
+
+- [x] 212-04-PLAN.md — Eval-source homogenization + lichess eval snapshot (wave 3)
+
+**Wave 4** *(blocked on Wave 3 completion)*
+
+- [x] 212-05-PLAN.md — Operator surface: status/record, runbook, provenance disclosure (wave 4)
+
+**Wave 5** *(blocked on Wave 4 completion)*
+
+- [ ] 212-06-PLAN.md — Classical tranche run: decision gate, execute, record, vacuum (wave 5) — *aborted at Task 2; Tasks 2/3 superseded by 212-10*
+
+**Wave 6** *(gap closure — blocked on Wave 5)*
+
+- [x] 212-07-PLAN.md — Gate the fifth lane: entry-ply probe + canonical claim, and correct the "every lane" claim (wave 6)
+
+**Wave 7** *(blocked on Wave 6 completion)*
+
+- [x] 212-08-PLAN.md — Smoke proof on the gated build: one selected game end to end, zero leak (wave 7)
+
+**Wave 8** *(blocked on Wave 7 completion)*
+
+- [x] 212-09-PLAN.md — Materialize the real classical selection and its lichess-eval snapshot (wave 8)
+
+**Wave 9** *(blocked on Wave 8 completion)*
+
+- [ ] 212-10-PLAN.md — Classical tranche run: decision gate, execute, record, vacuum (wave 9)
 
 ## Backlog
 

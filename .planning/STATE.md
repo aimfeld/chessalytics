@@ -1,29 +1,30 @@
 ---
 gsd_state_version: 1.0
 milestone: v2.13
-milestone_name: Ways In & Honest Answers
 current_phase: 212
-status: milestone_complete
-stopped_at: v2.13 closed — phases 206–211 archived, tagged, released; Phase 212 added and unplanned
-last_updated: "2026-08-22T00:00:00.000Z"
+current_phase_name: Benchmark Full-Game Analysis Lane
+status: executing
+stopped_at: Phase 212 wave 5 — 212-06 halted at checkpoint; gap plans 212-07..10 created
+last_updated: "2026-08-22T22:47:35.228Z"
 last_activity: 2026-08-22
-last_activity_desc: v2.13 Ways In & Honest Answers closed (retroactive); Phase 212 added from SEED-152
+last_activity_desc: Phase 212 execution resumed (wave continue)
+state_head: 8bdbfee04923127f5988455e2616d949901e9b08
 progress:
-  total_phases: 6
-  completed_phases: 6
-  total_plans: 20
-  completed_plans: 20
-current_phase_name: benchmark-full-game-analysis-lane
+  total_phases: 1
+  completed_phases: 0
+  total_plans: 10
+  completed_plans: 8
+milestone_name: Ways In & Honest Answers
 ---
 
 # Project State: FlawChess
 
 ## Current Position
 
-Phase: 211
-Plan: Not started
+Phase: 212 (Benchmark Full-Game Analysis Lane) — EXECUTING
+Plan: 2 of 6
 rounds — round 2 shipped the D-01 amendment: soft puzzles serve [deep best, second-best su])
-Status: All phases complete
+Status: Ready to execute
 backend 4348 passed / 19 skipped, frontend 3497 passed, ruff/ty/tsc/lint/knip clean;
 WINDOWS.md #6 fixed — ORACLE-01 unskipped)
 
@@ -33,7 +34,7 @@ Cloudflare nameservers, `maia3_simplified.onnx` and `stockfish-18-lite-single.wa
 return `cf-cache-status: HIT` while still carrying the origin's `max-age=2592000`, and
 `maia-worker.js` still returns `cache-control: no-cache`.
 
-Last activity: 2026-08-22 - Completed quick task 260822-etd: Fixed three unresolved production Sentry frontend errors (FLAWCHESS-9G / -91 / -9P)
+Last activity: 2026-08-22 — Phase 212 execution resumed (wave continue)
 `games.initial_fen` added and backfilled in-migration, the opening-transition sample
 representative filtered to standard-start games, four unguarded `chess.move()` replay sites
 contained, and `/analysis` game mode seeded from the game's real root. Every production
@@ -809,13 +810,13 @@ Items acknowledged and deferred at **v1.29 milestone close on 2026-06-29** (user
 
 ## Session Continuity
 
-**Stopped at:** Completed 211-03-PLAN.md — Phase 211 complete (3/3 plans), Task 3 operator-approved
+**Stopped at:** Phase 212 context gathered
 
-**Last session:** 2026-08-16T17:10:20.215Z
+**Last session:** 2026-08-22T12:48:00.376Z
 
 **Resume file:**
 
-None
+.planning/phases/212-benchmark-full-game-analysis-lane/212-CONTEXT.md
 
 ## Performance Metrics
 

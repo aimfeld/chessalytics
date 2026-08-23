@@ -143,6 +143,11 @@ from app.services.eval_queue_service import (
     claim_eval_job,
     release_job,
 )
+from app.services.eval_utils import (
+    derive_is_lichess_eval_game,
+    derive_raw_lichess_eval_game,
+    selection_gate_clause,
+)
 from app.services.flaws_service import _classify_tactic_gated, _recompute_fen_map
 
 logger = logging.getLogger(__name__)
@@ -296,6 +301,7 @@ def _build_lease_positions(
     gp_rows: list[tuple[int, int, int | None, int | None]],
     cached_hashes: frozenset[int] = frozenset(),
     is_lichess_eval_game: bool = False,
+    stored_eval_predates_engine: bool = False,
 ) -> list[LeasePosition] | None:
     """Collect per-ply FEN positions from a game's PGN for the lease response.
 
@@ -328,6 +334,21 @@ def _build_lease_positions(
     opening book, so the resulting submission could never produce a single
     out-of-book best-move candidate row, defeating this game type's entire reason
     for reaching /atomic-lease in the first place.
+
+    BUG FIX (tier3-branch-b-one-ply-stamp debug session): the bypass above used to
+    gate on `is_lichess_eval_game` alone. Under BENCHMARK_HOMOGENIZE_EVAL_SOURCE a
+    lichess-arm game's `is_lichess_eval_game` reads False (by design — see
+    derive_is_lichess_eval_game), so the bypass never fired even though the game's
+    game_positions rows still carry import-populated %evals (D-04 leaves them
+    untouched). The redundancy filter then filtered the lease down to exactly one
+    position, and the game was later stamped complete after that one ply — a bug
+    that reproduced deterministically and independent of game length (60/55/48/
+    25/78/20/24/57-ply games all leased exactly 1 position). `stored_eval_predates_engine`
+    (derive_raw_lichess_eval_game — deliberately homogenization-INVARIANT, see that
+    function's docstring) is the fix: it stays True for a lichess-arm game
+    regardless of the flag, so the bypass fires whenever EITHER signal says this
+    game's stored %eval cannot be trusted as "a prior round of our own engine
+    already resolved this ply."
 
     Returns None on PGN parse failure (caller should return 204 — treat as no game).
     Returns a list of LeasePosition (may include an is_terminal=True entry).
@@ -379,7 +400,14 @@ def _build_lease_positions(
         all_positions.append(pos)
         # Phase 174-06: the SEED-076 redundancy check never applies to lichess-eval
         # games (see docstring) — every position is always leased for them.
-        if is_lichess_eval_game or not _lease_position_redundant(t, target_by_ply, cached_hashes):
+        # tier3-branch-b-one-ply-stamp fix: OR in stored_eval_predates_engine (the
+        # homogenization-invariant signal) so a homogenized lichess-arm game keeps
+        # this bypass even though is_lichess_eval_game reads False for it.
+        if (
+            is_lichess_eval_game
+            or stored_eval_predates_engine
+            or not _lease_position_redundant(t, target_by_ply, cached_hashes)
+        ):
             filtered_positions.append(pos)
 
     # SEED-076 safety net: never return an empty lease for a claimed game — the submit
@@ -485,13 +513,18 @@ async def atomic_lease_eval_game(
     # Load PGN + game_positions in a second short read session.
     async with async_session_maker() as read_session:
         game_result = await read_session.execute(
-            sa.select(Game.pgn, Game.user_id).where(Game.id == game_id)
+            sa.select(Game.pgn, Game.user_id, Game.lichess_evals_at).where(Game.id == game_id)
         )
         row = game_result.one_or_none()
         if row is None:
             return Response(status_code=status.HTTP_204_NO_CONTENT)
 
         pgn_text: str = row.pgn
+        # tier3-branch-b-one-ply-stamp fix: the homogenization-invariant signal
+        # for _build_lease_positions's SEED-076 bypass — see
+        # derive_raw_lichess_eval_game's docstring and that function's own
+        # docstring for why is_lichess_eval_game alone is not enough here.
+        stored_eval_predates_engine = derive_raw_lichess_eval_game(row.lichess_evals_at)
 
         gp_result = await read_session.execute(
             select(
@@ -513,7 +546,12 @@ async def atomic_lease_eval_game(
     # read_session closed
 
     positions = _build_lease_positions(
-        game_id, pgn_text, gp_rows, cached_hashes, is_lichess_eval_game=is_lichess_eval_game
+        game_id,
+        pgn_text,
+        gp_rows,
+        cached_hashes,
+        is_lichess_eval_game=is_lichess_eval_game,
+        stored_eval_predates_engine=stored_eval_predates_engine,
     )
     if positions is None:
         return Response(status_code=status.HTTP_204_NO_CONTENT)
@@ -534,6 +572,38 @@ async def atomic_lease_eval_game(
         leased_at=datetime.now(timezone.utc),
         job_id=claim.job_id,
     )
+
+
+def _entry_lease_backlog_probe_sql() -> str:
+    """Return the D-5 backlog existence probe SELECT, gated when the flag is on.
+
+    Phase 212 BENCHLANE-02/D-09 (212-07): extracted from entry_lease_eval_games
+    so tests/test_eval_worker_endpoints.py can byte-identity-pin it directly and
+    so BENCHMARK_SELECTION_GATE_ENABLED can narrow the probe to only-selected
+    games -- otherwise a benchmark backend's /entry-lease would keep inviting
+    remote workers onto the wider (unselected) backlog forever, the fifth
+    ungated lane found during 212-06's aborted smoke drain. Gate-off output is
+    byte-identical to the pre-212-07 inline literal.
+
+    WR-03 lock-step: this predicate MUST stay identical to _entry_claim_sql's
+    (app/services/eval_entry.py) candidate predicate, so a probe that passes
+    still implies a claimable row exists. If you change one, change both.
+
+    Note for the reader: on the benchmark instance (gate on) this probe is
+    expected to return 204 forever once no currently-selected game has a NULL
+    evals_completed_at -- that is the intended terminal state (the tranche's
+    deliverable comes from full evals/PV/blobs/best-moves, none of which the
+    entry-ply lane produces), not a regression. See docs/benchmark-lane-runbook.md
+    §8 for the corresponding troubleshooting entry.
+    """
+    gate = selection_gate_clause("games")
+    return f"""
+                SELECT 1 FROM games
+                WHERE evals_completed_at IS NULL
+                  AND (entry_eval_lease_expiry IS NULL OR entry_eval_lease_expiry < now()){(" " + gate) if gate else ""}
+                ORDER BY id DESC
+                LIMIT 1 OFFSET :offset
+            """
 
 
 @router.post("/entry-lease", response_model=None)
@@ -561,15 +631,11 @@ async def entry_lease_eval_games(
         # claim predicate (NULL or expired lease). Counting leased rows here would let
         # the probe pass while the claim returns [] (all available rows leased by other
         # workers), wasting a claim transaction per cycle near the tail. Keeping the two
-        # predicates in lock-step prevents that drift.
+        # predicates in lock-step prevents that drift. Phase 212 BENCHLANE-02/D-09
+        # (212-07): both predicates now also carry the benchmark selection gate,
+        # applied identically in _entry_lease_backlog_probe_sql / _entry_claim_sql.
         probe = await probe_session.execute(
-            sa.text("""
-                SELECT 1 FROM games
-                WHERE evals_completed_at IS NULL
-                  AND (entry_eval_lease_expiry IS NULL OR entry_eval_lease_expiry < now())
-                ORDER BY id DESC
-                LIMIT 1 OFFSET :offset
-            """),
+            sa.text(_entry_lease_backlog_probe_sql()),
             {"offset": ENTRY_LEASE_BACKLOG_THRESHOLD - 1},
         )
         backlog_deep_enough = probe.scalar_one_or_none() is not None
@@ -1161,7 +1227,14 @@ async def _apply_atomic_submit(
             )
 
         pgn_text: str = game.pgn
-        is_lichess_eval_game: bool = game.lichess_evals_at is not None
+        # Phase 212 D-03: routed through the single derivation point so
+        # BENCHMARK_HOMOGENIZE_EVAL_SOURCE can force this False everywhere.
+        is_lichess_eval_game: bool = derive_is_lichess_eval_game(game.lichess_evals_at)
+        # tier3-branch-b-one-ply-stamp fix: the homogenization-invariant signal
+        # apply_full_eval's hole-counting needs to avoid trusting a homogenized
+        # lichess-arm game's import-populated eval_cp as "already resolved by a
+        # prior engine round" — see derive_raw_lichess_eval_game's docstring.
+        stored_eval_predates_engine: bool = derive_raw_lichess_eval_game(game.lichess_evals_at)
         owner_id: int = game.user_id
         # CR-01: read the current retry count so the write phase can branch on
         # the same Path A/B/C SEED-045 bounded-retry invariant _apply_submit uses.
@@ -1314,6 +1387,7 @@ async def _apply_atomic_submit(
             dedup_map=dedup_map,
             engine_result_map=engine_result_map,
             is_lichess_eval_game=is_lichess_eval_game,
+            stored_eval_predates_engine=stored_eval_predates_engine,
             flaw_pv_blobs=flaw_pv_blobs if flaw_pv_blobs else None,
             current_attempts=current_attempts,
             source="remote_eval_worker",

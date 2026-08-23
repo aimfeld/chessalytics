@@ -35,6 +35,7 @@ from app.services.eval_drain import (
     run_full_eval_drain,
     run_periodic_holed_game_resweep,
 )
+from app.services.eval_queue_service import assert_benchmark_selection_gate_ready
 from app.services.guest_cleanup_service import run_periodic_guest_cleanup
 from app.services.import_service import cleanup_orphaned_jobs, run_periodic_reaper
 from app.services.insights_llm import get_insights_agent
@@ -89,6 +90,35 @@ def _sentry_before_send(event: Event, hint: dict[str, Any]) -> Event | None:
 
 @asynccontextmanager
 async def lifespan(_app: FastAPI) -> AsyncIterator[None]:
+    # Bug fix (phase 212 plan 08): the app configured logging nowhere, so every
+    # `app.*` logger inherited the root logger's default WARNING and each of the
+    # handful of logger.info() calls under app/ was silently discarded in every
+    # environment. That is how `maia_engine: onnxruntime not installed — Maia
+    # inference disabled` — the single most important diagnostic for a
+    # silently-Maia-absent backend — could never reach a log, and why the
+    # benchmark-lane runbook's startup check was unperformable. Raise just the
+    # `app` tree to INFO; uvicorn owns its own `uvicorn.*` loggers and the root
+    # logger is left alone, so third-party INFO chatter stays suppressed. Cheap:
+    # under a dozen INFO sites exist across app/, all low-frequency (startup
+    # confirmations, job sweeps, cleanup counts).
+    #
+    # Raising the level is NOT sufficient on its own, which is the subtle half of
+    # this bug: uvicorn installs handlers on its own `uvicorn.*` loggers but adds
+    # none to the root logger, so an `app.*` record propagates to a handler-less
+    # root and falls through to logging.lastResort — which emits at WARNING. An
+    # INFO line would still vanish. Attach one StreamHandler to the `app` tree so
+    # the records have somewhere to go regardless of who started the process
+    # (uvicorn, pytest, or a script importing app.main).
+    _app_logger = logging.getLogger("app")
+    _app_logger.setLevel(logging.INFO)
+    if not any(getattr(h, "_flawchess_app_handler", False) for h in _app_logger.handlers):
+        _handler = logging.StreamHandler()
+        _handler.setFormatter(logging.Formatter("%(levelname)s:     %(name)s - %(message)s"))
+        # Marker makes the guard idempotent across repeated lifespan entry (the
+        # test suite builds the app many times per session) without dropping a
+        # handler some other caller legitimately attached.
+        _handler._flawchess_app_handler = True  # ty: ignore[unresolved-attribute] — marker attr
+        _app_logger.addHandler(_handler)
     # CR #1.2: refuse to boot a non-development environment with the default
     # SECRET_KEY — a publicly-known signing key makes every JWT forgeable. Checked
     # before anything else so the deploy-blocker fires as early as possible.
@@ -99,6 +129,16 @@ async def lifespan(_app: FastAPI) -> AsyncIterator[None]:
     # propagates, aborting uvicorn startup (D-36).
     get_insights_agent()
     await cleanup_orphaned_jobs()
+    # Phase 212 BENCHLANE-02/D-09/D-10: refuse to boot with the benchmark
+    # selection gate on but its table missing. Catches two failure modes: a
+    # gate-on instance whose benchmark tables were never created, and the far
+    # worse case where plain DATABASE_URL was left pointing at the dev
+    # database on :5432 (which has no benchmark_selection table), converting
+    # a silent wrong-database write into a startup abort. No-op (and touches
+    # no database) whenever the gate is off, i.e. on every non-benchmark
+    # instance including prod. Runs before start_engine() so a misconfigured
+    # instance never pays the Stockfish/Maia startup cost before failing.
+    await assert_benchmark_selection_gate_ready()
     # Phase 78 D-02: long-lived Stockfish UCI process. Comes AFTER existing startup
     # so engine startup failure does not mask deploy-blocker validation. try/finally
     # ensures stop_engine runs on exception during yield (graceful shutdown of UCI).

@@ -18,6 +18,7 @@ fallback is monkeypatched to a fixed 7-tuple (no real engine needed).
 from __future__ import annotations
 
 import uuid
+from datetime import datetime, timezone
 from typing import Any
 from unittest.mock import AsyncMock
 
@@ -27,7 +28,9 @@ import pytest_asyncio
 from sqlalchemy import delete, func, select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
+from app.core.config import settings
 from app.models.game_best_move import GameBestMove
+from app.models.game_flaw import GameFlaw
 from app.services import eval_apply
 from app.services.eval_apply import (
     _build_best_move_candidates,
@@ -36,6 +39,18 @@ from app.services.eval_apply import (
     _eval_of_position_map,
     _FullPlyEvalTarget,
     _upsert_best_move_rows,
+)
+from tests.test_eval_worker_endpoints import (
+    _BLUNDER_SUBMIT_EVALS_142,
+    _SIX_PLY_PGN_142,
+    _atomic_request,
+    _get_game_position,
+    _patch_router_session,
+)
+from tests.test_eval_worker_endpoints import _delete_games as _delete_games_homogenization
+from tests.test_eval_worker_endpoints import _insert_game as _insert_atomic_game
+from tests.test_eval_worker_endpoints import (
+    _insert_game_positions as _insert_atomic_game_positions,
 )
 
 _TEST_USER_ID: int = 99205  # unique to this module to avoid FK conflicts
@@ -746,3 +761,266 @@ class TestBestMoveLeasePositions:
         monkeypatch.setattr(eval_apply, "async_session_maker", ea_session_maker)
         positions = await _build_bestmove_lease_positions(-1)
         assert positions == []
+
+
+# ─── Homogenization (Phase 212 BENCHLANE-05, D-03) ──────────────────────────
+#
+# Proves the homogenized write path -- driven through the PRODUCTION submit
+# entry point app.routers.eval_remote._apply_atomic_submit, never a copy of
+# the classify/write logic, mirroring tests/services/write_path_golden_scenarios.py's
+# own reuse pattern. All six tests use one game (_SIX_PLY_PGN_142) with
+# lichess_evals_at set and a stored eval_cp (999) recognizably different from
+# the submitted engine values (_BLUNDER_SUBMIT_EVALS_142: post-move-shifted to
+# [20, 30, -500, -480, 60, 30] at plies 0-5) so a preserved-vs-overwritten
+# assertion cannot pass by coincidence.
+
+_HOMOGENIZATION_STORED_EVAL_CP: int = 999
+# Post-move shift (SEED-044): row `ply`'s eval_cp = the submitted eval at
+# index ply+1. Matches _BLUNDER_SUBMIT_EVALS_142's own documented mapping.
+_HOMOGENIZATION_EXPECTED_ENGINE_EVAL_CP_BY_PLY: dict[int, int] = {
+    0: 20,
+    1: 30,
+    2: -500,
+    3: -480,
+    4: 60,
+    5: 30,
+}
+
+
+async def _get_game_lichess_evals_at(
+    session_maker: async_sessionmaker[AsyncSession],
+    game_id: int,
+) -> datetime | None:
+    from app.models.game import Game
+
+    async with session_maker() as session:
+        result = await session.execute(select(Game.lichess_evals_at).where(Game.id == game_id))
+        return result.scalar_one_or_none()
+
+
+async def _seed_homogenization_game(
+    session_maker: async_sessionmaker[AsyncSession],
+    user_id: int,
+) -> int:
+    """A lichess-eval _SIX_PLY_PGN_142 game with stored eval_cp=999 at every
+    ply (0-5) -- a flat, non-flaw sequence recognizably different from the
+    submitted engine values."""
+    now = datetime.now(timezone.utc)
+    game_id = await _insert_atomic_game(
+        session_maker,
+        user_id,
+        pgn=_SIX_PLY_PGN_142,
+        lichess_evals_at=now,
+    )
+    await _insert_atomic_game_positions(
+        session_maker,
+        user_id,
+        game_id,
+        [
+            {"ply": p, "full_hash": 212_040_000 + p, "eval_cp": _HOMOGENIZATION_STORED_EVAL_CP}
+            for p in range(6)
+        ],
+    )
+    return game_id
+
+
+async def _run_homogenization_submit(
+    session_maker: async_sessionmaker[AsyncSession],
+    game_id: int,
+) -> None:
+    """Drive the production submit entry point directly (bypasses the
+    HTTP/auth layer), submitting _BLUNDER_SUBMIT_EVALS_142."""
+    from app.routers.eval_remote import _apply_atomic_submit
+
+    await _apply_atomic_submit(
+        game_id,
+        _atomic_request(game_id, list(_BLUNDER_SUBMIT_EVALS_142)),
+        worker_id="test-homogenization",
+        last_ip=None,
+    )
+
+
+class TestHomogenization:
+    """Phase 212 BENCHLANE-05 (D-03): BENCHMARK_HOMOGENIZE_EVAL_SOURCE forces
+    the drain write path to store our engine's eval_cp instead of preserving
+    a lichess-eval game's stored value, restores the terminal eval donor,
+    enables opening dedup, and classifies game_flaws from the engine values --
+    while games.lichess_evals_at itself stays byte-identical in both flag
+    states (D-04's §6 selection-marker guarantee)."""
+
+    async def test_homogenization_off_preserves_lichess_eval_cp(
+        self,
+        ea_user: int,
+        ea_session_maker: async_sessionmaker[AsyncSession],
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """Control: pins today's behavior (flag off, the default) so the
+        flag-on test means something -- a lichess-eval game's stored eval_cp
+        is preserved; the submitted engine value is discarded."""
+        monkeypatch.setattr(settings, "BENCHMARK_HOMOGENIZE_EVAL_SOURCE", False)
+        _patch_router_session(monkeypatch, ea_session_maker)
+
+        game_id = await _seed_homogenization_game(ea_session_maker, ea_user)
+        try:
+            await _run_homogenization_submit(ea_session_maker, game_id)
+
+            for ply in range(6):
+                row = await _get_game_position(ea_session_maker, game_id, ply)
+                assert row is not None
+                assert row["eval_cp"] == _HOMOGENIZATION_STORED_EVAL_CP, (
+                    f"ply {ply}: expected preserved stored eval_cp="
+                    f"{_HOMOGENIZATION_STORED_EVAL_CP}, got {row['eval_cp']}"
+                )
+        finally:
+            await _delete_games_homogenization(ea_session_maker, [game_id])
+
+    async def test_homogenization_on_overwrites_eval_cp_with_engine_value(
+        self,
+        ea_user: int,
+        ea_session_maker: async_sessionmaker[AsyncSession],
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """Flag on: the stored eval_cp becomes the submitted engine value
+        (post-move shifted) -- fails if the override is removed from
+        derive_is_lichess_eval_game."""
+        monkeypatch.setattr(settings, "BENCHMARK_HOMOGENIZE_EVAL_SOURCE", True)
+        _patch_router_session(monkeypatch, ea_session_maker)
+
+        game_id = await _seed_homogenization_game(ea_session_maker, ea_user)
+        try:
+            await _run_homogenization_submit(ea_session_maker, game_id)
+
+            for ply, expected_cp in _HOMOGENIZATION_EXPECTED_ENGINE_EVAL_CP_BY_PLY.items():
+                row = await _get_game_position(ea_session_maker, game_id, ply)
+                assert row is not None
+                assert row["eval_cp"] == expected_cp, (
+                    f"ply {ply}: expected engine eval_cp={expected_cp}, got {row['eval_cp']}"
+                )
+        finally:
+            await _delete_games_homogenization(ea_session_maker, [game_id])
+
+    async def test_homogenization_on_restores_terminal_donor(
+        self,
+        ea_user: int,
+        ea_session_maker: async_sessionmaker[AsyncSession],
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """Flag on: _collect_full_ply_targets is called with
+        include_terminal=True for a lichess-eval game (the terminal donor is
+        restored) -- asserted by patching _collect_full_ply_targets and
+        inspecting the kwarg it was actually called with."""
+        import app.routers.eval_remote as eval_remote_module
+        from app.services.eval_apply import _collect_full_ply_targets as _real_collect
+
+        monkeypatch.setattr(settings, "BENCHMARK_HOMOGENIZE_EVAL_SOURCE", True)
+        _patch_router_session(monkeypatch, ea_session_maker)
+
+        captured_kwargs: dict[str, Any] = {}
+
+        def _spy_collect(*args: Any, **kwargs: Any) -> Any:
+            captured_kwargs.update(kwargs)
+            return _real_collect(*args, **kwargs)
+
+        monkeypatch.setattr(eval_remote_module, "_collect_full_ply_targets", _spy_collect)
+
+        game_id = await _seed_homogenization_game(ea_session_maker, ea_user)
+        try:
+            await _run_homogenization_submit(ea_session_maker, game_id)
+
+            assert captured_kwargs.get("include_terminal") is True
+        finally:
+            await _delete_games_homogenization(ea_session_maker, [game_id])
+
+    async def test_homogenization_on_enables_opening_dedup(
+        self,
+        ea_user: int,
+        ea_session_maker: async_sessionmaker[AsyncSession],
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """Flag on: the opening-region dedup lookup actually runs for a
+        lichess-eval game (a non-empty candidate full_hash list is passed to
+        _fetch_dedup_evals), instead of being short-circuited to the
+        unconditional {} the flag-off branch uses."""
+        import app.routers.eval_remote as eval_remote_module
+        from app.services.eval_apply import _fetch_dedup_evals as _real_fetch_dedup
+
+        monkeypatch.setattr(settings, "BENCHMARK_HOMOGENIZE_EVAL_SOURCE", True)
+        _patch_router_session(monkeypatch, ea_session_maker)
+
+        captured_hashes: list[list[int]] = []
+
+        async def _spy_fetch_dedup(session: Any, full_hashes: list[int]) -> Any:
+            captured_hashes.append(list(full_hashes))
+            return await _real_fetch_dedup(session, full_hashes)
+
+        monkeypatch.setattr(eval_remote_module, "_fetch_dedup_evals", _spy_fetch_dedup)
+
+        game_id = await _seed_homogenization_game(ea_session_maker, ea_user)
+        try:
+            await _run_homogenization_submit(ea_session_maker, game_id)
+
+            assert len(captured_hashes) == 1, "expected exactly one _fetch_dedup_evals call"
+            assert captured_hashes[0], "expected a non-empty opening-region hash list"
+        finally:
+            await _delete_games_homogenization(ea_session_maker, [game_id])
+
+    async def test_homogenization_on_classifies_flaws_from_engine_values(
+        self,
+        ea_user: int,
+        ea_session_maker: async_sessionmaker[AsyncSession],
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """Flag on: game_flaws classification is driven by the just-written
+        engine values (the blunder at ply 2), not the flat stored lichess
+        values that would have produced zero flaws."""
+        monkeypatch.setattr(settings, "BENCHMARK_HOMOGENIZE_EVAL_SOURCE", True)
+        _patch_router_session(monkeypatch, ea_session_maker)
+
+        game_id = await _seed_homogenization_game(ea_session_maker, ea_user)
+        try:
+            await _run_homogenization_submit(ea_session_maker, game_id)
+
+            async with ea_session_maker() as session:
+                result = await session.execute(
+                    select(GameFlaw).where(GameFlaw.game_id == game_id, GameFlaw.ply == 2)
+                )
+                flaw = result.scalar_one_or_none()
+            assert flaw is not None, (
+                "expected a game_flaws row at ply 2 (the blunder swing in the "
+                "just-written engine values), not zero flaws from the flat "
+                "stored lichess values"
+            )
+        finally:
+            await _delete_games_homogenization(ea_session_maker, [game_id])
+
+    async def test_homogenization_never_writes_lichess_evals_at(
+        self,
+        ea_user: int,
+        ea_session_maker: async_sessionmaker[AsyncSession],
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """D-04's guarantee is load-bearing for §6: re-read the game after the
+        write in BOTH flag states and assert the timestamp is byte-identical
+        to what it was before -- this is the assertion that fails loudly if a
+        future change starts clearing it. Two separate games (one per flag
+        state) so neither run's write session can contaminate the other's
+        assertion."""
+        _patch_router_session(monkeypatch, ea_session_maker)
+
+        for homogenize in (False, True):
+            monkeypatch.setattr(settings, "BENCHMARK_HOMOGENIZE_EVAL_SOURCE", homogenize)
+
+            game_id = await _seed_homogenization_game(ea_session_maker, ea_user)
+            try:
+                before = await _get_game_lichess_evals_at(ea_session_maker, game_id)
+                assert before is not None
+
+                await _run_homogenization_submit(ea_session_maker, game_id)
+
+                after = await _get_game_lichess_evals_at(ea_session_maker, game_id)
+                assert after == before, (
+                    f"games.lichess_evals_at must never change (homogenize={homogenize}): "
+                    f"before={before!r}, after={after!r}"
+                )
+            finally:
+                await _delete_games_homogenization(ea_session_maker, [game_id])

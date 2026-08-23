@@ -3379,6 +3379,20 @@ The §5 queries reuse the same methodology as §§1–3:
 - **Equal-footing filter**: §5 applies the same `abs(opp_rating − user_rating) ≤ 100` filter as §§2–3, via `sql.BASE_GAME_FILTER`. The pairing design (same game's opponent on both sides) already conditions on game context, but the equal-footing filter further ensures both sides of the delta are from matched-rating games, improving zone stability and consistency with §§2–3 methodology.
 - **Per-user analyzed-games floor**: `FLAW_DELTA_MIN_GAMES = 20` (D-08). Matches `ENDGAME_MIN_GAMES` from §3.2.
 
+### Mixed eval provenance in `game_flaws` (Phase 212)
+
+Before Phase 212, every `game_flaws` row in the benchmark DB was classified from lichess `%eval` values — eval source and "was analyzed" were the same partition. After Phase 212's classical tranche, that is no longer true: roughly **175,000 of the DB's 4,153,067 `game_flaws` rows now derive from our own Stockfish** instead, because Phase 212's homogenization flag (`BENCHMARK_HOMOGENIZE_EVAL_SOURCE`) forced those games' write path to store engine evals in place of the lichess ones.
+
+**`benchmark_selection` is the marker.** Any query can split the two sources by joining `games g` to `benchmark_selection bs ON bs.game_id = g.id`:
+- **`bs.lichess_arm IS TRUE`** — this game had lichess evals at import time and was re-evaluated by our engine anyway (homogenized). Its `game_flaws` rows now derive from our Stockfish, not lichess.
+- **No `benchmark_selection` row for this game at all** — untouched, still lichess-classified data, exactly as before Phase 212.
+
+**Deliberate non-choices, so a future reader does not "fix" them:**
+- **No anti-join is applied and no frozen basis is kept.** Disclosure was chosen over exclusion for this phase — see `[[feedback_benchmark_source_of_truth]]` and 212-CONTEXT.md D-06. If a query needs a single-source basis, apply the split above explicitly; §5's own queries do not do this by default.
+- **`games.lichess_evals_at` no longer implies the stored `eval_cp` came from lichess.** It still, deliberately, marks "this game was analyzed on lichess at import time" (Phase 212 D-04 leaves the column itself untouched) — but for a homogenized lichess-arm game, the *stored* `eval_cp`/`game_flaws` values now come from our engine while `lichess_evals_at` stays set. These two meanings diverged in Phase 212; any query that conflates them (e.g. filtering `lichess_evals_at IS NOT NULL` to mean "flaws computed from lichess evals") is now wrong for the tranches Phase 212 has run.
+
+Per-tranche exact row counts for this split are recorded by `scripts/benchmark_lane.py record` under `reports/benchmark-lane/benchmark-lane-{tranche}-YYYY-MM-DD.md` — treat those reports as the authoritative counts rather than re-deriving them.
+
 ### Collapse verdict methodology
 
 Same as §§1–3 — the generator emits `max_abs_d` per (metric, axis); you convert to a verdict word:

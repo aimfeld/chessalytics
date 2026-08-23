@@ -97,6 +97,48 @@ class Settings(BaseSettings):
     # this merge — it is a separate, observed flag flip.
     BEST_MOVE_BACKFILL_ENABLED: bool = False
 
+    # Benchmark full-game-analysis lane selection gate (Phase 212 BENCHLANE-02,
+    # D-09). When True, every lottery/claim lane the worker fleet can reach --
+    # tier-3 derived, tier-4 blob, tier-4b bestmove (eval_queue_service.py), and
+    # the entry-ply probe + canonical claim (eval_remote.py / eval_entry.py,
+    # 212-07, which also covers the in-process server-pool drain since it shares
+    # the same claim) -- narrows its candidate query to games present in
+    # benchmark_selection. See app/services/eval_utils.py's selection_gate_clause().
+    # The explicit tier-1/2 queue (eval_jobs) is deliberately NOT gated: it is fed
+    # only by explicit user-requested enqueue, never a lottery, and is out of reach
+    # on the benchmark instance for a structural reason (no enqueue surface there) --
+    # see docs/benchmark-lane-runbook.md's per-rung table. This flag exists ONLY
+    # for the benchmark backend instance running on :8001 against the benchmark
+    # Postgres on :5433. Unlike
+    # EVAL_AUTO_DRAIN_ENABLED and BEST_MOVE_BACKFILL_ENABLED above (which prod
+    # DOES enable), prod's .env must NEVER set this true -- doing so would
+    # silently change what prod's lottery claims, gating prod's live traffic
+    # against a benchmark-only table that does not exist on prod's DB. Default
+    # False (safe for dev/CI/prod).
+    BENCHMARK_SELECTION_GATE_ENABLED: bool = False
+
+    # Eval-source homogenization for the benchmark full-game-analysis lane
+    # (Phase 212 BENCHLANE-05, D-03). When True, the derived
+    # is_lichess_eval_game boolean is forced False everywhere it is computed
+    # (see app/services/eval_utils.py's derive_is_lichess_eval_game -- the
+    # SINGLE derivation point all seven call sites route through). This makes
+    # the drain write path store our own engine's eval_cp instead of
+    # preserving lichess's, restores the terminal eval donor
+    # (include_terminal=not is_lichess_eval_game in eval_drain.py), and lets
+    # game_flaws classify from our Stockfish rather than lichess's imported
+    # evals -- so a §6-style analyzed-vs-unanalyzed comparison is not
+    # confounded by eval source. games.lichess_evals_at itself is
+    # deliberately left untouched by this flag and remains the §6 selection
+    # marker (D-04) -- only the derived boolean is overridden. Accepted
+    # knock-on: this also drops the eval_drain.py best-move identity-key
+    # substitution that keeps lichess's stored best_move as the candidate
+    # identity key, so the engine's own best move becomes the identity key
+    # instead -- which is the intended, more correct behavior. Like
+    # BENCHMARK_SELECTION_GATE_ENABLED above, this flag exists ONLY for the
+    # benchmark backend instance; prod's .env must NEVER set this true.
+    # Default False (safe for dev/CI/prod).
+    BENCHMARK_HOMOGENIZE_EVAL_SOURCE: bool = False
+
     # Operator token for the remote eval worker (Phase 120 SEED-048).
     # Empty string = endpoints return 403 (disabled in dev/CI).
     # Prod sets a strong random secret in .env.

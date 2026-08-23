@@ -78,6 +78,7 @@ from app.models.eval_jobs import (
 )  # noqa: F401 — re-export constants for callers
 from app.models.game import Game
 from app.models.user import User
+from app.services.eval_utils import derive_is_lichess_eval_game, selection_gate_clause
 
 # ─── Module-level constants (no magic numbers) ────────────────────────────────
 
@@ -285,11 +286,58 @@ async def _claim_queued_job(
     tier: int = row[3]
 
     # Resolve is_lichess_eval_game (D-117-07): lichess_evals_at IS NOT NULL.
+    # Phase 212 D-03: routed through the single derivation point so
+    # BENCHMARK_HOMOGENIZE_EVAL_SOURCE can force this False everywhere.
     game_result = await session.execute(select(Game.lichess_evals_at).where(Game.id == game_id))
     lichess_evals_at = game_result.scalar_one_or_none()
-    is_lichess_eval_game = lichess_evals_at is not None
+    is_lichess_eval_game = derive_is_lichess_eval_game(lichess_evals_at)
 
     return job_id, game_id, user_id, tier, is_lichess_eval_game
+
+
+# Phase 212 BENCHLANE-02/D-09/D-10: benchmark full-game-analysis lane selection
+# gate. BENCHMARK_SELECTION_GATE_SQL_TEMPLATE / selection_gate_clause() moved to
+# app/services/eval_utils.py by 212-07 (see that module's docstring for why) --
+# the three call sites below (Step 1/2 of _claim_tier3_derived, Stage 1/2 of
+# _claim_tier4_blob, Stage 1/2 of _claim_tier4_bestmove) keep interpolating the
+# fragment they get back exactly as before; only the import site moved.
+# Keys ONLY on bs.game_id = g.id -- deliberately no tc_tranche filter, because
+# tranche sequencing is achieved by populating benchmark_selection one tranche
+# at a time (scripts/benchmark_lane.py select), and a tranche filter here would
+# need a second config value to stay in sync.
+
+
+async def assert_benchmark_selection_gate_ready() -> None:
+    """Fail closed if the benchmark selection gate is enabled but its table is missing.
+
+    Mirrors the assert_secret_key_configured() deploy-blocker pattern (CR #1.2,
+    app/core/config.py): called from the app lifespan at startup -- NOT at import
+    time -- so scripts/ and Alembic, which import ``settings`` but never claim
+    work, are unaffected. Returns immediately when
+    BENCHMARK_SELECTION_GATE_ENABLED is False, opening no database session at
+    all, so dev, CI, and prod (where the flag is always off) pay nothing.
+
+    Failing closed is the point (D-10 point 3): a gate-on instance with no
+    benchmark_selection table would otherwise raise UndefinedTable on every
+    claim for hours while looking merely idle from the outside, rather than
+    aborting loudly at startup before the engine pool is even built.
+
+    Raises:
+        RuntimeError: the gate is enabled and benchmark_selection does not
+            exist in the connected database.
+    """
+    if not settings.BENCHMARK_SELECTION_GATE_ENABLED:
+        return
+    async with async_session_maker() as session:
+        result = await session.execute(sa.text("SELECT to_regclass('public.benchmark_selection')"))
+        table_regclass = result.scalar_one_or_none()
+    if table_regclass is None:
+        raise RuntimeError(
+            "BENCHMARK_SELECTION_GATE_ENABLED is true but the benchmark_selection "
+            "table does not exist in the connected database. Run "
+            "`scripts/benchmark_lane.py select` first to materialize a tranche, "
+            "or verify DATABASE_URL points at the intended database."
+        )
 
 
 async def _es_weighted_user_pick(
@@ -587,6 +635,15 @@ async def _claim_tier3_derived(
     tau_game_seconds: float = GAME_RECENCY_HALF_LIFE_DAYS / math.log(2) * 86400.0
     game_floor: float = GAME_WEIGHT_FLOOR
 
+    # Phase 212 BENCHLANE-02/D-09: benchmark selection gate, read once per call.
+    # "" when BENCHMARK_SELECTION_GATE_ENABLED is off -- the byte-identity
+    # requirement (D-10 point 1) means every interpolation site below must
+    # render the gate suffix as a NO-OP (no extra whitespace/newline) in that
+    # case, so each site conditionally prefixes a single space only when
+    # _gate is non-empty rather than unconditionally inserting {_gate} on its
+    # own line.
+    _gate = selection_gate_clause()
+
     # Step 1: unified ES weighted user pick over the needs-engine ∪ lichess-eval-
     # pv-incomplete union (260723-j6g), rewritten (260729-a86) as two correlated
     # EXISTS with the guest guard distributed onto branch (a) as an outer
@@ -597,19 +654,19 @@ async def _claim_tier3_derived(
     # branch.
     picked_user_id = await _es_weighted_user_pick(
         session,
-        candidate_where_sql="""
+        candidate_where_sql=f"""
             (u.is_guest = false AND EXISTS (
                 SELECT 1 FROM games g
                 WHERE g.user_id = u.id
                   AND g.full_evals_completed_at IS NULL
-                  AND g.lichess_evals_at IS NULL
+                  AND g.lichess_evals_at IS NULL{(" " + _gate) if _gate else ""}
             ))
             OR
             EXISTS (
                 SELECT 1 FROM games g
                 WHERE g.user_id = u.id
                   AND g.full_pv_completed_at IS NULL
-                  AND g.lichess_evals_at IS NOT NULL
+                  AND g.lichess_evals_at IS NOT NULL{(" " + _gate) if _gate else ""}
             )
         """,
         recency_col_sql="u.last_activity",
@@ -634,7 +691,7 @@ async def _claim_tier3_derived(
             "   AND g.lichess_evals_at IS NULL)"
             "  OR"
             "  (g.full_pv_completed_at IS NULL AND g.lichess_evals_at IS NOT NULL)"
-            " )"
+            f" ){(' ' + _gate) if _gate else ''}"
         ),
         recency_col_sql="g.played_at",
         tau_seconds=tau_game_seconds,
@@ -649,9 +706,11 @@ async def _claim_tier3_derived(
 
     # Derive is_lichess_eval_game PER-GAME (not per-branch) via a trivial
     # PK-indexed lookup, mirroring how the tier-1/2 and tier-4b paths resolve
-    # the same flag elsewhere in this module.
+    # the same flag elsewhere in this module. Phase 212 D-03: routed through
+    # the single derivation point (this is the tier-3 lane the benchmark
+    # selection gate drives, so it is load-bearing for the whole phase).
     lichess_result = await session.execute(select(Game.lichess_evals_at).where(Game.id == game_id))
-    is_lichess_eval_game = lichess_result.scalar_one_or_none() is not None
+    is_lichess_eval_game = derive_is_lichess_eval_game(lichess_result.scalar_one_or_none())
 
     return game_id, picked_user_id, is_lichess_eval_game
 
@@ -742,15 +801,20 @@ async def _claim_tier4_blob(
     tau_g_seconds: float = TIER4_GAME_RECENCY_HALF_LIFE_DAYS / math.log(2) * 86400.0
     floor_g: float = TIER4_GAME_WEIGHT_FLOOR
 
+    # Phase 212 BENCHLANE-02/D-09: benchmark selection gate, read once per call.
+    # "" when BENCHMARK_SELECTION_GATE_ENABLED is off -- see the byte-identity
+    # note on _claim_tier3_derived's identical _gate assignment above.
+    _gate = selection_gate_clause()
+
     # Stage 1: ES weighted user pick over users with a blob-pending analyzed game.
     # SEED-125: games-only predicate, backed by ix_games_blob_backfill_pending.
     picked_user_id = await _es_weighted_user_pick(
         session,
-        candidate_exists_sql="""
+        candidate_exists_sql=f"""
                 SELECT 1 FROM games g
                 WHERE g.user_id = u.id
                   AND g.full_evals_completed_at IS NOT NULL
-                  AND g.blobs_completed_at IS NULL
+                  AND g.blobs_completed_at IS NULL{(" " + _gate) if _gate else ""}
         """,
         recency_col_sql="u.last_activity",
         tau_seconds=tau_u_seconds,
@@ -767,7 +831,7 @@ async def _claim_tier4_blob(
         game_where_sql=(
             "g.user_id = :picked_user"
             " AND g.full_evals_completed_at IS NOT NULL"
-            " AND g.blobs_completed_at IS NULL"
+            f" AND g.blobs_completed_at IS NULL{(' ' + _gate) if _gate else ''}"
         ),
         recency_col_sql="g.full_evals_completed_at",
         tau_seconds=tau_g_seconds,
@@ -826,15 +890,20 @@ async def _claim_tier4_bestmove(
     tau_g_seconds: float = TIER4_GAME_RECENCY_HALF_LIFE_DAYS / math.log(2) * 86400.0
     floor_g: float = TIER4_GAME_WEIGHT_FLOOR
 
+    # Phase 212 BENCHLANE-02/D-09: benchmark selection gate, read once per call.
+    # "" when BENCHMARK_SELECTION_GATE_ENABLED is off -- see the byte-identity
+    # note on _claim_tier3_derived's identical _gate assignment above.
+    _gate = selection_gate_clause()
+
     # Stage 1: ES weighted user pick over users with an eligible best-move-pending game.
     # include_guests=True so guest orphans (full_pv set, best_moves NULL) self-heal (B2).
     picked_user_id = await _es_weighted_user_pick(
         session,
-        candidate_exists_sql="""
+        candidate_exists_sql=f"""
                 SELECT 1 FROM games g
                 WHERE g.user_id = u.id
                   AND g.full_pv_completed_at IS NOT NULL
-                  AND g.best_moves_completed_at IS NULL
+                  AND g.best_moves_completed_at IS NULL{(" " + _gate) if _gate else ""}
         """,
         recency_col_sql="u.last_activity",
         tau_seconds=tau_u_seconds,
@@ -851,7 +920,7 @@ async def _claim_tier4_bestmove(
         game_where_sql=(
             "g.user_id = :picked_user"
             " AND g.full_pv_completed_at IS NOT NULL"
-            " AND g.best_moves_completed_at IS NULL"
+            f" AND g.best_moves_completed_at IS NULL{(' ' + _gate) if _gate else ''}"
         ),
         recency_col_sql="g.full_pv_completed_at",
         tau_seconds=tau_g_seconds,
@@ -1001,10 +1070,11 @@ async def claim_eval_job(
             # from the game row (same PK lookup the tier-1/2 path uses). The
             # minimal drain re-derives this itself, so this field is
             # observability-only here, but a stale False would be a landmine.
+            # Phase 212 D-03: routed through the single derivation point.
             lichess_at_4b = await session.execute(
                 select(Game.lichess_evals_at).where(Game.id == game_id4b)
             )
-            is_lichess_4b = lichess_at_4b.scalar_one_or_none() is not None
+            is_lichess_4b = derive_is_lichess_eval_game(lichess_at_4b.scalar_one_or_none())
         return ClaimedJob(
             game_id=game_id4b,
             user_id=user_id4b,

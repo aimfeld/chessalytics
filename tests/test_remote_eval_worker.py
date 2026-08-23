@@ -44,6 +44,8 @@ from scripts.remote_eval_worker import (
     HTTP_TIMEOUT_S,
     WORKER_ID_MAX_LEN,
     WORKER_SCHEMA_VERSION,
+    _BackendTarget,
+    _build_backend_targets,
     _build_blob_walk_targets,
     _eval_atomic_blob_nodes,
     _eval_atomic_game,
@@ -63,6 +65,7 @@ from scripts.remote_eval_worker import (
     _RetryBudget,
     _retry_timed_out,
     _run_cycle,
+    _run_loop,
     _worker_role,
     parse_args,
 )
@@ -167,7 +170,7 @@ async def test_ladder_explicit_first_skips_entry_lease() -> None:
     pool = AsyncMock()
     pool.evaluate_nodes_with_pv = AsyncMock(return_value=(100, None, "e2e4", "e2e4 e7e5"))
 
-    await _run_cycle(
+    outcome = await _run_cycle(
         client=client,
         pool=pool,
         sf_version="sf16",
@@ -175,6 +178,7 @@ async def test_ladder_explicit_first_skips_entry_lease() -> None:
         dry_run=False,
         loop=False,
     )
+    assert outcome.did_work is True
 
     # First call: /atomic-lease with scope=explicit
     first_call = client.post.call_args_list[0]
@@ -220,7 +224,7 @@ async def test_ladder_entry_ply_on_explicit_204() -> None:
     pool = AsyncMock()
     pool.evaluate = AsyncMock(return_value=(50, None))  # depth-15 returns (cp, mate)
 
-    await _run_cycle(
+    outcome = await _run_cycle(
         client=client,
         pool=pool,
         sf_version="sf16",
@@ -228,6 +232,7 @@ async def test_ladder_entry_ply_on_explicit_204() -> None:
         dry_run=False,
         loop=False,
     )
+    assert outcome.did_work is True
 
     called_urls = [c.args[0] for c in client.post.call_args_list]
     assert called_urls[0] == "/api/eval/remote/atomic-lease"
@@ -271,7 +276,7 @@ async def test_ladder_falls_to_idle_when_entry_lease_204() -> None:
     pool = AsyncMock()
     pool.evaluate_nodes_with_pv = AsyncMock(return_value=(0, None, "e1e2", "e1e2"))
 
-    await _run_cycle(
+    outcome = await _run_cycle(
         client=client,
         pool=pool,
         sf_version="sf16",
@@ -279,6 +284,7 @@ async def test_ladder_falls_to_idle_when_entry_lease_204() -> None:
         dry_run=False,
         loop=False,
     )
+    assert outcome.did_work is True
 
     called_urls = [c.args[0] for c in client.post.call_args_list]
     assert called_urls[0] == "/api/eval/remote/atomic-lease"  # scope=explicit
@@ -372,7 +378,7 @@ async def test_ladder_flaw_blob_on_all_tier123_204() -> None:
         return_value=(100, None, "e2e4", "e2e4 e7e5", 50, None, "d2d4")
     )
 
-    await _run_cycle(
+    outcome = await _run_cycle(
         client=client,
         pool=pool,
         sf_version="sf18",
@@ -380,6 +386,7 @@ async def test_ladder_flaw_blob_on_all_tier123_204() -> None:
         dry_run=False,
         loop=False,
     )
+    assert outcome.did_work is True
 
     called_urls = [c.args[0] for c in client.post.call_args_list]
     assert "/api/eval/remote/flaw-blob-lease" in called_urls, (
@@ -409,7 +416,7 @@ async def test_ladder_all_queues_empty_sleeps_once() -> None:
     pool = AsyncMock()
 
     with patch("scripts.remote_eval_worker.asyncio.sleep", new_callable=AsyncMock) as mock_sleep:
-        await _run_cycle(
+        outcome = await _run_cycle(
             client=client,
             pool=pool,
             sf_version="sf18",
@@ -418,6 +425,7 @@ async def test_ladder_all_queues_empty_sleeps_once() -> None:
             loop=False,
         )
         mock_sleep.assert_awaited_once_with(1.0)
+    assert outcome.did_work is False
 
     # Confirm rungs 4 and 5 were actually reached (not just an earlier-rung sleep)
     called_urls = [c.args[0] for c in client.post.call_args_list]
@@ -1123,9 +1131,10 @@ async def test_ladder_bestmove_lease_only_after_flaw_blob_204() -> None:
         return_value=(0, None, "e2e4", "e2e4", 5, None, "d2d4")
     )
 
-    await _run_cycle(
+    outcome = await _run_cycle(
         client=client, pool=pool, sf_version="sf18", idle_sleep=1.0, dry_run=False, loop=False
     )
+    assert outcome.did_work is True
 
     called_urls = [c.args[0] for c in client.post.call_args_list]
     blob_idx = called_urls.index("/api/eval/remote/flaw-blob-lease")
@@ -1467,3 +1476,313 @@ def test_transient_failure_alert_s_clears_deploy_window() -> None:
     """Regression guard: the escalation threshold must clear a normal deploy/restart
     window so routine deploys never escalate (they're the churn we stopped capturing)."""
     assert TRANSIENT_FAILURE_ALERT_S >= 120.0
+
+
+# ─── D-13/D-14 dual-URL fallback tests (Plan 03 Task 2) ──────────────────────
+
+_ATOMIC_LEASE_BODY: dict[str, object] = {
+    "game_id": 42,
+    "positions": [
+        {
+            "ply": 2,
+            "fen": "rnbqkbnr/pppp1ppp/8/4p3/4P3/8/PPPP1PPP/RNBQKBNR w KQkq - 0 2",
+            "is_terminal": False,
+        }
+    ],
+    "job_id": "job-token-abc",
+}
+_ATOMIC_SUBMIT_BODY: dict[str, object] = {"game_id": 42, "flaws_written": 0, "blobs_written": 0}
+
+
+def _atomic_success_pool() -> AsyncMock:
+    """An engine pool that succeeds a single rung-1 atomic lease+submit."""
+    pool = AsyncMock()
+    pool.evaluate_nodes_with_pv = AsyncMock(return_value=(100, None, "e2e4", "e2e4 e7e5"))
+    return pool
+
+
+def _all_204_client() -> AsyncMock:
+    """A mock client whose /atomic-lease/entry-lease/flaw-blob-lease/bestmove-lease
+    rungs all return 204, in D-06 ladder order."""
+    client = AsyncMock()
+    client.post = AsyncMock(side_effect=[_make_response(204) for _ in range(5)])
+    return client
+
+
+async def test_build_backend_targets_single_target_when_no_fallback() -> None:
+    """With fallback_url=None, _build_backend_targets returns exactly one target --
+    the byte-identical single-backend case."""
+    targets = _build_backend_targets("https://flawchess.com", "primary-tok", None, None)
+    assert targets == [
+        _BackendTarget(base_url="https://flawchess.com", token="primary-tok", label="primary")
+    ]
+
+
+async def test_fallback_token_defaults_to_primary_token() -> None:
+    """--fallback-token omitted (None) while --fallback-url is set: the fallback
+    target's token equals the primary's resolved token (documented default)."""
+    targets = _build_backend_targets(
+        "https://flawchess.com", "primary-tok", "http://localhost:8001", None
+    )
+    assert len(targets) == 2
+    assert targets[0] == _BackendTarget(
+        base_url="https://flawchess.com", token="primary-tok", label="primary"
+    )
+    assert targets[1] == _BackendTarget(
+        base_url="http://localhost:8001", token="primary-tok", label="fallback"
+    )
+
+
+async def test_build_backend_targets_distinct_fallback_token() -> None:
+    """An explicit --fallback-token is used as-is, never overwritten by the primary."""
+    targets = _build_backend_targets(
+        "https://flawchess.com", "primary-tok", "http://localhost:8001", "bench-tok"
+    )
+    assert targets[1].token == "bench-tok"
+
+
+def test_fallback_url_empty_string_rejected(monkeypatch: pytest.MonkeyPatch) -> None:
+    """--fallback-url "" raises SystemExit (parser.error), not a silently-empty base_url."""
+    monkeypatch.setattr(sys, "argv", ["worker", "--fallback-url", "", "--once"])
+    with pytest.raises(SystemExit):
+        parse_args()
+
+
+def test_fallback_url_whitespace_only_rejected(monkeypatch: pytest.MonkeyPatch) -> None:
+    """--fallback-url "   " (whitespace-only) is also rejected, not just the empty string."""
+    monkeypatch.setattr(sys, "argv", ["worker", "--fallback-url", "   ", "--once"])
+    with pytest.raises(SystemExit):
+        parse_args()
+
+
+def test_fallback_token_without_url_rejected(monkeypatch: pytest.MonkeyPatch) -> None:
+    """--fallback-token without --fallback-url is rejected -- a token with nowhere
+    to send it is a configuration mistake, not a valid one-target run."""
+    monkeypatch.setattr(sys, "argv", ["worker", "--fallback-token", "tok", "--once"])
+    with pytest.raises(SystemExit):
+        parse_args()
+
+
+def test_fallback_url_and_token_accepted(monkeypatch: pytest.MonkeyPatch) -> None:
+    """--fallback-url with --fallback-token is accepted and both values are parsed."""
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        ["worker", "--fallback-url", "http://localhost:8001", "--fallback-token", "tok", "--once"],
+    )
+    args = parse_args()
+    assert args.fallback_url == "http://localhost:8001"
+    assert args.fallback_token == "tok"
+
+
+async def test_single_target_call_sequence_unchanged() -> None:
+    """With one client (--fallback-url omitted), _run_loop's per-cycle HTTP call
+    sequence is byte-identical to the pre-D-13 single-client loop: exactly one
+    _run_cycle invocation, same rung-1 lease + submit calls."""
+    client = AsyncMock()
+    client.post = AsyncMock(
+        side_effect=[
+            _make_response(200, _ATOMIC_LEASE_BODY),
+            _make_response(200, _ATOMIC_SUBMIT_BODY),
+        ]
+    )
+    pool = _atomic_success_pool()
+
+    await _run_loop(
+        clients=[client],
+        pool=pool,
+        sf_version="sf16",
+        idle_sleep=1.0,
+        dry_run=False,
+        loop=False,
+    )
+
+    called_urls = [c.args[0] for c in client.post.call_args_list]
+    assert called_urls == [
+        "/api/eval/remote/atomic-lease",
+        "/api/eval/remote/atomic-submit",
+    ]
+
+
+async def test_fallback_not_called_when_primary_rung1_works() -> None:
+    """Rung 1 returns 200 on primary: the fallback client receives zero calls."""
+    primary = AsyncMock()
+    primary.post = AsyncMock(
+        side_effect=[
+            _make_response(200, _ATOMIC_LEASE_BODY),
+            _make_response(200, _ATOMIC_SUBMIT_BODY),
+        ]
+    )
+    fallback = AsyncMock()
+    fallback.post = AsyncMock()
+    pool = _atomic_success_pool()
+
+    await _run_loop(
+        clients=[primary, fallback],
+        pool=pool,
+        sf_version="sf16",
+        idle_sleep=1.0,
+        dry_run=False,
+        loop=False,
+    )
+
+    fallback.post.assert_not_called()
+
+
+async def test_fallback_not_called_when_primary_rung5_works() -> None:
+    """Rung 5 (/bestmove-lease) returns 200 on primary after rungs 1-4 all 204:
+    the fallback client still receives zero calls (whole-ladder gating, not
+    per-rung)."""
+    bestmove_lease_body = {
+        "game_id": 88,
+        "positions": [{"ply": 4, "fen": chess.STARTING_FEN}],
+        "leased_at": "2026-08-22T10:00:00Z",
+    }
+    submit_body = {"game_id": 88, "rows_written": 1}
+    primary = AsyncMock()
+    primary.post = AsyncMock(
+        side_effect=[
+            _make_response(204),  # atomic-lease?scope=explicit
+            _make_response(204),  # entry-lease
+            _make_response(204),  # atomic-lease?scope=idle
+            _make_response(204),  # flaw-blob-lease
+            _make_response(200, bestmove_lease_body),  # bestmove-lease
+            _make_response(200, submit_body),  # bestmove-submit
+        ]
+    )
+    fallback = AsyncMock()
+    fallback.post = AsyncMock()
+
+    pool = AsyncMock()
+    pool.evaluate_nodes_multipv2 = AsyncMock(
+        return_value=(0, None, "e2e4", "e2e4", 5, None, "d2d4")
+    )
+
+    await _run_loop(
+        clients=[primary, fallback],
+        pool=pool,
+        sf_version="sf18",
+        idle_sleep=1.0,
+        dry_run=False,
+        loop=False,
+    )
+
+    fallback.post.assert_not_called()
+
+
+async def test_fallback_fires_only_after_all_204() -> None:
+    """All five primary rungs return 204: the fallback client receives its own
+    rung-1 call, and the primary's five calls all precede it."""
+    primary = _all_204_client()
+    fallback = AsyncMock()
+    fallback.post = AsyncMock(
+        side_effect=[
+            _make_response(200, _ATOMIC_LEASE_BODY),
+            _make_response(200, _ATOMIC_SUBMIT_BODY),
+        ]
+    )
+    pool = _atomic_success_pool()
+
+    await _run_loop(
+        clients=[primary, fallback],
+        pool=pool,
+        sf_version="sf16",
+        idle_sleep=1.0,
+        dry_run=False,
+        loop=False,
+    )
+
+    assert primary.post.call_count == 5
+    assert fallback.post.call_count == 2
+    assert fallback.post.call_args_list[0].args[0] == "/api/eval/remote/atomic-lease"
+
+
+async def test_ladder_never_interleaves_targets() -> None:
+    """The invariant test accepted in the assumption-delta decision: the primary
+    client's five calls all precede the fallback client's first call -- rungs are
+    never interleaved across targets. Verified by comparing recorded call ORDER
+    across the two mocks (call_args_list alone cannot show cross-mock ordering)."""
+    call_order: list[str] = []
+    primary_responses = [_make_response(204) for _ in range(5)]
+    fallback_responses = [
+        _make_response(200, _ATOMIC_LEASE_BODY),
+        _make_response(200, _ATOMIC_SUBMIT_BODY),
+    ]
+
+    async def primary_post(*_args: object, **_kwargs: object) -> MagicMock:
+        call_order.append("primary")
+        return primary_responses.pop(0)
+
+    async def fallback_post(*_args: object, **_kwargs: object) -> MagicMock:
+        call_order.append("fallback")
+        return fallback_responses.pop(0)
+
+    primary = AsyncMock()
+    primary.post = AsyncMock(side_effect=primary_post)
+    fallback = AsyncMock()
+    fallback.post = AsyncMock(side_effect=fallback_post)
+    pool = _atomic_success_pool()
+
+    await _run_loop(
+        clients=[primary, fallback],
+        pool=pool,
+        sf_version="sf16",
+        idle_sleep=1.0,
+        dry_run=False,
+        loop=False,
+    )
+
+    assert call_order == ["primary"] * 5 + ["fallback"] * 2
+
+
+async def test_both_targets_idle_sleeps_once() -> None:
+    """Both targets return all-204: asyncio.sleep(idle_sleep) is awaited exactly
+    once for the whole cycle, not once per target (T-146-06 regression guard)."""
+    primary = _all_204_client()
+    fallback = _all_204_client()
+    pool = AsyncMock()
+
+    with patch("scripts.remote_eval_worker.asyncio.sleep", new_callable=AsyncMock) as mock_sleep:
+        await _run_loop(
+            clients=[primary, fallback],
+            pool=pool,
+            sf_version="sf18",
+            idle_sleep=1.0,
+            dry_run=False,
+            loop=False,
+        )
+        mock_sleep.assert_awaited_once_with(1.0)
+
+    assert primary.post.call_count == 5
+    assert fallback.post.call_count == 5
+
+
+async def test_unreachable_primary_falls_through() -> None:
+    """Primary's first call raises httpx.ConnectError (unreachable, D-14): the
+    fallback ladder runs in the SAME cycle rather than the exception propagating.
+    D-14's fallthrough is unconditional (not gated on `loop`), so this holds even
+    for a bounded --once (loop=False) run -- there is more work left to try
+    before the run can conclude."""
+    primary = AsyncMock()
+    primary.post = AsyncMock(side_effect=httpx.ConnectError("connection refused"))
+    fallback = AsyncMock()
+    fallback.post = AsyncMock(
+        side_effect=[
+            _make_response(200, _ATOMIC_LEASE_BODY),
+            _make_response(200, _ATOMIC_SUBMIT_BODY),
+        ]
+    )
+    pool = _atomic_success_pool()
+
+    await _run_loop(
+        clients=[primary, fallback],
+        pool=pool,
+        sf_version="sf16",
+        idle_sleep=1.0,
+        dry_run=False,
+        loop=False,
+    )
+
+    assert primary.post.call_count == 1
+    assert fallback.post.call_count == 2
+    assert fallback.post.call_args_list[0].args[0] == "/api/eval/remote/atomic-lease"
