@@ -24,8 +24,8 @@ This is the paired-not-pooled lesson of report §6.2 applied throughout.
 
 Usage:
     bin/prod_db_tunnel.sh              # tunnel must be up
-    uv run python stories/two-pawns-up/prod_selection_bias.py            # prod
-    uv run python stories/two-pawns-up/prod_selection_bias.py --db dev   # smoke
+    uv run python scripts/two_pawns_up/prod_selection_bias.py            # prod
+    uv run python scripts/two_pawns_up/prod_selection_bias.py --db dev   # smoke
 """
 
 from __future__ import annotations
