@@ -160,6 +160,45 @@ describe('sentryBeforeSend (FLAWCHESS-24)', () => {
     ]);
   });
 
+  it('fingerprints a 502 response as api-http-502, not the default axios-stack group', async () => {
+    const { sentryBeforeSend } = await import('@/instrument');
+
+    const event = sentryBeforeSend(
+      makeEvent() as never,
+      makeHint({ isAxiosError: true, response: { status: 502 } }) as never,
+    );
+    expect((event as unknown as { fingerprint: string[] }).fingerprint).toEqual(['api-http-502']);
+  });
+
+  it('gives 403 and 502 DIFFERENT fingerprints so they cannot share one issue', async () => {
+    const { sentryBeforeSend } = await import('@/instrument');
+
+    const forbidden = sentryBeforeSend(
+      makeEvent() as never,
+      makeHint({ isAxiosError: true, response: { status: 403 } }) as never,
+    );
+    const badGateway = sentryBeforeSend(
+      makeEvent() as never,
+      makeHint({ isAxiosError: true, response: { status: 502 } }) as never,
+    );
+
+    const forbiddenPrint = (forbidden as unknown as { fingerprint: string[] }).fingerprint;
+    const badGatewayPrint = (badGateway as unknown as { fingerprint: string[] }).fingerprint;
+    expect(forbiddenPrint).toEqual(['api-http-403']);
+    expect(badGatewayPrint).toEqual(['api-http-502']);
+    expect(forbiddenPrint).not.toEqual(badGatewayPrint);
+  });
+
+  it('fingerprints a 422 response as api-http-422', async () => {
+    const { sentryBeforeSend } = await import('@/instrument');
+
+    const event = sentryBeforeSend(
+      makeEvent() as never,
+      makeHint({ isAxiosError: true, response: { status: 422 } }) as never,
+    );
+    expect((event as unknown as { fingerprint: string[] }).fingerprint).toEqual(['api-http-422']);
+  });
+
   it('fingerprints ECONNABORTED as api-timeout even while hidden/offline — a real attempted request', async () => {
     const { sentryBeforeSend } = await import('@/instrument');
     Object.defineProperty(navigator, 'onLine', { configurable: true, value: false });

@@ -48,6 +48,7 @@
 - ✅ **v2.10 FlawChess Engine Improvements** — Phases 194–199 (shipped 2026-08-01) — eliminate the engine's measured structural waste (main-thread jank, undersized thrashing provider caches, an over-deep flat grading ladder, a discarded Maia WDL head, Maia/Stockfish idling against each other), then light up dormant Stockfish root injection on the analysis board and re-establish honest bot strength labels in one final calibration sweep (SEED-126, SEED-127, SEED-118) — see [milestones/v2.10-ROADMAP.md](milestones/v2.10-ROADMAP.md)
 - ✅ **v2.11 Train Solve Surface & Push Reminders** — Phases 200–203 (shipped 2026-08-03) — make the Train solve screen readable and self-contained (sidebar-as-legend with per-move arrow glyphs + hover/tap spotlight, `inaccuracy`-tier alternatives recolored green, inline sideline exploration that never leaves the flow), close the retention loop with web push reminders on the days the scheduler actually picked (push infrastructure + reminder job, then a one-shot-permission-safe pre-prompt UX), and turn the reminder-confirmed state into the PWA install surface — fixing the permanent install-prompt burn, adding a 14-day/3-attempt cooldown, five explicit device states, and the desktop→phone QR handoff (SEED-131, SEED-132, SEED-134) — see [milestones/v2.11-ROADMAP.md](milestones/v2.11-ROADMAP.md)
 - ✅ **v2.12 Train Reliability & Grading Agreement** — Phases 204, 205 (shipped 2026-08-05; deployed to production, releases #295/#296) — stop Train's two silent-failure surfaces from lying to the user: a push reminder that never arrives now recovers itself (a pruned device re-registers on app load without spending the one-shot permission, a message survives a phone that is briefly unreachable, a VAPID rotation is detected and repaired on the next gesture, and a fan-out that reached nobody no longer burns the day's claim), and a Train puzzle can no longer contradict itself (the free-play root ply is graded from the mount search's own rank lines, and puzzles whose top-two margin sits inside browser-search noise are no longer served) (SEED-135, SEED-137) — see [milestones/v2.12-ROADMAP.md](milestones/v2.12-ROADMAP.md)
+- ✅ **v2.13 Ways In & Honest Answers** — Phases 206–211 (shipped 2026-08-22; deployed to production throughout, releases #297–#318) — two doors into the product that did not exist (self-serve password reset by email, and pasting a FEN or full PGN onto the analysis board), while Train stopped contradicting its own answer key (a session with none of your own blunders is labeled a warm-up and topped up from a sharp CC0 tactics pool instead of a full deck of red herrings; every "Also fine" alternative is now server-vetted and graded from the server's deep evals). Underneath: traffic-surge hardening (import concurrency cap with a queued state, a backing-off readiness poll, guest promotion and percentile compute off the event loop, Cloudflare CDN cutover) and custom-start games no longer crashing `/analysis` or silently evicting an opening line from insights (SEED-140, SEED-143, SEED-144, SEED-146, SEED-042, SEED-150) — see [milestones/v2.13-ROADMAP.md](milestones/v2.13-ROADMAP.md)
 
 ## Progress
 
@@ -166,470 +167,190 @@
 | 203. PWA Install Re-prompting & Train-Anchored Install Offer (SEED-134, v2.11) | 4/4 | Complete | 2026-08-02 |
 | 204. Push Reminder Delivery Reliability (SEED-135, v2.12) | 3/3 | Complete | 2026-08-03 |
 | 205. Train Grading Oracle Agreement (SEED-137, v2.12) | 2/2 | Complete    | 2026-08-04 |
-| 206. Train Warm-Up Sessions & Sharp Filler Pool (SEED-140, unassigned) | 3/3 | Complete    | 2026-08-07 |
-| 207. Self-Serve Password Reset (SEED-143, unassigned) | 3/3 | Complete    | 2026-08-08 |
-| 208. Paste a FEN or PGN on /analysis (SEED-144, unassigned) | 4/4 | Complete    | 2026-08-08 |
-| 209. Traffic-Surge Quick Wins (SEED-146, unassigned) | 4/4 | Complete    | 2026-08-15 |
-| 210. Custom-Start Games — Crash Containment & Insight Eviction (SEED-042, unassigned) | 3/3 | Complete    | 2026-08-15 |
-| 211. Vetted "Also Fine" Moves & Server-Key Grading (SEED-150, unassigned) | 3/3 | Complete    | 2026-08-16 |
+| 206. Train Warm-Up Sessions & Sharp Filler Pool (SEED-140, v2.13) | 3/3 | Complete    | 2026-08-07 |
+| 207. Self-Serve Password Reset (SEED-143, v2.13) | 3/3 | Complete    | 2026-08-08 |
+| 208. Paste a FEN or PGN on /analysis (SEED-144, v2.13) | 4/4 | Complete    | 2026-08-08 |
+| 209. Traffic-Surge Quick Wins (SEED-146, v2.13) | 4/4 | Complete    | 2026-08-15 |
+| 210. Custom-Start Games — Crash Containment & Insight Eviction (SEED-042, v2.13) | 3/3 | Complete    | 2026-08-15 |
+| 211. Vetted "Also Fine" Moves & Server-Key Grading (SEED-150, v2.13) | 3/3 | Complete    | 2026-08-16 |
+| 212. Benchmark Full-Game Analysis Lane (SEED-152, unassigned) | 0/0 | Not planned | - |
 
 ## Active Phases (unassigned milestone)
 
-Phases added after the v2.12 close and not yet assigned to a milestone. `/gsd-new-milestone` folds these into the next milestone section; until then they are active work, not backlog.
+Phases added after the v2.13 close and not yet assigned to a milestone. `/gsd-new-milestone` folds these into the next milestone section; until then they are active work, not backlog.
 
-### Phase 206: Train Warm-Up Sessions & Sharp Filler Pool
+### Phase 212: Benchmark Full-Game Analysis Lane
 
-**Goal**: A Train session that contains none of the user's own analyzed blunders stops silently masquerading as a normal session. When the SR side is empty, the user gets an explicitly labeled warm-up built from an honest mix of sharp static puzzles and several-fine-moves red herrings — not a full deck of herrings whose critical/several answer is always "several". The same static sharp set becomes the co-filler for *any* SR shortfall, so no session's critical/several base rate is skewed by the backfill. Backend + frontend, one migration expected (a third `DrillSource` value + a nullable static-puzzle identity column).
+**Goal**: The benchmark DB stops being eval-only. Today all 641,855 games marked analyzed
+carry lichess `%eval` and nothing else — 50,338,518 positions have `eval_cp` while
+`best_move` and `pv` are NULL for every single one, and `game_best_moves` is empty. So
+every FlawChess-specific signal (best moves, PV, flaw blobs, tactic tags, gem/great tiers)
+is unavailable on the entire benchmark population, which rules out whole classes of data
+story and forces robustness checks to leave the population (see
+`stories/two-pawns-up/two-pawns-up-report-latest.md` §6, which had to borrow ~98 prod
+accounts clustered at 1400–2200 and concede that "the sign of the side tilt need not
+transfer"). After this phase, a capped, randomly-selected equal-footing slice of the
+benchmark DB has been through the real FlawChess pipeline, produced by the existing worker
+fleet against a **local backend pointed at the benchmark DB** — no prod-side changes, no
+product surface, no prod disk impact.
 
-**Depends on**: Phase 189 (drill pool, session composition, `DrillSource`, `drill_solves`), Phase 192 (`herring_pool` and the exhaustion contract the sharp set must mirror), Phase 193 (`pool_eligible_since` / `tick_days`, which the warm-up must not silently bypass), Phase 205 (the dead band that made SR material scarcer, raising how often this fires)
+**Depends on**: nothing new. Runs on the existing tier-3 drain, `scripts/remote_eval_worker.py`,
+and the benchmark Postgres on port 5433 (`bin/benchmark_db.sh`).
 
-**Requirements**: WARM-01, WARM-02, WARM-03, WARM-04, WARM-05, WARM-06, WARM-07, WARM-08 (minted at planning, one per Success Criterion below in order; traceability table in `phases/206-train-warmup-sharp-filler/206-01-PLAN.md` § Requirements — this phase predates its milestone's REQUIREMENTS.md)
+**Source**: [SEED-152](../seeds/SEED-152-benchmark-full-game-analysis-lane.md) — planted
+2026-08-22 from a `/gsd-explore` session, revised the same day when the sibling-DB-on-prod
+topology was rejected. Carries the measured cost table, the storage/MVCC figures, and the
+locked population/cap/selection decisions.
 
-**Source**: [SEED-140](../seeds/SEED-140-train-first-session-warmup.md) — planted 2026-08-07 during `/gsd-explore` from "new user imports, trains immediately, gets only red herrings". The seed's original question ("do red herrings enter the SR rotation?") was **checked and answered: they do not** (`train_repository.py:1701-1715`, `:1659-1672`, POOL-08 at `:2178`). The SR ladder is uncontaminated; the defect is purely session *composition* and what the user is told about it. Do not re-derive that.
+**Locked in the seed — do not re-open**: population is equal-footing only
+(`abs(white_rating - black_rating) <= 100`, consistent with
+`.planning/notes/benchmark-equal-footing-framing.md`); cap is **100 games per user per TC
+bucket** (the cap *is* the plan, not a fallback — uncapped bullet alone costs 44.6 days
+against 24.8 for the whole capped four-TC program); selection within a user is **random,
+not recency-ordered** (every benchmark metric buckets on rating-at-game-time, so a
+recency-biased cap would systematically shift users toward their peak rating and away from
+the `median_elo` their cell was selected on); TC order is classical → rapid → blitz →
+bullet, each completing before the next so the program is stoppable at any boundary; and
+both arms run (games with and without lichess evals).
 
-**Scope**:
+**Rejected topology, recorded**: a sibling DB on the prod host with a new lowest-priority
+claim lane in `eval_queue_service.py`. Killed because the queue service is bound to the
+single app DB via `async_session_maker`, so a sibling-DB lane means dual-DB routing through
+every worker-facing path (claim, atomic submit, flaw classify, best-move write, lease
+expiry) — the riskiest place in the codebase to touch (`[[project_atomic_eval_submit_incremental_lease]]`) —
+plus slice-out/slice-back merge scripts and prod MVCC exposure. The "remote workers can't
+reach Adrian's box" objection evaporated once the worker machines turned out to be on the
+same LAN.
 
-- **The defect — two correct code paths combining into a pathological one.** The cross-backfill (`train_repository.py:1609-1618`) fills every empty SR slot with herrings so a short side never silently shrinks the session; with zero analyzed blunders that makes all `n` slots herrings. That in turn guarantees `puzzle_count == requested_count`, so the "still analyzing" notice at `TrainStartScreen.tsx:130` — gated on `blob_pending_count > 0 && puzzle_count < requested_count` — can never fire. The user is told nothing. Consequences in severity order: every `herring_pool` row is by construction a several-genuinely-fine-moves position, so the binary guess is **always** "several" and a user who works this out scores 100% having learned an actively harmful prior about their own games; a perfect score and a streak day for zero learning; and `n` herrings permanently retired per session from a manually generated pool (`herring_stmt(..., exclude_served=True)`, `train_pool.py:731-740`).
-- **Trigger is material scarcity, NOT session ordinal.** Never derive this from "is this their first session". A user who imports, plays bots for a while, then opens Train with blunders already analyzed gets an ordinary unlabeled session; a returning user whose material ran dry gets the warm-up again.
-- **The discriminant is zero, not a threshold (DECIDED).** Warm-up framing ⟺ the composed session contains **no** `DrillSource.SR_ITEM` puzzle at all (`len(surviving_sr_keys) == 0` at `train_repository.py:1693-1697`). One qualifying blunder makes it an ordinary session however much filler sits beside it.
-- **Server-computed and resume-stable.** Surface a boolean on the session response rather than letting the client count sources (the existing convention, `TrainStartScreen.tsx:157-162` / T-191-24). It must be derived from stored `drill_solves.source` rows or persisted on `drill_sessions` — `_resume_session` re-serves an existing session, so a flag recomputed from *current* pool state would silently shed its label mid-session once the lottery lands.
-- **Sharp puzzles come from a small static lichess set.** The vendored CC0 fixtures `fixtures/tagger/detector_fixture_{train,test}.csv` already carry `FEN,PreFlawFEN,FirstMove,PV,Themes,Rating` — Train's puzzle shape including the arriving move, plus a Glicko rating from millions of real solves. Selecting ~50 low-rated unambiguous positions is data selection, not new infrastructure. Deliberately easy: the warm-up teaches the mechanic, it does not benchmark the user.
-- **The sharp pool is a general SR-shortfall filler, and that is load-bearing rather than optional.** Today *every* shortfall is backfilled with herrings alone, skewing that session's base rate toward "several"; a sharp co-filler keeps it honest wherever a shortfall occurs. It is also the mechanism the no-material fallback runs on (below), so plan the two together.
-- **Labeled, but otherwise a normal session (user decision 2026-08-07).** It accrues streak and scores exactly like any other session — the earlier "fake streak day" objection applied specifically to the degenerate all-herring case, and an honest mix removes it. Uniform treatment also keeps special-casing out of scoring and streak settling.
+**Planning notes** (interactions the planner must resolve):
 
-**Locked constraints (do not re-open)**:
+- **Lichess-eval games are NOT cheaper — they are slightly more expensive.** Lichess never
+  supplies PV or best move; `eval_queue_service.py` enqueues them precisely because
+  `full_pv_completed_at IS NULL`. Phase 174-06 retired the old targets filter, so
+  `eval_drain.py:951` gives them the same full-ply MultiPV-2 pass as any engine game and
+  `:968` sets `dedup_hashes = []`, making them the only games that cannot use the opening
+  dedup cache. Only the stored eval *values* are preserved (`:836`). Budget them at 100%+
+  of an engine game. Half of classical (63,411 / 127,586) is already in this arm.
 
-1. **Warm-up sharp puzzles must not enter the SR rotation** — structurally guaranteed, not merely conventional: `drill_items` has PK `(user_id, game_id, ply)` with `game_id` a `ForeignKey("games.id")` (`app/models/drill_item.py:80-83`), and a lichess puzzle has no `games` row, so the database refuses it. No `drill_items` row means no `streak`/`ever_correct`/`due_date` for `_advance_drill_item` to touch. This is a positive argument for the lichess source over the discarded "sample other users' analyzed blunders" alternative, whose rows *do* exist in `games`.
-2. **No rating-matching for red herrings** — explicitly out of scope; a several-fine-moves position barely depends on solver strength, and 25% of every real session is already sampled across all users' games.
-3. **Repeats while material is scarce, but never deepens** — if the lottery still hasn't delivered by the next session, serve filler again rather than an empty screen. Same easy warm-up every time; no deepening or leveling filler track.
-4. **No tier-1 enqueue on import — DECIDED, explicitly rejected by the user 2026-08-07.** A new user's games are analyzed by the ES lottery like everyone else's. Do not reintroduce this as a "small optimization".
+- **Correct the seed's Maia claim before sizing the local backend.** The seed reads
+  `eval_queue_service.py:34` ("best-move backfill is backend-only — Maia inference cannot
+  run on the remote worker fleet") as meaning the whole tier-4b rung is backend work. That
+  docstring is now half-stale: Phase 177 BACK-02/03 added `/bestmove-lease` +
+  `/bestmove-submit` and `scripts/remote_eval_worker.py:1058-1150` computes the runner-up
+  **Stockfish** evals on the fleet; only the Maia inference itself (`app/services/maia_engine.py`)
+  runs in the backend process on submit. So the local instance carries Maia forward passes,
+  not the Stockfish half — cheaper than the seed implies, but still the reason a *local*
+  backend is needed at all.
 
-**Plan-time decisions to resolve explicitly (not default)**:
+- **Both eval flags gate tier-4b.** `BEST_MOVE_BACKFILL_ENABLED` is checked *together with*
+  `EVAL_AUTO_DRAIN_ENABLED` (`app/core/config.py:83-98`), so the local instance must set
+  both — while confirming that turning on auto-drain locally doesn't have the in-process
+  drain racing the worker claim path in a way that defeats the point of the fleet.
 
-1. **Where the warm-up's several-fine-moves positions come from** (the seed leaves this open): from `herring_pool` — reuses the whole serve/reveal/solve machinery, but every serve permanently retires that herring for the user; or fully static — burns nothing, but needs a serve path that does not go through `drill_solves`, which every reveal and progress surface reads today.
-2. **Whether generic tactics should fill `pool_state == "exhausted"` days.** That is where the sharp co-filler would most often fire beyond the cold-start case, and it currently renders the "Next review: {date}" empty state. Filling those days dilutes the your-own-mistakes thesis. Decide it deliberately; do not let it fall out of the backfill change.
-3. **Whether to cap the herring cross-backfill at `HERRING_SHARE`** independently of the warm-up. Worth doing on its own merits — it stops the silent all-filler session and makes the existing short-session notice start firing correctly — but it changes composition for existing users, so scope it consciously.
+- **Eval-source homogeneity is a decision the classical tranche cannot outrun.** As
+  designed, the analyzed arm keeps lichess `%eval` and its flaws are classified from that
+  stored `eval_cp`, while the never-analyzed arm gets ours — so any analyzed-vs-unanalyzed
+  comparison (the §6 selection-bias check this phase exists to enable) confounds selection
+  bias with eval source. The MultiPV-2 pass computes our evals for the lichess arm anyway
+  and discards them. This is a research DB, not user data, so the fix is cheap (overwrite
+  `eval_cp`, or add a column and keep both). **Decide before the classical tranche runs**,
+  and if the lichess arm runs at all, run it *with* the homogenization or the Stockfish
+  price buys a confounded comparison.
+
+- **Storage and MVCC.** ~15 KB/game net (48 B/position for `pv`+`best_move` × ~67 plies,
+  11.2 KB `game_flaws`, 0.6 KB `game_best_moves`), so cap-100 scope ≈ 6 GB net. These are
+  `UPDATE`s, so each touched position leaves a dead row version (~13 KB/game): budget ~2×
+  local disk headroom during the run and plan a vacuum pass after.
+
+- **Throughput.** 16k games/day is a two-day observed peak with all machines up (prod did
+  17,326 on 2026-08-19, 15,685 on 2026-08-20; ~85% from Adrian's local box — see
+  `[[project_worker_fleet_topology]]`). Budget 60–70% sustained; the TC tranches make that
+  stretch the calendar, not the risk.
 
 **Success Criteria** (what must be TRUE):
 
-1. A user whose composed session contains zero `DrillSource.SR_ITEM` puzzles sees an explicitly labeled warm-up, and that label survives leaving and resuming the session even if the ES lottery lands in between.
-2. A user with at least one qualifying blunder sees an ordinary unlabeled session, however much filler accompanies it — and the label is never derived from session ordinal anywhere in the stack.
-3. A warm-up session's critical/several answer is genuinely mixed: neither always-"several" (today's all-herring deck) nor always-"critical" (an all-lichess deck).
-4. No warm-up or filler puzzle ever produces a `drill_items` row, and no static sharp puzzle can acquire SR state.
-5. **`pool_eligible_since` is stamped for filler-only sessions.** `_stamp_pool_eligibility` (`train_repository.py:558-561`) returns early unless `has_drill_items or has_pool_candidates`, and filler satisfies neither; that watermark is the D-06 floor handed to `tick_days` (`:584-585`), so with it NULL a warm-up user accrues **no streak at all** regardless of what the UI says. The "accrues streak like any other session" decision is a silent no-op without this, and nothing about the failure is visible in types or tests — prove it with a test that goes red when the widened condition is reverted.
-6. The `puzzle_type !== 'herring'` "this is one of the user's own games" proxy is replaced by a `source`-based predicate at **all** sites together (`TrainReveal.tsx:874`, `:915-917`, `:925`, `:1266`) — a foreign sharp puzzle satisfies the old expression, would render your-game prose, and would then fail to load a game the user does not own.
-7. The static sharp set has a stable no-repeat ordering that degrades to repeats once exhausted, mirroring `herring_stmt`'s documented contract (`train_pool.py:683-698`), and is sized for several days rather than one session (~50 positions ≈ a week at ~6 sharp per all-filler session of 8).
-8. Each production change is mutation-tested (revert it, confirm the test goes red) rather than accepted on symbol presence.
+1. A `benchmark_selection` table in the benchmark DB materializes the capped
+   (100/user/TC), randomly-selected, equal-footing set as `(game_id, tc_tranche)`,
+   populated per TC tranche. The table itself is the reproducibility record a story cites —
+   not a seed plus a query that must replay identically.
 
-**Non-goals**: an automatic tier-1 fast path on import (rejected, constraint 4); rating-matched red herrings; a pool generator or new sampling infrastructure for the sharp set (it is a static selection from committed CC0 fixtures); a deepening/leveling filler track; a `bu` best-move key on the server answer key (out of scope since Phase 205, still an eval-pipeline change).
+2. A single config-gated `WHERE EXISTS (... benchmark_selection ...)` narrows the tier-3
+   candidate query, off by default and verifiably inert in dev, CI, and prod. Without it
+   tier-3's global lottery would treat all 2.1M eq-footing games as pending.
 
-**Plans**: 3 plans
+3. `scripts/remote_eval_worker.py` accepts an ordered URL list (primary + fallback) and
+   claims from the fallback only when the primary returns no work — strict per-claim prod
+   priority, so the next claim after prod work appears goes to prod at full core count. A
+   leased benchmark game simply finishes (~60s); no requeue logic exists or is needed.
+
+4. A second backend (`uvicorn app.main:app --port 8001`, `0.0.0.0` bind, worker-token auth)
+   runs against the benchmark DB on 5433 with the selection gate on, its Alembic head
+   verified to match, and produces the full pipeline output end to end on a small tranche:
+   `best_move` + `pv` on `game_positions`, `game_flaws` rows, `game_best_moves` rows.
+
+5. The eval-source homogeneity question is decided and implemented (or the lichess arm is
+   explicitly excluded from the tranche) **before** classical starts, with the choice and
+   its consequence for §6-style comparisons written down.
+
+6. The classical tranche completes — or is stopped at a TC boundary by operator choice —
+   with the resulting row counts recorded and a post-run vacuum performed on the benchmark
+   DB.
+
+**Requirements**: BENCHLANE-01..06 (minted at planning time, one per Success Criterion —
+this phase predates its milestone's `REQUIREMENTS.md`, same convention as Phases 206–211;
+the traceability table lives in `212-01-PLAN.md`).
+
+**Open question carried to `/gsd-discuss-phase`**: whether to re-analyze the lichess arm at
+all in the first tranche. It is half of classical and the most expensive per game;
+deferring it halves classical to ~27k games / 1.7 days, at the cost of leaving gem tiers
+unavailable on exactly the games that already have evals.
+
+**Not part of this phase** (recorded from the seed's adjacent finding):
+`benchmark_selected_users` holds 9,450 distinct users from the 2026-03 dump but only 4,760
+exist in `users` — roughly half the selected cohort was never imported. Recovering them
+costs an *import*, not Stockfish, and cluster-bootstrap CI width scales with the number of
+accounts, so it may be the cheaper statistical-power purchase. Worth checking before
+spending fleet weeks.
+
+**Plans**: 10 plans (6 original + 4 gap closure from `212-VERIFICATION.md`)
 
 Plans:
 **Wave 1**
 
-- [x] 206-01-PLAN.md — Sharp-filler spine: migration, third `DrillSource`, and the end-to-end vertical slice (tracer) through composition, solve, reveal, and the `source`-based your-game predicate
+- [x] 212-01-PLAN.md — Tracer: gated selection spine, one game end to end (wave 1)
 
 **Wave 2** *(blocked on Wave 1 completion)*
 
-- [x] 206-02-PLAN.md — The real 200-position sharp set: one-off Stockfish-verified authoring pass and the committed CC0 data file
-- [x] 206-03-PLAN.md — The warm-up label: `is_warmup` frozen at composition, the `pool_eligible_since` widening, and the `'warmup'` landing state replacing `'short'`
+- [x] 212-02-PLAN.md — Gate hardening: all lottery lanes + fail-closed boot assertion (wave 2)
+- [x] 212-03-PLAN.md — Dual-URL worker fallback with strict prod priority (wave 2)
 
-**UI hint**: small — a warm-up label/framing on the Train start and session surfaces, plus the `source`-based rewrite of the your-game predicate in `TrainReveal`. No new pages, no new components expected beyond the label treatment.
+**Wave 3** *(blocked on Wave 2 completion)*
 
-### Phase 207: Self-Serve Password Reset
+- [x] 212-04-PLAN.md — Eval-source homogenization + lichess eval snapshot (wave 3)
 
-**Goal**: A user who signed up with email + password and forgot it can recover their account without operator involvement. Today there is **no recovery path at all** — 172 prod accounts with a password have exactly one option, register a fresh address and re-import their entire game history, losing bookmarks and Train state. Ships the first email-sending capability the project has ever had (Resend over raw `httpx`), mounts `fastapi_users.get_reset_password_router()`, and adds the two frontend forms. Backend + frontend, **no migration** (fastapi-users' reset token is stateless and JWT-based; nothing is persisted).
+**Wave 4** *(blocked on Wave 3 completion)*
 
-**Depends on**: nothing in the codebase. The one real dependency is **operator work outside the repo** (Step 0 below), which must land before any code is written. Since the D-05 supersession that work is additive-only DNS plus an API key — no longer a step that can break live mail.
+- [x] 212-05-PLAN.md — Operator surface: status/record, runbook, provenance disclosure (wave 4)
 
-**Requirements**: RESET-01, RESET-02, RESET-03, RESET-04, RESET-05, RESET-06, RESET-07, RESET-08 (one per Success Criterion below, in order; traceability table in the phase's `-01-PLAN.md` § Requirements — this phase predates its milestone's REQUIREMENTS.md)
+**Wave 5** *(blocked on Wave 4 completion)*
 
-**Source**: [SEED-143](../seeds/SEED-143-self-serve-password-reset.md) — planted 2026-08-08 during `/gsd-explore` from "there's currently no way for a user to recover their signed-up accounts if they lost their password". The seed carries a **fully verified current-state audit and seven locked decisions (D-01..D-07)**, including a provider bake-off with three named disqualifications. Do not re-derive the provider choice, the self-hosting rejection, or the current-state facts.
+- [ ] 212-06-PLAN.md — Classical tranche run: decision gate, execute, record, vacuum (wave 5) — *aborted at Task 2; Tasks 2/3 superseded by 212-10*
 
-**Supersedes**: backlog Phase 999.1 (Password Reset), promoted here.
+**Wave 6** *(gap closure — blocked on Wave 5)*
 
-**Blocking pre-planning gate — Step 0 is operator work, not executor work**:
+- [x] 212-07-PLAN.md — Gate the fifth lane: entry-ply probe + canonical claim, and correct the "every lane" claim (wave 6)
 
-> **D-05 SUPERSEDED 2026-08-08 (operator challenge, verified against Resend's docs).** The seed's premise — that an apex `From` requires merging an include into the existing apex SPF record — is **false**, and the apex-merge-vs-`send.`-subdomain tradeoff it agonized over is a false dilemma. Resend runs on SES and sets the Return-Path to `bounces@send.flawchess.com`; **SPF is evaluated against the envelope-from, not the visible `From` header**, so SPF lives on the `send.` subdomain while DKIM signs with `d=flawchess.com` at the apex. `From: noreply@flawchess.com` then passes DMARC on **strict DKIM alignment** (and SPF aligns too, relaxed, same org domain) while the existing `v=spf1 a mx include:spf.webapps.net ~all` is never read or modified. **All records below are purely additive. Do not edit the apex SPF record.** The seed's `include:_spf.resend.com` was wrong on two counts: the token is `include:amazonses.com`, and adding any Resend include to the apex is actively counterproductive (redundant, and it consumes one of SPF's 10-lookup budget).
+**Wave 7** *(blocked on Wave 6 completion)*
 
-1. Create a Resend account; add **flawchess.com** (the apex) as the domain. **Read the exact records off the dashboard before publishing anything** — expect three additive records, named relative to the verified domain:
-   - `MX` on `send` → `feedback-smtp.<region>.amazonses.com`, priority 10
-   - `TXT` on `send` → `v=spf1 include:amazonses.com ~all`
-   - `TXT` on `resend._domainkey` → the DKIM public key
-2. Confirm the DKIM record lands at **`resend._domainkey.flawchess.com` (apex level)**, not under `send.`. This is the one load-bearing detail: apex-level DKIM is what makes `noreply@flawchess.com` align. Resend's own KB verifies with `dig resend._domainkey.example.com`, but one third-party guide claims Resend scopes DKIM to the sending subdomain — the dashboard settles it at zero cost. **If it does scope DKIM to `send.`, the original tradeoff reappears: take `noreply@send.flawchess.com` rather than merging the apex SPF.**
-3. Confirm `send.flawchess.com` has no pre-existing MX (the Swizzonic `MX 10 mx.swizzonic.email` is on the apex, so no conflict is expected — Resend requires its bounce MX to be the only MX on the sending subdomain).
-4. Add `_dmarc.flawchess.com` → `v=DMARC1; p=none; rua=mailto:<addr>` (purely additive; none exists today).
-5. Put `RESEND_API_KEY` in the local `.prod.env` that `bin/deploy.sh:28-29` scps to `/opt/flawchess/.env`. Never commit it.
+- [x] 212-08-PLAN.md — Smoke proof on the gated build: one selected game end to end, zero leak (wave 7)
 
-**Scope**:
+**Wave 8** *(blocked on Wave 7 completion)*
 
-- **Backend** — `app/services/email_service.py` (new): one `httpx.AsyncClient` POST to `https://api.resend.com/emails`, no SDK (D-03: the official `resend` package adds nothing over one POST, and `httpx` is already project-wide). Override `on_after_forgot_password` on `UserManager` (`app/users.py:63`, currently the base no-op — the token secrets at `:64-65` are already configured and consumed by nothing) to build the reset URL from `settings.FRONTEND_URL` and send. Mount `fastapi_users.get_reset_password_router()` under the `/auth` prefix alongside the register router (`app/routers/auth.py:49-53`). Add `RESEND_API_KEY` and `MAIL_FROM` to `Settings`.
-- **Frontend** — `ForgotPasswordForm.tsx` (new), a `/auth/reset-password` route reading `?token=` (register near `App.tsx:845-847`), a "Forgot password?" link on `LoginForm.tsx`. `frontend/src/components/auth/` currently holds exactly two files, so there is no existing pattern to conform to beyond the project's standard rules.
-- **Per-email rate limit (D-06, in scope).** The forgot-password endpoint is unauthenticated. Without a cooldown, flooding it burns the 100/day Resend cap and breaks the flow for *everyone*, and lets a known user be mail-bombed. ~10 lines.
-- **Sentry capture on send failure (D-06, in scope).** Already mandated by CLAUDE.md for `app/services/`. `capture_exception` on the Resend call; pass user_id via `set_context` — never interpolate variables into the message.
+- [x] 212-09-PLAN.md — Materialize the real classical selection and its lichess-eval snapshot (wave 8)
 
-**Locked constraints (do not re-open)**:
+**Wave 9** *(blocked on Wave 8 completion)*
 
-1. **Fully self-serve (D-01)** — emailed token link, user sets a new password, zero operator involvement. The "email the maintainer" manual path was considered and rejected despite the tiny volume.
-2. **No self-hosted mail server (D-02)** — rejected on deliverability, not on effort. Hetzner blocks outbound 25/465 by default (587 is open, so relay was never actually blocked — moot given D-03), and more decisively, **IP reputation is earned by volume and this flow has none**: ~5 sends/year warms nothing, ever. A reset email in spam is a silent total failure nobody reports.
-3. **Resend, free tier, raw HTTP (D-03)** — 3,000/mo · 100/day permanent, ~60x headroom, no account review, HTTPS:443. Brevo and Mailjet are **disqualified** (delete free accounts after 4 months of inactivity — the exact silent-rot failure this flow must avoid); SES's free tier ended for new customers 21 Jul 2026; Mailgun is a churny vendor. **Postmark is the designated fallback** if Resend deliverability ever disappoints (rejected only for its manual new-account review).
-4. **D-04 REVERSED 2026-08-08 (operator decision) — eligibility is "has a password", and the predicate is load-bearing.** The seed had Google-only accounts receiving a standard reset link and gaining a password. They do not. An account with an empty `hashed_password` gets **no reset email**; the HTTP response and UI copy stay byte-identical (RESET-02 is unaffected). **The predicate is `hashed_password != ''` — "has a password to reset" — and NOT "has no linked Google account".** Prod measured 2026-08-08 shows why that distinction is the whole ballgame:
-
-   | Group | Password | Google linked | Count | Reset? |
-   |---|---|---|---|---|
-   | Pure email/password | `$argon2id$` | no | 47 | **yes** |
-   | **Both** | `$argon2id$` | yes | **125** | **yes** |
-   | Google-only | `''` | yes | 44 | no |
-   | Guests | `''` | no | 304 | no |
-
-   Gating on "is a Google account" (an `oauth_account` row) would strand **125 of the 172** accounts that need reset — 73% of the target population — all of whom carry real `$argon2id$` hashes and can genuinely forget them.
-
-   (Guests share the empty hash and are therefore also excluded, so no separate `is_guest` check is needed. This is a note on the predicate's shape, not a reason for it — D-07 already established the guest path is unreachable, since a guest's `guest_<uuid4hex>@guest.local` address cannot be typed into the form without guessing a uuid4.)
-
-5. **No enumeration fix needed** — fastapi-users' `forgot_password` already returns `202` regardless of whether the address exists. Default token TTL 3600s is fine as-is. Don't build either.
-
-**Explicitly OUT of scope (D-07 — decided, not oversights)**:
-
-- **Periodic canary send.** The only thing that would catch a revoked key or DNS drift *before* a real user hits it. Judged over-engineering at ~5 sends/year. **Accepted consequence: the first person to discover a broken flow is a locked-out user.** If a reset ever fails in the wild, revisit this decision rather than debugging in place.
-- **Explicit guest-account guard.** Guest emails are unguessable uuid4 sentinels (`guest_<uuid4hex>@guest.local`, `app/services/guest_service.py:21,37`), so a `.local` send is not reachable in practice; D-06's Sentry capture covers the residual.
-- **Email verification on registration.** See the follow-up note below — this is a real gap, deliberately not scoped here.
-
-**Success Criteria** (what must be TRUE):
-
-1. A user with a password who submits their address on the forgot-password form receives a working reset link and can set a new password with it — verified end-to-end against a real mailbox, not mocked.
-2. Submitting an address that does not exist is indistinguishable from one that does (same `202`, same UI copy, no timing tell introduced by the send).
-3. Repeated requests for the same address are rate-limited, and the limit is proven by a test that fails when the cooldown is removed.
-4. A Resend send failure produces a Sentry event with `user_id` in context and **no variable interpolated into the message string** (grouping stays intact).
-5. **Eligibility is credential state, not account type.** An account with a linked Google account *and* a password (125 in prod, the majority of the target population) receives a reset email and completes the flow normally. An account with an empty `hashed_password` (44 Google-only, 304 guests) receives no email, while its HTTP response and UI copy remain byte-identical to every other submission. Proven by a test that goes red if eligibility is ever derived from `oauth_account` rather than from the presence of a password.
-6. The frontend forms carry `data-testid` on every interactive element, honor the `text-sm` floor, use `variant="brand-outline"` for secondary actions, are usable at 375px, and render an `isError` branch rather than falling through to an empty state. The confirmation is a **single static string with no status-dependent branch**, and it closes the Google-only dead end by naming the alternative: "If an account exists for that address, we've sent a reset link. Signed up with Google? Use the Sign in with Google button instead." (Operator decision 2026-08-08 — chosen over a second email template, which stays a non-goal.)
-7. The existing apex SPF record is **byte-identical** to its pre-phase value (`v=spf1 a mx include:spf.webapps.net ~all`), and Swizzonic mail to flawchess.com still delivers — confirmed by an actual received message. Under the superseded D-05 this was the phase's one real risk; it is now a regression check that the additive-only path was actually followed.
-8. Each production change is mutation-tested (revert it, confirm the test goes red) rather than accepted on symbol presence.
-
-**Non-goals**: email verification on registration; a canary/monitoring send; guest-account recovery (ephemeral by design, explicitly out of scope); a templating engine or a second email template; the official `resend` SDK; any database migration.
-
-**Follow-up this phase creates (capture as a seed when it ships, do not scope here)**: **there is no email verification on registration either** — `get_verify_router()` is equally absent and `on_after_register` (`app/users.py:67-77`) only stamps `last_login`, so a user can register with a typo'd address they do not control. Today that is merely untidy. **Once password reset ships it becomes load-bearing**: the reset link goes to a mailbox that isn't theirs, making that account *permanently* unrecoverable — strictly worse than today's "no recovery for anyone", because the user now reasonably expects recovery to work. The infrastructure (Resend client, config, send path) lands with this phase, so the marginal cost afterwards is small.
-
-**Plans**: 3 plans
-
-Plans:
-**Wave 1**
-
-- [x] 207-01-PLAN.md — Backend spine: a `type="tracer"` end-to-end slice (config → eligibility gate + per-email limiter → email service → `on_after_forgot_password` → mounted reset router → HTTP test proving forgot → token → reset → login), then the rate-limit/non-blocking-dispatch/Sentry contract and the credential-state eligibility tests, all mutation-tested
-
-**Wave 2** *(blocked on Wave 1 — consumes the HTTP contract recorded in 207-01-SUMMARY.md)*
-
-- [x] 207-02-PLAN.md — Frontend: `ForgotPasswordForm` + `ResetPasswordForm`, their two public routes, the sign-in entry link, Vitest suites, and a 375px human-verify checkpoint
-
-**Wave 3** *(blocked on Waves 1–2)*
-
-- [x] 207-03-PLAN.md — Operator handoff: `.env.example` entries, `docs/email-resend-runbook.md`, CHANGELOG bullet, and the two Step-0-gated HUMAN-UAT verdicts (RESET-01 real mailbox, RESET-07 apex-SPF regression)
-
-**UI hint**: small — one new form component, one new route, one link on `LoginForm.tsx`. No new pages beyond the reset-password route, no design-system additions.
-
-**Planning notes (2026-08-08)**:
-
-- **Step 0 is still outstanding.** RESET-01 (real mailbox) and RESET-07 (apex SPF + Swizzonic delivery) are planned as HUMAN-UAT in Plan 03, not executor tasks, and `deferred` is a first-class answer at that checkpoint. No task in any plan requires a live `RESEND_API_KEY` to pass — `MAIL_FROM` is a `Settings` field with a default and an empty key makes every send a no-op.
-- **One threat was upgraded to `high` during planning: T-207-02, a timing enumeration oracle.** Awaiting the Resend POST inside the request handler makes a registered address cost a network round-trip that an unregistered one never pays, contradicting Success Criterion 2's "no timing tell introduced by the send". Plan 01 Task 2 dispatches the send without awaiting it. The residual library-internal Argon2 differential is recorded as accepted threat T-207-03 rather than silently ignored.
-- **Assumption-delta decision: `no-change` on the data model, semantics pinned by an invariant instead.** The D-04 reversal makes this phase the **first production read of `hashed_password` as a predicate**, so the two meanings fused in that value must be pulled apart explicitly. A `has_password` column would be derived state, would need a forbidden migration, and would create a second source of truth that drifts on every password write. Instead the empty-hash comparison is permitted at exactly one site (the eligibility gate), documented there as credential state, and `tests/test_users_account_type_invariant.py` fails if a future change re-fuses the account-type reading onto it or derives eligibility from `oauth_account`. The 125-account dual case (password + Google linked) is the executable form of that invariant and is the plan's highest-value test — it is the regression a plausible "skip Google accounts" gate causes, affecting 73% of the target population.
-- **Both guards in `on_after_forgot_password` share one silent-no-op shape.** The eligibility gate and the per-email rate limit each return without raising, logging, or emitting a Sentry event. Neither can introduce a timing tell, and the reason is load-bearing rather than incidental: T-207-02 already moved the only network I/O off the request path, so "gated" and "sent" differ by an in-memory branch either way (threats T-207-24, T-207-25).
-- **`COVERAGE.md`** records the Resend API capability matrix: 2 `INTEGRATE`, 24 reasoned `OPT-OUT`, 0 unreasoned.
-
-### Phase 208: Paste a FEN or PGN on /analysis
-
-**Goal**: `/analysis` can only be reached with a position someone else constructed (`?line=` from the Openings explorer, `?fen=` from the calibration harness, `?game_id=` from the Library). A user can bring an arbitrary position or game in from outside — a puzzle FEN from a book, a game from a broadcast, a PGN a friend sent — via one button, one modal, one textarea whose format is sniffed. Paste-and-look persists nothing; an explicit "Analyze full game" saves the game as `platform='pgn'` (always excluded from analytics) and enqueues it through the existing tier-1 eval path. `/analysis` also gains the main nav item it has never had, without which the modal is unreachable. Frontend + backend, **no migration**, no new eval infrastructure.
-
-**Depends on**: nothing blocking. Builds on Phase 167 (`platform='flawchess'` store-on-finish precedent and the `DEFAULT_EXCLUDED_PLATFORMS` seam, D-02), Phase 171 (the three nav surfaces and the WR-07 lock-gate lesson), Phase 118/121 (`POST /imports/eval/tier1` explicit enqueue), and `useAnalysisBoard.loadMainLine` as it stands after v2.10.
-
-**Requirements**: PASTE-01..PASTE-09 (minted at planning, one per Success Criterion below in order; traceability table in the phase's `-01-PLAN.md` § Requirements — this phase predates its milestone's REQUIREMENTS.md)
-
-**Source**: [SEED-144](../seeds/SEED-144-analysis-fen-pgn-paste.md) — planted 2026-08-08 during `/gsd-explore` from "implement PGN and FEN import". The seed carries **ten locked decisions (D-01..D-10)**, a measured chess.js 1.4 `loadPgn()` capability matrix, a seven-row reuse-anchor table with file:line, and a fully reasoned rejection of bulk multi-game PGN import. Do not re-derive the bulk-import rejection, the ephemeral-vs-persist split, or the nav-array analysis.
-
-**Scope**:
-
-- **Frontend — paste modal** (D-01/D-02/D-03): a trigger button on `/analysis` opening a `<form>` modal with one textarea. Format is sniffed, not toggled: a bare FEN handed to `loadPgn()` throws a distinguishable parse error. A FEN routes through `parseAnalysisFenParam` (`frontend/src/lib/analysisUrl.ts`); a PGN routes through `useAnalysisBoard.loadMainLine(sans, newRootFen)` (`frontend/src/hooks/useAnalysisBoard.ts:85`). Mainline + headers only — comments and RAVs are dropped (chess.js drops RAVs silently anyway). No `?fen=`/`?line=` write-back, so the documented `fen > line` precedence in `analysisUrl.ts` is untouched.
-- **Frontend — side selector** (D-06): sets `user_color` for the save path (parsed White/Black header names, defaults to White), driving board orientation and which side's flaws read as "yours".
-- **Frontend — navigation** (D-09/D-10): append `/analysis` to `NAV_ITEMS` (`App.tsx:77`) **only**, not `BOTTOM_NAV_ITEMS` (`:85`) — that yields desktop header + mobile More drawer with the bottom bar untouched, and makes the two byte-identical arrays diverge for the first time. Comment both arrays saying so (WR-07 at `App.tsx:113-119` records this codebase already shipping a bug from nav surfaces silently disagreeing). Add `'/analysis'` to `IMPORT_EXEMPT_ROUTES` (`:120`) and an `isActive` clause (`:130`); `ROUTE_TITLES` already carries the entry.
-- **Backend — save path** (D-04/D-05/D-07): a normalization variant of `normalize_flawchess_game()` (`app/services/normalization.py:590`) with the `[%clk]`-for-both-colors gate (STORE-02/D-15) dropped, writing `platform='pgn'` with a deterministic synthesized `platform_game_id` so re-pasting is idempotent under `uq_games_user_platform_game_id`. Untimed: no clocks, no TC bucket. `_flush_batch` Stage 5 already computes `ply_count`, `result_fen` and the Zobrist `game_positions` rows.
-- **Backend — analytics exclusion** (D-05): add `'pgn'` to `DEFAULT_EXCLUDED_PLATFORMS` (`app/repositories/query_utils.py:30`) — the one central seam, no per-router platform checks.
-- **Backend — analysis enqueue** (D-08): the existing `POST /imports/eval/tier1` (`app/routers/imports.py:380`, IDOR-guarded), not the background lottery. Tier-1 is already open to guests for their own games (QUEUE-08 opened for tier-1 only), so guests get this too.
-
-**Locked constraints (do not re-open)**:
-
-1. **Button + modal, one textarea, format sniffed (D-01)** — no format toggle, no separate FEN and PGN entry points.
-2. **Mainline + headers only (D-02)** — variations grafted as sidelines was considered and rejected: `insertPvLine` supports it, but chess.js provides no RAV parser and writing one is expensive relative to the rest of the phase.
-3. **Ephemeral by default (D-03/D-04)** — a refresh returns to the start position; nothing is written until the user explicitly asks for "Analyze full game". A bare FEN is *always* ephemeral (no moves means no game), so D-04/D-05/D-06/D-08 do not apply to it.
-4. **`platform='pgn'` is always excluded from analytics (D-05)** — no per-game opt-in. **Accepted consequence: a pasted game of your own does not count toward your Openings WDL / Endgames / Insights.** Import it from the platform you played it on if you want it in your stats.
-5. **A separate guest account as the "scouting library"** was rejected — guests are excluded from the whole eval pipeline by QUEUE-08, and the guest JWT *replaces* `localStorage.auth_token`, making it an account switch rather than a side collection.
-6. **Bulk multi-game PGN upload on the Import page is out (rejected in the seed)** — the blocker is subject-player identification against a `NOT NULL user_color`, where getting it wrong silently *inverts* W/D/L. Corpus evidence: 0 of 2,869 sample games carried `[%clk]`, and one file spelled a single player twelve ways.
-
-**Open questions to resolve at `/gsd-discuss-phase` (both from the seed, neither a blocker)**:
-
-1. **Do pasted games appear in the Library list?** Without it there is no route back to a game you analyzed once you navigate away. `library_service.py:868` builds `library_platform = platform if platform is not None else ["chess.com", "lichess", "flawchess"]`, so adding `"pgn"` is a one-token change — this is a product call, not a cost question. If yes, decide whether they need a visual marker.
-2. **How exactly is `platform_game_id` synthesized?** A deterministic hash of movetext + date + players buys idempotent re-pasting for free; the exact input set and hash are open.
-
-**Success Criteria** (what must be TRUE):
-
-1. Pasting a bare FEN loads that position on `/analysis` as a free-play root, writes nothing to the DB, and does not touch the URL.
-2. Pasting a PGN loads its mainline and headers (names, ratings, result, date reach the PlayerBar); a `[SetUp]`/`[FEN]`-rooted PGN adopts the header FEN, headerless movetext parses, and ChessBase-style RAVs/NAGs/comments are dropped without an error.
-3. One textarea handles both formats with no toggle, and malformed input produces an inline error rather than a blank board, a crash, or a silently wrong position.
-4. "Analyze full game" persists exactly one `platform='pgn'` game with `user_color` taken from the modal's side selector, and enqueues it via `POST /imports/eval/tier1` — for guests as well as authenticated users. Paste-and-look and bare-FEN paste persist nothing.
-5. Pasted games never appear in Openings WDL, Endgames, Insights, or any other `apply_game_filters()` consumer, proven by a test that goes red if `'pgn'` is removed from `DEFAULT_EXCLUDED_PLATFORMS`.
-6. Re-pasting and re-analyzing the same game reuses the existing row instead of violating or dodging `uq_games_user_platform_game_id`.
-7. A pasted game that is saved and then never analyzed is marked eval-ineligible rather than left pending — `ix_games_user_evals_pending` stays near-zero at steady state and the `users_with_zero_pending` gate is unaffected.
-8. `/analysis` is reachable from the desktop header and the mobile More drawer, is clickable with zero imported games, highlights when active, and the **mobile bottom bar is unchanged** — with a comment on both nav arrays recording that the divergence is intentional.
-9. Every interactive element in the modal carries a `data-testid`, the modal is a `<form>` with its own container testid, no type is below `text-sm`, and the whole flow works at 375px — including landing on `/analysis` from the More drawer and getting sanely back out (the analysis route takes over the mobile shell at `App.tsx:331`, `:537-540`).
-
-**Non-goals**: bulk multi-game PGN upload on the Import page; variations/RAVs as sidelines; comments and NAGs; URL write-back or shareable pasted-game links; a per-game "count this in my stats" opt-in; prompting for a time control on paste; a separate guest scouting account; any database migration.
-
-**Plans**: 4 plans in 2 waves
-
-Plans:
-**Wave 1**
-
-- [x] 208-01-PLAN.md — Tracer: `/analysis` nav item, paste trigger, modal, sniffed FEN/PGN ephemeral load (wave 1)
-- [x] 208-02-PLAN.md — `platform='pgn'` exclusion seam, D-16 identity hash, `normalize_pasted_game` (wave 1)
-
-**Wave 2** *(blocked on Wave 1 completion)*
-
-- [x] 208-03-PLAN.md — `POST /imports/paste`: save, reuse-on-re-paste, tier-1 enqueue, and the "Analyze full game" wiring (wave 2)
-- [x] 208-04-PLAN.md — Library opt-in: `include_pasted` resolution, Library-scoped "Pasted" chip, card badge (wave 2)
-
-**UI hint**: small-to-medium — one new modal component on an existing page, one nav item across two existing surfaces, no new pages and no design-system additions.
-
-### Phase 209: Traffic-Surge Quick Wins
-
-**Goal**: A sudden traffic spike (YouTube mention, Show HN, press) can no longer take the *whole site* down through any of the cheap-to-fix bottlenecks: the readiness poll stops being unbounded standing load per open tab, the one password-hash call in our own code moves off the single event loop, the 82 MB vendored ML runtime moves off the origin NIC to a CDN, post-import percentile computes are concurrency-gated, and imports beyond a global cap wait in a visible "queued" state instead of exhausting the connection pool and 500ing users who aren't importing. This is deliberately the **quick-win cut of SEED-146** — survival, not throughput; the medium/large items stay unimplemented by explicit user decision (2026-08-10).
-
-**Depends on**: nothing in the codebase. Item 3 (CDN) is **operator work** (DNS provider + CDN account access), not executor work — it can proceed in parallel with the code items and must not block them.
-
-**Requirements**: SURGE-01..SURGE-07 (minted at planning, one per Success Criterion below in order; traceability table in the phase's `-01-PLAN.md` § Requirements — this phase predates its milestone's REQUIREMENTS.md)
-
-**Source**: [SEED-146](../seeds/closed/SEED-146-traffic-surge-readiness.md) — planted 2026-08-10 during `/gsd-explore` ("what happens if 100 users import simultaneously"). The seed carries **measured facts verified 2026-08-10 (do not re-derive)**: 65.9 ms Argon2id hash, 5.80 ms/game PGN processing, prod/dev core parity, the 1,111.7 ms `compute_stage_a` query, per-file asset sizes, and estimated ceilings. It also carries the ranked fix list, traps, and rejected alternatives (Web Push readiness signal, staging/load-test rig, vertical scaling) — all binding here.
-
-**Scope** (the quick-win cut, decided with the user 2026-08-10):
-
-- **Seed item 1 — `useReadiness` poll (highest impact).** Frontend-first: keep 3 s cadence while `tier1` is false (import phase, seconds-to-minutes), back off hard once only `tier2` is outstanding, and cap total poll duration so an 8-hour tab goes quiet. Cheapen `GET /imports/readiness` only if it turns out trivial while in there; the poll fix must not depend on it.
-- **Seed item 2, our-code half ONLY — Argon2id off the event loop.** `asyncio.to_thread(...)` around `_password_helper.hash` in `promote_guest_with_password` (`app/services/guest_service.py:94`, reached from `POST /auth/guest/promote/email`). **Seed correction 2026-08-10:** `POST /auth/guest/create` never hashes (`hashed_password=""`), so the "Use as Guest" funnel carries zero hashing cost and the seed's "6.6 s frozen loop" scenario does not exist. Hashing load is proportional to register/login/promotion volume only, which further justifies deferring the register/login half (`UserManager` override, M-sized).
-- **Seed item 3 — CDN for `/maia/*` and `/engine/*`.** DNS + cache config, no code. Must respect existing per-path headers: `@vendored_runtime` 30-day caching stays, `@maiaworker` (`/maia/maia-worker.js`) stays `no-cache`.
-- **Seed item 4, THIN slice — global import semaphore + bare "queued" status.** A global concurrency cap on import execution and a visible "queued" job state (NO position number, NO ETA math — that UX is the deferred medium feature). The periodic reaper must not mark a queued-but-alive job failed while it waits out `IMPORT_TIMEOUT_SECONDS`.
-- **Seed item 5 — gate `compute_stage_a`/`compute_stage_b`.** A `Semaphore(2–3)` around the per-import-completion percentile computes so burst completions can't hold N of 20 pooled connections for seconds.
-
-**Locked constraints (do not re-open)**:
-
-1. **Deferred by user decision 2026-08-10, do not scope-creep back in**: register/login async hashing (M), queue position + ETA UX (S–M), and all of seed item 6 (`to_thread` PGN parse, `uvicorn --workers`, API rate limiting). Pick these up only when a spike becomes concretely plausible.
-2. **Poll fix in place, not Web Push** — rejected in the seed; do not reintroduce.
-3. **Do not remove or loosen the outbound rate-limiter semaphores** (`CHESSCOM_SEMAPHORE_LIMIT` / `LICHESS_SEMAPHORE_LIMIT` = 3) — they are load-bearing for the 4 GB backend memory limit.
-4. **No Postgres tuning** (0.012 avg busy backends; `shared_buffers` stays 2 GB) and **no staging/load-test rig** — every fix is verifiable locally or by inspection.
-5. **Analysis backpressure is out of scope** — days-long eval drain is fine by design; this phase must not grow an eval-throughput track.
-6. **Tuning Argon2 cost parameters downward is not the plan** — it's a security trade reserved as fallback only.
-
-**Success Criteria** (what must be TRUE):
-
-1. With `tier1` true and `tier2` still outstanding, the readiness poll's **emitted interval sequence** backs off and polling stops entirely after a total-duration cap; while `tier1` is false the cadence stays at 3 s. The test asserts the interval sequence itself and goes red when the backoff is reverted (per `feedback_mutation_test_gap_closures` — "backoff constant exists" proves nothing).
-2. `POST /auth/guest/promote/email` hashes the password off the event loop; a test goes red when the `to_thread` wrapper is removed. Register/login paths and `POST /auth/guest/create` (which never hashes) are untouched.
-3. `/maia/*` and `/engine/*` are served from CDN cache (cache-hit response headers on a second fetch of `maia3_simplified.onnx`), and `/maia/maia-worker.js` still returns `no-cache`.
-4. No more than the configured cap of imports executes concurrently; the cap+1th import job is visibly "queued" (not failed, not silently stalled), starts when a slot frees, and is never reaped as an orphan while waiting.
-5. A burst of simultaneous import completions never runs more than the semaphore's worth of concurrent `compute_stage_a`/`b` computations.
-6. The outbound chess.com/lichess rate-limiter semaphores are byte-identical to before the phase.
-7. Each production change is mutation-tested (revert it, confirm the test goes red) rather than accepted on symbol presence.
-
-**Non-goals**: register/login async hashing; queue position numbers or ETA display; `to_thread` PGN parsing; multi-worker uvicorn; API rate limiting; Web Push as the readiness signal; a staging environment or load tests; Postgres/`shared_buffers` tuning; anything touching eval/analysis throughput.
-
-**Plans**: 4 plans in 1 wave
-
-Plans:
-**Wave 1** *(all four plans are independent — no shared files, no cross-plan dependency)*
-
-- [x] 209-01-PLAN.md — Guest-promotion `to_thread` + percentile-compute semaphore, plus the phase requirement traceability table and mutation-test ledger (wave 1)
-- [x] 209-02-PLAN.md — Global import concurrency cap, in-memory `QUEUED` state, `started_at` re-stamp for the reaper exemption, and the bare queued label (wave 1)
-- [x] 209-03-PLAN.md — `useReadiness` backoff ladder + 30-minute backoff budget, with the emitted interval sequence as the tested artifact (wave 1)
-- [x] 209-04-PLAN.md — Cloudflare CDN cutover runbook + operator checkpoint (no executor DNS actions) (wave 1) — operator executed the cutover; verified live 2026-08-15: `flawchess.com` NS are `tate`/`julissa.ns.cloudflare.com`, `maia3_simplified.onnx` and `stockfish-18-lite-single.wasm` both return `cf-cache-status: HIT` while still carrying the origin's `max-age=2592000`, and `maia-worker.js` still returns `cache-control: no-cache` (`cf-cache-status: EXPIRED` — stored but revalidated against origin on every request, never served stale)
-
-**UI hint**: minimal — a "queued" state on the existing import progress surface and whatever the poll backoff needs (likely nothing visible). No new pages or components.
-
-### Phase 210: Custom-Start Games — Crash Containment & Insight Eviction
-
-**Goal**: A game that does not start from the standard chess position stops breaking two
-unrelated surfaces. `/analysis` no longer white-screens when it tries to replay such a game
-(confirmed in prod, Sentry FLAWCHESS-96), and `/api/insights/openings` no longer drops whole
-aggregated transitions — 50-game lines vanishing because the one sample game picked to
-render the move path happened to be custom-start (Sentry FLAWCHESS-5E, 74 events).
-
-**Depends on**: nothing. Phase 208 (`normalize_pasted_game`) already derives a root FEN for
-pasted PGNs but never persists it — this phase is what gives it somewhere to live.
-
-**Requirements**: CUSTOM-01..CUSTOM-06 (minted at planning, one per Success Criterion below in
-order; traceability table in `210-01-PLAN.md` § Requirements — this phase predates its
-milestone's REQUIREMENTS.md)
-
-**Source**: [SEED-042](../seeds/SEED-042-custom-fen-games-evict-opening-transitions.md) —
-planted 2026-06-12, revised 2026-08-06 and 2026-08-15. The seed carries a **root cause
-confirmed in code, not inferred**, and locked design decisions that stand in for a research
-pass: `initial_fen TEXT NULL` over `has_custom_start BOOL`, an aggregate `FILTER` on the
-sample selection over whole-row exclusion, and a PGN-sourced backfill over re-import. Verified
-still accurate against the tree on 2026-08-15 (chess.js is 1.4.0; the repository aggregate and
-both dead guards are unchanged).
-
-**Scope** — the seed's **Tier 1 plus the containment fix**, in three independently shippable slices:
-
-- **Slice 1 — frontend containment (no backend dependency).** `chess.js` 1.4.0's `move()`
-  *throws* on illegal SAN; the `if (!move) break` guards at `useAnalysisBoard.ts:399`
-  (`loadMainLine`, the confirmed crash site) and `:474` (`insertPvLine`, which throws inside a
-  `setState` updater) are therefore dead code. Replace with try/catch + `break`, matching the
-  already-correct precedents in `treeCommon.ts:222` / `analysisUrl.ts:58`. Fold in the same
-  latent pattern at `useChessGame.ts:147` and `useBotGame.ts:299`.
-
-- **Slice 2 — `games.initial_fen` and the eviction fix.** Nullable `TEXT` column (metadata-only
-  add, no table rewrite), populated at import from the `[SetUp "1"]`/`[FEN ...]` header pair in
-  **all** normalizer paths that can carry one, backfilled from the stored `games.pgn` in the
-  same migration (~176 prod rows). Then filter the sample-representative aggregate in
-  `query_opening_transitions` to standard-start games only, leaving the W/D/L counts untouched.
-
-- **Slice 3 — plumb the real root through.** Carry `initial_fen` on the library game-detail
-  payload so `/analysis` game mode seeds from the game's actual starting position instead of
-  the hardcoded `STARTING_FEN`, upgrading slice 1's "degrade gracefully" to "actually works".
-
-**Locked constraints (do not re-open)**:
-
-1. **Do NOT exclude custom-start games from the aggregate.** They legitimately reached the
-   position and must keep contributing to W/D/L. Only their use as the SAN-path *sample
-   representative* is the bug. The counts before and after this phase must be identical.
-
-2. **Do NOT drop custom-FEN games at import.** They are valid standard-rules games that
-   correctly participate in position matching for openings and endgames.
-
-3. **Tier 2 stays deferred** (user decision 2026-08-15): threading a `rootFen` through
-   `useChessGame`'s five start-anchored sites, versioning its sessionStorage payload, and
-   migrating position bookmarks to carry a root. Phase-sized frontend refactor serving 0.05%
-   of positions; slices 1 and 3 remove the user-visible pain without it.
-
-4. **No new index on `initial_fen`.** The predicate matches ~99.95% of rows and `Game` is
-   already joined in the only query that reads it.
-
-**Success Criteria** (what must be TRUE):
-
-1. Seeding `/analysis` with a SAN sequence that is illegal from its root renders a partial or
-   empty board and leaves the page mounted — it never reaches the React ErrorBoundary. Proven
-   by a test that goes red when the try/catch is reverted to `if (!move) break`.
-
-2. `games.initial_fen` is non-NULL exactly for games whose PGN carries a `[SetUp "1"]`/`[FEN]`
-   pair naming a non-standard start, for chess.com, lichess and pasted imports alike, and the
-   migration backfills existing rows from the stored PGN without a re-import.
-
-3. An opening transition whose shallowest-ply game is custom-start is still returned, with its
-   full game count and W/D/L intact, and with a replayable `entry_san_sequence` sourced from a
-   standard-start game in the same group.
-
-4. A transition group in which *every* game is custom-start is dropped without raising — the
-   filtered aggregate yields a NULL sample, which `_wrap_transition_row` handles explicitly
-   rather than by `TypeError` on `sample_pair[0]`.
-
-5. That residual drop is reported to Sentry as a warning-level `capture_message` (keeping the
-   existing `set_context`/`set_tag`), not an escalating `capture_exception`.
-
-6. `/analysis` game mode seeds a custom-start library game from its own `initial_fen` and plays
-   through its real mainline.
-
-**Non-goals**: the seed's Tier 2 in full (opening-explorer custom roots, bookmark root FENs,
-`?fen=`+`?line=` combination); any change to which games are imported or to position-hash
-matching; the four unrelated Sentry-hygiene items in SEED-148.
-
-**Plans**: 3 plans in 2 waves
-
-Plans:
-**Wave 1** *(independent — slice 1 is frontend-only, slice 2 is backend-only, no shared files)*
-
-- [x] 210-01-PLAN.md — Frontend replay containment: try/catch at the four unguarded `chess.move()` replay sites, with the crash reproduced as a test first (wave 1)
-- [x] 210-02-PLAN.md — `games.initial_fen` migration + in-migration PGN backfill, normalizer population across all paths, the sample-representative `FILTER`, the NULL-sample guard, and the Sentry demotion (wave 1)
-
-**Wave 2** *(blocked on 210-02 — consumes the `initial_fen` column)*
-
-- [x] 210-03-PLAN.md — Carry `initial_fen` on the library game-detail payload and seed `/analysis` game mode from it instead of `STARTING_FEN` (wave 2)
-
-**UI hint**: none — no new components, no visual change. Slice 1 is a crash guard, slice 3 makes
-an existing board show the correct starting position.
-
-### Phase 211: Vetted "Also Fine" Moves & Server-Key Grading
-
-**Goal**: The Train reveal can no longer advertise a move as "Also fine" that deep analysis
-would call a blunder. Today the list is derived client-side from ranks 2–4 of a 1.5s
-MultiPV-4 WASM search whose node budget is split four ways, on positions selected to be
-tactically sharp — while the server's deep guarantee only ever covers the top two moves
-(`missed_pv_lines` node 0) or the herring MultiPV-5 ladder. Observed in prod: "Bxf4 also
-fine" on a puzzle whose source-game analysis board correctly grades Bxf4 a blunder. After
-this phase, every displayed alternative is server-vetted (soft → at most the deep
-second-best, sharp → none, herring → good-band ladder moves), playing a vetted move is
-graded from the server's own evals (instant, no search), and the mount search drops to
-width 1, concentrating the full budget on the main line.
-
-**Depends on**: nothing new. Builds on Phase 205's dead band (which guarantees the soft
-second-best is certified *good*) and Phase 192's `herring_pool.ladder`.
-
-**Source**: [SEED-150](../seeds/SEED-150-vetted-also-fine-moves.md) — planted 2026-08-16
-after a `/gsd-explore` session; carries the verified blob/ladder shapes, the post-attempt
-delivery design that keeps POOL-10 / P-01's pre-attempt lock intact, and the locked
-residual decision (off-key played moves stay best-effort live-engine; top-K blob extension
-explicitly out of scope).
-
-**Planning notes** (interactions the planner must resolve, from the seed):
-
-- **P-01 (LOCKED)**: vetted moves and their evals reach the client **post-attempt only**
-  (solve-recording POST response, or an attempt-gated fetch). The pre-attempt
-  `TrainPuzzle` schema stays byte-identical.
-
-- **Phase 205 interaction**: ORACLE-0x made the free-play root ply grade from the mount
-  search's rank lines — that mechanism dies with MultiPV-4. Its *guarantee* ("an Also
-  fine move can never be badged a mistake when played") must be re-established the new
-  way: both the list and the root-ply grading read the same server key. Deeper free-play
-  plies stay engine-only, as today.
-
-- **Before removing width 4**: trace remaining consumers of the `lines` array passed
-  through `GradeResult` (the reveal exploration surface passes it around).
-
-- Grading regimes: key move → both ES ends from server evals via the shared sigmoid
-  (agrees with the list by construction); off-key move → existing full-budget width-1
-  after-move search, same-engine ES delta against client rank 1.
-
-**Success Criteria** (what must be TRUE):
-
-1. The "Also fine" list (legend row + board arrows, desktop and mobile) shows only
-   server-vetted moves: at most one on a soft puzzle (the blob's `su`), none on a sharp
-   puzzle, and only good-band ladder moves on a herring.
-
-2. The pre-attempt puzzle payload is unchanged; vetted moves are delivered only after an
-   attempt is recorded (P-01 held, verified by schema/API test).
-
-3. Playing a server-vetted move yields a verdict computed from the server's deep evals
-   with no engine search, and that verdict can never contradict the "Also fine" list.
-
-4. Playing an off-key move is graded by a full-budget width-1 after-move search; the
-   accepted residual (shallow grading of off-key moves) is documented, not "fixed".
-
-5. `TRAIN_GRADING_MULTIPV_WIDTH` is 1; `deriveFineMoves` and the rank-match fast path are
-   retired, with all former `lines` consumers accounted for.
-
-6. Phase 205's free-play root-ply agreement guarantee still holds under the new
-   mechanism (a vetted move played in free-play at the root is never badged worse than
-   the list claims).
-
-**Requirements**: VETFINE-01, VETFINE-02, VETFINE-03, VETFINE-04, VETFINE-05, VETFINE-06
-(minted at planning time, one per Success Criterion above — this phase predates its
-milestone's `REQUIREMENTS.md`, same convention as Phases 206–210; the traceability table
-lives in `211-01-PLAN.md`).
-
-**Plans**: 3 plans
-
-Plans:
-
-- [x] 211-01-PLAN.md — Server key: certify the vetted alternatives from the stored answer
-  key, override the client's tier for a played key move, lock the P-01 surface (tracer, wave 1)
-
-- [x] 211-02-PLAN.md — Width 1: retire the client's own "also fine" derivation and split the
-  alternative-arrow cap per puzzle type (wave 2)
-
-- [x] 211-03-PLAN.md — Re-establish Phase 205's free-play root-ply guarantee on the server
-  key; operator check (wave 3)
+- [ ] 212-10-PLAN.md — Classical tranche run: decision gate, execute, record, vacuum (wave 9)
 
 ## Backlog
 
@@ -1262,5 +983,27 @@ Two post-v2.11 defect phases, both sourced from real production behavior rather 
 **Requirements:** 12/12 complete (PUSHREL-01..06, ORACLE-01..06). Both phases verified `passed` at 6/6 truths; Phase 205's single browser-only item (the real-Stockfish "Also fine" badge check) was operator-confirmed in `205-UAT.md` on 2026-08-04.
 
 See [milestones/v2.12-ROADMAP.md](milestones/v2.12-ROADMAP.md) for full phase detail.
+
+</details>
+
+<details>
+<summary>✅ v2.13 Ways In & Honest Answers (Phases 206–211) — SHIPPED 2026-08-22 (deployed to production, releases #297–#318)</summary>
+
+Two doors opened that did not exist before — a locked-out account can recover itself, and a position from anywhere can be pasted onto the board — while Train stopped telling users things its own answer key contradicts. Robustness work runs underneath both: the site survives a traffic surge without importers trampling each other, and a game that did not start from the standard position no longer crashes the analysis page or silently deletes an opening line from insights. Sourced from SEED-140, SEED-143, SEED-144, SEED-146, SEED-042 and SEED-150. Assembled retroactively at close from six already-shipped, already-deployed phases — no `/gsd-new-milestone` requirements cycle was run (same pattern as v2.6, v2.8 and v2.12), so requirement IDs were minted at phase-planning time and live in each phase's first PLAN.md.
+
+- [x] Phase 206: Train Warm-Up Sessions & Sharp Filler Pool (SEED-140) (3/3 plans) — a session containing none of the user's own blunders is now labeled a warm-up instead of quietly handing over a full deck of red herrings. The trigger is material scarcity (**zero** SR puzzles), never session ordinal, and is server-computed from stored `drill_solves.source` so `_resume_session` cannot shed the label mid-session. The deeper fix is the filler pool: 208 sharp tactical positions (13 motifs, engine-verified, CC0 lichess) now top up any SR shortfall, replacing a herring-only backfill that — because every `herring_pool` row is by construction a several-fine-moves position — made the critical/several question answerable without looking at the board and taught an actively harmful prior about the user's own games — completed 2026-08-07
+- [x] Phase 207: Self-Serve Password Reset (SEED-143) (3/3 plans) — the recovery gap was total, not partial: a user who forgot their password had to register a different address and re-import their whole history, losing bookmarks and Train state. Now a reset link arrives by email (Resend on the free tier via raw `httpx`, no SDK) and the flow is fully self-serve. **D-05 was superseded during planning** when the operator challenged the apex-SPF merge: SPF is evaluated against the envelope-from, and Resend scopes it to a `send.` subdomain while DKIM signs at the apex — so `From: noreply@flawchess.com` passes DMARC on strict DKIM alignment with the existing `v=spf1 a mx include:spf.webapps.net ~all` never read or modified. The one step that could have broken live mail was retired before it ran; Success Criterion 7 became a regression check rather than a risk — completed 2026-08-08
+- [x] Phase 208: Paste a FEN or PGN on /analysis (SEED-144) (4/4 plans) — `/analysis` finally has a door in. One button, one modal, one textarea whose format is **sniffed rather than toggled** (a bare FEN handed to chess.js `loadPgn()` throws a distinguishable parse error, which is what makes the single box safe), plus the nav item the page never had. Paste-and-look persists nothing; only an explicit "Analyze full game" writes a `platform='pgn'` row, unconditionally excluded from analytics through the existing `DEFAULT_EXCLUDED_PLATFORMS` seam. The expensive half of the original ask — bulk multi-game PGN upload on the Import page — was explored and **rejected in the seed** on subject-player identification against a `NOT NULL user_color` (getting it wrong silently *inverts* W/D/L; one sample file spelled a single player twelve ways, and 0 of 2,869 sample games carried `[%clk]`) — completed 2026-08-08
+- [x] Phase 209: Traffic-Surge Quick Wins (SEED-146) (4/4 plans) — concurrent imports no longer trample the site: a global concurrency cap with an in-memory `QUEUED` state and an "Import queued, starting shortly" notice, with `started_at` re-stamped so the reaper never counts queue time against an import's limit. The readiness poll every page runs in the background now backs off step by step under a 30-minute budget instead of asking every few seconds indefinitely, and guest promotion plus percentile compute were moved off the event loop (`to_thread` + semaphore) so they stop stalling other users' requests. Plan 04 was a Cloudflare CDN cutover runbook executed by the operator, verified live 2026-08-15 with `maia3_simplified.onnx` and `stockfish-18-lite-single.wasm` both returning `cf-cache-status: HIT` while `maia-worker.js` still revalidates against origin — completed 2026-08-15
+- [x] Phase 210: Custom-Start Games — Crash Containment & Insight Eviction (SEED-042) (3/3 plans) — a game that did not start from the standard position (a chess.com thematic tournament, a custom-position "Let's Play!", a pasted set-up PGN) crashed the analysis page outright and could silently delete an entire opening line from insights. Both closed via a new `games.initial_fen` column backfilled in-migration, populated across all four normalizer paths, with the sample aggregate filtered to standard-start games and a NULL-sample guard; the analysis board now seeds from the game's own root instead of `STARTING_FEN`. One defect the seed did not anticipate was fixed in passing: a Sentry `capture_exception` on an expected drop demoted to `capture_message(level="warning")` — completed 2026-08-15
+- [x] Phase 211: Vetted "Also Fine" Moves & Server-Key Grading (SEED-150) (3/3 plans) — the Train reveal could advertise a move as "Also fine" that deep analysis calls a blunder, because the list was derived client-side from ranks 2–4 of a 1.5s MultiPV-4 WASM search whose node budget was split four ways, on positions selected to be tactically sharp, while the server's deep guarantee only ever covered the top two moves. Every displayed alternative is now server-vetted (soft → at most the deep second-best, sharp → none, herring → good-band ladder moves), playing a vetted move is graded instantly from the server's own evals with no search, and `TRAIN_GRADING_MULTIPV_WIDTH` dropped to 1 so the full budget concentrates on the main line. Phase 205's free-play root-ply agreement guarantee was re-established on the new mechanism rather than inherited — completed 2026-08-16
+
+**Requirements:** 6 phases, 20 plans. Requirement IDs minted per-phase at planning time (WARMUP, RESET, PASTE, SURGE, CUSTOM, VETFINE families) — this milestone has no `REQUIREMENTS.md`, same convention as v2.6/v2.8/v2.12.
+
+**Verification status is uneven and recorded as such.** Phases 206, 207 and 211 carry a passing VERIFICATION.md. Phase 208 verified 32/32 must-haves in code but closed `human_needed` with **four live-browser UAT items still `[pending]`** — two UI-SPEC viewport backstops at 375px, one Library cross-surface containment check, and one confirmation of an already-automated regression fix — and shipped to production regardless. Phases 209 and 210 have no VERIFICATION.md at all: 209 carries a VALIDATION.md and 210 a SUMMARY.md with a per-requirement proof table (each row red-before-fix), which is evidence but not the standard artifact.
+
+**Deployed throughout, not at close.** Unlike a normal milestone this one never had an undeployed tail — the six phases went out incrementally across releases #297–#318, and at close `origin/production` and `main` are byte-identical outside `.planning/`. The 262 commits and +31,705/−3,657 across 308 non-planning files in this range also carry the public data-stories site (16 files, +3,530), the Umami outbound-link tracking, two Caddy access-log secret-leak fixes (#315, #316), a `pydantic-ai` 2.x upgrade, and assorted sound-design and move-browsing quick tasks that belong to no phase.
+
+See [milestones/v2.13-ROADMAP.md](milestones/v2.13-ROADMAP.md) for full phase detail.
 
 </details>

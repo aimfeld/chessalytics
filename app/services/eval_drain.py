@@ -101,6 +101,7 @@ from app.services.eval_entry import (
     _mark_evals_completed,
 )
 from app.services.eval_queue_service import WORKER_ID_SERVER_POOL, claim_eval_job
+from app.services.eval_utils import derive_is_lichess_eval_game
 from app.services.user_benchmark_percentiles_service import compute_stage_b
 
 logger = logging.getLogger(__name__)
@@ -747,7 +748,9 @@ async def _tier4b_minimal_drain_tick(game_id: int, user_id: int) -> bool:
             return False
         pgn_text: str = game.pgn
         # Quick 260719-fsz: needed for the divergence-guard-parity override below.
-        is_lichess_eval_game = game.lichess_evals_at is not None
+        # Phase 212 D-03: routed through the single derivation point so
+        # BENCHMARK_HOMOGENIZE_EVAL_SOURCE can force this False everywhere.
+        is_lichess_eval_game = derive_is_lichess_eval_game(game.lichess_evals_at)
         gp_result = await read_session.execute(
             select(
                 GamePosition.ply,

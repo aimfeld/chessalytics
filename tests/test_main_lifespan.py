@@ -281,3 +281,152 @@ class TestLifespanBackgroundTasks:
             "Expected 'Guest cleanup task raised on shutdown' in logger.exception calls. "
             f"Captured: {logged_messages}"
         )
+
+
+class TestBenchmarkSelectionGateAssertion:
+    """Phase 212-02 (D-09/D-10 point 3): assert_benchmark_selection_gate_ready()
+    is awaited from the lifespan before start_engine(), and fails closed when
+    the gate is on but benchmark_selection is missing."""
+
+    async def test_benchmark_gate_assertion_noop_when_flag_off(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """Flag off: the assertion returns immediately and never opens a
+        database session -- dev, CI, and prod (gate always off) pay nothing."""
+        import app.services.eval_queue_service as eval_queue_service_module
+        from app.main import app
+
+        monkeypatch.setattr(
+            eval_queue_service_module.settings, "BENCHMARK_SELECTION_GATE_ENABLED", False
+        )
+
+        session_maker_called = False
+
+        def _fail_if_called(*_args: object, **_kwargs: object) -> None:
+            nonlocal session_maker_called
+            session_maker_called = True
+            raise AssertionError("async_session_maker must not be called when the flag is off")
+
+        monkeypatch.setattr(eval_queue_service_module, "async_session_maker", _fail_if_called)
+
+        monkeypatch.setattr("app.main.get_insights_agent", _noop_sync)
+        monkeypatch.setattr("app.main.cleanup_orphaned_jobs", _noop)
+        monkeypatch.setattr("app.main.start_engine", _noop_async_returns_none)
+        monkeypatch.setattr("app.main.stop_engine", _noop_async_returns_none)
+        monkeypatch.setattr("app.main.run_periodic_reaper", _stub_sleep_forever)
+        monkeypatch.setattr("app.main.run_eval_drain", _stub_sleep_forever)
+        monkeypatch.setattr("app.main.run_full_eval_drain", _stub_sleep_forever)
+        monkeypatch.setattr("app.main.run_periodic_guest_cleanup", _stub_sleep_forever)
+        monkeypatch.setattr("app.main.run_periodic_train_reminders", _stub_sleep_forever)
+
+        async with app.router.lifespan_context(app):
+            await asyncio.sleep(0)
+
+        assert not session_maker_called, (
+            "assert_benchmark_selection_gate_ready must not touch the database "
+            "when BENCHMARK_SELECTION_GATE_ENABLED is False"
+        )
+
+    async def test_benchmark_gate_assertion_passes_when_table_present(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """Flag on, to_regclass resolves the table: the assertion returns
+        without raising and the lifespan boots normally."""
+        import app.services.eval_queue_service as eval_queue_service_module
+        from app.main import app
+
+        monkeypatch.setattr(
+            eval_queue_service_module.settings, "BENCHMARK_SELECTION_GATE_ENABLED", True
+        )
+
+        class _FakeResult:
+            def scalar_one_or_none(self) -> int:
+                return 12345  # any non-None regclass oid stands in for "table exists"
+
+        class _FakeSession:
+            async def __aenter__(self) -> "_FakeSession":
+                return self
+
+            async def __aexit__(self, *_exc_info: object) -> None:
+                return None
+
+            async def execute(self, *_args: object, **_kwargs: object) -> _FakeResult:
+                return _FakeResult()
+
+        def _fake_session_maker() -> _FakeSession:
+            return _FakeSession()
+
+        monkeypatch.setattr(eval_queue_service_module, "async_session_maker", _fake_session_maker)
+
+        monkeypatch.setattr("app.main.get_insights_agent", _noop_sync)
+        monkeypatch.setattr("app.main.cleanup_orphaned_jobs", _noop)
+        monkeypatch.setattr("app.main.start_engine", _noop_async_returns_none)
+        monkeypatch.setattr("app.main.stop_engine", _noop_async_returns_none)
+        monkeypatch.setattr("app.main.run_periodic_reaper", _stub_sleep_forever)
+        monkeypatch.setattr("app.main.run_eval_drain", _stub_sleep_forever)
+        monkeypatch.setattr("app.main.run_full_eval_drain", _stub_sleep_forever)
+        monkeypatch.setattr("app.main.run_periodic_guest_cleanup", _stub_sleep_forever)
+        monkeypatch.setattr("app.main.run_periodic_train_reminders", _stub_sleep_forever)
+
+        # Must not raise.
+        async with app.router.lifespan_context(app):
+            await asyncio.sleep(0)
+
+    async def test_benchmark_gate_assertion_aborts_startup_when_table_missing(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """Flag on, to_regclass returns None: entering the lifespan raises
+        RuntimeError and no background task in EXPECTED_TASKS is ever spawned."""
+        import app.services.eval_queue_service as eval_queue_service_module
+        from app.main import app
+
+        monkeypatch.setattr(
+            eval_queue_service_module.settings, "BENCHMARK_SELECTION_GATE_ENABLED", True
+        )
+
+        class _FakeResult:
+            def scalar_one_or_none(self) -> None:
+                return None  # to_regclass('public.benchmark_selection') -> NULL
+
+        class _FakeSession:
+            async def __aenter__(self) -> "_FakeSession":
+                return self
+
+            async def __aexit__(self, *_exc_info: object) -> None:
+                return None
+
+            async def execute(self, *_args: object, **_kwargs: object) -> _FakeResult:
+                return _FakeResult()
+
+        def _fake_session_maker() -> _FakeSession:
+            return _FakeSession()
+
+        monkeypatch.setattr(eval_queue_service_module, "async_session_maker", _fake_session_maker)
+
+        reaper_called = False
+
+        async def _stub_reaper_records_call() -> None:
+            nonlocal reaper_called
+            reaper_called = True
+            await asyncio.sleep(STUB_SLEEP_SECONDS)
+
+        monkeypatch.setattr("app.main.get_insights_agent", _noop_sync)
+        monkeypatch.setattr("app.main.cleanup_orphaned_jobs", _noop)
+        monkeypatch.setattr("app.main.start_engine", _noop_async_returns_none)
+        monkeypatch.setattr("app.main.stop_engine", _noop_async_returns_none)
+        monkeypatch.setattr("app.main.run_periodic_reaper", _stub_reaper_records_call)
+        monkeypatch.setattr("app.main.run_eval_drain", _stub_sleep_forever)
+        monkeypatch.setattr("app.main.run_full_eval_drain", _stub_sleep_forever)
+        monkeypatch.setattr("app.main.run_periodic_guest_cleanup", _stub_sleep_forever)
+        monkeypatch.setattr("app.main.run_periodic_train_reminders", _stub_sleep_forever)
+
+        with pytest.raises(RuntimeError, match="benchmark_selection"):
+            async with app.router.lifespan_context(app):
+                await asyncio.sleep(0)
+
+        assert not reaper_called, (
+            "No background task may be spawned when the gate assertion aborts startup"
+        )

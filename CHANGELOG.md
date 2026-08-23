@@ -8,6 +8,8 @@ in `YYYY-MM-DD` (Europe/Zurich).
 
 ## [Unreleased]
 
+## [v2.13] Ways In & Honest Answers — 2026-08-22
+
 ### Added
 
 - Train now tells you when a session contains none of your own blunders instead of quietly handing you a full deck of red herrings. Those sessions are labeled as a warm-up, with a banner explaining what you are about to solve, and they still count toward your streak like any other session. This fires when you simply do not have enough analyzed material yet, not on a fixed session number. (Phase 206)
@@ -19,6 +21,8 @@ in `YYYY-MM-DD` (Europe/Zurich).
 - Forgot your password? You can now reset it yourself — request a link by email, follow it, and set a new one, with no need to contact support. (Phase 207)
 
 - You can now paste a FEN or a full PGN on the analysis board to load any position or game from outside FlawChess, look at it without saving anything, and optionally run a full analysis on it. Pasted games never count toward your openings, endgames, or insights stats, and stay hidden in the Library until you turn on the Pasted filter. (Phase 208)
+
+- The analysis board and the opening explorer board now support the same lichess-style move browsing: arrow keys work as soon as you land on the page, no need to click the board first, and scrolling the mouse wheel while hovering the board steps through the moves too. Holding an arrow key browses at a steady, visible pace instead of jumping straight to the end of the game.
 
 ### Changed
 
@@ -61,6 +65,8 @@ in `YYYY-MM-DD` (Europe/Zurich).
 - On devices where the browser's GPU backend drops the Maia session mid-analysis, Maia now restarts on the CPU backend and keeps working instead of failing that position's human-move prediction. (SEED-148)
 
 - A Train puzzle can no longer advertise a move as "Also fine" that deep analysis grades a blunder. The old list came from ranks 2–4 of a quick browser search on deliberately sharp positions, which sometimes promoted moves the source game's own analysis board correctly marked as mistakes. (Phase 211)
+
+- Analysis on mobile no longer permanently loses an engine worker when you background the tab and come back to it. And two harmless browser conditions — a service-worker update check on iOS, and a blocked push-key request — no longer surface as errors.
 
 ### Security
 
@@ -1339,7 +1345,8 @@ bookmarks, game cards, and rating / stats pages.
 - Rating history, global stats, openings W/D/L charts.
 - Multi-user auth with data isolation.
 
-[Unreleased]: https://github.com/flawchess/flawchess/compare/v2.12...HEAD
+[Unreleased]: https://github.com/flawchess/flawchess/compare/v2.13...HEAD
+[v2.13]: https://github.com/flawchess/flawchess/compare/v2.12...v2.13
 [v2.12]: https://github.com/flawchess/flawchess/compare/v2.11...v2.12
 [v2.11]: https://github.com/flawchess/flawchess/compare/v2.10...v2.11
 [v2.10]: https://github.com/flawchess/flawchess/compare/v2.9...v2.10

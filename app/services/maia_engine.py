@@ -116,6 +116,16 @@ async def start_maia() -> None:
         logger.exception("maia_engine: ONNX session load failed — Maia inference disabled")
         sentry_sdk.capture_exception()
         _session = None
+        return
+    # Startup confirmation. Bug fix (phase 212 plan 08): this function previously
+    # logged ONLY on its four failure paths and returned silently on success, so
+    # the benchmark-lane runbook's "confirm the startup log reports Maia loaded"
+    # check was impossible to perform — there was no such line. Absence of an
+    # error line is not a positive signal, and it is a dangerous one to rely on
+    # here: a Maia-absent backend produces PV normally but silently never stamps
+    # best_moves_completed_at, and row counts alone cannot tell "Maia ran, zero
+    # candidates" from "Maia absent" after the fact.
+    logger.info("maia_engine: Maia ONNX session loaded — inference enabled (%s)", _MODEL_PATH)
 
 
 def is_maia_available() -> bool:

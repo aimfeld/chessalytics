@@ -109,8 +109,33 @@ _AUTOGEN_INDEX_IGNORELIST = {
 }
 
 
+# Benchmark-only tables (Phase 69 INFRA-02, Phase 212 D-08). These tables live
+# on the shared declarative Base (so target_metadata sees them) but are
+# created ONLY by targeted Base.metadata.create_all(tables=[...]) from
+# scripts/ against the benchmark engine on :5433 -- never by an Alembic
+# migration. _include_object previously filtered indexes only (see
+# _AUTOGEN_INDEX_IGNORELIST above and the 2026-07-02 code-review note), so
+# tables were never filtered: the next unrelated `alembic revision
+# --autogenerate` would have silently emitted op.create_table for each of
+# these against prod's migration chain, the same class of latent time-bomb
+# the index ignorelist above already guards against. This retroactively
+# protects the two tables that predate this fix
+# (benchmark_selected_users, benchmark_ingest_checkpoints) as well as the two
+# added in Phase 212 (benchmark_selection, benchmark_lichess_eval_snapshot).
+# Do NOT add benchmark_cohort_cdf here -- that table IS canonical and is
+# deliberately imported at the top of this module.
+_AUTOGEN_TABLE_IGNORELIST = {
+    "benchmark_selected_users",
+    "benchmark_ingest_checkpoints",
+    "benchmark_selection",
+    "benchmark_lichess_eval_snapshot",
+}
+
+
 def _include_object(object_, name, type_, reflected, compare_to):  # type: ignore[no-untyped-def]
     if type_ == "index" and name in _AUTOGEN_INDEX_IGNORELIST:
+        return False
+    if type_ == "table" and name in _AUTOGEN_TABLE_IGNORELIST:
         return False
     return True
 

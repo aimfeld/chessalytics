@@ -47,6 +47,7 @@ to Sentry (import path: D-11; backfill script: log).
 from __future__ import annotations
 
 import asyncio
+import logging
 import os
 import shutil
 import sys
@@ -56,6 +57,8 @@ import chess
 import chess.engine
 
 from app.services.zobrist import EVAL_CP_MAX_ABS, EVAL_MATE_MAX_ABS
+
+logger = logging.getLogger(__name__)
 
 # D-06: STOCKFISH_PATH env var wins when set (prod Docker sets it, CI sets it).
 # When unset we probe well-known locations so local dev needs no env var: the
@@ -229,6 +232,15 @@ async def start_engine() -> None:
     pool = EnginePool(size=_read_pool_size())
     await pool.start()
     _pool = pool
+    # Startup confirmation. Deliberately logged on SUCCESS, not only on failure:
+    # an operator following the benchmark-lane runbook needs a positive signal
+    # that the engine really came up in THIS process, and "no error line" is not
+    # one (see the matching note in maia_engine.start_maia).
+    logger.info(
+        "start_engine: Stockfish pool loaded — %d worker(s), binary %s",
+        pool.size,
+        _STOCKFISH_PATH,
+    )
 
 
 async def stop_engine() -> None:

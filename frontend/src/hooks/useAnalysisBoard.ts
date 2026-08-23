@@ -7,12 +7,16 @@
  * - No Zobrist hashing or opening lookup.
  * - Mid-line moves fork a new child node rather than truncating the main line (BOARD-01).
  * - Stores full FEN per node for O(1) goToNode — no root replay (BOARD-02).
- * - Container-scoped keyboard handler (same pattern as useTacticLine, not window-level).
+ * - Arrow-key and mouse-wheel move browsing (Quick 260821-kyz) live in the
+ *   shared useBoardNavigationInput hook, which the Openings board uses too.
+ *   containerRef.current === null (useTrainFreePlay never attaches it) is
+ *   what excludes Train from both surfaces.
  */
 
 import { useRef, useState, useCallback, useEffect } from 'react';
 import type { RefObject } from 'react';
 import { Chess } from 'chess.js';
+import { useBoardNavigationInput } from '@/hooks/useBoardNavigationInput';
 import { playSound, unlockAudio } from '@/lib/sounds';
 import type { SoundEvent } from '@/lib/sounds';
 
@@ -724,25 +728,8 @@ export function useAnalysisBoard(
     playSound(event);
   }, [state.currentNodeId, state.nodes]);
 
-  // Container-scoped keyboard handler (ArrowLeft = goBack, ArrowRight = goForward).
-  // Scoped to containerRef — NOT window — to avoid clashing with page shortcuts.
-  // (Mirrors useTacticLine lines 181-197; goBack/goForward are stable callbacks
-  // with [] deps, so no stale closure on the handler.)
-  useEffect(() => {
-    const container = containerRef.current;
-    if (!container) return;
-    const handleKeyDown = (e: KeyboardEvent): void => {
-      if (e.key === 'ArrowLeft') {
-        e.preventDefault();
-        goBack();
-      } else if (e.key === 'ArrowRight') {
-        e.preventDefault();
-        goForward();
-      }
-    };
-    container.addEventListener('keydown', handleKeyDown);
-    return () => container.removeEventListener('keydown', handleKeyDown);
-  }, [goBack, goForward]);
+  // Arrow-key and mouse-wheel move browsing, shared with the Openings board.
+  useBoardNavigationInput({ containerRefs: [containerRef], goBack, goForward });
 
   const position = getPosition(state);
   const lastMove = getLastMove(state);

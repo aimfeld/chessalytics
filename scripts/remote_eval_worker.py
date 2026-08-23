@@ -166,6 +166,23 @@ def _log(msg: str = "") -> None:
     print(f"[{ts}] {msg}")
 
 
+def _target(client: httpx.AsyncClient) -> str:
+    """`target=<host:port>` for a per-game log line, so a tailed worker log shows
+    WHICH backend a claim came from.
+
+    `_BackendTarget.label` ("primary"/"fallback") already exists for this purpose
+    but never reached the per-game lines, so a worker draining both prod and a
+    benchmark instance logged leases indistinguishably. Derived from the client
+    rather than threaded through five rung handlers as a parameter: every handler
+    already holds the `client` whose `base_url` IS the routing fact, so there is
+    no way for this label to drift out of sync with where the request actually
+    went. Host and port only -- the scheme and path add width without
+    distinguishing anything.
+    """
+    url = client.base_url
+    return f"target={url.host}:{url.port}" if url.port else f"target={url.host}"
+
+
 # ─── SEED-139 D-05: bounded per-cycle worker-side retry of timed-out positions ─
 
 _ResultTuple = TypeVar("_ResultTuple", bound=tuple[Any, ...])
@@ -692,6 +709,25 @@ def _loop_exception_handler(
 # ─── Main worker loop ─────────────────────────────────────────────────────────
 
 
+@dataclass(frozen=True)
+class _CycleOutcome:
+    """Result of one `_run_cycle` invocation: "did work happen" vs "should the
+    loop stop", kept as two SEPARATE facts.
+
+    Before this dataclass, `_run_cycle` returned only `not loop` at every return
+    point. In the default looping mode (`loop=True`) that expression is ALWAYS
+    `False`, whether a rung successfully leased-and-submitted a game or all five
+    rungs returned 204 -- "prod had nothing to do" and "prod just finished a
+    game" were indistinguishable at the call site. Task 2's dual-URL fallback
+    needs exactly that distinction: it only tries the benchmark backend on a
+    cycle where the primary's WHOLE ladder did nothing, so `did_work` must never
+    be conflated with `should_stop` (today's `not loop` semantics, unchanged).
+    """
+
+    did_work: bool
+    should_stop: bool
+
+
 def _is_expected_transient(exc: BaseException) -> bool:
     """True for operational churn a continuous polling daemon rides out silently.
 
@@ -716,7 +752,7 @@ def _is_expected_transient(exc: BaseException) -> bool:
 
 
 async def _run_loop(
-    client: httpx.AsyncClient,
+    clients: list[httpx.AsyncClient],
     pool: EnginePool,
     sf_version: str,
     idle_sleep: float,
@@ -724,16 +760,49 @@ async def _run_loop(
     loop: bool,
     heartbeat: _Heartbeat | None = None,
 ) -> None:
-    """Inner lease → eval → submit loop.
+    """Inner lease → eval → submit loop, now iterating an ORDERED list of backend
+    targets per cycle (D-13/Task 2).
 
-    On 204 (empty queue): sleep `idle_sleep` seconds and continue if `loop`,
-    else return. On 2xx lease response: evaluate all positions, then submit
-    unless `dry_run`. Exits cleanly when `not loop` after one game cycle.
+    With a single client this is byte-identical to the pre-D-13 single-target
+    loop: one `_run_cycle` call per outer iteration. With multiple clients, each
+    outer iteration ("cycle") tries `clients[0]`'s WHOLE five-rung ladder first;
+    only when it returns `did_work=False` does the loop advance to `clients[1]`'s
+    whole ladder, and so on -- rungs are never interleaved across clients, and
+    once any client's ladder does work, later clients are not touched this cycle
+    (strict per-claim prod priority, D-13). `sleep_when_idle` is passed True only
+    for the LAST client in the list, so a fully-idle cycle sleeps `idle_sleep`
+    exactly once no matter how many targets are configured (T-146-06).
 
-    Each cycle is wrapped in an exception boundary: a transient network error,
-    a 5xx (raise_for_status), or a bad FEN must not kill a continuous daemon. When
-    looping, the worker backs off `idle_sleep` and retries. When not looping the
-    exception propagates so --once surfaces failures with a non-zero exit.
+    On 204 (empty queue, last target only): sleep `idle_sleep` seconds and
+    continue if `loop`, else return. On 2xx lease response (any target): evaluate
+    all positions, then submit unless `dry_run`. Exits cleanly when `not loop`
+    after one game cycle.
+
+    Each per-target `_run_cycle` call is wrapped in an exception boundary: a
+    transient network error, a 5xx (raise_for_status), or a bad FEN must not kill
+    a continuous daemon. D-14: when a target's ladder raises an EXPECTED transient
+    exception (see `_is_expected_transient`) and it is NOT the last target, that
+    target is treated as no-work and the loop advances to the next target in the
+    SAME cycle -- UNCONDITIONALLY, even when `not loop` (an unreachable primary
+    still falls through to a configured fallback on a bounded `--once` run,
+    since there is more work left to try before the run can conclude). Single-
+    target runs never take this branch (the only client is always "last"), so
+    the byte-identical single-target contract below is untouched.
+
+    When the LAST target's ladder raises a transient exception (every target in
+    the list has now been tried this cycle with none reaching its own
+    idle-sleep tail), the loop falls back to the pre-D-13 single-target
+    terminal shape: `not loop` captures and re-raises immediately (--once
+    surfaces a non-zero exit, exactly like today's single-target worker); when
+    looping it backs off `idle_sleep` once and retries from the first target
+    next cycle -- the streak tracking below still runs so a sustained outage
+    escalates exactly one Sentry event, same as the single-target case.
+
+    A NON-transient exception (a genuine defect) keeps the pre-D-13 behavior
+    exactly, on WHICHEVER target raises it: captured to Sentry immediately,
+    never falls through to a later target (a real bug must not be silently
+    masked by trying the next backend), re-raised when `not loop`, else backs
+    off `idle_sleep` and retries from the first target next cycle.
 
     Sentry policy (quota hygiene): expected transient failures (_is_expected_transient)
     are logged locally and NOT captured per-cycle — only ONE event escalates once a
@@ -741,43 +810,119 @@ async def _run_loop(
     not a deploy blip). Unexpected exceptions (a genuine bug) are captured immediately.
     A successful cycle resets the streak. `--once` runs surface everything.
 
-    SEED-063: `heartbeat.mark()` is called after each `_run_cycle` that returns
-    WITHOUT raising -- BEFORE the stop check. A clean 204 idle cycle returns
-    normally, so it counts as progress (an idle worker with an empty queue is
-    healthy, not stalled). A failed cycle (the except branch) is NOT progress.
+    SEED-063: `heartbeat.mark()` is called after each per-target `_run_cycle` that
+    returns WITHOUT raising -- BEFORE the stop check. A clean 204 idle cycle
+    returns normally, so it counts as progress (an idle worker with an empty
+    queue is healthy, not stalled). A failed cycle (the except branch) is NOT
+    progress.
     """
     # Transient-failure streak tracking: start timestamp of the current uninterrupted
     # run of expected-transient failures, and whether we've already escalated it once.
     streak_start: float | None = None
     streak_alerted: bool = False
+    last_index = len(clients) - 1
     while True:
-        try:
-            stop = await _run_cycle(client, pool, sf_version, idle_sleep, dry_run, loop)
-        except (KeyboardInterrupt, asyncio.CancelledError):
-            raise
-        except Exception as exc:
-            # --once (manual run): surface everything, then re-raise for a non-zero exit.
-            if not loop:
-                sentry_sdk.capture_exception(exc)
-                raise
-            if _is_expected_transient(exc):
-                streak_start, streak_alerted = _handle_transient_failure(
-                    exc, streak_start, streak_alerted
+        for i, client in enumerate(clients):
+            is_last = i == last_index
+            try:
+                outcome = await _run_cycle(
+                    client,
+                    pool,
+                    sf_version,
+                    idle_sleep,
+                    dry_run,
+                    loop,
+                    sleep_when_idle=is_last,
                 )
-            else:
-                # Genuine defect (bad payload, ValidationError, unexpected type): capture now.
+            except (KeyboardInterrupt, asyncio.CancelledError):
+                raise
+            except Exception as exc:
+                if _is_expected_transient(exc):
+                    if not is_last:
+                        # D-14: treat this target as no-work and advance to the
+                        # next one in the SAME cycle -- UNCONDITIONALLY, even in
+                        # --once mode, since there is more work left to try
+                        # before this run can conclude. Single-target runs never
+                        # take this branch (is_last is always True when there is
+                        # only one client), so the byte-identical single-target
+                        # --once contract below is untouched.
+                        streak_start, streak_alerted = _handle_transient_failure(
+                            exc, streak_start, streak_alerted
+                        )
+                        continue
+                    # Last (or only) target: no more targets to try this cycle --
+                    # the same terminal shape as the pre-D-13 single-target case,
+                    # so --once surfaces it exactly as before (capture + raise,
+                    # no streak bookkeeping -- the process is about to exit).
+                    if not loop:
+                        sentry_sdk.capture_exception(exc)
+                        raise
+                    streak_start, streak_alerted = _handle_transient_failure(
+                        exc, streak_start, streak_alerted
+                    )
+                    await asyncio.sleep(idle_sleep)
+                    continue
+                # Genuine defect (bad payload, ValidationError, unexpected type):
+                # capture now, regardless of loop mode. Never falls through to
+                # another target -- a real bug must not be silently masked by
+                # trying the next backend.
                 sentry_sdk.capture_exception(exc)
+                if not loop:
+                    raise
                 _log("Cycle failed (unexpected); see Sentry. Backing off...")
-            await asyncio.sleep(idle_sleep)
-            continue
+                await asyncio.sleep(idle_sleep)
+                break
 
-        # Success: reset the transient-failure streak.
-        streak_start = None
-        streak_alerted = False
-        if heartbeat is not None:
-            heartbeat.mark()
-        if stop:
-            return
+            # Success (this target's ladder completed without raising): reset the
+            # transient-failure streak.
+            streak_start = None
+            streak_alerted = False
+            if heartbeat is not None:
+                heartbeat.mark()
+            if outcome.did_work or is_last:
+                # Either this target did work (never touch later clients, D-13),
+                # or this was the last target's own fully-idle 204 (already slept
+                # inside _run_cycle above) -- either way this cycle is finished.
+                # `should_stop` is identical across every target's outcome (it is
+                # purely `not loop`), so it is only meaningful to check HERE, once
+                # the cycle is actually done -- checking it right after the FIRST
+                # target's return would make a `--once` run stop before ever
+                # trying a later target, defeating the whole fallback.
+                if outcome.should_stop:
+                    return
+                break
+
+
+def _describe_exc(exc: BaseException) -> str:
+    """One-line, operator-actionable rendering of a transient cycle failure.
+
+    An HTTP status is the single most useful discriminator (403 = wrong operator
+    token, 404 = wrong URL/path, 5xx = the backend is up but unhealthy), and
+    `httpx.HTTPStatusError`'s own `str()` is three lines with a docs link, so the
+    status and target are pulled out explicitly. Connect/timeout errors carry an
+    empty `str()`, which is exactly the case that produced a bare "Cycle failed",
+    so the class name is always included as the floor.
+    """
+    if isinstance(exc, httpx.HTTPStatusError):
+        return (
+            f"HTTP {exc.response.status_code} from "
+            f"{exc.request.url.host}:{exc.request.url.port or ''} "
+            f"{exc.request.url.path}"
+        )
+    if isinstance(exc, httpx.RequestError):
+        # `.request` RAISES RuntimeError when unset rather than returning None, so
+        # a truthiness check on it crashes the failure handler that is reporting
+        # the failure. A RequestError raised outside a send (or constructed in a
+        # test) has no request attached, so this branch is reachable in practice.
+        try:
+            url = exc.request.url
+            target = f" to {url.host}:{url.port or ''}"
+        except RuntimeError:
+            target = ""
+        detail = f": {exc}" if str(exc) else ""
+        return f"{type(exc).__name__}{target}{detail}"
+    detail = f": {exc}" if str(exc) else ""
+    return f"{type(exc).__name__}{detail}"
 
 
 def _handle_transient_failure(
@@ -807,7 +952,14 @@ def _handle_transient_failure(
             level="warning",
         )
         streak_alerted = True
-    _log(f"Cycle failed (transient, {round(elapsed)}s streak). Backing off...")
+    # The exception used to be dropped here, leaving a bare "Cycle failed" that
+    # could not distinguish an unreachable fallback backend from a prod auth
+    # failure or a blip -- undiagnosable from the log alone, which is the only
+    # thing an operator on a remote worker box has. httpx exceptions carry the
+    # request URL but never headers, so the operator token cannot leak here.
+    _log(
+        f"Cycle failed (transient, {round(elapsed)}s streak): {_describe_exc(exc)}. Backing off..."
+    )
     return streak_start, streak_alerted
 
 
@@ -818,8 +970,10 @@ async def _run_cycle(
     idle_sleep: float,
     dry_run: bool,
     loop: bool,
-) -> bool:
-    """Run one D-06 ladder cycle. Returns True when the loop should stop.
+    *,
+    sleep_when_idle: bool = True,
+) -> _CycleOutcome:
+    """Run one D-06 ladder cycle. Returns a `_CycleOutcome(did_work, should_stop)`.
 
     D-06 ladder, now FIVE rungs (Phase 123 SEED-051; rung 4 added Phase 146 D-04;
     rung 5 added Phase 177 BACK-02/03). Rungs 1 and 3 upgraded to the atomic
@@ -863,8 +1017,16 @@ async def _run_cycle(
     makes all 5 round-trips. Entry-ply is always-on (D-08); the server D-5 gate
     makes it cost nothing when there's no big import.
 
-    Returns True only in non-loop mode after a completed cycle (or an idle 204);
-    in loop mode it always returns False so _run_loop keeps draining.
+    `should_stop` is True only in non-loop mode after a completed cycle (or an
+    idle 204); in loop mode it is always False so _run_loop keeps draining.
+    `did_work` is True whenever any rung returned non-204 and was handled, and
+    False only when all five rungs returned 204 (the fully-idle tail below).
+
+    `sleep_when_idle` (D-13/Task 2): when False, the all-204 tail skips its
+    `asyncio.sleep(idle_sleep)` and "Queue fully empty" log line -- used by
+    `_run_loop` for every target except the last one in a multi-target run, so
+    exactly one idle sleep happens per fully-idle cycle regardless of how many
+    backend targets are configured (T-146-06 single-sleep invariant).
     """
     # ── Rung 1: explicit tier-1/2 (atomic eval+blob pair, Phase 147 Part B) ──
     lease_resp = await client.post(
@@ -897,9 +1059,10 @@ async def _run_cycle(
             # (Phase 177 BACK-02/03, Pitfall 6: strictly AFTER rung 4).
             bestmove_resp = await client.post("/api/eval/remote/bestmove-lease")
             if bestmove_resp.status_code == 204:
-                _log("Queue fully empty (204). Sleeping...")
-                await asyncio.sleep(idle_sleep)
-                return not loop
+                if sleep_when_idle:
+                    _log("Queue fully empty (204). Sleeping...")
+                    await asyncio.sleep(idle_sleep)
+                return _CycleOutcome(did_work=False, should_stop=not loop)
             return await _handle_bestmove_response(
                 client, pool, sf_version, dry_run, loop, bestmove_resp
             )
@@ -915,7 +1078,7 @@ async def _handle_atomic_response(
     dry_run: bool,
     loop: bool,
     lease_resp: httpx.Response,
-) -> bool:
+) -> _CycleOutcome:
     """Handle a 200 response from /atomic-lease (Phase 147 SEED-074 Part B).
 
     Evaluates full-ply at MultiPV-1 (unchanged `_eval_positions`), derives a
@@ -940,7 +1103,10 @@ async def _handle_atomic_response(
     # eval_jobs.status='completed' when the submit is clean and no holes remain.
     job_id = data.get("job_id")
 
-    _log(f"Atomic-leased game_id={game_id} ({len(positions)} positions). Evaluating...")
+    _log(
+        f"Atomic-leased game_id={game_id} ({len(positions)} positions) "
+        f"[{_target(client)}]. Evaluating..."
+    )
     evals, blob_nodes, second_best = await _eval_atomic_game(pool, positions)
 
     if dry_run:
@@ -948,7 +1114,7 @@ async def _handle_atomic_response(
             f"--dry-run: evaluated {len(evals)} positions + {len(blob_nodes)} blob nodes + "
             f"{len(second_best)} second_best for game_id={game_id}; skipping submit."
         )
-        return not loop
+        return _CycleOutcome(did_work=True, should_stop=not loop)
 
     submit_resp = await client.post(
         "/api/eval/remote/atomic-submit",
@@ -965,10 +1131,11 @@ async def _handle_atomic_response(
     submit_resp.raise_for_status()
     result = submit_resp.json()
     _log(
-        f"Atomic-submitted game_id={game_id}: flaws_written={result.get('flaws_written')}, "
+        f"Atomic-submitted game_id={game_id} [{_target(client)}]: "
+        f"flaws_written={result.get('flaws_written')}, "
         f"blobs_written={result.get('blobs_written')}"
     )
-    return not loop
+    return _CycleOutcome(did_work=True, should_stop=not loop)
 
 
 async def _handle_entry_ply_response(
@@ -978,18 +1145,21 @@ async def _handle_entry_ply_response(
     dry_run: bool,
     loop: bool,
     entry_resp: httpx.Response,
-) -> bool:
+) -> _CycleOutcome:
     """Handle a 200 response from /entry-lease (depth-15 entry-ply path)."""
     entry_resp.raise_for_status()
     data = entry_resp.json()
     positions = data["positions"]
 
-    _log(f"Leased {len(positions)} entry-ply position(s). Evaluating at depth-15...")
+    _log(
+        f"Leased {len(positions)} entry-ply position(s) [{_target(client)}]. "
+        "Evaluating at depth-15..."
+    )
     evals = await _eval_entry_positions(pool, positions)
 
     if dry_run:
         _log(f"--dry-run: evaluated {len(evals)} entry-ply positions; skipping submit.")
-        return not loop
+        return _CycleOutcome(did_work=True, should_stop=not loop)
 
     submit_resp = await client.post(
         "/api/eval/remote/entry-submit",
@@ -1004,7 +1174,7 @@ async def _handle_entry_ply_response(
         f"Entry-submit complete: game_ids={result.get('game_ids')}, "
         f"stamped_count={result.get('stamped_count')}"
     )
-    return not loop
+    return _CycleOutcome(did_work=True, should_stop=not loop)
 
 
 async def _handle_flaw_blob_response(
@@ -1014,7 +1184,7 @@ async def _handle_flaw_blob_response(
     dry_run: bool,
     loop: bool,
     blob_lease_resp: httpx.Response,
-) -> bool:
+) -> _CycleOutcome:
     """Handle a 200 response from /flaw-blob-lease (tier-4 blob drain path, D-04).
 
     Evaluates each leased FEN at MultiPV=2, then POSTs the results to
@@ -1031,8 +1201,8 @@ async def _handle_flaw_blob_response(
     # that blobs_written will report on submit. Log both so the counts share a frame.
     flaw_count = len({str(pos["token"]).split(":", 1)[0] for pos in positions})
     _log(
-        f"Flaw-blob lease game_id={game_id} ({len(positions)} FENs across {flaw_count} flaws). "
-        "Evaluating at MultiPV=2..."
+        f"Flaw-blob lease game_id={game_id} ({len(positions)} FENs across {flaw_count} flaws) "
+        f"[{_target(client)}]. Evaluating at MultiPV=2..."
     )
     evals = await _eval_flaw_blob_positions(pool, positions)
 
@@ -1040,7 +1210,7 @@ async def _handle_flaw_blob_response(
         _log(
             f"--dry-run: evaluated {len(evals)} flaw-blob positions for game_id={game_id}; skipping submit."
         )
-        return not loop
+        return _CycleOutcome(did_work=True, should_stop=not loop)
 
     submit_resp = await client.post(
         "/api/eval/remote/flaw-blob-submit",
@@ -1048,8 +1218,11 @@ async def _handle_flaw_blob_response(
     )
     submit_resp.raise_for_status()
     result = submit_resp.json()
-    _log(f"Flaw-blob submit game_id={game_id}: blobs_written={result.get('blobs_written')}")
-    return not loop
+    _log(
+        f"Flaw-blob submit game_id={game_id} [{_target(client)}]: "
+        f"blobs_written={result.get('blobs_written')}"
+    )
+    return _CycleOutcome(did_work=True, should_stop=not loop)
 
 
 # ─── Rung-5 tier-4b best-move backfill helpers (Phase 177 BACK-02/03) ────────
@@ -1112,7 +1285,7 @@ async def _handle_bestmove_response(
     dry_run: bool,
     loop: bool,
     bestmove_lease_resp: httpx.Response,
-) -> bool:
+) -> _CycleOutcome:
     """Handle a 200 response from /bestmove-lease (tier-4b best-move backfill, D-02).
 
     Evaluates each leased candidate-ply FEN at MultiPV=2 only, then POSTs the
@@ -1128,8 +1301,8 @@ async def _handle_bestmove_response(
     positions = data["positions"]
 
     _log(
-        f"Bestmove-leased game_id={game_id} ({len(positions)} candidate plies). "
-        "Evaluating at MultiPV=2..."
+        f"Bestmove-leased game_id={game_id} ({len(positions)} candidate plies) "
+        f"[{_target(client)}]. Evaluating at MultiPV=2..."
     )
     evals = await _eval_bestmove_positions(pool, positions)
 
@@ -1138,7 +1311,7 @@ async def _handle_bestmove_response(
             f"--dry-run: evaluated {len(evals)} bestmove candidate plies for "
             f"game_id={game_id}; skipping submit."
         )
-        return not loop
+        return _CycleOutcome(did_work=True, should_stop=not loop)
 
     submit_resp = await client.post(
         "/api/eval/remote/bestmove-submit",
@@ -1146,16 +1319,88 @@ async def _handle_bestmove_response(
     )
     submit_resp.raise_for_status()
     result = submit_resp.json()
-    _log(f"Bestmove-submit game_id={game_id}: rows_written={result.get('rows_written')}")
-    return not loop
+    _log(
+        f"Bestmove-submit game_id={game_id} [{_target(client)}]: "
+        f"rows_written={result.get('rows_written')}"
+    )
+    return _CycleOutcome(did_work=True, should_stop=not loop)
 
 
 # ─── Worker entrypoint ────────────────────────────────────────────────────────
 
 
-async def run_worker(
+@dataclass(frozen=True)
+class _BackendTarget:
+    """One backend a worker can lease/submit against (D-13).
+
+    `base_url` and `token` are fixed at construction, matching how
+    `httpx.AsyncClient` itself is used in this file: never mutate an existing
+    client's `.base_url` or reuse one client for two URLs. `label` (e.g.
+    "primary" / "fallback") appears only in log lines so a tailed worker log
+    shows which backend a claim came from -- it plays no role in routing.
+    """
+
+    base_url: str
+    token: str
+    label: str
+
+
+def _resolve_fallback_token(
+    fallback_url: str | None,
+    cli_fallback_token: str | None,
+    env_fallback_token: str,
+) -> str | None:
+    """Precedence for the fallback backend's token: `--fallback-token`, then
+    `EVAL_FALLBACK_OPERATOR_TOKEN`, then None (meaning "reuse the primary token",
+    `_build_backend_targets`'s documented default).
+
+    Mirrors how the primary token resolves (`--token` then
+    `EVAL_OPERATOR_TOKEN`), which had no fallback-side equivalent, so the only
+    way to give a fallback instance its own token was a CLI flag on every worker
+    box. Resolved after parse rather than as an argparse default so the secret
+    never lands in `--help` or the parsed namespace.
+
+    Returns None untouched when `fallback_url` is unset: with no fallback target
+    there is nothing to authenticate against, and consuming the env var there
+    would let a stray value change nothing while looking like it should.
+    """
+    if fallback_url is None:
+        return None
+    if cli_fallback_token is not None:
+        return cli_fallback_token
+    return env_fallback_token or None
+
+
+def _build_backend_targets(
     base_url: str,
     token: str,
+    fallback_url: str | None,
+    fallback_token: str | None,
+) -> list[_BackendTarget]:
+    """Build the ordered target list `run_worker` drains, prod always at index 0.
+
+    One target (today's behavior) when `fallback_url` is None. Two targets --
+    prod first, fallback second -- when set. When `fallback_token` is omitted
+    (None) but `fallback_url` is set, the fallback target reuses the primary's
+    resolved `token` (documented in `--fallback-token`'s help text): an operator
+    who wants a DISTINCT benchmark-instance token must supply it, either via
+    `--fallback-token` or via `EVAL_FALLBACK_OPERATOR_TOKEN` in the environment /
+    .env, which `main()` resolves into `fallback_token` before calling this.
+    """
+    targets = [_BackendTarget(base_url=base_url, token=token, label="primary")]
+    if fallback_url is not None:
+        targets.append(
+            _BackendTarget(
+                base_url=fallback_url,
+                token=fallback_token if fallback_token is not None else token,
+                label="fallback",
+            )
+        )
+    return targets
+
+
+async def run_worker(
+    targets: list[_BackendTarget],
     worker_id: str,
     workers: int,
     idle_sleep: float,
@@ -1163,10 +1408,19 @@ async def run_worker(
     loop: bool,
     heartbeat: _Heartbeat | None = None,
 ) -> None:
-    """Start an EnginePool, read the SF version, then run the lease/eval/submit loop.
+    """Start an EnginePool, read the SF version, then run the lease/eval/submit loop
+    against an ORDERED list of backend targets (D-13/Task 2).
 
     worker_id is sent on every request via X-Worker-Id (D-10 / SEED-051) so that
     eval_jobs.leased_by and games.entry_eval_leased_by are per-worker in prod.
+
+    One `httpx.AsyncClient` is constructed per target, inside a
+    `contextlib.AsyncExitStack` so N clients close cleanly regardless of N (the
+    prior `async with httpx.AsyncClient(...) as client:` form only generalizes to
+    exactly one). Each client keeps today's exact construction shape: `base_url`
+    from its target, `headers={"X-Operator-Token", "X-Worker-Id"}`, and
+    `timeout=HTTP_TIMEOUT_S`. `_run_loop` decides per-cycle which client(s) to
+    try and in what order -- this function only builds them.
 
     `heartbeat` (SEED-063) defaults to None so existing callers/tests are unaffected;
     the supervised "child" role passes a `_Heartbeat` instance so `_run_loop` marks
@@ -1183,14 +1437,21 @@ async def run_worker(
         sf_version = await get_stockfish_version()
         _log(f"Stockfish version: {sf_version}")
 
-        async with httpx.AsyncClient(
-            base_url=base_url,
-            # D-10: X-Worker-Id set once alongside X-Operator-Token — no per-call change.
-            headers={"X-Operator-Token": token, "X-Worker-Id": worker_id},
-            timeout=HTTP_TIMEOUT_S,
-        ) as client:
+        async with contextlib.AsyncExitStack() as stack:
+            clients = [
+                await stack.enter_async_context(
+                    httpx.AsyncClient(
+                        base_url=target.base_url,
+                        # D-10: X-Worker-Id set once alongside X-Operator-Token —
+                        # no per-call change.
+                        headers={"X-Operator-Token": target.token, "X-Worker-Id": worker_id},
+                        timeout=HTTP_TIMEOUT_S,
+                    )
+                )
+                for target in targets
+            ]
             await _run_loop(
-                client=client,
+                clients=clients,
                 pool=pool,
                 sf_version=sf_version,
                 idle_sleep=idle_sleep,
@@ -1335,6 +1596,32 @@ def parse_args() -> argparse.Namespace:
             "Default: random ~8-char base36 generated at startup."
         ),
     )
+    parser.add_argument(
+        "--fallback-url",
+        default=None,
+        dest="fallback_url",
+        metavar="URL",
+        help=(
+            "Base URL of a second backend, tried only when the primary's WHOLE "
+            "five-rung ladder returns no work in the same cycle (D-13). Strict "
+            "per-claim prod priority: the fallback's rungs are never interleaved "
+            "with the primary's. Omit to keep today's single-backend behavior."
+        ),
+    )
+    parser.add_argument(
+        "--fallback-token",
+        default=None,
+        dest="fallback_token",
+        metavar="TOKEN",
+        help=(
+            "Operator token for the fallback backend's X-Operator-Token header. "
+            "Optional — falls back to EVAL_FALLBACK_OPERATOR_TOKEN from the "
+            "environment or the .env file, then to the primary token (--token / "
+            "EVAL_OPERATOR_TOKEN). A fallback instance with its own distinct token "
+            "must therefore set one of the two, or it will present the primary "
+            "token and fail that instance's auth check. Requires --fallback-url."
+        ),
+    )
     args = parser.parse_args()
     if args.workers < 1:
         parser.error(f"--workers must be >= 1, got {args.workers}")
@@ -1344,6 +1631,10 @@ def parse_args() -> argparse.Namespace:
         parser.error(
             f"--worker-id must be < 10 chars, got {len(args.worker_id)} ({args.worker_id!r})"
         )
+    if args.fallback_url is not None and not args.fallback_url.strip():
+        parser.error("--fallback-url must not be empty")
+    if args.fallback_token is not None and args.fallback_url is None:
+        parser.error("--fallback-token requires --fallback-url")
     return args
 
 
@@ -1364,10 +1655,11 @@ async def _run_async(
     stall. A bounded `--once` run needs no supervision at all, so it passes
     `heartbeat=None` and skips the checker task entirely.
     """
+    targets = _build_backend_targets(args.base_url, token, args.fallback_url, args.fallback_token)
+
     if not supervised:
         await run_worker(
-            base_url=args.base_url,
-            token=token,
+            targets=targets,
             worker_id=worker_id,
             workers=args.workers,
             idle_sleep=args.idle_sleep,
@@ -1384,8 +1676,7 @@ async def _run_async(
     )
     try:
         await run_worker(
-            base_url=args.base_url,
-            token=token,
+            targets=targets,
             worker_id=worker_id,
             workers=args.workers,
             idle_sleep=args.idle_sleep,
@@ -1422,6 +1713,10 @@ def main() -> int:
         )
         return 1
 
+    args.fallback_token = _resolve_fallback_token(
+        args.fallback_url, args.fallback_token, settings.EVAL_FALLBACK_OPERATOR_TOKEN
+    )
+
     if settings.SENTRY_DSN:
         sentry_sdk.init(
             dsn=settings.SENTRY_DSN,
@@ -1444,9 +1739,10 @@ def main() -> int:
     worker_id: str = args.worker_id if args.worker_id is not None else _generate_worker_id()
 
     # Log startup info — NEVER log the token value (T-120-01).
+    fallback_suffix = f" fallback_url={args.fallback_url}" if args.fallback_url else ""
     _log(
         f"Starting remote eval worker: base_url={args.base_url} "
-        f"workers={args.workers} worker_id={worker_id}"
+        f"workers={args.workers} worker_id={worker_id}{fallback_suffix}"
     )
 
     asyncio.run(_run_async(args, token, worker_id, supervised=(role == "child")))

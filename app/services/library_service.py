@@ -61,6 +61,7 @@ from app.services.flaw_delta_zones import FLAW_DELTA_ZONES
 from app.models.game_position import GamePosition
 from app.schemas.library import EvalPoint, FlawMarker, PhaseTransitions
 from app.services.eval_utils import (
+    derive_is_lichess_eval_game,
     eval_cp_to_expected_score,
     eval_mate_to_expected_score,
 )
@@ -254,10 +255,16 @@ def _build_eval_series(
                 # lichess's authoritative post-move %eval for a lichess-eval game;
                 # suppress the badge when our best_cp overrates it. Since played ==
                 # best for every candidate, pos.eval_cp describes the same resulting
-                # position as best_cp (both post-best-move).
+                # position as best_cp (both post-best-move). Phase 212 D-03: routed
+                # through the single derivation point -- under
+                # BENCHMARK_HOMOGENIZE_EVAL_SOURCE, pos.eval_cp holds OUR engine's
+                # value while lichess_evals_at deliberately stays set (D-04), so
+                # the guard's "pos.eval_cp is lichess's %eval" premise no longer
+                # holds and this read must follow the homogenized boolean, not the
+                # raw timestamp.
                 post_move_cp=pos.eval_cp,
                 post_move_mate=pos.eval_mate,
-                is_lichess_eval_game=game.lichess_evals_at is not None,
+                is_lichess_eval_game=derive_is_lichess_eval_game(game.lichess_evals_at),
             )
             if tier != "neither":
                 best_move_tier = tier

@@ -2,12 +2,23 @@
 set -euo pipefail
 
 cd "$(dirname "$0")/.."
+REPO_ROOT="$(pwd)"
 
 # Kill existing backend/frontend processes if running.
 # Use fuser to kill anything on the ports directly — pkill -f can miss
 # orphaned uvicorn child processes (--reload spawns a watcher + worker).
+#
+# The vite pattern is deliberately scoped to THIS checkout's node_modules
+# rather than the bare string "vite". `pkill -f "vite"` matched any process
+# with "vite" anywhere in its command line — a parallel-worktree dev server
+# (see .claude/skills/parallel-worktree), an editor, even a grep or the
+# shell running this script — and silently killed them. The real dev server
+# runs as `node <repo>/frontend/node_modules/.bin/vite --host`, so anchoring
+# on the absolute repo path kills exactly our own server and nothing else.
+# `fuser -k 5173/tcp` below remains the backstop for anything still holding
+# the port.
 pkill -f "uvicorn app.main:app" 2>/dev/null || true
-pkill -f "vite" 2>/dev/null || true
+pkill -f "${REPO_ROOT}/frontend/node_modules/.bin/vite" 2>/dev/null || true
 fuser -k 8000/tcp 2>/dev/null || true
 fuser -k 5173/tcp 2>/dev/null || true
 sleep 1

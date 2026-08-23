@@ -769,6 +769,378 @@ async def test_entry_lease_returns_positions(
         await _delete_games(eval_worker_session_maker, game_ids)
 
 
+# ─── Phase 212 BENCHLANE-02/D-09 (212-07): entry-ply lane selection gate ──────
+# The fifth lottery lane, found ungated during 212-06's aborted smoke drain
+# (docs/benchmark-lane-runbook.md §8, .planning/phases/212-benchmark-full-game-
+# analysis-lane/212-06-CHECKPOINT-RECORD.md). Mirrors
+# tests/services/test_eval_queue.py::TestBenchmarkSelectionGate's byte-identity +
+# narrowing + empty-table pattern, applied to the entry-ply probe
+# (_entry_lease_backlog_probe_sql) and canonical claim (_entry_claim_sql).
+
+# Frozen pre-212-07 (git HEAD~1, i.e. the commit immediately before Task 1's
+# edit) baselines -- captured from app/routers/eval_remote.py and
+# app/services/eval_entry.py via `git show`, never copy-pasted from the
+# post-change builder output. Direct `==` comparisons only (D-10 point 1):
+# an empty _selection_gate_clause()-equivalent that renders as a stray space,
+# a newline, or a bare truthy conjunct rather than nothing at all must fail
+# these, not merely a "looks equivalent" whitespace-normalized check.
+_FROZEN_ENTRY_CLAIM_SQL: str = (
+    "\n            UPDATE games\n"
+    "            SET entry_eval_lease_expiry = now() + (:ttl || ' seconds')::interval,\n"
+    "                entry_eval_leased_by = :worker_id\n"
+    "            WHERE id IN (\n"
+    "                SELECT id FROM games\n"
+    "                WHERE evals_completed_at IS NULL\n"
+    "                  AND (entry_eval_lease_expiry IS NULL OR entry_eval_lease_expiry < now())\n"
+    "                ORDER BY id DESC\n"
+    "                LIMIT :batch\n"
+    "                FOR UPDATE SKIP LOCKED\n"
+    "            )\n"
+    "            RETURNING id\n"
+    "        "
+)
+_FROZEN_ENTRY_LEASE_BACKLOG_PROBE_SQL: str = (
+    "\n                SELECT 1 FROM games\n"
+    "                WHERE evals_completed_at IS NULL\n"
+    "                  AND (entry_eval_lease_expiry IS NULL OR entry_eval_lease_expiry < now())\n"
+    "                ORDER BY id DESC\n"
+    "                LIMIT 1 OFFSET :offset\n"
+    "            "
+)
+
+
+async def _create_benchmark_selection_table(test_engine: object) -> None:
+    """Create the benchmark_selection table in the test DB if it doesn't exist yet.
+
+    Mirrors tests/services/test_eval_queue.py::test_benchmark_selection_gate_on_narrows_tier3's
+    targeted create_all (INFRA-02: benchmark-only tables stay out of the canonical
+    Alembic chain, so the test DB never has this table unless a test creates it).
+    """
+    from typing import cast
+
+    from sqlalchemy import Table
+    from sqlalchemy.ext.asyncio import AsyncEngine
+
+    from app.models.benchmark_selection import BenchmarkSelection
+
+    engine = cast(AsyncEngine, test_engine)
+    bench_table = cast(Table, BenchmarkSelection.__table__)
+    async with engine.begin() as conn:
+        await conn.run_sync(
+            lambda sync_conn: BenchmarkSelection.metadata.create_all(
+                sync_conn, tables=[bench_table], checkfirst=True
+            )
+        )
+
+
+class TestEntryLeaseSelectionGate:
+    """D-09/D-10 for the entry-ply lane (212-07 Tasks 1+2): the fifth lottery
+    lane, gated in lock-step at its probe (_entry_lease_backlog_probe_sql) and
+    its canonical claim (_entry_claim_sql), shared by /entry-lease and the
+    in-process server-pool drain (_pick_pending_game_ids)."""
+
+    async def test_entry_lease_gate_on_narrows_to_selection(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+        eval_worker_session_maker: async_sessionmaker[AsyncSession],
+        eval_worker_test_user: int,
+        test_engine: object,
+    ) -> None:
+        """Gate on, one benchmark_selection row among otherwise-claimable pending
+        games: /entry-lease stamps entry_eval_leased_by on the selected game
+        only — the unselected pending game is never leased.
+
+        The real ENTRY_LEASE_BACKLOG_THRESHOLD (300) is itself part of the
+        gated predicate once the gate is on (D-5's probe and the claim share
+        the identical WHERE, WR-03) — so the probe's existence check would
+        need 300 SELECTED rows to pass at the production threshold. That
+        depth requirement is already covered by test_entry_lease_gate_at_threshold
+        / test_entry_lease_gate_below_threshold above; this test's job is
+        narrowly to prove the SELECTION narrowing, so it patches the threshold
+        down to 1 rather than paying for 300 BenchmarkSelection inserts to
+        re-prove a boundary this test isn't about.
+        """
+        import app.routers.eval_remote as eval_remote_module
+        from app.models.benchmark_selection import BenchmarkSelection
+
+        await _create_benchmark_selection_table(test_engine)
+
+        monkeypatch.setattr(settings, "EVAL_OPERATOR_TOKEN", _TEST_TOKEN)
+        _patch_router_session(monkeypatch, eval_worker_session_maker)
+        monkeypatch.setattr(eval_remote_module, "ENTRY_LEASE_BACKLOG_THRESHOLD", 1)
+
+        user_id = eval_worker_test_user
+        unselected_game = await _insert_game(
+            eval_worker_session_maker, user_id, evals_completed_at=None
+        )
+        selected_game = await _insert_game(
+            eval_worker_session_maker, user_id, evals_completed_at=None
+        )
+        game_ids = [unselected_game, selected_game]
+
+        async with eval_worker_session_maker() as session:
+            session.add(
+                BenchmarkSelection(
+                    game_id=selected_game,
+                    user_id=user_id,
+                    tc_tranche="blitz",
+                    lichess_arm=False,
+                )
+            )
+            await session.commit()
+
+        monkeypatch.setattr(settings, "BENCHMARK_SELECTION_GATE_ENABLED", True)
+
+        try:
+            async with _make_client() as client:
+                response = await client.post(
+                    _ENTRY_LEASE_URL, headers={"X-Operator-Token": _TEST_TOKEN}
+                )
+            assert response.status_code == 200, (
+                f"Expected 200 (selected game claimable), got {response.status_code}: "
+                f"{response.text}"
+            )
+            selected_leased_by = await _get_game_entry_eval_leased_by(
+                eval_worker_session_maker, selected_game
+            )
+            unselected_leased_by = await _get_game_entry_eval_leased_by(
+                eval_worker_session_maker, unselected_game
+            )
+            assert selected_leased_by is not None, "the selected game must be leased"
+            assert unselected_leased_by is None, "the unselected game must never be leased"
+        finally:
+            monkeypatch.setattr(settings, "BENCHMARK_SELECTION_GATE_ENABLED", False)
+            async with eval_worker_session_maker() as session:
+                await session.execute(
+                    delete(BenchmarkSelection).where(BenchmarkSelection.game_id == selected_game)
+                )
+                await session.commit()
+            await _delete_games(eval_worker_session_maker, game_ids)
+
+    async def test_entry_lease_backlog_probe_sql_byte_identical_gate_off(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """Gate off, _entry_lease_backlog_probe_sql() is byte-identical (direct
+        `==`) to the pre-212-07 (git HEAD~1) inline literal.
+
+        What breaks this: an empty selection_gate_clause() rendering as a
+        trailing space, a stray newline, or a bare truthy conjunct (e.g.
+        "AND TRUE") appended to the WHERE clause instead of nothing at all.
+        """
+        from app.routers.eval_remote import _entry_lease_backlog_probe_sql
+
+        monkeypatch.setattr(settings, "BENCHMARK_SELECTION_GATE_ENABLED", False)
+        assert _entry_lease_backlog_probe_sql() == _FROZEN_ENTRY_LEASE_BACKLOG_PROBE_SQL, (
+            "the entry-lease backlog probe SQL must stay byte-identical to the "
+            "pre-212-07 baseline when the gate is off"
+        )
+
+    async def test_entry_claim_sql_byte_identical_gate_off(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """Gate off, _entry_claim_sql() is byte-identical (direct `==`) to the
+        pre-212-07 (git HEAD~1) inline literal.
+
+        What breaks this: an empty selection_gate_clause() rendering as a
+        trailing space, a stray newline, or a bare truthy conjunct (e.g.
+        "AND TRUE") appended to the candidate subquery's WHERE instead of
+        nothing at all.
+        """
+        from app.services.eval_entry import _entry_claim_sql
+
+        monkeypatch.setattr(settings, "BENCHMARK_SELECTION_GATE_ENABLED", False)
+        assert _entry_claim_sql() == _FROZEN_ENTRY_CLAIM_SQL, (
+            "the entry-ply claim SQL must stay byte-identical to the "
+            "pre-212-07 baseline when the gate is off"
+        )
+
+    async def test_entry_probe_and_claim_predicates_stay_in_lockstep(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """Gate on: the selection fragment appears in BOTH builders' output, and
+        the shared lease-expiry predicate line is present in both.
+
+        WR-03 regression net: a future edit that gates one of the two
+        (probe, claim) and not the other would let the probe pass while the
+        claim returns nothing, burning a claim transaction per worker cycle
+        near the tail of the backlog.
+        """
+        from app.routers.eval_remote import _entry_lease_backlog_probe_sql
+        from app.services.eval_entry import _entry_claim_sql
+
+        monkeypatch.setattr(settings, "BENCHMARK_SELECTION_GATE_ENABLED", True)
+        try:
+            probe_sql = _entry_lease_backlog_probe_sql()
+            claim_sql = _entry_claim_sql()
+
+            selection_fragment = (
+                "EXISTS (SELECT 1 FROM benchmark_selection bs WHERE bs.game_id = games.id)"
+            )
+            assert selection_fragment in probe_sql, "probe must carry the selection fragment"
+            assert selection_fragment in claim_sql, "claim must carry the selection fragment"
+
+            shared_predicate = (
+                "(entry_eval_lease_expiry IS NULL OR entry_eval_lease_expiry < now())"
+            )
+            assert shared_predicate in probe_sql
+            assert shared_predicate in claim_sql
+        finally:
+            monkeypatch.setattr(settings, "BENCHMARK_SELECTION_GATE_ENABLED", False)
+
+    async def test_entry_lease_gate_on_empty_selection_returns_204(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+        eval_worker_session_maker: async_sessionmaker[AsyncSession],
+        eval_worker_test_user: int,
+        test_engine: object,
+    ) -> None:
+        """Gate on, benchmark_selection created but empty, pending backlog well
+        past ENTRY_LEASE_BACKLOG_THRESHOLD: /entry-lease returns 204 rather than
+        an ungated fallthrough to the wider backlog (D-09)."""
+        from app.services.eval_drain import ENTRY_LEASE_BACKLOG_THRESHOLD
+
+        await _create_benchmark_selection_table(test_engine)
+
+        monkeypatch.setattr(settings, "EVAL_OPERATOR_TOKEN", _TEST_TOKEN)
+        _patch_router_session(monkeypatch, eval_worker_session_maker)
+
+        user_id = eval_worker_test_user
+        game_ids: list[int] = []
+        for _ in range(ENTRY_LEASE_BACKLOG_THRESHOLD):
+            gid = await _insert_game(eval_worker_session_maker, user_id, evals_completed_at=None)
+            game_ids.append(gid)
+
+        monkeypatch.setattr(settings, "BENCHMARK_SELECTION_GATE_ENABLED", True)
+        try:
+            async with _make_client() as client:
+                response = await client.post(
+                    _ENTRY_LEASE_URL, headers={"X-Operator-Token": _TEST_TOKEN}
+                )
+            assert response.status_code == 204, (
+                f"Expected 204 (no selected game in a deep-but-empty-selection "
+                f"backlog), got {response.status_code}: {response.text}"
+            )
+            for gid in game_ids:
+                leased_by = await _get_game_entry_eval_leased_by(eval_worker_session_maker, gid)
+                assert leased_by is None, f"game {gid} must never be leased with an empty selection"
+        finally:
+            monkeypatch.setattr(settings, "BENCHMARK_SELECTION_GATE_ENABLED", False)
+            await _delete_games(eval_worker_session_maker, game_ids)
+
+    async def test_claim_entry_eval_games_gate_on_skips_unselected(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+        eval_worker_session_maker: async_sessionmaker[AsyncSession],
+        eval_worker_test_user: int,
+        test_engine: object,
+    ) -> None:
+        """Gate on, calling _claim_entry_eval_games directly against a session:
+        only the selected game id comes back."""
+        from app.models.benchmark_selection import BenchmarkSelection
+        from app.services.eval_entry import _claim_entry_eval_games
+
+        await _create_benchmark_selection_table(test_engine)
+
+        user_id = eval_worker_test_user
+        unselected_game = await _insert_game(
+            eval_worker_session_maker, user_id, evals_completed_at=None
+        )
+        selected_game = await _insert_game(
+            eval_worker_session_maker, user_id, evals_completed_at=None
+        )
+        game_ids = [unselected_game, selected_game]
+
+        async with eval_worker_session_maker() as session:
+            session.add(
+                BenchmarkSelection(
+                    game_id=selected_game,
+                    user_id=user_id,
+                    tc_tranche="blitz",
+                    lichess_arm=False,
+                )
+            )
+            await session.commit()
+
+        monkeypatch.setattr(settings, "BENCHMARK_SELECTION_GATE_ENABLED", True)
+        try:
+            async with eval_worker_session_maker() as session:
+                claimed = await _claim_entry_eval_games(session, "test-claim", 50, 20)
+                await session.commit()
+            assert claimed == [selected_game], (
+                f"gate-on direct claim must return only the selected game "
+                f"{selected_game}, got {claimed}"
+            )
+        finally:
+            monkeypatch.setattr(settings, "BENCHMARK_SELECTION_GATE_ENABLED", False)
+            async with eval_worker_session_maker() as session:
+                await session.execute(
+                    delete(BenchmarkSelection).where(BenchmarkSelection.game_id == selected_game)
+                )
+                await session.commit()
+            await _delete_games(eval_worker_session_maker, game_ids)
+
+    async def test_pick_pending_game_ids_gate_on_skips_unselected(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+        eval_worker_session_maker: async_sessionmaker[AsyncSession],
+        eval_worker_test_user: int,
+        test_engine: object,
+    ) -> None:
+        """Gate on, exercising _pick_pending_game_ids (the in-process
+        server-pool drain's picker, app/services/eval_drain.py) with the router
+        session patched: only selected ids are returned.
+
+        This pins the in-process consumer D-11 makes mandatory on the
+        benchmark instance — without it, a future refactor giving the
+        server-pool drain its own claim would silently reopen the leak on the
+        one instance where automatic draining is mandatory.
+        """
+        from app.models.benchmark_selection import BenchmarkSelection
+        from app.services.eval_drain import _pick_pending_game_ids
+
+        await _create_benchmark_selection_table(test_engine)
+        _patch_router_session(monkeypatch, eval_worker_session_maker)
+
+        user_id = eval_worker_test_user
+        unselected_game = await _insert_game(
+            eval_worker_session_maker, user_id, evals_completed_at=None
+        )
+        selected_game = await _insert_game(
+            eval_worker_session_maker, user_id, evals_completed_at=None
+        )
+        game_ids = [unselected_game, selected_game]
+
+        async with eval_worker_session_maker() as session:
+            session.add(
+                BenchmarkSelection(
+                    game_id=selected_game,
+                    user_id=user_id,
+                    tc_tranche="blitz",
+                    lichess_arm=False,
+                )
+            )
+            await session.commit()
+
+        monkeypatch.setattr(settings, "BENCHMARK_SELECTION_GATE_ENABLED", True)
+        try:
+            picked = await _pick_pending_game_ids(limit=50)
+            assert picked == [selected_game], (
+                f"gate-on _pick_pending_game_ids must return only the selected "
+                f"game {selected_game}, got {picked}"
+            )
+        finally:
+            monkeypatch.setattr(settings, "BENCHMARK_SELECTION_GATE_ENABLED", False)
+            async with eval_worker_session_maker() as session:
+                await session.execute(
+                    delete(BenchmarkSelection).where(BenchmarkSelection.game_id == selected_game)
+                )
+                await session.commit()
+            await _delete_games(eval_worker_session_maker, game_ids)
+
+
 @pytest.mark.asyncio
 async def test_entry_submit_auth_missing_token(monkeypatch: pytest.MonkeyPatch) -> None:
     """Missing operator token → 403 (T-123-01)."""
@@ -2226,6 +2598,101 @@ class TestAtomicLeaseEndpoint:
                 "position — its %evals are never shifted (Phase 174-06)"
             )
             assert {p["ply"] for p in positions} == {0, 1, 2, 3}
+        finally:
+            await _delete_games(eval_worker_session_maker, [game_id])
+
+    @pytest.mark.asyncio
+    async def test_atomic_lease_homogenized_lichess_eval_game_returns_full_positions(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+        eval_worker_session_maker: async_sessionmaker[AsyncSession],
+        eval_worker_test_user: int,
+    ) -> None:
+        """tier3-branch-b-one-ply-stamp regression: BENCHMARK_HOMOGENIZE_EVAL_SOURCE
+        forces claim_eval_job's is_lichess_eval_game to False for a lichess-eval
+        game (derive_is_lichess_eval_game's documented override) while the game's
+        game_positions rows still carry import-populated %evals — the exact shape
+        of the sibling test above, but with the flag forced False the way
+        claim_eval_job actually reports it under homogenization.
+
+        Before the fix, `_build_lease_positions`'s SEED-076 bypass read only
+        `is_lichess_eval_game` (False here), so `_lease_position_redundant`
+        treated every already-%eval'd row as "a worker already resolved this" and
+        collapsed the lease to a single position — reproducing 212-08's measured
+        defect (avg 1.0 best_move cells regardless of game length) at the unit
+        level, with no live fleet needed. The fix threads
+        derive_raw_lichess_eval_game (homogenization-INVARIANT) through as a
+        second bypass signal.
+        """
+        monkeypatch.setattr(settings, "EVAL_OPERATOR_TOKEN", _TEST_TOKEN)
+        monkeypatch.setattr(settings, "BENCHMARK_HOMOGENIZE_EVAL_SOURCE", True)
+        _patch_router_session(monkeypatch, eval_worker_session_maker)
+
+        user_id = eval_worker_test_user
+        game_id = await _insert_game(
+            eval_worker_session_maker,
+            user_id,
+            pgn="1. e4 e5 2. Nf3 Nc6 *",
+            lichess_evals_at=datetime.now(timezone.utc),
+        )
+        # Every row already carries a %eval — the lichess-eval shape (import-supplied,
+        # never engine-derived), identical seed data to the sibling test above.
+        await _insert_game_positions(
+            eval_worker_session_maker,
+            user_id,
+            game_id,
+            [
+                {"ply": ply, "full_hash": 52100 + ply, "eval_cp": 20 + ply, "eval_mate": None}
+                for ply in range(4)
+            ],
+        )
+
+        import app.routers.eval_remote as eval_remote_module
+
+        monkeypatch.setattr(
+            eval_remote_module,
+            "claim_eval_job",
+            AsyncMock(
+                return_value=ClaimedJob(
+                    game_id=game_id,
+                    user_id=user_id,
+                    tier=1,
+                    # This is the crux of the reproduction: claim_eval_job actually
+                    # reports False here under homogenization (derive_is_lichess_eval_game),
+                    # even though the game IS a lichess-eval game at the DB level.
+                    is_lichess_eval_game=False,
+                    job_id=None,
+                )
+            ),
+        )
+
+        try:
+            async with _make_client() as client:
+                response = await client.post(
+                    _ATOMIC_LEASE_URL,
+                    params={"worker_schema_version": 2},
+                    headers={"X-Operator-Token": _TEST_TOKEN},
+                )
+
+            assert response.status_code == 200, (
+                f"homogenized lichess-eval game must lease like any other game, "
+                f"got {response.status_code}: {response.text}"
+            )
+            body = response.json()
+            assert body["is_lichess_eval_game"] is False
+
+            positions = body["positions"]
+            # All 4 real plies leased (no SEED-076 redundancy omission) PLUS the
+            # terminal eval-donor (include_terminal=not is_lichess_eval_game=True
+            # under homogenization — mirrors an engine game's shape, unlike the
+            # non-homogenized sibling test above which omits the terminal donor).
+            non_terminal_plies = {p["ply"] for p in positions if not p["is_terminal"]}
+            terminal_positions = [p for p in positions if p["is_terminal"]]
+            assert non_terminal_plies == {0, 1, 2, 3}, (
+                "Expected all 4 plies leased (no SEED-076 redundancy omission for a "
+                f"homogenized lichess-eval game), got {positions}"
+            )
+            assert len(terminal_positions) == 1
         finally:
             await _delete_games(eval_worker_session_maker, [game_id])
 

@@ -1,3 +1,23 @@
+{
+    # Global log filter. This exists because a site-level `log` block's format
+    # applies ONLY to `http.log.access.logN` — Caddy's ERROR logger
+    # (`http.log.error.logN`), which is exactly what fires on a proxy 502, is
+    # routed to the default logger and bypasses it entirely. That gap leaked
+    # X-Operator-Token in full on every deploy-window 502 even after the site
+    # block was filtered. Keep this block and the site block in sync.
+    log {
+        format filter {
+            wrap json
+            fields {
+                request>headers delete
+                request>uri query {
+                    replace token REDACTED
+                }
+            }
+        }
+    }
+}
+
 flawchess.org, www.flawchess.org {
     redir https://flawchess.com{uri} permanent
 }
@@ -9,10 +29,59 @@ analytics.flawchess.com {
 flawchess.com {
     encode gzip
 
+    # Access log. Without this Caddy logs NOTHING about requests, so any status
+    # Caddy produces on its own — above all the 502 it returns while the backend
+    # container restarts, and any 5xx that therefore never reaches FastAPI or the
+    # backend's Sentry — leaves no server-side trace at all. The only evidence was
+    # whatever the browser happened to report (FLAWCHESS-64), which is sampled,
+    # client-side, and useless for reconstructing an outage after the fact.
+    #
+    # stdout keeps `docker compose logs caddy` as the single inspection path.
+    # Volume is bounded by the `logging:` limits on the caddy service in
+    # docker-compose.yml — Docker's json-file default has NO rotation, and this
+    # host has no /etc/docker/daemon.json, so without those limits an access log
+    # grows until the 160 GB disk fills.
+    #
+    # SECRET REDACTION. Caddy redacts Authorization and Cookie by default and
+    # NOTHING else, and this app carries two credentials those defaults miss:
+    #   1. X-Operator-Token — the SHARED remote-worker secret, sent on every
+    #      eval-worker poll (app/routers/eval_remote.py:169). Worker polling is
+    #      the bulk of API traffic, so it landed in most log lines.
+    #   2. ?token= — password-reset links are FRONTEND_URL/auth/reset-password
+    #      ?token=<token> (app/users.py:131). That is an SPA route, not /api/*,
+    #      so log_skip below does NOT cover it and its query is logged in full.
+    #      The token grants account takeover.
+    #
+    # Drop ALL request headers rather than blacklisting known-secret names.
+    # Blacklisting failed twice in one evening (missed the custom header, then
+    # missed the error logger), and it silently re-breaks the moment anyone adds
+    # an authenticated header. Nothing here needs headers: method, uri, status,
+    # duration and the upstream error message are what diagnose a 5xx. Note this
+    # also drops Cf-Connecting-Ip, so real client IPs stop being written to disk.
+    # The query filter stays because the reset token rides in the URI, not a
+    # header — add any future secret query param there.
+    log {
+        output stdout
+        format filter {
+            wrap json
+            fields {
+                request>headers delete
+                request>uri query {
+                    replace token REDACTED
+                }
+            }
+        }
+    }
+
     # Frontend SPA — serve static files first
     # If the file exists on disk (JS, CSS, images, etc.), serve it directly
     @static file
     handle @static {
+        # Static assets are served by Caddy itself and can never 502, so they
+        # carry no diagnostic value — and logging every hashed chunk plus the
+        # 43.6 MB Maia model would drown the API entries this log exists for.
+        log_skip
+
         root * /srv
 
         # Service worker and PWA manifest must never be HTTP-cached so browsers

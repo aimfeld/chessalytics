@@ -11,6 +11,8 @@
 /node_modules
 # Harness-only native deps (scripts/package.json — onnxruntime-node)
 /scripts/node_modules
+# SEED-145 local working data (large ndjson ledgers)
+scripts/seed145/
 
 # Byte-compiled / optimized / DLL files
 __pycache__/
