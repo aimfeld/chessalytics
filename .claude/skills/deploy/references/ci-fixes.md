@@ -78,9 +78,9 @@ This is the single most common preventable CI failure on this project — see CL
 ## CI: ruff lint errors
 
 ```bash
-uv run ruff check app/ tests/ --fix
+uv run ruff check . --fix
 # Inspect remaining errors that --fix couldn't resolve
-uv run ruff check app/ tests/
+uv run ruff check .
 ```
 
 Auto-fixable issues commit cleanly. For manual fixes (unused imports flagged but actually needed, type narrowing, etc.), apply the smallest change that makes the rule pass. If a rule needs to be suppressed, use `# noqa: <rule-code>` with a brief reason on the same line.

@@ -80,7 +80,7 @@ Run all of these and resolve every output before integrating work into `main`. T
 
 ```bash
 uv run ruff format app/ tests/ scripts/         # apply formatting (not just --check)
-uv run ruff check app/ tests/ --fix    # apply autofixable lint
+uv run ruff check . --fix    # apply autofixable lint
 uv run ty check app/ tests/ scripts/            # type check, zero errors required
 uv run pytest -n auto -x               # full backend suite (parallel), stop on first failure
 ( cd frontend && npm run lint && npm test -- --run )  # frontend lint + tests
