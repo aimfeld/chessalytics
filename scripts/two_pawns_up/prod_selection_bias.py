@@ -35,6 +35,7 @@ import asyncio
 import random
 import sys
 from collections import defaultdict
+from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -213,8 +214,8 @@ UserArms = dict[int, dict[bool, list[int]]]
 
 def collect(
     rows: list[ProdFact],
-    trial: "callable[[ProdFact], bool]",
-    success: "callable[[ProdFact], float]",
+    trial: Callable[[ProdFact], bool],
+    success: Callable[[ProdFact], float],
 ) -> UserArms:
     arms: UserArms = defaultdict(lambda: {True: [0, 0], False: [0, 0]})
     for r in rows:
