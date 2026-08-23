@@ -17,6 +17,11 @@ uv run python -m dashboard.server      # http://127.0.0.1:8899
 Options: `--port`, `--host`, `--cache-seconds`. Stop the tunnel afterwards with
 `bin/prod_db_tunnel.sh stop`.
 
+There is no autoreload: the process serves the payload shape it started with,
+while `static/` is read from disk per request. After changing anything under
+`dashboard/`, restart the server — otherwise new page JS runs against an old
+payload and fields added in that change read as `undefined`.
+
 The page polls `/api/stats` every 60 seconds and shows the last refresh time in
 the masthead; "Refresh now" forces a re-query. If the tunnel is down the page
 keeps the last good snapshot, marks itself stale, and says what to do.

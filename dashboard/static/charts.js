@@ -2,8 +2,14 @@
 const NS="http://www.w3.org/2000/svg";
 const $=s=>document.querySelector(s), tip=$("#tip");
 const MON=["Jan","Feb","Mar","Apr","May","Jun","Jul","Aug","Sep","Oct","Nov","Dec"];
-const short=d=>{const [y,m,dd]=d.split("-");return (+dd)+" "+MON[+m-1];};
-const long=d=>{const [y,m,dd]=d.split("-");return (+dd)+" "+MON[+m-1]+" "+y;};
+// Degrade to the em-dash placeholder instead of throwing when a date is
+// missing. A long-running server process serves the payload it was started
+// with, so a newly added key (promoted_since) reads as undefined here until
+// the operator restarts — and an unguarded d.split() turned that cosmetic gap
+// into a whole-page render failure that fell back to the last snapshot.
+const DASH="\u2014";
+const short=d=>{if(!d)return DASH;const [y,m,dd]=d.split("-");return (+dd)+" "+MON[+m-1];};
+const long=d=>{if(!d)return DASH;const [y,m,dd]=d.split("-");return (+dd)+" "+MON[+m-1]+" "+y;};
 const num=n=>n>=10000?(n/1000).toFixed(n>=100000?0:1).replace(/\.0$/,"")+"k":n.toLocaleString("en-US");
 const pct=x=>Math.round(x*100)+"%";
 
