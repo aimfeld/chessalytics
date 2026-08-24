@@ -246,10 +246,9 @@ async def lifespan(_app: FastAPI) -> AsyncIterator[None]:
             # cross-dependency with the engine, so order is flexible; stop_maia is a
             # safe no-op when Maia was never started (onnxruntime absent).
             await stop_maia()
-            # Quick 260824-qaz (D-4): dispose the hosted activity dashboard's
-            # dedicated read-only engine, mirroring how dashboard/server.py
-            # disposes its own engine on shutdown. No-op if the endpoint was
-            # never hit (lazy construction, _cache stays None).
+            # Dispose the Activity Pulse endpoint's dedicated read-only engine.
+            # No-op if the endpoint was never hit (lazy construction, _cache
+            # stays None).
             await dispose_activity_engine()
 
 

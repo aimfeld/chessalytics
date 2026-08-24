@@ -58,9 +58,9 @@ depends_on: Union[str, Sequence[str], None] = None
 
 
 # SQL twin of the dashboard's pre-change _PROMOTED_GUEST predicate
-# (dashboard/queries.py) — see module docstring for why both halves matter,
-# and why the backfilled value is the signup date, not the true promotion
-# date.
+# (app/services/activity_queries.py) — see module docstring for why both
+# halves matter, and why the backfilled value is the signup date, not the
+# true promotion date.
 _BACKFILL_PROMOTED_AT = """
     UPDATE users
     SET promoted_at = created_at

@@ -8,12 +8,17 @@ touching production.
 
 import datetime
 from decimal import Decimal
-from typing import Any, TypedDict
+from typing import Any, Final, TypedDict
 
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncConnection
 
-from dashboard.config import FUNNEL_GAMES_THRESHOLD, MIN_GAMES_PER_ELO
+# Bot ratings with fewer games than this are dropped from the score-by-rating
+# chart -- below it a single session swings the number by tens of points.
+MIN_GAMES_PER_ELO: Final[int] = 10
+
+# "Imported a real library" threshold for the last funnel stage.
+FUNNEL_GAMES_THRESHOLD: Final[int] = 100
 
 # promoted_at is stamped by app/services/guest_service.py on both promotion
 # paths (Google and email/password) in the same UPDATE that flips is_guest;
@@ -22,7 +27,7 @@ from dashboard.config import FUNNEL_GAMES_THRESHOLD, MIN_GAMES_PER_ELO
 # with promoted_at set to the row's created_at (signup date, not the true
 # historical promotion date — that is unrecoverable), so the early part of
 # the series is a floor rather than the true rate, and a promotion-date time
-# series is only meaningful from config.PROMOTED_AT_SINCE onward.
+# series is only meaningful from activity_stats.PROMOTED_AT_SINCE onward.
 _PROMOTED_GUEST = "u.promoted_at IS NOT NULL"
 
 # Cohort for the conversion queries below: rows that are still guest sessions,
@@ -37,7 +42,6 @@ class Payload(TypedDict):
 
     generated_at: str
     promoted_since: str
-    poll_interval_seconds: int
     days: list[str]
     last_complete_index: int
     activity: list[list[int]]

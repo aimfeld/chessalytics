@@ -25,8 +25,8 @@ from sqlalchemy.ext.asyncio import async_sessionmaker
 from app.main import app
 from app.models.user import User
 from app.routers import admin_activity
-from dashboard import queries
-from dashboard.stats import StatsCache, build_readonly_engine
+from app.services import activity_queries as queries
+from app.services.activity_stats import StatsCache, build_readonly_engine
 
 _DEFAULT_PASSWORD = "pw12345678"
 
@@ -85,7 +85,7 @@ async def touch_user_activity(client: httpx.AsyncClient, token: str) -> None:
     """Trigger one authenticated request so LastActivityMiddleware writes a
     user_activity row for `token`'s owner.
 
-    dashboard.queries.fetch_day_range runs `SELECT min(activity_date)` /
+    activity_queries.fetch_day_range runs `SELECT min(activity_date)` /
     `max(activity_date)` through `_scalar_date`, which asserts the result is a
     `datetime.date` — on a fresh test DB with zero user_activity rows that
     assert fails (min() of an empty set is NULL), so the 200-path tests below
@@ -203,7 +203,6 @@ async def test_stats_cached_for_ttl_then_refresh_forces_rebuild(test_engine, mon
     fake_payload = queries.Payload(
         generated_at="2026-01-01T00:00:00+00:00",
         promoted_since="2026-08-23",
-        poll_interval_seconds=60,
         days=["2026-01-01"],
         last_complete_index=0,
         activity=[],
@@ -228,9 +227,9 @@ async def test_stats_cached_for_ttl_then_refresh_forces_rebuild(test_engine, mon
         return fake_payload
 
     # StatsCache.get() calls the module-level `build_payload` name inside
-    # dashboard/stats.py, so patching that module attribute (not the imported
+    # app/services/activity_stats.py, so patching that module attribute (not the imported
     # binding here) is what actually intercepts the call.
-    monkeypatch.setattr("dashboard.stats.build_payload", fake_build_payload)
+    monkeypatch.setattr("app.services.activity_stats.build_payload", fake_build_payload)
 
     cache = StatsCache(test_engine, ttl_seconds=300)
 

@@ -6,20 +6,17 @@ import { LoadError } from '@/components/ui/load-error';
 import type { ActivityStatsPayload } from '@/types/activity';
 
 // Order matters and is load-bearing: charts.js publishes window.__fc, which
-// app.js binds when its mount() runs. The stylesheet is scoped under
-// .activity-dash (see dashboard/static/styles.css) so importing it here cannot
-// restyle the rest of the SPA. boot.js is deliberately NOT imported — it is the
-// standalone page's fetch/poll driver, and leaving it out is what keeps "the
-// hosted page never polls" structural rather than a convention (D-6).
-import '@activity-dash/styles.css';
-import '@activity-dash/charts.js';
-import '@activity-dash/app.js';
+// render.js binds when its mount() runs. Every rule in styles.css is scoped
+// under .activity-dash, so importing it here cannot restyle the rest of the SPA.
+import './styles.css';
+import './charts.js';
+import './render.js';
 
 /**
- * Globals published by the shared dashboard scripts above. `charts.js` sets
- * `window.__fc` (the SVG chart toolkit) and `app.js` sets `window.__fcApp` (the
- * render layer). React never calls `__fc` directly — only app.js does — so it
- * is typed as `unknown`: it just has to exist.
+ * Globals published by the two scripts above. `charts.js` sets `window.__fc`
+ * (the SVG chart toolkit) and `render.js` sets `window.__fcApp` (the render
+ * layer). React never calls `__fc` directly — only render.js does — so it is
+ * typed as `unknown`: it just has to exist.
  *
  * Declared here rather than in a standalone .d.ts because knip reports an
  * ambient declaration file that nothing imports as dead code.
@@ -51,11 +48,11 @@ async function fetchActivityStats(refresh: boolean): Promise<ActivityStatsPayloa
  * Loads the dashboard's own three Google faces for as long as this page is
  * mounted, then removes them.
  *
- * Not a cosmetic choice: check_layout.mjs measures text width via
+ * Not a cosmetic choice: check-activity-layout.mjs measures text width via
  * MONO_CHAR_RATIO / SANS_CHAR_RATIO, calibrated against IBM Plex Mono and
  * Source Sans 3. Substituting the app's font stack would silently invalidate
  * every fit assertion the harness makes about these charts. Injecting on mount
- * rather than from index.html keeps the cost off every other page.
+ * rather than from the app's index.html keeps the cost off every other page.
  */
 function useDashboardFonts() {
   useEffect(() => {
@@ -72,18 +69,16 @@ function useDashboardFonts() {
 }
 
 /**
- * Superuser-only Activity Pulse page (Quick 260824-qaz).
+ * Superuser-only Activity Pulse page.
  *
- * The markup below is a JSX port of dashboard/static/index.html's body. Every
- * `id` is byte-identical to that file on purpose: app.js and charts.js address
- * the DOM by id (#c-actives, #t-funnel, #conv-big, #tip, ...), so renaming one
- * silently drops a chart. The rendering itself is done imperatively by the
- * shared app.js — React owns only the static shell, the data fetch, and the
- * Refresh button.
+ * React owns only the static shell, the data fetch, and the Refresh button; the
+ * charts themselves are rendered imperatively by render.js. Both render.js and
+ * charts.js address the DOM by id (#c-actives, #t-funnel, #conv-big, #tip, ...),
+ * so renaming an id below silently drops a chart.
  *
  * Deliberately NOT wrapped in a padded or max-width container: ProtectedLayout's
- * `<main className="pb-16 sm:pb-0">` is unpadded, and the dashboard's own .wrap
- * chain (plus check_layout.mjs's width model) depends on that staying true.
+ * `<main className="pb-16 sm:pb-0">` is unpadded, and the .wrap chain below
+ * (plus check-activity-layout.mjs's width model) depends on that staying true.
  */
 export default function ActivityPage() {
   useDashboardFonts();
@@ -134,7 +129,7 @@ export default function ActivityPage() {
   };
 
   const setAudience = (aud: 'all' | 'reg' | 'guest') => () => {
-    // Intentionally a no-op handler: app.js's mount() binds its own click
+    // Intentionally a no-op handler: render.js's mount() binds its own click
     // listener on these buttons and owns their aria-pressed state. React must
     // not also write that attribute — dual ownership of one attribute is the
     // bug this seam avoids. The handler exists only so the element is a real

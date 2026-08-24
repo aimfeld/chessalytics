@@ -13,7 +13,7 @@ let AUD="all";
 
 /* Everything below is filled by update(payload) on every refresh — the page
    holds no baked-in numbers, so a reload always reflects the live database.
-   Whoever calls update() (boot.js or the React host) owns the fetching. */
+   ActivityPage.tsx owns the fetching and calls update(). */
 let D=null, DAYS=[], NDAYS=0, ACT=[], SIGNUPS=[], BOT=[], TRAIN=[], SOLVES=[],
     IMPORTS=[], PERSONA=[], ELO=[], FUNNEL=[], TTI=[], STICK=[], CONV=null, CONVCMP=[];
 
@@ -216,11 +216,10 @@ function render(){
 }
 
 /* ---------- mount ---------- */
-/* app.js is the RENDER layer only. Fetching, polling, the live-status pill and
-   the error banner live in boot.js (standalone page) or in the React host
-   (frontend/src/pages/ActivityPage.tsx). Keeping them out of here is what makes
-   "the hosted page never polls on a timer" (D-6) structural rather than a
-   convention someone can undo by accident. */
+/* render.js is the RENDER layer only. Fetching, the live-status pill and the
+   error banner belong to the React host (./ActivityPage.tsx). Keeping them out
+   of here is what makes "the page never polls on a timer" structural rather
+   than a convention someone can undo by accident. */
 function mount(){
   bindCharts();
   let destroyed=false;

@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-// Headless layout harness for dashboard/static/charts.js.
+// Headless layout harness for src/pages/activity/charts.js.
 //
 // Loads the REAL charts.js off disk into a node:vm sandbox behind a minimal
 // DOM shim, invokes every chart entry point with synthetic worst-case
@@ -8,7 +8,7 @@
 // itself — every geometric decision comes from charts.js; this file only
 // measures and asserts.
 //
-// Usage: node dashboard/check_layout.mjs [--checks fit|labels|palette|all]
+// Usage: npm run check:activity-layout -- [--checks fit|labels|palette|all]
 //   fit    - SVG width fits its container; no preserveAspectRatio scale-down;
 //            no text clipped outside the chart's own width.
 //   labels - no two same-baseline text nodes overlap.
@@ -22,14 +22,15 @@ import path from "node:path";
 import vm from "node:vm";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
-const CHARTS_PATH = path.join(__dirname, "static", "charts.js");
-const STYLES_PATH = path.join(__dirname, "static", "styles.css");
+const ACTIVITY_DIR = path.join(__dirname, "..", "src", "pages", "activity");
+const CHARTS_PATH = path.join(ACTIVITY_DIR, "charts.js");
+const STYLES_PATH = path.join(ACTIVITY_DIR, "styles.css");
 
 const VIEWPORTS = [320, 360, 390, 414];
 const EPS = 0.5; // float slack for box-overlap/edge comparisons
 
 /* ---------------------------------------------------------------------- *
- * Width chain — mirrored from dashboard/static/styles.css. If these ever
+ * Width chain — mirrored from src/pages/activity/styles.css. If these ever
  * drift from the stylesheet, assertNoDrift() below fails loudly rather than
  * silently measuring a fiction (see PLAN 260824-dsj must_haves.key_links).
  *
@@ -159,8 +160,8 @@ function loadCharts(dom) {
 }
 
 /* ---------------------------------------------------------------------- *
- * Fixtures — real worst-case label strings from dashboard/queries.py and
- * dashboard/app.js (see PLAN 260824-dsj measured_baseline).
+ * Fixtures — real worst-case label strings from
+ * app/services/activity_queries.py and src/pages/activity/render.js.
  * ---------------------------------------------------------------------- */
 function generateDateLabels(startISO, n) {
   const start = new Date(startISO + "T00:00:00Z");
@@ -531,7 +532,7 @@ function run(checks) {
   const fc = loadCharts(dom);
   const violations = [];
   if (typeof fc.textPx !== "function") {
-    console.error("MISSING: __fc.textPx is not exported by charts.js yet (Task 2 of PLAN 260824-dsj adds it).");
+    console.error("MISSING: __fc.textPx is not exported by charts.js yet (charts.js must export it).");
     console.error("Text-box and label-overlap checks cannot run without it — this is expected RED before Task 2.");
     violations.push("__fc.textPx is not exported by charts.js");
   }

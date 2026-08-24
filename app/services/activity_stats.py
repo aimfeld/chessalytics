@@ -1,15 +1,9 @@
-"""Reusable, side-effect-free pieces of the activity dashboard runtime.
+"""Engine, payload builder and cache for the Activity Pulse dashboard.
 
-Both `dashboard/server.py` (the standalone tunnel-driven tool, queried against
-`settings.DATABASE_URL_PROD`) and `app/routers/admin_activity.py` (the hosted
-superuser page, queried against `settings.DATABASE_URL`) import from here — one
-read-only engine factory, one payload builder, one cache implementation, so the
-two consumers can never drift apart (D-3).
-
-Importing this module has NO side effects: no engine is opened at import time.
-That is what makes it safe for `app/` to import. `dashboard/server.py`, by
-contrast, opens a prod-URL engine as a module-level side effect (`app =
-create_app()`), which is exactly why `app/` must never import that module.
+Consumed by `app/routers/admin_activity.py`, which serves the payload to the
+superuser-only `/activity` page. Importing this module has NO side effects: no
+engine is opened at import time, so the router can build its cache lazily on
+first request rather than opening a connection during every pytest session.
 """
 
 import asyncio
@@ -17,8 +11,22 @@ import datetime
 
 from sqlalchemy.ext.asyncio import AsyncEngine, create_async_engine
 
-from dashboard import queries
-from dashboard.config import POLL_INTERVAL_SECONDS, PROMOTED_AT_SINCE
+from typing import Final
+
+from app.services import activity_queries as queries
+
+# The date users.promoted_at started recording (see the migration in
+# alembic/versions/). Production only begins stamping rows at the first deploy
+# on or after this date, so guest-conversion history before it is a floor
+# (Google-only, recovered by the migration backfill with the row's signup date
+# standing in for the unrecoverable true promotion date), not the true rate.
+PROMOTED_AT_SINCE: Final[str] = "2026-08-23"
+
+# The /activity page is manual-refresh only, but build_payload runs ~16
+# sequential full-history aggregate queries directly against production. This
+# TTL bounds that load no matter how many superuser tabs are open, while still
+# refreshing within a normal monitoring session.
+CACHE_TTL_SECONDS: Final[int] = 300
 
 # One connection is plenty: the payload is built by a single sequential pass and
 # results are cached, so concurrency here would only add load on the database.
@@ -53,7 +61,6 @@ async def build_payload(engine: AsyncEngine) -> queries.Payload:
         return queries.Payload(
             generated_at=datetime.datetime.now(datetime.timezone.utc).isoformat(),
             promoted_since=PROMOTED_AT_SINCE,
-            poll_interval_seconds=POLL_INTERVAL_SECONDS,
             days=days,
             last_complete_index=last_complete,
             activity=await queries.fetch_activity(conn, first_day),

@@ -28,7 +28,7 @@ const pct=x=>Math.round(x*100)+"%";
 const axisNum=n=>n>=1e6?(n/1e6).toFixed(n>=1e7?0:1).replace(/\.0$/,"")+"M"
   :n>=1000?(n/1000).toFixed(n>=10000?0:1).replace(/\.0$/,"")+"k":String(Math.round(n));
 
-/* ---- layout constants (dashboard/check_layout.mjs asserts against these) ----
+/* ---- layout constants (scripts/check-activity-layout.mjs asserts against these) ----
    Every threshold, gutter and character-width ratio a chart function needs is
    named here rather than inlined at the call site. Widths marked "narrow"
    apply once frame() reports the container is below NARROW_CHART_WIDTH; that
@@ -50,16 +50,16 @@ const GBAR_LABEL_PX=13, GBAR_LABEL_PX_NARROW=12; // consistent with the 12/12.5p
 const GBAR_LABEL_LINE_H=15, GBAR_LABEL_MAX_LINES=3, GBAR_LABEL_BASE=10;
 // Estimated text-box width. Not a real measurement — but it's the SAME
 // estimate every layout decision below is made with, so the harness in
-// check_layout.mjs and this renderer agree by construction.
+// check-activity-layout.mjs and this renderer agree by construction.
 function textPx(text,fontPx,mono){ return String(text).length*fontPx*(mono?MONO_CHAR_RATIO:SANS_CHAR_RATIO); }
 
 function C(){
   // Read the palette off the SCOPED wrapper, not documentElement. styles.css
   // defines --ink/--s1/... on .activity-dash rather than :root so the
-  // dashboard's generic token names cannot collide with the app's theme; a
+  // the dashboard's generic token names cannot collide with the app's theme; a
   // getComputedStyle(documentElement) here returns "" for every one of them,
   // which SVG renders as black — every bar and line silently loses its colour.
-  // Falling back to documentElement keeps check_layout.mjs (which renders
+  // Falling back to documentElement keeps check-activity-layout.mjs (which renders
   // without the wrapper) working.
   const host=document.querySelector(".activity-dash")||document.documentElement;
   const s=getComputedStyle(host), g=k=>s.getPropertyValue(k).trim();

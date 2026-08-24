@@ -1,17 +1,15 @@
 /**
- * Mirrors `dashboard/queries.py`'s `Payload` TypedDict — the full Activity
- * Pulse dashboard dataset served by `GET /api/admin/activity/stats`.
+ * Mirrors the `Payload` TypedDict in `app/services/activity_queries.py` — the
+ * full Activity Pulse dataset served by `GET /api/admin/activity/stats`.
  *
  * Row arrays are heterogeneous (a mix of dates, counts, and labels per row,
  * matching the raw SQL result shape), so they type as tuples of
  * `string | number | null` rather than a named interface per row — the same
- * shape the standalone dashboard's app.js/charts.js already destructure
- * positionally.
+ * shape pages/activity/render.js destructures positionally.
  */
 export interface ActivityStatsPayload {
   generated_at: string;
   promoted_since: string;
-  poll_interval_seconds: number;
   days: string[];
   last_complete_index: number;
   activity: number[][];

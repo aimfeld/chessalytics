@@ -12,7 +12,8 @@
     "preview": "vite preview",
     "test": "vitest run",
     "test:watch": "vitest",
-    "knip": "knip"
+    "knip": "knip",
+    "check:activity-layout": "node scripts/check-activity-layout.mjs"
   },
   "dependencies": {
     "@dnd-kit/core": "^6.3.1",

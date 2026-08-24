@@ -56,7 +56,7 @@ const TrainPage = lazy(() => import('./pages/Train'));
 // stylesheet and two chart scripts to this page — none of that belongs in
 // the main bundle. ActivityPage.tsx also uses export default (mirrors
 // Analysis/Bots/Train's Pitfall 1 divergence).
-const ActivityPage = lazy(() => import('./pages/ActivityPage'));
+const ActivityPage = lazy(() => import('./pages/activity/ActivityPage'));
 
 const FLAG_OPENINGS_VISITED = 'openings_visited';
 const FLAG_ENDGAMES_VISITED = 'endgames_visited';

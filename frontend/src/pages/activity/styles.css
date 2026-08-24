@@ -1,13 +1,11 @@
-/* Every rule in this file is scoped under `.activity-dash`.
-
-   The stylesheet has two hosts: dashboard/static/index.html puts the class on
-   <body>, and the hosted React page (frontend/src/pages/ActivityPage.tsx) puts
-   it on its own wrapper div. Scoping is what stops the dashboard's typography,
-   custom properties and bare element selectors (table/th/td/footer/section)
-   from restyling the rest of the SPA when someone visits /activity (D-9).
+/* Every rule in this file is scoped under `.activity-dash`, the class
+   ./ActivityPage.tsx puts on its own wrapper <main>. Scoping is what stops this
+   file's typography, custom properties and bare element selectors
+   (table/th/td/footer/section) from restyling the rest of the SPA when someone
+   visits /activity.
 
    Two things must NOT be "tidied":
-   - dashboard/check_layout.mjs greps for the literal declaration bodies
+   - scripts/check-activity-layout.mjs greps for the literal declaration bodies
      `padding:0 24px 96px`, `padding:18px 18px 10px`, `padding:0 12px 64px` and
      `padding:14px 12px 10px` and exits 1 if any is missing. Prefixing a
      selector is safe; reformatting those declarations is not.
@@ -148,7 +146,7 @@
 .activity-dash .caveats li::before{content:"—"; position:absolute; left:0; color:var(--brand)}
 @media (prefers-reduced-motion:reduce){.activity-dash *{transition:none !important; animation:none !important}}
 
-/* ---- live status + error banner (standalone dashboard only) ---- */
+/* ---- live status pill + error banner (rendered by ActivityPage.tsx) ---- */
 .activity-dash .live{display:flex; align-items:center; gap:8px; justify-content:flex-end; margin-top:10px; font-size:.9375rem; color:var(--ink-3)}
 .activity-dash .live .dot{width:9px; height:9px; border-radius:50%; background:var(--ink-3); flex:none}
 .activity-dash .live.ok .dot{background:var(--s2)}

@@ -1,8 +1,9 @@
 """Forward-only daily activity calendar for DAU/MAU/retention analysis.
 
 One row per (user_id, UTC activity_date). The middleware writer is hour-throttled,
-so `activity_count` counts distinct active hours that day (1-24 range). Collection
-only — no query layer, no endpoint, no dashboard.
+so `activity_count` counts distinct active hours that day (1-24 range). Read by
+`app/services/activity_queries.py` for the superuser-only /activity dashboard;
+the model itself stays write-only (the middleware is its sole writer).
 """
 
 import datetime
