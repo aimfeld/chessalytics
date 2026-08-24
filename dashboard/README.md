@@ -26,6 +26,16 @@ The page polls `/api/stats` every 60 seconds and shows the last refresh time in
 the masthead; "Refresh now" forces a re-query. If the tunnel is down the page
 keeps the last good snapshot, marks itself stale, and says what to do.
 
+**Checking mobile layout** — `node dashboard/check_layout.mjs` loads the real
+`static/charts.js` through a minimal DOM shim and renders every chart with
+synthetic worst-case fixture data at 320/360/390/414px CSS-pixel viewports. It
+asserts that every chart's `<svg>` fits within its container width (no
+horizontal scrolling), that no text is clipped outside the chart, and that no
+two same-baseline labels (x-axis ticks, category labels) overlap — then exits
+0, or prints the concrete violations and exits 1. It needs no server, no
+database and no browser. Pass `--checks fit` or `--checks labels` to run one
+assertion group at a time; the default is `all`.
+
 ## Safety
 
 - **Read-only by construction.** The engine sets `default_transaction_read_only`
@@ -48,6 +58,7 @@ keeps the last good snapshot, marks itself stale, and says what to do.
 | `static/index.html` | Page markup (all numbers filled at runtime) |
 | `static/charts.js` | Chart toolkit: line, bar, grouped bar, funnel, sparkline |
 | `static/app.js` | Fetches `/api/stats`, renders, polls, handles failures |
+| `check_layout.mjs` | Headless layout harness — asserts chart geometry fits phone widths |
 
 ## Reading the numbers
 

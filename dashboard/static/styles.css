@@ -86,6 +86,15 @@ section{margin-top:52px}
 .hero .exp{color:var(--ink-2); margin-top:6px}
 .hero .exp b{color:var(--ink); font-variant-numeric:tabular-nums}
 @media (max-width:820px){ .grid2{grid-template-columns:1fr} }
+@media (max-width:560px){
+  .wrap{padding:0 12px 64px}
+  .card{padding:14px 12px 10px}
+  .mast-inner{padding:24px 12px 20px}
+  .tile{padding:14px 14px 12px}
+  .window{text-align:left}
+  .live{justify-content:flex-start}
+  section{margin-top:36px}
+}
 .chart{width:100%; overflow-x:auto}
 .legend{display:flex; flex-wrap:wrap; gap:6px 18px; margin:2px 0 12px; font-size:.9375rem; color:var(--ink-2)}
 .legend span{display:inline-flex; align-items:center; gap:7px}
