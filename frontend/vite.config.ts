@@ -135,10 +135,21 @@ export default defineConfig({
   resolve: {
     alias: {
       '@': path.resolve(__dirname, './src'),
+      // The Activity Pulse dashboard's stylesheet and chart/render scripts are
+      // shared verbatim with the standalone tunnel server (dashboard/server.py),
+      // so they stay in dashboard/static/ rather than being copied into src/.
+      // See dashboard/README.md.
+      '@activity-dash': path.resolve(__dirname, '../dashboard/static'),
     },
   },
   server: {
     host: true,
+    fs: {
+      // frontend/package-lock.json makes Vite infer frontend/ as the workspace
+      // root, so without this the dev server 403s the @activity-dash files one
+      // level up. Build is unaffected; this is dev-server file serving only.
+      allow: [path.resolve(__dirname, '..')],
+    },
     hmr: {
       clientPort: process.env.TUNNEL ? 443 : undefined,
     },

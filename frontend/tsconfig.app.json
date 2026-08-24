@@ -15,6 +15,12 @@
     "moduleDetection": "force",
     "noEmit": true,
     "jsx": "react-jsx",
+    // Required by ActivityPage.tsx's side-effect imports of the shared dashboard
+    // scripts (`@activity-dash/charts.js`, `@activity-dash/app.js`):
+    // noUncheckedSideEffectImports makes an unresolvable side-effect import a
+    // hard error. checkJs stays off — those files are plain browser scripts
+    // shared with the standalone dashboard and are not type-checked.
+    "allowJs": true,
 
     /* Linting */
     "strict": true,
@@ -30,7 +36,10 @@
     // `@/*` paths off baseUrl (or to a supported resolution) before upgrading.
     "ignoreDeprecations": "6.0",
     "paths": {
-      "@/*": ["./src/*"]
+      "@/*": ["./src/*"],
+      // Mirrors the '@activity-dash' alias in vite.config.ts. Both are needed:
+      // Vite resolves the runtime import, this resolves it for tsc.
+      "@activity-dash/*": ["../dashboard/static/*"]
     }
   },
   "include": ["src"],
