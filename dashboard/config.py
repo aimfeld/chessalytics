@@ -13,6 +13,16 @@ PORT: Final[int] = 8899
 CACHE_TTL_SECONDS: Final[int] = 60
 POLL_INTERVAL_SECONDS: Final[int] = 60
 
+# The hosted /activity page (app/routers/admin_activity.py) shares the same
+# StatsCache implementation but uses a 5x longer TTL than the standalone
+# tunnel tool above: build_payload runs ~16 sequential full-history aggregate
+# queries, and the hosted endpoint sits directly against the production
+# database with no rate-limiting SSH tunnel in front of it and no 60s poll
+# driving it (D-6, manual refresh only) — a short TTL there would put a real
+# standing query load on prod every time a superuser has the tab open. 300s
+# bounds that load while still refreshing within a normal monitoring session.
+HOSTED_CACHE_TTL_SECONDS: Final[int] = 300
+
 # The public launch. A real event, not derivable from the data, so it is a
 # constant here and rendered as an annotation on every time chart.
 LAUNCH_DATE: Final[str] = "2026-07-23"

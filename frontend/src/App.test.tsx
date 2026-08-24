@@ -1010,3 +1010,73 @@ describe('Quick 260809-g0n: MobileBottomBar swaps main nav for board controls', 
     expect(screen.getByTestId('mobile-bottom-bar')).toBeTruthy();
   });
 });
+
+// Quick 260824-qaz (D-7/D-8): the hosted Activity Pulse dashboard's nav entry
+// mirrors ADMIN_NAV_ITEM's conditional-append pattern on both nav surfaces —
+// present for superusers on both NavHeader and MobileMoreDrawer, absent on
+// both for everyone else.
+describe('Quick 260824-qaz: /activity nav entry (superuser-only)', () => {
+  it('desktop NavHeader: is_superuser true -> renders nav-activity', () => {
+    profileState = {
+      email: 'admin@example.com',
+      is_superuser: true,
+      is_guest: false,
+      chess_com_game_count: 50,
+      lichess_game_count: 0,
+      impersonation: null,
+    } as Partial<UserProfile>;
+    tier1State = true;
+
+    renderNavHeader();
+
+    expect(screen.getByTestId('nav-activity')).toBeTruthy();
+  });
+
+  it('more drawer (MobileMoreDrawer): is_superuser true -> renders drawer-nav-activity', () => {
+    profileState = {
+      email: 'admin@example.com',
+      is_superuser: true,
+      is_guest: false,
+      chess_com_game_count: 50,
+      lichess_game_count: 0,
+      impersonation: null,
+    } as Partial<UserProfile>;
+    tier1State = true;
+
+    renderMobileMoreDrawer();
+
+    expect(screen.getByTestId('drawer-nav-activity')).toBeTruthy();
+  });
+
+  it('desktop NavHeader: is_superuser false -> renders NO activity entry', () => {
+    profileState = {
+      email: 'regular@example.com',
+      is_superuser: false,
+      is_guest: false,
+      chess_com_game_count: 50,
+      lichess_game_count: 0,
+      impersonation: null,
+    } as Partial<UserProfile>;
+    tier1State = true;
+
+    renderNavHeader();
+
+    expect(screen.queryByTestId('nav-activity')).toBeNull();
+  });
+
+  it('more drawer (MobileMoreDrawer): is_superuser false -> renders NO activity entry', () => {
+    profileState = {
+      email: 'regular@example.com',
+      is_superuser: false,
+      is_guest: false,
+      chess_com_game_count: 50,
+      lichess_game_count: 0,
+      impersonation: null,
+    } as Partial<UserProfile>;
+    tier1State = true;
+
+    renderMobileMoreDrawer();
+
+    expect(screen.queryByTestId('drawer-nav-activity')).toBeNull();
+  });
+});
