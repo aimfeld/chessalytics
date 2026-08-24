@@ -34,7 +34,7 @@ async function load(force){
   }catch(err){
     status("error", D?"stale — retrying":"no data");
     banner.hidden=false;
-    banner.innerHTML="<b>Cannot refresh from production.</b> "+err.message+
+    banner.innerHTML="<b>Cannot refresh.</b> "+err.message+
       (D?" Showing the last successful snapshot.":"");
     schedule();
   }finally{

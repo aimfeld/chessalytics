@@ -150,11 +150,11 @@ export default function ActivityPage() {
         <div className="mast-inner">
           <div>
             <div className="rulebar" aria-hidden="true"></div>
-            <div className="eyebrow">FlawChess · production</div>
+            <div className="eyebrow">FlawChess</div>
             <h1>Activity Pulse</h1>
             <p className="sub">
               Who shows up, how often they come back, and what they do once they are here. Built
-              from the production <span className="mono">user_activity</span> calendar plus the
+              from the <span className="mono">user_activity</span> calendar plus the
               bot-game, Train, import and signup tables.
             </p>
           </div>
