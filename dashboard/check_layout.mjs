@@ -8,7 +8,7 @@
 // itself — every geometric decision comes from charts.js; this file only
 // measures and asserts.
 //
-// Usage: node dashboard/check_layout.mjs [--checks fit|labels|all]
+// Usage: node dashboard/check_layout.mjs [--checks fit|labels|palette|all]
 //   fit    - SVG width fits its container; no preserveAspectRatio scale-down;
 //            no text clipped outside the chart's own width.
 //   labels - no two same-baseline text nodes overlap.
@@ -119,20 +119,34 @@ function makeNode(tag) {
   };
 }
 
-function makeDom() {
+function makeDom({ scopedWrapperPresent = true } = {}) {
   const tipNode = makeNode("div");
+  const wrapperNode = makeNode("main");
+  const htmlNode = makeNode("html");
   const doc = {
     querySelector(sel) {
-      return sel === "#tip" ? tipNode : makeNode("div");
+      if (sel === "#tip") return tipNode;
+      // styles.css defines the palette on .activity-dash, NOT on :root, so a
+      // renderer that reads it off documentElement gets nothing. Modelling the
+      // wrapper as a distinct node is what lets checkPalette() catch that.
+      if (sel === ".activity-dash") return scopedWrapperPresent ? wrapperNode : null;
+      return makeNode("div");
     },
-    documentElement: makeNode("html"),
+    documentElement: htmlNode,
     createElementNS(_ns, tag) {
       return makeNode(tag);
     },
   };
-  // Colors are never measured by any assertion; any non-empty placeholder is fine.
-  const getComputedStyle = () => ({ getPropertyValue: () => "#000000" });
-  return { document: doc, getComputedStyle, makeNode };
+  // Element-AWARE on purpose. The palette resolves only on the scoped wrapper;
+  // every other element (documentElement included) returns "" exactly as a real
+  // browser does for an undefined custom property. An SVG fill of "" renders
+  // black, which is how this failure reaches a user: every bar and line loses
+  // its colour while the layout stays perfect, so the fit/label checks below
+  // pass happily. Do NOT "simplify" this back to a constant.
+  const getComputedStyle = (el) => ({
+    getPropertyValue: () => (el === wrapperNode ? "#B25A28" : ""),
+  });
+  return { document: doc, getComputedStyle, makeNode, wrapperNode, htmlNode };
 }
 
 function loadCharts(dom) {
@@ -474,11 +488,40 @@ function checkLabels(fc, result, violations) {
 /* ---------------------------------------------------------------------- *
  * Main.
  * ---------------------------------------------------------------------- */
+// C() must read the palette off the .activity-dash wrapper. If it reads
+// documentElement (the pre-scoping behaviour) every token comes back "" and
+// every chart renders black — invisible to the geometry checks above.
+function checkPalette(violations) {
+  const dom = makeDom();
+  const fc = loadCharts(dom);
+  if (typeof fc.C !== "function") {
+    violations.push("__fc.C is not exported by charts.js");
+    return;
+  }
+  const empty = Object.entries(fc.C())
+    .filter(([, v]) => !v)
+    .map(([k]) => k);
+  if (empty.length) {
+    violations.push(
+      `C() resolved no colour for ${empty.length} token(s) (${empty.join(", ")}) — ` +
+        "it must read the palette from the .activity-dash wrapper, not documentElement",
+    );
+  }
+  // And it must degrade rather than throw when the wrapper is absent (the
+  // standalone page mounts charts before the body class is meaningful).
+  const bare = makeDom({ scopedWrapperPresent: false });
+  try {
+    loadCharts(bare).C();
+  } catch (err) {
+    violations.push(`C() threw with no .activity-dash wrapper present: ${err.message}`);
+  }
+}
+
 function parseArgs(argv) {
   const idx = argv.indexOf("--checks");
   const val = idx >= 0 ? argv[idx + 1] : "all";
-  if (!["fit", "labels", "all"].includes(val)) {
-    console.error(`Unknown --checks value "${val}"; expected fit, labels or all.`);
+  if (!["fit", "labels", "palette", "all"].includes(val)) {
+    console.error(`Unknown --checks value "${val}"; expected fit, labels, palette or all.`);
     process.exit(1);
   }
   return val;
@@ -494,6 +537,7 @@ function run(checks) {
     console.error("Text-box and label-overlap checks cannot run without it — this is expected RED before Task 2.");
     violations.push("__fc.textPx is not exported by charts.js");
   }
+  if (checks === "palette" || checks === "all") checkPalette(violations);
   const cases = buildCases(fc);
   for (const viewport of VIEWPORTS) {
     console.log(describeChain(viewport));
