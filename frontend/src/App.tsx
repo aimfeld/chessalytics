@@ -10,7 +10,7 @@ import { TooltipProvider } from '@/components/ui/tooltip';
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
 import { cn } from '@/lib/utils';
-import { ArrowLeft, BookOpenIcon, MenuIcon, LogOutIcon, TrophyIcon, DoorOpen, Shield, FolderOpen, Bot, Dumbbell, Search } from 'lucide-react';
+import { ArrowLeft, BookOpenIcon, MenuIcon, LogOutIcon, TrophyIcon, DoorOpen, Shield, FolderOpen, Bot, Dumbbell, Search, Activity } from 'lucide-react';
 import {
   Drawer, DrawerContent, DrawerHeader, DrawerTitle, DrawerClose,
 } from '@/components/ui/drawer';
@@ -52,6 +52,11 @@ const BotsPage = lazy(() => import('./pages/Bots'));
 // Phase 190 Plan 01: lazy-loaded because it pulls the Stockfish WASM grading
 // worker. Train.tsx also uses export default (mirrors Analysis/Bots).
 const TrainPage = lazy(() => import('./pages/Train'));
+// Quick 260824-qaz: lazy-loaded because Tasks 2-3 attach a ~30 KB dashboard
+// stylesheet and two chart scripts to this page — none of that belongs in
+// the main bundle. ActivityPage.tsx also uses export default (mirrors
+// Analysis/Bots/Train's Pitfall 1 divergence).
+const ActivityPage = lazy(() => import('./pages/activity/ActivityPage'));
 
 const FLAG_OPENINGS_VISITED = 'openings_visited';
 const FLAG_ENDGAMES_VISITED = 'endgames_visited';
@@ -109,6 +114,10 @@ const BOTTOM_NAV_ITEMS = [
 // not widen the type; declared here so both NavHeader and MobileMoreDrawer share
 // the same object literal and icon.
 const ADMIN_NAV_ITEM = { to: '/admin', label: 'Admin', Icon: Shield } as const;
+// Quick 260824-qaz (D-7/D-8): hosted Activity Pulse dashboard, superuser-only
+// like ADMIN_NAV_ITEM above — same conditional-append pattern on both nav
+// surfaces below.
+const ACTIVITY_NAV_ITEM = { to: '/activity', label: 'Activity', Icon: Activity } as const;
 
 const ROUTE_TITLES: Record<string, string> = {
   '/library': 'Library',
@@ -118,6 +127,7 @@ const ROUTE_TITLES: Record<string, string> = {
   '/endgames': 'Endgame',
   '/admin': 'Admin',
   '/analysis': 'Analysis',
+  '/activity': 'Activity',
 };
 
 // ─── Nav lock helper ──────────────────────────────────────────────────────────
@@ -132,13 +142,16 @@ const ROUTE_TITLES: Record<string, string> = {
  *   contributes to neither chess_com_game_count nor lichess_game_count, so it
  *   cannot accidentally unlock the import-gated nav either). A locked nav
  *   entry pointing at an open route would be incoherent.
+ * - `/activity` — Quick 260824-qaz: superuser-only like `/admin`, gated by
+ *   SuperuserRoute instead. An import-gate on top of the superuser gate would
+ *   be incoherent for the same reason `/admin` is exempt.
  *
  * WR-07: this gate used to be copy-pasted into all three nav surfaces with
  * DIVERGENT clause lists (MobileBottomBar's copy omitted `/admin`), and Phase
  * 171 had to patch every one of them to add `/bots`. One definition now, so the
  * next exempt route is a one-line edit and the surfaces cannot disagree.
  */
-const IMPORT_EXEMPT_ROUTES: ReadonlySet<string> = new Set(['/library', '/admin', '/bots', '/analysis']);
+const IMPORT_EXEMPT_ROUTES: ReadonlySet<string> = new Set(['/library', '/admin', '/bots', '/analysis', '/activity']);
 
 function isNavLocked(to: string, navUnlocked: boolean): boolean {
   return !IMPORT_EXEMPT_ROUTES.has(to) && !navUnlocked;
@@ -191,7 +204,7 @@ export function NavHeader() {
   // No client-side schedule-mask/timezone math is performed here.
   const trainBadgeVisible = trainProgressQuery.data?.badge_visible ?? false;
   // D-16: Admin tab rightmost for superusers, absent otherwise.
-  const navItems = profile?.is_superuser ? [...NAV_ITEMS, ADMIN_NAV_ITEM] : NAV_ITEMS;
+  const navItems = profile?.is_superuser ? [...NAV_ITEMS, ADMIN_NAV_ITEM, ACTIVITY_NAV_ITEM] : NAV_ITEMS;
 
   return (
     <header className="hidden sm:block bg-background border-b border-border px-6 overflow-hidden">
@@ -517,7 +530,7 @@ export function MobileMoreDrawer({ open, onOpenChange }: { open: boolean; onOpen
   const { tier1 } = useReadiness();
   const navUnlocked = totalGames > 0 && tier1;
   // D-17: Admin entry surfaced in the More drawer (not the bottom bar) for superusers.
-  const navItems = profile?.is_superuser ? [...NAV_ITEMS, ADMIN_NAV_ITEM] : NAV_ITEMS;
+  const navItems = profile?.is_superuser ? [...NAV_ITEMS, ADMIN_NAV_ITEM, ACTIVITY_NAV_ITEM] : NAV_ITEMS;
 
   return (
     <Drawer open={open} onOpenChange={onOpenChange} direction="bottom">
@@ -933,6 +946,27 @@ function AppRoutes() {
             }
           />
           <Route path="/admin" element={<SuperuserRoute><AdminPage /></SuperuserRoute>} />
+          {/* Quick 260824-qaz: hosted Activity Pulse dashboard. Lazy-loaded
+              (Tasks 2-3 attach a ~30 KB stylesheet + two chart scripts), gated
+              like /admin by SuperuserRoute — the hard gate lives on the data
+              endpoint (D-1), this is defense-in-depth against briefly
+              rendering the route shell before the profile query resolves. */}
+          <Route
+            path="/activity"
+            element={
+              <SuperuserRoute>
+                <Suspense
+                  fallback={
+                    <div className="p-6 text-sm text-muted-foreground" data-testid="activity-loading">
+                      Loading activity dashboard…
+                    </div>
+                  }
+                >
+                  <ActivityPage />
+                </Suspense>
+              </SuperuserRoute>
+            }
+          />
           <Route path="/analysis" element={<AnalysisRoute />} />
           {/* Phase 169 D-14: real /bots route, lazy-loaded, UNLINKED from nav this
               phase (Phase 171 adds the nav entry). Not wrapped in ImportRequiredRoute

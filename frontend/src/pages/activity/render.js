@@ -1,17 +1,24 @@
 
 (() => {
-const {lineChart,barChart,hbar,funnel,gbar,sparkline,legend,table,C,num,short,long}=window.__fc;
+// Bound in mount(), not at module-evaluation time. Same trap as charts.js's
+// #tip lookup: under the React host this script can evaluate before charts.js
+// has published window.__fc, and an eager destructure would freeze every chart
+// helper as undefined for the lifetime of the module.
+let lineChart,barChart,hbar,funnel,gbar,sparkline,legend,table,C,num,short,long;
+const bindCharts=()=>{
+  ({lineChart,barChart,hbar,funnel,gbar,sparkline,legend,table,C,num,short,long}=window.__fc);
+};
 const $=s=>document.querySelector(s);
 let AUD="all";
 
-/* Everything below is filled from /api/stats on every refresh — the page holds
-   no baked-in numbers, so a reload always reflects the live database. */
+/* Everything below is filled by update(payload) on every refresh — the page
+   holds no baked-in numbers, so a reload always reflects the live database.
+   ActivityPage.tsx owns the fetching and calls update(). */
 let D=null, DAYS=[], NDAYS=0, ACT=[], SIGNUPS=[], BOT=[], TRAIN=[], SOLVES=[],
     IMPORTS=[], PERSONA=[], ELO=[], FUNNEL=[], TTI=[], STICK=[], CONV=null, CONVCMP=[];
 
 function apply(payload){
   D=payload;
-  window.__LAUNCH=payload.launch_date;
   DAYS=payload.days; NDAYS=DAYS.length;
   ACT=payload.activity.map(([u,d,g,h])=>({u,d,g,h}));
   SIGNUPS=payload.signups; BOT=payload.bot; TRAIN=payload.train; SOLVES=payload.solves;
@@ -96,17 +103,10 @@ function chrome(){
     `since the feature went live on ${long(BOT[0][0])}.`;
   $("#cav-start").textContent=long(DAYS[0]);
   $("#cav-partial").textContent=long(last);
-  $("#cav-launch").textContent=long(D.launch_date);
   $("#cav-funnel").textContent=long(DAYS[0]);
   $("#cav-promoted").textContent=long(D.promoted_since);
-  const li=DAYS.indexOf(D.launch_date), su=SIGNUPS.find(r=>r[0]===D.launch_date);
-  const im=IMPORTS.find(r=>r[0]===D.launch_date);
-  $("#cav-launch-detail").textContent = su
-    ? `${su[1]+su[2]} accounts and ${num(im?im[3]:0)} imported games arrived that day`
-    : "the traffic that day is not organic growth";
   $("#cav-features").textContent=
     `bot play starts ${long(BOT[0][0])}, Train sessions ${long(TRAIN[0][0])}`;
-  if(li<0) $("#cav-launch").textContent=long(D.launch_date)+" (outside the tracked range)";
 }
 
 function render(){
@@ -136,7 +136,7 @@ function render(){
 
   const rr=retention(0), rg=retention(1), rl=Array.from({length:14},(_,i)=>"day-"+(i+1));
   legend("#ret-legend",[{name:"Registered accounts",color:c.s1,line:1},{name:"Guest sessions",color:c.s5,line:1}]);
-  lineChart($("#c-retention"),{labels:rl,h:250,mark:false,every:1,pctAxis:true,yMax:1,
+  lineChart($("#c-retention"),{labels:rl,h:250,every:1,pctAxis:true,yMax:1,
     xfmt:(lb,i)=>String(i+1), xcap:"days since first visit",
     fmt:v=>Math.round(v*100)+"%",
     series:[{name:"Registered accounts",values:rr,color:c.s1,area:true},
@@ -189,7 +189,7 @@ function render(){
 
   const tr=expand(TRAIN), [ts,tu,tc,te,to,tp]=tr.cols;
   legend("#tr-legend",[{name:"Completed",color:c.win},{name:"Still open",color:c.draw},{name:"Expired unfinished",color:c.loss}]);
-  barChart($("#c-train"),{labels:tr.labels,h:240,every:5,mark:false,series:[
+  barChart($("#c-train"),{labels:tr.labels,h:240,every:5,series:[
     {name:"Completed",values:tc,color:c.win},{name:"Still open",values:to,color:c.draw},
     {name:"Expired unfinished",values:te,color:c.loss}],
     extra:i=>[{k:"Puzzles served",v:tp[i]}]});
@@ -197,12 +197,12 @@ function render(){
     TRAIN.map(r=>[long(r[0]),r[1],r[2],r[3],r[4],r[5],r[6]]).reverse());
 
   const sv=expand(SOLVES);
-  barChart($("#c-solves"),{labels:sv.labels,h:220,every:5,mark:false,
+  barChart($("#c-solves"),{labels:sv.labels,h:220,every:5,
     series:[{name:"Puzzles solved",values:sv.cols[0],color:c.s2}],
     extra:i=>[{k:"Users",v:sv.cols[1][i]}]});
   const rowsS=sv.labels.map((_,i)=>[0,sv.cols[0][i],sv.cols[2][i],sv.cols[3][i]]);
   legend("#acc-legend",[{name:"Right move",color:c.s3,line:1},{name:"Right verdict",color:c.s4,line:1}]);
-  lineChart($("#c-acc"),{labels:sv.labels,h:220,every:5,mark:false,pctAxis:true,yMax:1,
+  lineChart($("#c-acc"),{labels:sv.labels,h:220,every:5,pctAxis:true,yMax:1,
     fmt:v=>Math.round(v*100)+"%",series:[
       {name:"Right move",values:roll7(rowsS,2,1),color:c.s3},
       {name:"Right verdict",values:roll7(rowsS,3,1),color:c.s4}]});
@@ -215,55 +215,57 @@ function render(){
     series:[{name:"Importing users",values:im.cols[1],color:c.s2}]});
 }
 
-/* ---------- live data ---------- */
-const live=$("#live"), liveText=$("#live-text"), refreshBtn=$("#btn-refresh"), banner=$("#banner");
-let timer=null;
+/* ---------- mount ---------- */
+/* render.js is the RENDER layer only. Fetching, the live-status pill and the
+   error banner belong to the React host (./ActivityPage.tsx). Keeping them out
+   of here is what makes "the page never polls on a timer" structural rather
+   than a convention someone can undo by accident. */
+function mount(){
+  bindCharts();
+  let destroyed=false;
+  const draw=()=>{ if(!destroyed) render(); };
 
-function status(state,text){ live.className="live "+state; liveText.textContent=text; }
-const clock=iso=>new Date(iso).toLocaleTimeString([], {hour:"2-digit",minute:"2-digit",second:"2-digit"});
+  // The audience segmented control owns its own aria-pressed attributes
+  // imperatively. Do NOT lift this into React state — dual ownership of one
+  // attribute is exactly the bug this seam exists to avoid.
+  const segButtons=Array.from(document.querySelectorAll(".seg button"));
+  const segBound=segButtons.map(b=>{
+    const h=()=>{
+      AUD=b.dataset.aud;
+      segButtons.forEach(x=>x.setAttribute("aria-pressed",String(x===b)));
+      draw();
+    };
+    b.addEventListener("click",h);
+    return [b,h];
+  });
 
-async function load(force){
-  refreshBtn.disabled=true;
-  status(D?"stale":"", D?"refreshing…":"loading…");
-  try{
-    const res=await fetch("/api/stats"+(force?"?refresh=1":""), {cache:"no-store"});
-    if(!res.ok){
-      let detail="Request failed ("+res.status+").";
-      try{ const body=await res.json(); if(body.detail) detail=body.detail; }catch(e){}
-      throw new Error(detail);
-    }
-    apply(await res.json());
-    banner.hidden=true;
-    status("ok","updated "+clock(D.generated_at));
-    render();
-    schedule();
-  }catch(err){
-    status("error", D?"stale — retrying":"no data");
-    banner.hidden=false;
-    banner.innerHTML="<b>Cannot refresh from production.</b> "+err.message+
-      (D?" Showing the last successful snapshot.":"");
-    schedule();
-  }finally{
-    refreshBtn.disabled=false;
-  }
+  let rt=null;
+  const onResize=()=>{clearTimeout(rt);rt=setTimeout(draw,150);};
+  addEventListener("resize",onResize);
+
+  const mq=matchMedia("(prefers-color-scheme: dark)");
+  mq.addEventListener("change",draw);
+
+  const obs=new MutationObserver(draw);
+  obs.observe(document.documentElement,{attributes:true,attributeFilter:["data-theme"]});
+
+  if(document.fonts) document.fonts.ready.then(draw);
+
+  return {
+    update(payload){ apply(payload); draw(); },
+    // destroy() is not optional: React 19 StrictMode mounts effects twice in
+    // dev, so without it the second mount leaves the first mount's resize
+    // listener re-rendering into a detached DOM.
+    destroy(){
+      destroyed=true;
+      segBound.forEach(([b,h])=>b.removeEventListener("click",h));
+      removeEventListener("resize",onResize);
+      clearTimeout(rt);
+      mq.removeEventListener("change",draw);
+      obs.disconnect();
+    },
+  };
 }
-function schedule(){
-  clearTimeout(timer);
-  const secs=(D&&D.poll_interval_seconds)||60;
-  timer=setTimeout(()=>load(false), secs*1000);
-}
-refreshBtn.addEventListener("click",()=>load(true));
-document.addEventListener("visibilitychange",()=>{ if(!document.hidden) load(false); });
 
-document.querySelectorAll(".seg button").forEach(b=>b.addEventListener("click",()=>{
-  AUD=b.dataset.aud;
-  document.querySelectorAll(".seg button").forEach(x=>x.setAttribute("aria-pressed",String(x===b)));
-  render();
-}));
-let t=null;
-addEventListener("resize",()=>{clearTimeout(t);t=setTimeout(render,150)});
-matchMedia("(prefers-color-scheme: dark)").addEventListener("change",render);
-new MutationObserver(render).observe(document.documentElement,{attributes:true,attributeFilter:["data-theme"]});
-document.fonts && document.fonts.ready.then(render);
-load(false);
+window.__fcApp={mount};
 })();

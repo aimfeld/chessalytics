@@ -8,6 +8,10 @@ in `YYYY-MM-DD` (Europe/Zurich).
 
 ## [Unreleased]
 
+### Added
+
+- Admins can now open the Activity Pulse dashboard at `/activity` from the main nav, instead of running it locally over an SSH tunnel. Data loads on open and refreshes only when asked.
+
 ## [v2.13] Ways In & Honest Answers — 2026-08-22
 
 ### Added

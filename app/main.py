@@ -19,6 +19,8 @@ from app.core.config import assert_secret_key_configured, settings
 from app.middleware.last_activity import LastActivityMiddleware
 from app.routers import openings, position_bookmarks, imports, auth, feedback
 from app.routers.admin import router as admin_router
+from app.routers.admin_activity import dispose_activity_engine
+from app.routers.admin_activity import router as admin_activity_router
 from app.routers.bots import router as bots_router
 from app.routers.endgames import router as endgames_router
 from app.routers.insights import router as insights_router
@@ -244,6 +246,10 @@ async def lifespan(_app: FastAPI) -> AsyncIterator[None]:
             # cross-dependency with the engine, so order is flexible; stop_maia is a
             # safe no-op when Maia was never started (onnxruntime absent).
             await stop_maia()
+            # Dispose the Activity Pulse endpoint's dedicated read-only engine.
+            # No-op if the endpoint was never hit (lazy construction, _cache
+            # stays None).
+            await dispose_activity_engine()
 
 
 if settings.SENTRY_DSN:
@@ -281,6 +287,7 @@ app.include_router(endgames_router, prefix="/api")
 app.include_router(insights_router, prefix="/api")
 app.include_router(users_router, prefix="/api")
 app.include_router(admin_router, prefix="/api")
+app.include_router(admin_activity_router, prefix="/api")
 app.include_router(library_router, prefix="/api")
 app.include_router(eval_remote_router, prefix="/api")
 app.include_router(feedback.router, prefix="/api")

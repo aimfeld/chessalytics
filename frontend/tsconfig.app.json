@@ -15,6 +15,12 @@
     "moduleDetection": "force",
     "noEmit": true,
     "jsx": "react-jsx",
+    // Required by ActivityPage.tsx's side-effect imports of the Activity Pulse
+    // chart scripts (`./charts.js`, `./render.js`): noUncheckedSideEffectImports
+    // makes an unresolvable side-effect import a hard error. checkJs stays off —
+    // both are plain browser scripts, loaded by check-activity-layout.mjs
+    // through a vm sandbox, and are not type-checked.
+    "allowJs": true,
 
     /* Linting */
     "strict": true,
