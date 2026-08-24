@@ -74,7 +74,7 @@ assertion group at a time; the default is `all`.
 
 | File | Role |
 |---|---|
-| `config.py` | Constants: bind address, both cache TTLs, launch date, thresholds |
+| `config.py` | Constants: bind address, both cache TTLs, thresholds |
 | `queries.py` | Every SQL query, returning JSON-able rows — **shared by both consumers** |
 | `stats.py` | `build_readonly_engine()`, `build_payload()`, `StatsCache` — **shared by both consumers**; side-effect free so `app/` can import it |
 | `server.py` | Standalone FastAPI app: builds its own engine at import time, mounts `static/` |
@@ -103,7 +103,6 @@ assertion group at a time; the default is `all`.
   before the flag shipped (`PROMOTED_AT_SINCE` in `config.py`) remains a
   floor, not the true rate, and any promotion-timing metric is only
   meaningful for rows promoted on or after that date.
-- `LAUNCH_DATE` in `config.py` is a real-world event, not derived from the data.
 
 ## Query cost
 

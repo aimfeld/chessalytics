@@ -33,8 +33,6 @@ declare global {
         destroy(): void;
       };
     };
-    /** Set by app.js's apply(); read by charts.js to mark the launch date. */
-    __LAUNCH?: string;
   }
 }
 
@@ -242,8 +240,7 @@ export default function ActivityPage() {
           <div className="card">
             <h3 id="au-title">Rolling active users</h3>
             <p className="note">
-              A user counts as active on a day if the API saw them at least once. The 23 July
-              launch is marked on every time chart.
+              A user counts as active on a day if the API saw them at least once.
             </p>
             <div className="legend" id="au-legend"></div>
             <div className="chart" id="c-actives"></div>
@@ -449,8 +446,8 @@ export default function ActivityPage() {
             <div className="card">
               <h3>Games imported per day</h3>
               <p className="note">
-                Log-scaled — launch day alone pulled in 136k games, three orders of magnitude above
-                a quiet day.
+                Log-scaled — the busiest day pulled in three orders of magnitude more games
+                than a quiet one.
               </p>
               <div className="chart" id="c-imports"></div>
             </div>
@@ -484,12 +481,6 @@ export default function ActivityPage() {
               two rows.
             </li>
             <li>
-              <b>
-                The <span id="cav-launch">launch</span> spike is a launch event
-              </b>
-              , not organic growth — <span id="cav-launch-detail"></span>.
-            </li>
-            <li>
               <b>A converted guest counts as a registered account in the funnel</b>, dated to when
               the guest session started — promotion happens in place, so there is no second account
               and no second creation date.
@@ -498,7 +489,7 @@ export default function ActivityPage() {
               <b>
                 The funnel counts accounts created on or after <span id="cav-funnel">—</span>
               </b>{' '}
-              — earlier accounts are excluded, so it measures the launch cohort rather than the whole
+              — earlier accounts are excluded, so it measures recent accounts rather than the whole
               user base. Train is registered-only, which is why no guest ever reaches it.
             </li>
             <li>

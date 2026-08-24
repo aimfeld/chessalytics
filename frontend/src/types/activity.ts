@@ -10,7 +10,6 @@
  */
 export interface ActivityStatsPayload {
   generated_at: string;
-  launch_date: string;
   promoted_since: string;
   poll_interval_seconds: number;
   days: string[];

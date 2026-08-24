@@ -202,7 +202,6 @@ async def test_stats_cached_for_ttl_then_refresh_forces_rebuild(test_engine, mon
     build_calls = 0
     fake_payload = queries.Payload(
         generated_at="2026-01-01T00:00:00+00:00",
-        launch_date="2026-07-23",
         promoted_since="2026-08-23",
         poll_interval_seconds=60,
         days=["2026-01-01"],

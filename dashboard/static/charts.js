@@ -121,12 +121,6 @@ function xAxis(svg,labels,x,yBot,c,every,xfmt){
       fill:c.ink3,"font-size":12,"font-family":"IBM Plex Mono, monospace"});
     t.textContent=f(lb,i); svg.appendChild(t); });
 }
-function launchMark(svg,labels,x,yTop,yBot,c){
-  const i=labels.indexOf(window.__LAUNCH); if(i<0)return;
-  svg.appendChild(el("line",{x1:x(i),x2:x(i),y1:yTop-4,y2:yBot,stroke:c.brand,"stroke-width":1.5,"stroke-dasharray":"3 4",opacity:.75}));
-  const t=el("text",{x:x(i)+5,y:yTop+6,fill:c.brand,"font-size":11.5,"font-family":"IBM Plex Mono, monospace"});
-  t.textContent="launch"; svg.appendChild(t);
-}
 function hover(svg,x0,x1,yTop,yBot,n,xAt,onIdx,c){
   const cross=el("line",{y1:yTop,y2:yBot,stroke:c.ink3,"stroke-width":1,opacity:0});
   const dots=el("g",{opacity:0}); svg.appendChild(cross); svg.appendChild(dots);
@@ -154,7 +148,7 @@ const tipRows=(title,rows)=>`<div class="th">${title}</div>`+rows.map(r=>
   `<div class="r"><span class="lab">${r.c?`<i style="background:${r.c}"></i>`:""}${r.k}</span><b>${r.v}</b></div>`).join("");
 
 /* ---------- line chart ---------- */
-function lineChart(host,{labels,series,h=280,fmt=num,every=7,mark=true,yMax=null,pctAxis=false,xfmt=null,xcap=null}){
+function lineChart(host,{labels,series,h=280,fmt=num,every=7,yMax=null,pctAxis=false,xfmt=null,xcap=null}){
   const c=C(), {svg,w,narrow}=frame(host,h);
   const x0=narrow?AXIS_LEFT_NARROW:AXIS_LEFT, x1=w-(narrow?AXIS_RIGHT_NARROW:AXIS_RIGHT), yTop=18,yBot=h-30;
   const max=yMax!=null?yMax:niceMax(Math.max(1,...series.flatMap(s=>s.values)));
@@ -163,7 +157,6 @@ function lineChart(host,{labels,series,h=280,fmt=num,every=7,mark=true,yMax=null
   yAxis(svg,x0,x1,yTop,yBot,max,pctAxis?(v=>Math.round(v*100)+"%"):axisNum,c);
   xAxis(svg,labels,X,yBot,c,every,xfmt);
   if(xcap){const t=el('text',{x:x1,y:14,'text-anchor':'end',fill:c.ink3,'font-size':12.5});t.textContent=xcap;svg.appendChild(t);}
-  if(mark) launchMark(svg,labels,X,yTop,yBot,c);
   series.forEach(s=>{
     if(s.area){
       const d="M"+X(0)+","+yBot+" "+s.values.map((v,i)=>"L"+X(i)+","+Y(v)).join(" ")+" L"+X(labels.length-1)+","+yBot+"Z";
@@ -180,7 +173,7 @@ function lineChart(host,{labels,series,h=280,fmt=num,every=7,mark=true,yMax=null
   },c);
 }
 /* ---------- stacked / plain bars ---------- */
-function barChart(host,{labels,series,h=240,fmt=num,every=7,mark=true,log=false,extra=null}){
+function barChart(host,{labels,series,h=240,fmt=num,every=7,log=false,extra=null}){
   const c=C(), {svg,w,narrow}=frame(host,h);
   const x0=narrow?AXIS_LEFT_NARROW:AXIS_LEFT, x1=w-(narrow?AXIS_RIGHT_NARROW:AXIS_RIGHT), yTop=18,yBot=h-30;
   const totals=labels.map((_,i)=>series.reduce((a,s)=>a+s.values[i],0));
@@ -195,7 +188,6 @@ function barChart(host,{labels,series,h=240,fmt=num,every=7,mark=true,log=false,
       t.textContent=axisNum(Math.pow(10,k)); svg.appendChild(t);} }
   else yAxis(svg,x0,x1,yTop,yBot,max,axisNum,c);
   xAxis(svg,labels,X,yBot,c,every);
-  if(mark) launchMark(svg,labels,X,yTop,yBot,c);
   labels.forEach((_,i)=>{
     let acc=0;
     series.forEach(s=>{

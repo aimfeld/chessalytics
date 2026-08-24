@@ -23,10 +23,6 @@ POLL_INTERVAL_SECONDS: Final[int] = 60
 # bounds that load while still refreshing within a normal monitoring session.
 HOSTED_CACHE_TTL_SECONDS: Final[int] = 300
 
-# The public launch. A real event, not derivable from the data, so it is a
-# constant here and rendered as an annotation on every time chart.
-LAUNCH_DATE: Final[str] = "2026-07-23"
-
 # The date users.promoted_at started recording (see the migration in
 # alembic/versions/). Production only begins stamping rows at the first
 # deploy on or after this date, so guest-conversion history before it is a

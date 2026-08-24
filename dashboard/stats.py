@@ -18,7 +18,7 @@ import datetime
 from sqlalchemy.ext.asyncio import AsyncEngine, create_async_engine
 
 from dashboard import queries
-from dashboard.config import LAUNCH_DATE, POLL_INTERVAL_SECONDS, PROMOTED_AT_SINCE
+from dashboard.config import POLL_INTERVAL_SECONDS, PROMOTED_AT_SINCE
 
 # One connection is plenty: the payload is built by a single sequential pass and
 # results are cached, so concurrency here would only add load on the database.
@@ -52,7 +52,6 @@ async def build_payload(engine: AsyncEngine) -> queries.Payload:
         first_day, days, last_complete = await queries.fetch_day_range(conn)
         return queries.Payload(
             generated_at=datetime.datetime.now(datetime.timezone.utc).isoformat(),
-            launch_date=LAUNCH_DATE,
             promoted_since=PROMOTED_AT_SINCE,
             poll_interval_seconds=POLL_INTERVAL_SECONDS,
             days=days,

@@ -19,7 +19,6 @@ let D=null, DAYS=[], NDAYS=0, ACT=[], SIGNUPS=[], BOT=[], TRAIN=[], SOLVES=[],
 
 function apply(payload){
   D=payload;
-  window.__LAUNCH=payload.launch_date;
   DAYS=payload.days; NDAYS=DAYS.length;
   ACT=payload.activity.map(([u,d,g,h])=>({u,d,g,h}));
   SIGNUPS=payload.signups; BOT=payload.bot; TRAIN=payload.train; SOLVES=payload.solves;
@@ -104,17 +103,10 @@ function chrome(){
     `since the feature went live on ${long(BOT[0][0])}.`;
   $("#cav-start").textContent=long(DAYS[0]);
   $("#cav-partial").textContent=long(last);
-  $("#cav-launch").textContent=long(D.launch_date);
   $("#cav-funnel").textContent=long(DAYS[0]);
   $("#cav-promoted").textContent=long(D.promoted_since);
-  const li=DAYS.indexOf(D.launch_date), su=SIGNUPS.find(r=>r[0]===D.launch_date);
-  const im=IMPORTS.find(r=>r[0]===D.launch_date);
-  $("#cav-launch-detail").textContent = su
-    ? `${su[1]+su[2]} accounts and ${num(im?im[3]:0)} imported games arrived that day`
-    : "the traffic that day is not organic growth";
   $("#cav-features").textContent=
     `bot play starts ${long(BOT[0][0])}, Train sessions ${long(TRAIN[0][0])}`;
-  if(li<0) $("#cav-launch").textContent=long(D.launch_date)+" (outside the tracked range)";
 }
 
 function render(){
@@ -144,7 +136,7 @@ function render(){
 
   const rr=retention(0), rg=retention(1), rl=Array.from({length:14},(_,i)=>"day-"+(i+1));
   legend("#ret-legend",[{name:"Registered accounts",color:c.s1,line:1},{name:"Guest sessions",color:c.s5,line:1}]);
-  lineChart($("#c-retention"),{labels:rl,h:250,mark:false,every:1,pctAxis:true,yMax:1,
+  lineChart($("#c-retention"),{labels:rl,h:250,every:1,pctAxis:true,yMax:1,
     xfmt:(lb,i)=>String(i+1), xcap:"days since first visit",
     fmt:v=>Math.round(v*100)+"%",
     series:[{name:"Registered accounts",values:rr,color:c.s1,area:true},
@@ -197,7 +189,7 @@ function render(){
 
   const tr=expand(TRAIN), [ts,tu,tc,te,to,tp]=tr.cols;
   legend("#tr-legend",[{name:"Completed",color:c.win},{name:"Still open",color:c.draw},{name:"Expired unfinished",color:c.loss}]);
-  barChart($("#c-train"),{labels:tr.labels,h:240,every:5,mark:false,series:[
+  barChart($("#c-train"),{labels:tr.labels,h:240,every:5,series:[
     {name:"Completed",values:tc,color:c.win},{name:"Still open",values:to,color:c.draw},
     {name:"Expired unfinished",values:te,color:c.loss}],
     extra:i=>[{k:"Puzzles served",v:tp[i]}]});
@@ -205,12 +197,12 @@ function render(){
     TRAIN.map(r=>[long(r[0]),r[1],r[2],r[3],r[4],r[5],r[6]]).reverse());
 
   const sv=expand(SOLVES);
-  barChart($("#c-solves"),{labels:sv.labels,h:220,every:5,mark:false,
+  barChart($("#c-solves"),{labels:sv.labels,h:220,every:5,
     series:[{name:"Puzzles solved",values:sv.cols[0],color:c.s2}],
     extra:i=>[{k:"Users",v:sv.cols[1][i]}]});
   const rowsS=sv.labels.map((_,i)=>[0,sv.cols[0][i],sv.cols[2][i],sv.cols[3][i]]);
   legend("#acc-legend",[{name:"Right move",color:c.s3,line:1},{name:"Right verdict",color:c.s4,line:1}]);
-  lineChart($("#c-acc"),{labels:sv.labels,h:220,every:5,mark:false,pctAxis:true,yMax:1,
+  lineChart($("#c-acc"),{labels:sv.labels,h:220,every:5,pctAxis:true,yMax:1,
     fmt:v=>Math.round(v*100)+"%",series:[
       {name:"Right move",values:roll7(rowsS,2,1),color:c.s3},
       {name:"Right verdict",values:roll7(rowsS,3,1),color:c.s4}]});

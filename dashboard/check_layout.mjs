@@ -205,7 +205,6 @@ function buildCases(fc) {
           labels: DATE_LABELS,
           h: 220,
           every: 5,
-          mark: false,
           pctAxis: true,
           yMax: 1,
           fmt: (v) => Math.round(v * 100) + "%",
@@ -222,7 +221,6 @@ function buildCases(fc) {
         fc.lineChart(host, {
           labels: RETENTION_LABELS,
           h: 250,
-          mark: false,
           every: 1,
           pctAxis: true,
           yMax: 1,

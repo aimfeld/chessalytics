@@ -52,7 +52,7 @@
     </div>
     <div class="card">
       <h3 id="au-title">Rolling active users</h3>
-      <p class="note">A user counts as active on a day if the API saw them at least once. The 23 July launch is marked on every time chart.</p>
+      <p class="note">A user counts as active on a day if the API saw them at least once.</p>
       <div class="legend" id="au-legend"></div>
       <div class="chart" id="c-actives"></div>
       <details class="data"><summary>Show the numbers</summary><div class="tblwrap" id="t-actives"></div></details>
@@ -184,7 +184,7 @@
     <div class="grid2">
       <div class="card">
         <h3>Games imported per day</h3>
-        <p class="note">Log-scaled &mdash; launch day alone pulled in 136k games, three orders of magnitude above a quiet day.</p>
+        <p class="note">Log-scaled &mdash; the busiest day pulled in three orders of magnitude more games than a quiet one.</p>
         <div class="chart" id="c-imports"></div>
       </div>
       <div class="card">
@@ -201,9 +201,8 @@
       <li><b>Activity tracking starts <span id="cav-start">&mdash;</span>.</b> Nothing before that date exists in <span class="mono">user_activity</span>, so MAU is still filling its first window at the left edge of every chart.</li>
       <li><b><span id="cav-partial">Today</span> is a partial day</b> &mdash; the last bar in every daily series is incomplete.</li>
       <li><b>Guests are real sessions, not bots.</b> A guest row is created when someone tries the app without signing up; they can convert later, and the same person may appear as two rows.</li>
-      <li><b>The <span id="cav-launch">launch</span> spike is a launch event</b>, not organic growth &mdash; <span id="cav-launch-detail"></span>.</li>
       <li><b>A converted guest counts as a registered account in the funnel</b>, dated to when the guest session started &mdash; promotion happens in place, so there is no second account and no second creation date.</li>
-      <li><b>The funnel counts accounts created on or after <span id="cav-funnel">&mdash;</span></b> &mdash; earlier accounts are excluded, so it measures the launch cohort rather than the whole user base. Train is registered-only, which is why no guest ever reaches it.</li>
+      <li><b>The funnel counts accounts created on or after <span id="cav-funnel">&mdash;</span></b> &mdash; earlier accounts are excluded, so it measures recent accounts rather than the whole user base. Train is registered-only, which is why no guest ever reaches it.</li>
       <li><b>Bot games and Train sessions arrived later</b> &mdash; <span id="cav-features"></span>, both after activity tracking began.</li>
     </ul>
   </footer>

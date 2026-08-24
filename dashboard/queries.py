@@ -36,7 +36,6 @@ class Payload(TypedDict):
     """The complete dashboard dataset, as served to the page."""
 
     generated_at: str
-    launch_date: str
     promoted_since: str
     poll_interval_seconds: int
     days: list[str]
