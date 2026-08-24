@@ -1,6 +1,13 @@
 (() => {
 const NS="http://www.w3.org/2000/svg";
-const $=s=>document.querySelector(s), tip=$("#tip");
+const $=s=>document.querySelector(s);
+// Resolve #tip at call time, never at module-evaluation time. Under the React
+// host (frontend/src/pages/ActivityPage.tsx) this script is evaluated before
+// the page markup is mounted, so an eager `const tip=$("#tip")` binds null for
+// the lifetime of the module and every hover throws on `tip.innerHTML`. The
+// standalone page loads this after the markup, which is why the eager form
+// worked there and would have failed only once hosted.
+const tipEl=()=>$("#tip");
 const MON=["Jan","Feb","Mar","Apr","May","Jun","Jul","Aug","Sep","Oct","Nov","Dec"];
 // Degrade to the em-dash placeholder instead of throwing when a date is
 // missing. A long-running server process serves the payload it was started
@@ -125,12 +132,14 @@ function hover(svg,x0,x1,yTop,yBot,n,xAt,onIdx,c){
     cross.setAttribute("x1",px); cross.setAttribute("x2",px); cross.setAttribute("opacity",".45");
     dots.innerHTML=""; dots.setAttribute("opacity",1);
     const rows=onIdx(i,dots,px);
+    const tip=tipEl(); if(!tip) return;
     tip.innerHTML=rows; tip.style.opacity=1;
     const tw=tip.offsetWidth, th=tip.offsetHeight;
     tip.style.left=Math.min(window.innerWidth-tw-10,Math.max(10,ev.clientX-tw/2))+"px";
     tip.style.top=(ev.clientY-th-14<10?ev.clientY+18:ev.clientY-th-14)+"px";
   };
-  const out=()=>{cross.setAttribute("opacity",0);dots.setAttribute("opacity",0);tip.style.opacity=0;};
+  const out=()=>{cross.setAttribute("opacity",0);dots.setAttribute("opacity",0);
+    const tip=tipEl(); if(tip) tip.style.opacity=0;};
   rect.addEventListener("pointermove",move); rect.addEventListener("pointerleave",out);
 }
 const tipRows=(title,rows)=>`<div class="th">${title}</div>`+rows.map(r=>

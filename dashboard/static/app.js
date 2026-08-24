@@ -1,11 +1,19 @@
 
 (() => {
-const {lineChart,barChart,hbar,funnel,gbar,sparkline,legend,table,C,num,short,long}=window.__fc;
+// Bound in mount(), not at module-evaluation time. Same trap as charts.js's
+// #tip lookup: under the React host this script can evaluate before charts.js
+// has published window.__fc, and an eager destructure would freeze every chart
+// helper as undefined for the lifetime of the module.
+let lineChart,barChart,hbar,funnel,gbar,sparkline,legend,table,C,num,short,long;
+const bindCharts=()=>{
+  ({lineChart,barChart,hbar,funnel,gbar,sparkline,legend,table,C,num,short,long}=window.__fc);
+};
 const $=s=>document.querySelector(s);
 let AUD="all";
 
-/* Everything below is filled from /api/stats on every refresh — the page holds
-   no baked-in numbers, so a reload always reflects the live database. */
+/* Everything below is filled by update(payload) on every refresh — the page
+   holds no baked-in numbers, so a reload always reflects the live database.
+   Whoever calls update() (boot.js or the React host) owns the fetching. */
 let D=null, DAYS=[], NDAYS=0, ACT=[], SIGNUPS=[], BOT=[], TRAIN=[], SOLVES=[],
     IMPORTS=[], PERSONA=[], ELO=[], FUNNEL=[], TTI=[], STICK=[], CONV=null, CONVCMP=[];
 
@@ -215,55 +223,58 @@ function render(){
     series:[{name:"Importing users",values:im.cols[1],color:c.s2}]});
 }
 
-/* ---------- live data ---------- */
-const live=$("#live"), liveText=$("#live-text"), refreshBtn=$("#btn-refresh"), banner=$("#banner");
-let timer=null;
+/* ---------- mount ---------- */
+/* app.js is the RENDER layer only. Fetching, polling, the live-status pill and
+   the error banner live in boot.js (standalone page) or in the React host
+   (frontend/src/pages/ActivityPage.tsx). Keeping them out of here is what makes
+   "the hosted page never polls on a timer" (D-6) structural rather than a
+   convention someone can undo by accident. */
+function mount(){
+  bindCharts();
+  let destroyed=false;
+  const draw=()=>{ if(!destroyed) render(); };
 
-function status(state,text){ live.className="live "+state; liveText.textContent=text; }
-const clock=iso=>new Date(iso).toLocaleTimeString([], {hour:"2-digit",minute:"2-digit",second:"2-digit"});
+  // The audience segmented control owns its own aria-pressed attributes
+  // imperatively. Do NOT lift this into React state — dual ownership of one
+  // attribute is exactly the bug this seam exists to avoid.
+  const segButtons=Array.from(document.querySelectorAll(".seg button"));
+  const segBound=segButtons.map(b=>{
+    const h=()=>{
+      AUD=b.dataset.aud;
+      segButtons.forEach(x=>x.setAttribute("aria-pressed",String(x===b)));
+      draw();
+    };
+    b.addEventListener("click",h);
+    return [b,h];
+  });
 
-async function load(force){
-  refreshBtn.disabled=true;
-  status(D?"stale":"", D?"refreshing…":"loading…");
-  try{
-    const res=await fetch("/api/stats"+(force?"?refresh=1":""), {cache:"no-store"});
-    if(!res.ok){
-      let detail="Request failed ("+res.status+").";
-      try{ const body=await res.json(); if(body.detail) detail=body.detail; }catch(e){}
-      throw new Error(detail);
-    }
-    apply(await res.json());
-    banner.hidden=true;
-    status("ok","updated "+clock(D.generated_at));
-    render();
-    schedule();
-  }catch(err){
-    status("error", D?"stale — retrying":"no data");
-    banner.hidden=false;
-    banner.innerHTML="<b>Cannot refresh from production.</b> "+err.message+
-      (D?" Showing the last successful snapshot.":"");
-    schedule();
-  }finally{
-    refreshBtn.disabled=false;
-  }
+  let rt=null;
+  const onResize=()=>{clearTimeout(rt);rt=setTimeout(draw,150);};
+  addEventListener("resize",onResize);
+
+  const mq=matchMedia("(prefers-color-scheme: dark)");
+  mq.addEventListener("change",draw);
+
+  const obs=new MutationObserver(draw);
+  obs.observe(document.documentElement,{attributes:true,attributeFilter:["data-theme"]});
+
+  if(document.fonts) document.fonts.ready.then(draw);
+
+  return {
+    update(payload){ apply(payload); draw(); },
+    // destroy() is not optional: React 19 StrictMode mounts effects twice in
+    // dev, so without it the second mount leaves the first mount's resize
+    // listener re-rendering into a detached DOM.
+    destroy(){
+      destroyed=true;
+      segBound.forEach(([b,h])=>b.removeEventListener("click",h));
+      removeEventListener("resize",onResize);
+      clearTimeout(rt);
+      mq.removeEventListener("change",draw);
+      obs.disconnect();
+    },
+  };
 }
-function schedule(){
-  clearTimeout(timer);
-  const secs=(D&&D.poll_interval_seconds)||60;
-  timer=setTimeout(()=>load(false), secs*1000);
-}
-refreshBtn.addEventListener("click",()=>load(true));
-document.addEventListener("visibilitychange",()=>{ if(!document.hidden) load(false); });
 
-document.querySelectorAll(".seg button").forEach(b=>b.addEventListener("click",()=>{
-  AUD=b.dataset.aud;
-  document.querySelectorAll(".seg button").forEach(x=>x.setAttribute("aria-pressed",String(x===b)));
-  render();
-}));
-let t=null;
-addEventListener("resize",()=>{clearTimeout(t);t=setTimeout(render,150)});
-matchMedia("(prefers-color-scheme: dark)").addEventListener("change",render);
-new MutationObserver(render).observe(document.documentElement,{attributes:true,attributeFilter:["data-theme"]});
-document.fonts && document.fonts.ready.then(render);
-load(false);
+window.__fcApp={mount};
 })();
