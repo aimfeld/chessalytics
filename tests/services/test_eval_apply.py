@@ -17,6 +17,8 @@ fallback is monkeypatched to a fixed 7-tuple (no real engine needed).
 
 from __future__ import annotations
 
+import asyncio
+import time
 import uuid
 from datetime import datetime, timezone
 from typing import Any
@@ -25,7 +27,7 @@ from unittest.mock import AsyncMock
 import chess
 import pytest
 import pytest_asyncio
-from sqlalchemy import delete, func, select
+from sqlalchemy import delete, func, select, text
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from app.core.config import settings
@@ -38,7 +40,9 @@ from app.services.eval_apply import (
     _contiguous_san_prefix,
     _eval_of_position_map,
     _FullPlyEvalTarget,
+    _game_write_lock_key,
     _upsert_best_move_rows,
+    apply_full_eval,
 )
 from tests.test_eval_worker_endpoints import (
     _BLUNDER_SUBMIT_EVALS_142,
@@ -1024,3 +1028,168 @@ class TestHomogenization:
                 )
             finally:
                 await _delete_games_homogenization(ea_session_maker, [game_id])
+
+
+# ─── Same-game write lock (260825-v8g, FLAWCHESS-9F / FLAWCHESS-8G) ────────────
+
+# Duration constants (CLAUDE.md: no magic numbers). The probe deadline's only job
+# is to bound the pg_locks poll loop -- correctness of the assertions comes from
+# task.done() and the pg_locks row itself, not from how long the loop takes.
+_LOCK_PROBE_POLL_DEADLINE_S: float = 5.0
+_LOCK_PROBE_POLL_INTERVAL_S: float = 0.05
+_LOCK_RELEASE_TIMEOUT_S: float = 5.0
+_LOCK_SERIALIZE_TIMEOUT_S: float = 10.0
+
+# Distinct full_hash range, unused elsewhere in this file.
+_LOCK_TEST_FULL_HASH_BASE: int = 260_825_000
+
+
+async def _seed_lock_test_game(
+    session_maker: async_sessionmaker[AsyncSession],
+    user_id: int,
+) -> int:
+    """A minimal _SIX_PLY_PGN_142 game for the same-game write-lock tests.
+    apply_full_eval is called with empty targets/engine_result_map below, so
+    the seeded rows need no eval coverage -- they exist only so
+    _classify_and_fill_oracle's game/positions load has something to find."""
+    game_id = await _insert_atomic_game(session_maker, user_id, pgn=_SIX_PLY_PGN_142)
+    await _insert_atomic_game_positions(
+        session_maker,
+        user_id,
+        game_id,
+        [{"ply": p, "full_hash": _LOCK_TEST_FULL_HASH_BASE + p} for p in range(6)],
+    )
+    return game_id
+
+
+async def _apply_full_eval_lock_probe(
+    session_maker: async_sessionmaker[AsyncSession],
+    game_id: int,
+) -> None:
+    """Call apply_full_eval with the minimum viable arguments for this game.
+    Empty targets/engine_result_map is the point: the lock must be taken before
+    any of the write work runs, so this probe needs no engine and no eval
+    payload. Opens and commits its own session -- apply_full_eval does not own
+    session lifecycle, the caller does."""
+    async with session_maker() as session:
+        await apply_full_eval(
+            session,
+            game_id=game_id,
+            job_id=None,
+            targets=[],
+            dedup_map={},
+            engine_result_map={},
+            is_lichess_eval_game=False,
+            flaw_pv_blobs=None,
+            current_attempts=0,
+            source="remote_eval_worker",
+            on_path_c_capacity_reached=lambda *_args: None,
+        )
+        await session.commit()
+
+
+async def _advisory_waiter_row_visible(session: AsyncSession, lock_key: int) -> bool:
+    """True iff a NOT-granted advisory lock row for `lock_key` is visible in
+    pg_locks for the CURRENT database. The database filter is mandatory: under
+    `-n auto` several cloned test databases coexist in the same PostgreSQL
+    cluster and pg_locks is cluster-wide, so an unfiltered probe can read
+    another worker's lock row instead of this test's."""
+    classid = lock_key >> 32
+    objid = lock_key & 0xFFFFFFFF
+    result = await session.execute(
+        text(
+            "SELECT 1 FROM pg_locks "
+            "WHERE locktype = 'advisory' AND NOT granted AND objsubid = 1 "
+            "AND classid = :classid AND objid = :objid "
+            "AND database = (SELECT oid FROM pg_database WHERE datname = current_database())"
+        ),
+        {"classid": classid, "objid": objid},
+    )
+    return result.first() is not None
+
+
+class TestSameGameWriteLock:
+    """260825-v8g (FLAWCHESS-9F / FLAWCHESS-8G): apply_full_eval takes a
+    transaction-scoped pg_advisory_xact_lock keyed on game_id as the FIRST
+    statement of its body, serializing same-game writers across both live write
+    lanes (the router's _apply_atomic_submit and the drain's _full_drain_tick,
+    which both funnel through this one shared function)."""
+
+    async def test_apply_full_eval_blocks_while_game_lock_held(
+        self,
+        ea_user: int,
+        ea_session_maker: async_sessionmaker[AsyncSession],
+    ) -> None:
+        """A holder session takes the same advisory key and leaves its
+        transaction open; a concurrent apply_full_eval call for the SAME
+        game_id must not complete while that holder holds the key. Deleting
+        the lock statement from apply_full_eval makes this test fail: with no
+        lock taken, apply_full_eval runs straight through and the first
+        assertion below (not task.done()) is what fires and names the cause."""
+        game_id = await _seed_lock_test_game(ea_session_maker, ea_user)
+        holder = ea_session_maker()
+        task: asyncio.Task[None] | None = None
+        try:
+            lock_key = _game_write_lock_key(game_id)
+            await holder.execute(
+                text("SELECT pg_advisory_xact_lock(:lock_key)"), {"lock_key": lock_key}
+            )
+
+            task = asyncio.create_task(_apply_full_eval_lock_probe(ea_session_maker, game_id))
+
+            async with ea_session_maker() as probe_session:
+                deadline = time.monotonic() + _LOCK_PROBE_POLL_DEADLINE_S
+                waiter_seen = False
+                while time.monotonic() < deadline:
+                    if await _advisory_waiter_row_visible(probe_session, lock_key):
+                        waiter_seen = True
+                        break
+                    await asyncio.sleep(_LOCK_PROBE_POLL_INTERVAL_S)
+
+            # Ordering matters (see docstring): on a deleted lock line the task
+            # finishes fast, so checking task.done() FIRST gives the diagnostic
+            # that names the cause, rather than a generic "no waiter row" message.
+            assert not task.done(), (
+                "apply_full_eval completed while another session held the "
+                "per-game advisory lock -- the lock is not being taken"
+            )
+            assert waiter_seen, (
+                "no NOT-granted advisory lock row for this game_id's key was "
+                "observed in pg_locks within the probe deadline"
+            )
+
+            await holder.rollback()
+
+            await asyncio.wait_for(task, timeout=_LOCK_RELEASE_TIMEOUT_S)
+        finally:
+            if task is not None and not task.done():
+                task.cancel()
+            await holder.close()
+            await _delete_game(ea_session_maker, game_id)
+
+    async def test_concurrent_same_game_apply_full_eval_serializes(
+        self,
+        ea_user: int,
+        ea_session_maker: async_sessionmaker[AsyncSession],
+    ) -> None:
+        """Two apply_full_eval calls for the SAME game_id, started concurrently
+        in two independent sessions, both complete without raising. Each call
+        opens its OWN session inside the helper (_apply_full_eval_lock_probe),
+        so gathering the two tasks here does not violate the CLAUDE.md ban on
+        asyncio.gather over a single AsyncSession -- there are two sessions,
+        one per task, neither shared.
+
+        This is the test that catches a session-scoped pg_advisory_lock used
+        in place of the required xact-scoped pg_advisory_xact_lock: a
+        session-scoped lock is never released by a caller's COMMIT/ROLLBACK
+        and would never release across pooled connections, hanging the second
+        call until the timeout below fires."""
+        game_id = await _seed_lock_test_game(ea_session_maker, ea_user)
+        try:
+            task_a = asyncio.create_task(_apply_full_eval_lock_probe(ea_session_maker, game_id))
+            task_b = asyncio.create_task(_apply_full_eval_lock_probe(ea_session_maker, game_id))
+            await asyncio.wait_for(
+                asyncio.gather(task_a, task_b), timeout=_LOCK_SERIALIZE_TIMEOUT_S
+            )
+        finally:
+            await _delete_game(ea_session_maker, game_id)

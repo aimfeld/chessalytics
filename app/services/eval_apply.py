@@ -104,6 +104,42 @@ MAX_EVAL_ATTEMPTS: int = 5
 # drift from the ply <= N predicate of the ix_gp_full_hash_opening partial index.
 _DEDUP_MAX_PLY: int = DEDUP_MAX_PLY
 
+# 260825-v8g (FLAWCHESS-9F / FLAWCHESS-8G): namespace for the per-game write
+# advisory-lock key space (see `_game_write_lock_key` below), packed into the
+# HIGH 32 bits of a bigint key. Value is the ASCII bytes of "FLAW" read as one
+# big-endian uint32 (0x46='F', 0x4C='L', 0x41='A', 0x57='W'). Exists so this key
+# space can never collide with another advisory-lock user of this database —
+# `tests/conftest.py`'s template-clone serialization already occupies
+# `_TEMPLATE_ADVISORY_LOCK_KEY = 7_777_777_777`, which is far below
+# `_GAME_WRITE_LOCK_NAMESPACE << 32` (~5.07e18), so the two spaces are provably
+# disjoint.
+_GAME_WRITE_LOCK_NAMESPACE: int = 0x464C4157
+# Low-32-bit mask applied to game_id when packing the key (see
+# `_game_write_lock_key`).
+_GAME_WRITE_LOCK_MASK: int = 0xFFFFFFFF
+
+
+def _game_write_lock_key(game_id: int) -> int:
+    """Pack `game_id` into a single bigint key for `pg_advisory_xact_lock(bigint)`.
+
+    (1) Why the single-argument bigint form rather than the two-argument
+    `pg_advisory_xact_lock(int4, int4)` form: `games.id` is BIGINT in the actual
+    schema (`alembic/versions/20260311_133123_dcef507678d8_initial_schema.py`
+    line 25), so a game id is not guaranteed to fit in int4 — even though
+    today's max game id is far below the int4 ceiling.
+
+    (2) PostgreSQL keeps the int8 and two-int4 advisory key spaces separate
+    internally (`pg_locks.objsubid` is 1 for the single-bigint form vs 2 for the
+    two-int4 form), so packing a namespace into the high bits here deliberately
+    mirrors the two-argument form's classid/objid split without sharing its
+    key space.
+
+    (3) The `& _GAME_WRITE_LOCK_MASK` means two game ids congruent modulo 2**32
+    would share a key — harmless in practice (that is 4.29 billion games apart)
+    but stated here so nobody has to re-derive it from the bit math.
+    """
+    return (_GAME_WRITE_LOCK_NAMESPACE << 32) | (game_id & _GAME_WRITE_LOCK_MASK)
+
 
 # ---------------------------------------------------------------------------
 # Phase 116 full-ply drain: dataclass + helpers
@@ -2569,6 +2605,36 @@ async def apply_full_eval(
     before the move (eval_drain.py's own async_session_maker for the drain tick,
     eval_remote.py's own async_session_maker for the router).
 
+    Per-game write lock (260825-v8g, FLAWCHESS-9F / FLAWCHESS-8G, 2026-08-23): on
+    2026-08-23 08:02:04/05 three concurrent atomic-submits for the SAME game_id
+    (2361356) landed at once and produced one PostgreSQL deadlock cycle across two
+    Sentry issues. `_apply_full_eval_results` emits two separate
+    `UPDATE game_positions ... FROM (VALUES ...)` statements —
+    `_batch_update_best_move_rows` then `_batch_update_eval_rows` — whose ply sets
+    partially overlap; row-lock acquisition order across two separate statements is
+    planner-dependent, so one transaction can hold ply 9 and want ply 55 while
+    another holds 55 and wants 9. The same window's `_classify_and_fill_oracle`
+    per-ply flaw diff/upsert (delete/insert/update against `game_flaws`, see its own
+    docstring) is a correctness hazard under the same same-game race, not merely a
+    deadlock one — which is why the lock below wraps this whole function body
+    rather than just the two UPDATEs.
+
+    The lock is taken here, at the very top of `apply_full_eval`, and not in the
+    router (`_apply_atomic_submit`), because Phase 150 R7 already funnels BOTH live
+    write lanes — the router and `_full_drain_tick` (eval_drain.py) — through this
+    one shared function; a router-only lock would leave the drain lane racing. It
+    is `pg_advisory_xact_lock` (transaction-scoped), not `pg_advisory_lock`
+    (session-scoped), because `apply_full_eval` never owns or commits the
+    write_session — an xact-scoped lock releases automatically at the caller's
+    COMMIT or ROLLBACK with no explicit unlock call and no leak path, which also
+    keeps it safe under the WR-01 fail-closed contract (an exception here
+    propagates and aborts the caller's transaction, releasing the lock with it).
+    The one behavioral consequence worth knowing: submits for the SAME game now
+    serialize instead of racing, while different games are completely unaffected;
+    no new deadlock cycle is introduced because the lock is always the FIRST
+    statement on every path into this function, with the identical key derivation
+    (`_game_write_lock_key`) every time.
+
     Sequencing (unchanged from the pre-move _apply_atomic_submit / _full_drain_tick
     write phases): _apply_full_eval_results -> _classify_and_fill_oracle -> optional
     flaws_written count -> optional opening-cache upsert -> apply_completion_decision
@@ -2604,6 +2670,14 @@ async def apply_full_eval(
         (failed_ply_count, stamp_complete, flaws_written) — flaws_written is 0
         when count_flaws_written is False.
     """
+    # 260825-v8g (FLAWCHESS-9F / FLAWCHESS-8G): serialize same-game writers for the
+    # whole write session before any row work runs — see the docstring paragraph
+    # above for the deadlock/correctness rationale.
+    await write_session.execute(
+        sa.text("SELECT pg_advisory_xact_lock(:lock_key)"),
+        {"lock_key": _game_write_lock_key(game_id)},
+    )
+
     failed_ply_count = await _apply_full_eval_results(
         write_session,
         targets,
