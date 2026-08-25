@@ -3,12 +3,24 @@
 services:
   db:
     image: postgres:18-alpine
+    # Come back automatically after a reboot or a Docker daemon restart. Without
+    # this the container stays Exited and the next thing to touch :5432 fails
+    # with a bare ConnectionRefusedError. Does NOT survive `compose down` --
+    # that removes the container outright, restart policy or not.
+    restart: unless-stopped
     command:
       - "postgres"
       - "-c"
       - "shared_preload_libraries=pg_stat_statements"
       - "-c"
       - "pg_stat_statements.track=all"
+    # Docker's 64 MB /dev/shm default is exhausted by parallel-query DSM
+    # segments and surfaces as a MISLEADING "No space left on device" /
+    # asyncpg.DiskFullError while the volume has hundreds of GB free. This is a
+    # Docker option, NOT a Postgres flag; benchmark and prod carry the same
+    # 256m for the same reason. A bare `docker compose restart db` does NOT
+    # apply a changed shm_size -- the container must be recreated.
+    shm_size: "256m"
     environment:
       POSTGRES_USER: postgres
       POSTGRES_PASSWORD: postgres
