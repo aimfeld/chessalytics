@@ -38,7 +38,13 @@ from app.services.eval_utils import LICHESS_K, eval_cp_to_expected_score  # noqa
 
 DATA_DIR = REPO_ROOT / "scripts" / "engine_disagreement_study" / "data"
 LEDGER_GLOB = "stage_b_ledger-worker-*.ndjson"
-ALIGNED_PATH = DATA_DIR / "stage_b_aligned_evals.ndjson"
+# The committed artifact is the gzipped copy (~0.8 MB); the plain .ndjson is a
+# ~14 MB local by-product of the repair run and stays gitignored. Prefer the
+# uncompressed file when it happens to be present, else read the .gz — polars
+# decompresses ndjson transparently, so the two paths are interchangeable.
+# Mirrors the same fallback in seed153_tail_analysis.py.
+ALIGNED_PATH_PLAIN = DATA_DIR / "stage_b_aligned_evals.ndjson"
+ALIGNED_PATH_GZ = DATA_DIR / "stage_b_aligned_evals.ndjson.gz"
 REPORT_PATH = REPO_ROOT / "reports" / "engine-disagreement-study" / "seed145-repaired-census.md"
 
 ARMS: dict[str, str] = {
@@ -104,8 +110,14 @@ def load() -> pl.DataFrame:
     raw = pl.concat(
         [pl.read_ndjson(s, infer_schema_length=None) for s in shards], how="diagonal_relaxed"
     )
+    aligned_path = ALIGNED_PATH_PLAIN if ALIGNED_PATH_PLAIN.exists() else ALIGNED_PATH_GZ
+    if not aligned_path.exists():
+        raise SystemExit(
+            f"no aligned-eval file: expected {ALIGNED_PATH_PLAIN.name} or {ALIGNED_PATH_GZ.name} "
+            f"in {DATA_DIR}"
+        )
     aligned = pl.read_ndjson(
-        ALIGNED_PATH,
+        aligned_path,
         schema={
             "game_id": pl.Int64,
             "ply": pl.Int64,
