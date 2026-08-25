@@ -3,6 +3,12 @@
 services:
   db:
     image: postgres:18-alpine
+    # Come back automatically after a reboot or a Docker daemon restart. The
+    # benchmark backend on :8001 and the worker fleet have no DB retry loop, so
+    # a DB that stays down turns every atomic-lease into a 500 until someone
+    # notices. Does NOT survive `compose down` -- that removes the container
+    # outright, restart policy or not.
+    restart: unless-stopped
     command:
       - "postgres"
       - "-c"

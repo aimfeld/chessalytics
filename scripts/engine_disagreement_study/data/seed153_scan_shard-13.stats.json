@@ -1,0 +1,11 @@
+{
+  "shard": 13,
+  "num_shards": 160,
+  "seed": "seed153-scan",
+  "games": 2005,
+  "games_emitted": 1951,
+  "evaled_plies": 99589,
+  "mate_plies": 4704,
+  "scannable_plies": 93388,
+  "unreachable_plies": 1497
+}

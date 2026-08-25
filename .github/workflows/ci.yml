@@ -83,10 +83,18 @@ jobs:
         run: uv run ruff check .
 
       - name: Format check (ruff)
-        run: uv run ruff format --check app/ tests/ scripts/
+        run: uv run ruff format --check app/ tests/ scripts/ analysis/
 
       - name: Type check (ty)
         run: uv run ty check app/ tests/ scripts/
+
+      # analysis/ is a standalone uv project with its own venv and its own
+      # dependency set (marimo/polars/plotly/psycopg), so it cannot be type
+      # checked against the root environment — its imports would all read as
+      # unresolved. Separate step, separate env. `--with ty` because ty is a
+      # root dev dependency, not one of analysis/'s.
+      - name: Type check (ty, analysis project)
+        run: uv run --project analysis --with ty ty check analysis/
 
       - name: Install Stockfish (for engine wrapper tests)
         # Mirrors Dockerfile: download pinned sf_18 binary from GitHub releases instead of

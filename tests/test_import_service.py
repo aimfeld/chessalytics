@@ -5,6 +5,7 @@ and error handling. All external dependencies are mocked.
 """
 
 import asyncio
+import logging
 from datetime import datetime, timedelta, timezone
 from types import SimpleNamespace
 from typing import cast
@@ -434,6 +435,71 @@ class TestRunImport:
         # The internal details must not have leaked into the client-facing error.
         assert "db:5432" not in job.error
         assert "password" not in job.error
+
+    @pytest.mark.asyncio
+    async def test_unknown_username_is_not_reported_to_sentry(self, caplog):
+        """A nonexistent chess.com/lichess handle must not create a Sentry issue.
+
+        Bug fix (FLAWCHESS-K): a user typo raised ValueError, which logger.exception
+        (ERROR -> Sentry LoggingIntegration) plus capture_exception turned into a
+        recurring production issue. It is expected user input, so it must log at INFO
+        and skip capture_exception entirely.
+        """
+        job_id = create_job(user_id=1, platform="chess.com", username="HELOOO0oo")
+
+        async def _raise_value_error(*args, **kwargs):
+            raise ValueError("chess.com user 'HELOOO0oo' not found")
+            yield  # pragma: no cover
+
+        mock_session = _make_mock_session()
+        mock_maker = _mock_session_maker(mock_session)
+
+        with (
+            patch("app.services.import_service.async_session_maker", mock_maker),
+            patch(
+                "app.services.import_service.import_job_repository.get_latest_for_user_platform",
+                new=AsyncMock(return_value=None),
+            ),
+            patch(
+                "app.services.import_service.import_job_repository.create_import_job",
+                new=AsyncMock(),
+            ),
+            patch(
+                "app.services.import_service.import_job_repository.update_import_job",
+                new=AsyncMock(),
+            ),
+            patch(
+                "app.services.import_service.chesscom_client.fetch_chesscom_games",
+                side_effect=_raise_value_error,
+            ),
+            patch("app.services.import_service.httpx.AsyncClient") as mock_client_cls,
+            patch("app.services.import_service.sentry_sdk.capture_exception") as mock_capture,
+            caplog.at_level(logging.INFO, logger="app.services.import_service"),
+        ):
+            mock_http_ctx = AsyncMock()
+            mock_http_ctx.__aenter__ = AsyncMock(return_value=AsyncMock())
+            mock_http_ctx.__aexit__ = AsyncMock(return_value=False)
+            mock_client_cls.return_value = mock_http_ctx
+
+            await run_import(job_id)
+
+        mock_capture.assert_not_called()
+
+        records = [r for r in caplog.records if "HELOOO0oo" in r.getMessage()]
+        assert records, "the failure must still be logged for local diagnosis"
+        assert all(r.levelno == logging.INFO for r in records), (
+            "an unknown username must log at INFO — ERROR reaches Sentry via LoggingIntegration"
+        )
+        assert all(r.exc_info is None for r in records), (
+            "logger.exception attaches exc_info, which Sentry turns into an error event"
+        )
+
+        # The user still gets the actionable message.
+        job = get_job(job_id)
+        assert job is not None
+        assert job.status == JobStatus.FAILED
+        assert job.error is not None
+        assert "HELOOO0oo" in job.error
 
     @pytest.mark.asyncio
     async def test_incremental_sync_passes_since_to_chesscom_client(self):
