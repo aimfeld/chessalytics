@@ -4,4 +4,4 @@
 # normalize on commit. The gzipped manifest must be exempt: git's text
 # auto-detection can misclassify it and strip CR bytes when diffing.
 scripts/engine_disagreement_study/data/** text eol=lf
-scripts/engine_disagreement_study/data/**.gz binary
+scripts/engine_disagreement_study/data/**/*.gz binary

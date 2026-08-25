@@ -36,13 +36,18 @@ if [[ -z "${RUN_GATE:-}" ]]; then
 fi
 
 echo "→ pre-push: ruff format --check"
-uv run ruff format --check app/ tests/ scripts/
+uv run ruff format --check app/ tests/ scripts/ analysis/
 
 echo "→ pre-push: ruff check"
 uv run ruff check .
 
 echo "→ pre-push: ty check"
 uv run ty check app/ tests/ scripts/
+
+# analysis/ is a standalone uv project with its own venv, so it needs its own
+# ty invocation — the root environment cannot resolve marimo/polars/plotly.
+echo "→ pre-push: ty check (analysis)"
+uv run --project analysis --with ty ty check analysis/
 
 echo "✓ pre-push gates passed"
 HOOK

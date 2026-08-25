@@ -23,6 +23,45 @@ scope: medium — one Node harness extension + one sweep script + one ledger-loa
 
 # SEED-145: Which engine predicts game outcomes best? Stockfish vs Maia vs FlawChess at middlegame and endgame entry
 
+## Stage B eval-alignment repair (2026-08-24, found via SEED-153)
+
+`game_positions.eval_cp` has two populations with **opposite** ply conventions:
+lichess %evals are post-move (the eval of `fen[P]` sits on row P-1), while entry-lane
+evals from `app/services/eval_entry.py` snapshot the board pre-push and write it at the
+same ply (already aligned). `stage_b_sample.py` reads `eval_cp[P]` for both, which is
+correct for one and wrong for the other.
+
+Measured with a fresh Stockfish at depth 16 on `fen[P]`, 150 rows per population from the
+Stage B ledgers: entry-lane **7.0 cp** from `eval_cp[P]` (aligned); lichess 26.5 cp from
+`eval_cp[P]` but **13.0 cp** from `eval_cp[P-1]` (shifted). Stage B is **72.2%
+entry-lane**, so a blanket shift would corrupt most of the frame — the repair is per-row.
+
+Repaired without re-running any engine: Maia and FlawChess read `row.fen` directly, so all
+140,658 ledgered values were already correct. Only the Stockfish arm was re-derived, from
+a DB read of the previous row's eval on the lichess subset.
+
+- `scripts/engine_disagreement_study/seed145_repair_aligned_evals.py` (provenance-aware fetch)
+- `analysis/engine_disagreement_study/seed145_repaired_census.py`
+- `reports/engine-disagreement-study/seed145-repaired-census.md`
+
+**The headline survives.** The entry-lane control moved by exactly +0.0000. On the 32.6%
+lichess subset SF's Brier worsens by +0.0021 (MG) / +0.0044 (EG), moving the aggregate by
+<0.001. Engines stay level, the blend still wins.
+
+**Material change: FlawChess now ties Stockfish at BOTH boundaries.** FC−SF is
++0.00007 (z=+0.38, n.s.) at middlegame and +0.00039 (z=+1.26, n.s.) at endgame. The
+published endgame result — SF ahead at +0.00261, z=+5.2 — does **not** survive the
+repair. Maia edges FC at middlegame (+0.00067, z=+2.31) and the 50/50 blend still beats
+every individual arm at both boundaries.
+
+E-14 was not re-derived; it is an absolute floor rather than an arm comparison, and every
+arm cleared it comfortably.
+
+*(Reproducibility note: the isotonic PAVA fit was order-sensitive across tied predictor
+values, and polars gives no row-order guarantee after a join, so the report varied run to
+run by enough to flip significance verdicts. Fixed by lexsorting the fit on (x, y); the
+analysis is now bit-reproducible.)*
+
 ## Why This Matters
 
 The FlawChess Engine's thesis is that a *practical* expected score (Maia-modelled fallible

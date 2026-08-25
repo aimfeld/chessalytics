@@ -250,6 +250,18 @@ scripts/engine_disagreement_study/data/*.ndjson
 scripts/engine_disagreement_study/data/*.log
 scripts/engine_disagreement_study/data/*.bak
 !scripts/engine_disagreement_study/data/gate0_*.ndjson
+# SEED-153 scan-shard intermediates: the FEN+eval input the Maia scan reads,
+# ~3.4 MB gzipped per 2,000-game shard and fully regenerable from the benchmark
+# DB by seed153_scan_sample.py. The committed artifacts are the small per-shard
+# stats/incidence JSONs and the combined seed153_manifest.ndjson.gz deliverable.
+scripts/engine_disagreement_study/data/seed153_scan_shard-*.ndjson.gz
+
+# SEED-153 pre-aligned (contaminated) first run, kept for comparison. Same rules as
+# the live data dir: bulk ledgers/manifests/scan shards stay local, the small
+# incidence/stats JSONs and the combined manifest .gz stay committed.
+scripts/engine_disagreement_study/data/prealigned-run/*.ndjson
+scripts/engine_disagreement_study/data/prealigned-run/*.log
+scripts/engine_disagreement_study/data/prealigned-run/seed153_scan_shard-*.ndjson.gz
 
 # Analysis notebook chart exports (analysis/README.md, "Sharing charts with Claude")
 analysis/out/*

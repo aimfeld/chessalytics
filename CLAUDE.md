@@ -46,6 +46,7 @@ uv run pytest -n auto -x         # Full suite, stop on first failure
 uv run ruff check .             # Lint
 uv run ruff format .            # Format
 uv run ty check app/ tests/ scripts/     # Type check (must pass with zero errors)
+uv run --project analysis --with ty ty check analysis/  # Type check analysis/ (own venv)
 uv run alembic upgrade head     # Run migrations
 uv run alembic revision --autogenerate -m "description"  # Create migration
 
@@ -79,9 +80,10 @@ keeps serial execution (D-02) — `-n auto` is a local-only convenience.
 Run all of these and resolve every output before integrating work into `main`. This is the safety net that replaces pre-merge CI (see Version Control).
 
 ```bash
-uv run ruff format app/ tests/ scripts/         # apply formatting (not just --check)
+uv run ruff format app/ tests/ scripts/ analysis/  # apply formatting (not just --check)
 uv run ruff check . --fix    # apply autofixable lint
 uv run ty check app/ tests/ scripts/            # type check, zero errors required
+uv run --project analysis --with ty ty check analysis/  # same, for the standalone analysis project
 uv run pytest -n auto -x               # full backend suite (parallel), stop on first failure
 ( cd frontend && npm run lint && npm test -- --run )  # frontend lint + tests
 ```

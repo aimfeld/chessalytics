@@ -1,0 +1,115 @@
+{
+  "agreement_max_diff": 0.0003941620438558946,
+  "rows": [
+    {
+      "path": "nvh",
+      "batch_size": 1,
+      "workers": 1,
+      "positions": 3000,
+      "inference_ms": 121933,
+      "wall_ms": 125136,
+      "pos_per_sec": 24.60370341594198,
+      "wall_pos_per_sec": 23.973832296035233,
+      "session_create_ms": 253
+    },
+    {
+      "path": "batch",
+      "batch_size": 1,
+      "workers": 1,
+      "positions": 3000,
+      "inference_ms": 122814,
+      "wall_ms": 125985,
+      "pos_per_sec": 24.427125118059315,
+      "wall_pos_per_sec": 23.81245175154959,
+      "session_create_ms": 231
+    },
+    {
+      "path": "batch",
+      "batch_size": 32,
+      "workers": 1,
+      "positions": 3000,
+      "inference_ms": 75939,
+      "wall_ms": 78135,
+      "pos_per_sec": 39.505167746362176,
+      "wall_pos_per_sec": 38.394935893971365,
+      "session_create_ms": 244
+    },
+    {
+      "path": "batch",
+      "batch_size": 128,
+      "workers": 1,
+      "positions": 3000,
+      "inference_ms": 88372,
+      "wall_ms": 90791,
+      "pos_per_sec": 33.94738417056631,
+      "wall_pos_per_sec": 33.04283762834492,
+      "session_create_ms": 243
+    },
+    {
+      "path": "batch",
+      "batch_size": 512,
+      "workers": 1,
+      "positions": 3000,
+      "inference_ms": 91972,
+      "wall_ms": 94410,
+      "pos_per_sec": 32.61853727895039,
+      "wall_pos_per_sec": 31.776218352840747,
+      "session_create_ms": 257
+    },
+    {
+      "path": "nvh",
+      "batch_size": 1,
+      "workers": 12,
+      "positions": 3000,
+      "inference_ms": 35992,
+      "wall_ms": 44574,
+      "pos_per_sec": 83.35261944621334,
+      "wall_pos_per_sec": 67.30405542368848,
+      "session_create_ms": 684
+    },
+    {
+      "path": "batch",
+      "batch_size": 1,
+      "workers": 12,
+      "positions": 3000,
+      "inference_ms": 34592,
+      "wall_ms": 44165,
+      "pos_per_sec": 86.7249870062431,
+      "wall_pos_per_sec": 67.92750533015963,
+      "session_create_ms": 612
+    },
+    {
+      "path": "batch",
+      "batch_size": 32,
+      "workers": 12,
+      "positions": 3000,
+      "inference_ms": 22941,
+      "wall_ms": 29655,
+      "pos_per_sec": 130.77216536267824,
+      "wall_pos_per_sec": 101.1641633933842,
+      "session_create_ms": 637
+    },
+    {
+      "path": "batch",
+      "batch_size": 128,
+      "workers": 12,
+      "positions": 3000,
+      "inference_ms": 23769,
+      "wall_ms": 29674,
+      "pos_per_sec": 126.21441829371516,
+      "wall_pos_per_sec": 101.09933117086392,
+      "session_create_ms": 696
+    },
+    {
+      "path": "batch",
+      "batch_size": 512,
+      "workers": 12,
+      "positions": 3000,
+      "inference_ms": 23140,
+      "wall_ms": 30217,
+      "pos_per_sec": 129.64293171546242,
+      "wall_pos_per_sec": 99.28299983871531,
+      "session_create_ms": 640
+    }
+  ]
+}

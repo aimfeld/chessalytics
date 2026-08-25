@@ -1,0 +1,29 @@
+{
+  "shard": 23,
+  "seed": "seed153-pick",
+  "games": 1992,
+  "positions": 98774,
+  "qualifying_positions": 2077,
+  "games_with_qualifier": 818,
+  "rows_emitted": 818,
+  "by_phase": {
+    "middlegame": 1333,
+    "endgame": 744
+  },
+  "positions_by_phase": {
+    "middlegame": 54404,
+    "endgame": 44370
+  },
+  "sf_picks_winner": 469,
+  "resolved_games": 737,
+  "elapsed_ms": 716467,
+  "incidence_scannable_pct": 2.102780083827728,
+  "incidence_evaled_pct": 1.9869513641755634,
+  "evaled_plies": 104532,
+  "mate_plies": 4236,
+  "games_with_qualifier_pct": 41.06425702811245,
+  "sf_picks_winner_pct": 63.63636363636363,
+  "incidence_mg_pct": 2.450187486214249,
+  "incidence_eg_pct": 1.6768086544962812,
+  "pos_per_sec": 137.86259520675762
+}

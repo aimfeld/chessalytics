@@ -277,7 +277,8 @@ def _(ARMS, ARM_COLORS, basis, frame, go, half, make_subplots, mo, np, pl):
         col=1,
     )
 
-    _order = sorted(_skill, key=_skill.get)
+    # `key=_skill.get` is float | None to a type checker; index instead.
+    _order = sorted(_skill, key=lambda k: _skill[k])
     _fig.add_trace(
         go.Bar(
             x=[_skill[k] for k in _order],

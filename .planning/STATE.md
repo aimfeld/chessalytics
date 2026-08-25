@@ -4,16 +4,16 @@ milestone: v2.13
 current_phase: 212
 current_phase_name: Benchmark Full-Game Analysis Lane
 status: executing
-stopped_at: "Phase 212 wave 9 — code shipped to main; 212-10 Task 2 (classical tranche) in flight, Task 3 blocked until it ends"
-last_updated: "2026-08-23T09:05:00.000Z"
+stopped_at: Phase 212 wave 9 — code shipped to main; 212-10 Task 2 (classical tranche) in flight, Task 3 blocked until it ends
+last_updated: "2026-08-24T04:20:51.656Z"
 last_activity: 2026-08-23
-last_activity_desc: "Phase 212 code squash-merged to main; classical tranche running at 0.2%"
-state_head: ab235e724c410bd793a56af77c9fc08da5def112
+last_activity_desc: Phase 212 code squash-merged to main; classical tranche running at 0.2%
+state_head: 1bc6766dff7f4a99724cd887c22454dd475c8400
 progress:
   total_phases: 1
   completed_phases: 0
-  total_plans: 10
-  completed_plans: 9
+  total_plans: 11
+  completed_plans: 8
 milestone_name: Ways In & Honest Answers
 ---
 
@@ -56,6 +56,7 @@ session archived at `.planning/debug/resolved/tier3-branch-b-one-ply-stamp.md`.
    entry-ply lane and now fires on correct behavior (it tripped +9,342 during the smoke
    run with every one of those games inside `benchmark_selection`). Monitor
    **`stamped_but_unselected`** instead, baseline **1,805,063**.
+
 2. **212-06 must not be run.** Its Tasks 2/3 are fully superseded by 212-08/09/10; it
    should be retired with a note at phase close.
 
@@ -800,6 +801,7 @@ None active.
 | 260823-sqc | Record guest→registered promotion on the user row instead of inferring it from credential state. Adds nullable `users.promoted_at` (timestamptz) set by `guest_service` on BOTH promotion paths — the email/password path was previously indistinguishable from a direct signup, so the dashboard's conversion rate was a floor of unknown tightness. **Design changed mid-flight from a boolean `is_promoted` to a timestamp on operator call**: a promoted guest keeps its original `created_at`, so a boolean can only answer "of guests created in window W, how many ever promoted" (censored, retroactively-changing); the timestamp also yields promotion-date series + time-to-conversion at identical cost. Migration backfills `promoted_at = created_at` for rows the old Google-only heuristic caught, so the published number does not jump on ship day — but those backfilled values are the SIGNUP date, not the true promotion date, so promotion-date series are meaningless left of `PROMOTED_AT_SINCE`. Dashboard switched at BOTH sites (`_PROMOTED_GUEST` predicate AND the `_GUEST_COHORT` denominator filter — changing only the former would have inflated the rate), plus an on-page + README caveat that the pre-flag series is a floor. Caught during execution: `func.now()` in a Core UPDATE is a SQL expression, so SQLAlchemy expires rather than mirrors the attribute and a bare read raised `MissingGreenlet` under AsyncSession — fixed with an explicit `session.refresh()` in both paths (invisible with the boolean). Backend gate green (4440 passed/19 skipped); frontend untouched (0 files). **Not deployed: prod has no such column, so the dashboard's guest-conversion card errors against prod until `bin/deploy.sh` runs.** | 2026-08-23 | 30789bc96 | [260823-sqc-add-is-promoted-flag-to-users-table-for-](./quick/260823-sqc-add-is-promoted-flag-to-users-table-for-/) |
 | 260824-dsj | Mobile-friendly activity dashboard (internal `dashboard/`, not the app): charts no longer overflow horizontally on phones. Root cause was `frame()`'s hard `Math.max(320, containerWidth)` SVG floor — wider than the ~236–276px a card gives at 320–360px viewports — so every chart got its own sideways scrollbar. Replaced with a `MIN_CHART_WIDTH=200` degenerate-container guard plus a `narrow` flag (`resolveFrame`, threshold 420 chart-px) driving tighter axis gutters, a stacked `hbar` row layout, a shortened `funnel` meta line, adaptive `tickStep()` x-tick density (the caller's `every` becomes a lower bound), greedy `wrapLabel()` for `gbar` categories, and a k/M-suffix `axisNum()` for axis ticks (`num()`'s "1,000" overran the narrow gutter). New `@media(max-width:560px)` block trims `.wrap`/`.card` padding. Gated by `dashboard/check_layout.mjs`, a dependency-free node:vm harness that renders the real charts.js at 320/360/390/414px and asserts fit + no clipped/overlapping labels; proven RED (27 violations) before the fix. No server, DB or browser needed; `frontend/` untouched | 2026-08-24 | c0c4e8fb | [260824-dsj-make-the-activity-dashboard-mobile-frien](./quick/260824-dsj-make-the-activity-dashboard-mobile-frien/) |
 | 260824-qaz | Host the Activity Pulse dashboard at `/activity` in the SPA, superuser-only, with a nav entry. Auth is Bearer JWT, so the HTML document cannot be gated server-side — the page ships as an SPA route behind `SuperuserRoute` and the hard gate is on `GET /api/admin/activity/stats` (`current_superuser`, also 403s impersonation). No SQL, chart code or stylesheet forked: `queries.py` plus a new side-effect-free `dashboard/stats.py` (`build_readonly_engine`/`build_payload`/`StatsCache`) serve both the standalone tunnel server (`DATABASE_URL_PROD`, 60s TTL, polls) and the hosted endpoint (`settings.DATABASE_URL`, dedicated read-only `pool_size=1` engine, 300s TTL, no poll). The poll driver moved to a new `boot.js` the React page does not import, making "no poll in prod" structural. `charts.js`'s eager `#tip` binding (and `app.js`'s `window.__fc` destructure) made lazy — under Vite they evaluated before React rendered, so every chart hover would have thrown. `styles.css` scoped under `.activity-dash`, leaving the four declaration bodies `check_layout.mjs` greps for byte-identical; four sub-14px sizes raised, `.tip .th` kept under the tooltip exception. Dashboard CSS/JS code-split into their own chunk. Cost measured on dev only (0.40s cold / 0.03s / 0.03s at 70 `user_activity` rows) — a floor, NOT timed against prod | 2026-08-24 | 21a85321 | [260824-qaz-host-the-activity-dashboard-at-activity-](./quick/260824-qaz-host-the-activity-dashboard-at-activity-/) |
+| SEED-153 | Engine disagreement study, complete. On the 19,737-position tail where Stockfish and Maia back opposite winners, FlawChess ties Stockfish at both phases (+0.00145 z=+1.70 MG, +0.00218 z=+1.51 EG, recalibrated), beats Maia decisively, and beats the 50/50 blend of its own inputs. The null is decisive rather than underpowered: MDE 0.00301/0.00490 sits below the 0.00690/0.00829 pilot effects the targets were sized for. Found and fixed an eval-alignment defect worth +0.0234/+0.0291 Brier to Stockfish — `game_positions.eval_cp` carries TWO populations with opposite ply conventions (lichess post-move, entry-lane aligned), so a blanket shift would have corrupted SEED-145's 72% entry-lane frame; both studies repaired provenance-aware. Also established that the rating gradient favouring FlawChess at low ELO is a calibration artifact, not information. No public data story (reasons in the report). reports/engine-disagreement-study/engine-disagreement-study.md | 2026-08-25 | f7ada3e36 | [SEED-153](./seeds/closed/SEED-153-disagreement-hunt-fc-vs-sf.md) |
 
 ## Deferred Items
 
