@@ -939,20 +939,30 @@ async def run_import(job_id: str) -> None:
         )
 
     except Exception as exc:
-        logger.exception("Import job %s failed: %s", job_id, exc)
         job.status = JobStatus.FAILED
         # Sanitize the client-facing error (code-review 2026-07-02, #1): the raw
         # str(exc) is surfaced to clients by GET /imports/{job_id} and /active, so a
         # DBAPIError / httpx / connection error would leak internals. ValueError is the
         # codebase's deliberate user-facing import error (e.g. "chess.com user 'x' not
         # found") — safe and actionable, so keep its message. Any other type gets a
-        # fixed generic message. The raw exc always goes to Sentry for diagnosis.
-        client_error = str(exc) if isinstance(exc, ValueError) else _GENERIC_IMPORT_FAILURE_MSG
+        # fixed generic message.
+        expected_user_error = isinstance(exc, ValueError)
+        client_error = str(exc) if expected_user_error else _GENERIC_IMPORT_FAILURE_MSG
         job.error = client_error
-        sentry_sdk.set_context(
-            "import", {"job_id": job_id, "user_id": job.user_id, "platform": job.platform}
-        )
-        sentry_sdk.capture_exception(exc)
+
+        # Bug fix (FLAWCHESS-K): a user typing a nonexistent chess.com/lichess handle
+        # raised ValueError, which logger.exception (ERROR -> Sentry LoggingIntegration)
+        # plus capture_exception turned into a recurring Sentry issue. It is expected
+        # user input, not a bug, so log it at INFO and keep it out of Sentry. Every
+        # other exception type still logs at ERROR and is captured for diagnosis.
+        if expected_user_error:
+            logger.info("Import job %s failed: %s", job_id, exc)
+        else:
+            logger.exception("Import job %s failed: %s", job_id, exc)
+            sentry_sdk.set_context(
+                "import", {"job_id": job_id, "user_id": job.user_id, "platform": job.platform}
+            )
+            sentry_sdk.capture_exception(exc)
 
         # Bug fix (Phase 90, SEED-017, FLAWCHESS-3Q): use bounded-retry helper so
         # a Postgres crash-recovery window does not swallow this failed transition.
