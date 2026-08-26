@@ -141,6 +141,17 @@ describe('PersonaGrid', () => {
     expect(screen.queryByTestId('bots-player-rating-info')).toBeNull();
   });
 
+  it('renders the human-like-opponents intro card even with no rating estimate (guests need it most)', () => {
+    render(<PersonaGrid onSelectPersona={vi.fn()} onSelectCustom={vi.fn()} currentStrength={null} />);
+
+    // The card must NOT be nested inside the currentStrength guard above —
+    // a guest sees no rating line, but must still see the explanation.
+    const card = screen.getByTestId('bots-intro-card');
+    expect(card.textContent).toContain('Human-like Opponents');
+    expect(card.textContent).toContain('FlawChess Engine');
+    expect(screen.getByTestId('bots-intro-info')).toBeTruthy();
+  });
+
   it('never uses sub-text-sm font-size utilities anywhere in the grid', () => {
     render(<PersonaGrid onSelectPersona={vi.fn()} onSelectCustom={vi.fn()} currentStrength={null} />);
 

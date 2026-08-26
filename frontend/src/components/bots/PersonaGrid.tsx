@@ -12,6 +12,7 @@
 import type { ReactElement } from 'react';
 import { PersonaCard } from '@/components/bots/PersonaCard';
 import { Button } from '@/components/ui/button';
+import { Card, CardHeader, CardBody } from '@/components/ui/card';
 import { InfoPopover } from '@/components/ui/info-popover';
 import { currentStrengthCopy } from '@/lib/currentStrengthCopy';
 import {
@@ -52,6 +53,46 @@ export interface PersonaGridProps {
   winsByPersona?: Record<string, number>;
 }
 
+/**
+ * Intro card explaining what makes these opponents different from a dialed-down
+ * engine. Renders unconditionally (guests included) — unlike the rating line
+ * below it, which needs a `currentStrength` to say anything.
+ *
+ * Copy accuracy constraint: 16 of the 24 personas run at `HUMAN_BLEND` (rungs
+ * 800-1400), where `selectBotMove` makes exactly ONE Maia policy call and never
+ * searches. So this copy must never claim the bots "calculate" or "think" — it
+ * describes human move PREDICTION, which is what all 24 have in common. The
+ * style sentence stays directional for the same reason: `varianceBonus` and
+ * `contempt` only bite on the Light/Deep rungs, while the prior reweighting and
+ * opening books tilt every rung.
+ */
+function HumanLikeOpponentsCard(): ReactElement {
+  return (
+    <Card as="section" data-testid="bots-intro-card">
+      <CardHeader size="compact">
+        Human-like Opponents
+        <InfoPopover ariaLabel="About the bot opponents" testId="bots-intro-info">
+          <div className="max-w-xs space-y-2">
+            <p>
+              A normal engine turned down plays perfectly, then throws in a random blunder. These
+              bots instead predict what a human at that rating would actually play, so their
+              mistakes look like the ones you meet online.
+            </p>
+            <p>
+              Each style tilts that further: Attackers press, Tricksters play for complications,
+              Grinders trade down and never resign, Walls keep it quiet.
+            </p>
+          </div>
+        </InfoPopover>
+      </CardHeader>
+      <CardBody className="text-sm text-muted-foreground">
+        Not weakened engines — these bots are driven by the FlawChess Engine and play like real
+        players at their rating.
+      </CardBody>
+    </Card>
+  );
+}
+
 export function PersonaGrid({
   onSelectPersona,
   onSelectCustom,
@@ -65,6 +106,8 @@ export function PersonaGrid({
       data-testid="bots-persona-grid"
       className="mx-auto flex max-w-2xl flex-col gap-6 p-4 pb-20 sm:pb-4"
     >
+      <HumanLikeOpponentsCard />
+
       {/* Strength reference for picking an opponent: the persona cards all
           carry a `~ELO` label, but without the player's own number those
           labels have nothing to be "similar" to. A null `rung` (anchor
