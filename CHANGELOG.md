@@ -12,6 +12,8 @@ in `YYYY-MM-DD` (Europe/Zurich).
 
 - Admins can now open the Activity Pulse dashboard at `/activity` from the main nav, instead of running it locally over an SSH tunnel. Data loads on open and refreshes only when asked.
 
+- You can now paste a single FEN or PGN directly from the Import tab, not just from the analysis board — it opens the same paste dialog and lands you on the analysis board with the position or game already loaded.
+
 ### Changed
 
 - Train no longer serves the same puzzle forever: a puzzle you keep missing is now set aside after 6 total misses, even if you solved it correctly somewhere in between. Previously only a puzzle you had never once solved could be parked, so a puzzle you alternately solved and missed stayed in the rotation indefinitely.

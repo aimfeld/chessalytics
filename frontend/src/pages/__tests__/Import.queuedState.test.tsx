@@ -13,6 +13,7 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { cleanup, render, screen } from '@testing-library/react';
 import { MemoryRouter } from 'react-router';
+import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { TooltipProvider } from '@/components/ui/tooltip';
 import type { ImportStatusResponse } from '@/types/api';
 
@@ -98,18 +99,8 @@ vi.mock('react-router', async () => {
   };
 });
 
-vi.mock('@tanstack/react-query', async () => {
-  const actual = await vi.importActual<typeof import('@tanstack/react-query')>('@tanstack/react-query');
-  return {
-    ...actual,
-    useQueryClient: () => ({
-      invalidateQueries: vi.fn(),
-    }),
-  };
-});
-
 vi.mock('@/api/client', () => ({
-  apiClient: { delete: vi.fn() },
+  apiClient: { delete: vi.fn(), post: vi.fn() },
 }));
 
 afterEach(() => {
@@ -120,17 +111,25 @@ afterEach(() => {
 
 import { ImportPage } from '../Import';
 
+// Quick 260826-qdl: ImportPage now unconditionally mounts PasteModal, whose
+// useSavePastedGame calls the REAL @tanstack/react-query useMutation, which
+// internally calls the library's OWN (unmocked) useQueryClient — a module
+// mock of the named export does not reach that internal cross-file call, so
+// a real QueryClientProvider is required instead of the previous stub.
 function renderImport() {
+  const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
   return render(
-    <MemoryRouter>
-      <TooltipProvider>
-        <ImportPage
-          onImportStarted={vi.fn()}
-          activeJobIds={['job-1']}
-          onJobDismissed={vi.fn()}
-        />
-      </TooltipProvider>
-    </MemoryRouter>,
+    <QueryClientProvider client={queryClient}>
+      <MemoryRouter>
+        <TooltipProvider>
+          <ImportPage
+            onImportStarted={vi.fn()}
+            activeJobIds={['job-1']}
+            onJobDismissed={vi.fn()}
+          />
+        </TooltipProvider>
+      </MemoryRouter>
+    </QueryClientProvider>,
   );
 }
 
