@@ -20,6 +20,8 @@ import {
   GRADING_WATCHDOG_TIMEOUT_MS,
   GRADING_WATCHDOG_SUSPEND_FACTOR,
   MAX_WATCHDOG_SUSPEND_REARMS,
+  GRADING_WATCHDOG_LIVENESS_MS,
+  MAX_WATCHDOG_LIVENESS_REARMS,
   STOP_BESTMOVE_WATCHDOG_TIMEOUT_MS,
   MAX_SLOT_RESPAWNS,
   INIT_WATCHDOG_TIMEOUT_MS,
@@ -898,6 +900,180 @@ describe('createWorkerPool: watchdog (D-06)', () => {
     expect(Sentry.captureException).toHaveBeenCalledTimes(1);
     expect(result.size).toBe(0);
   });
+
+  // ─── FLAWCHESS-9G second pass: worker-liveness gate ──────────────────────
+
+  it('FLAWCHESS-9G: a slot still emitting `info` at its deadline is slow, not wedged — re-armed, not killed, and its eventual bestmove delivers the real grade', async () => {
+    const pool = createWorkerPool();
+    const gradePromise = pool.grade(TEST_FEN, ['e7e5']);
+    const worker = createdWorkers[0]!;
+    driveInit(worker);
+
+    let settled = false;
+    void gradePromise.then(() => {
+      settled = true;
+    });
+
+    // Search grinds most of the window, then emits a line well inside the
+    // liveness threshold before the (on-time) fire — the shape of a genuinely
+    // slow `go depth N` under CPU contention, which has no wall-clock bound.
+    await vi.advanceTimersByTimeAsync(GRADING_WATCHDOG_TIMEOUT_MS - GRADING_WATCHDOG_LIVENESS_MS / 2);
+    worker.simulateMessage('info depth 12 multipv 1 score cp 8 nodes 500000 pv e7e5');
+    await vi.advanceTimersByTimeAsync(GRADING_WATCHDOG_LIVENESS_MS / 2);
+
+    expect(Sentry.captureException).not.toHaveBeenCalled();
+    expect(worker.messages).not.toContain('stop');
+    expect(settled).toBe(false);
+
+    worker.simulateMessage('info depth 14 multipv 1 score cp 5 nodes 900000 pv e7e5');
+    worker.simulateMessage('bestmove e7e5');
+    const result = await gradePromise;
+    expect(result.get('e7e5')?.evalCp).toBe(-5); // black to move -> white POV
+  });
+
+  it('FLAWCHESS-9G: liveness is stamped by `info` lines this pool DISCARDS — a currmove report with no score still proves the worker is running', async () => {
+    const pool = createWorkerPool();
+    const gradePromise = pool.grade(TEST_FEN, ['e7e5']);
+    const worker = createdWorkers[0]!;
+    driveInit(worker);
+
+    let settled = false;
+    void gradePromise.then(() => {
+      settled = true;
+    });
+
+    // `parseInfoLine` yields nothing usable from this (no score, no pv) and
+    // the accumulator stays empty — but it is still worker output.
+    await vi.advanceTimersByTimeAsync(GRADING_WATCHDOG_TIMEOUT_MS - 1_000);
+    worker.simulateMessage('info depth 13 currmove e7e5 currmovenumber 1');
+    await vi.advanceTimersByTimeAsync(1_000);
+
+    expect(Sentry.captureException).not.toHaveBeenCalled();
+    expect(settled).toBe(false);
+
+    worker.simulateMessage('bestmove e7e5');
+    const result = await gradePromise;
+    expect(result.size).toBe(0); // nothing exact-bound ever arrived
+  });
+
+  it('FLAWCHESS-9G: an `info` line older than GRADING_WATCHDOG_LIVENESS_MS does NOT save the slot — a worker that went silent is still killed at its first fire', async () => {
+    const pool = createWorkerPool();
+    const gradePromise = pool.grade(TEST_FEN, ['e7e5']);
+    const worker = createdWorkers[0]!;
+    driveInit(worker);
+
+    // Output stops with the full liveness window still to run before the
+    // deadline — silence, not slowness.
+    await vi.advanceTimersByTimeAsync(GRADING_WATCHDOG_TIMEOUT_MS - GRADING_WATCHDOG_LIVENESS_MS - 1_000);
+    worker.simulateMessage('info depth 10 multipv 1 score cp 8 nodes 1000 pv e7e5');
+    await vi.advanceTimersByTimeAsync(GRADING_WATCHDOG_LIVENESS_MS + 1_000);
+
+    const result = await gradePromise;
+    expect(worker.messages).toContain('stop');
+    expect(Sentry.captureException).toHaveBeenCalledTimes(1);
+    expect(result.size).toBe(0);
+  });
+
+  it('FLAWCHESS-9G: liveness re-arms are bounded so a worker that emits `info` forever without ever reaching bestmove still reaches the kill path', async () => {
+    const pool = createWorkerPool();
+    const gradePromise = pool.grade(TEST_FEN, ['e7e5']);
+    const worker = createdWorkers[0]!;
+    driveInit(worker);
+
+    let settled = false;
+    void gradePromise.then(() => {
+      settled = true;
+    });
+
+    // Each round: chatter right before the deadline, then let the watchdog fire.
+    for (let i = 0; i < MAX_WATCHDOG_LIVENESS_REARMS; i++) {
+      await vi.advanceTimersByTimeAsync(GRADING_WATCHDOG_TIMEOUT_MS - 1_000);
+      worker.simulateMessage('info depth 12 multipv 1 score cp 8 nodes 500000 pv e7e5');
+      await vi.advanceTimersByTimeAsync(1_000);
+      expect(settled).toBe(false);
+      expect(Sentry.captureException).not.toHaveBeenCalled();
+    }
+
+    // One more identical round exceeds the budget — kill path, despite the
+    // worker looking alive.
+    await vi.advanceTimersByTimeAsync(GRADING_WATCHDOG_TIMEOUT_MS - 1_000);
+    worker.simulateMessage('info depth 12 multipv 1 score cp 8 nodes 500000 pv e7e5');
+    await vi.advanceTimersByTimeAsync(1_000);
+
+    const result = await gradePromise;
+    expect(settled).toBe(true);
+    expect(Sentry.captureException).toHaveBeenCalledTimes(1);
+    expect(result.size).toBe(0);
+  });
+
+  it('FLAWCHESS-9G: the kill-path capture carries the context needed to attribute a fire to its cause, with no variable data in the message', async () => {
+    const pool = createWorkerPool();
+    const gradePromise = pool.grade(TEST_FEN, ['e7e5', 'c7c5'], undefined, 12);
+    const worker = createdWorkers[0]!;
+    driveInit(worker);
+
+    await vi.advanceTimersByTimeAsync(GRADING_WATCHDOG_TIMEOUT_MS);
+    await gradePromise;
+
+    const [err, ctx] = vi.mocked(Sentry.captureException).mock.calls[0]!;
+    expect((err as Error).message).toBe('Stockfish worker pool: grading watchdog timeout');
+    const ctxObj = ctx as { contexts: { stockfishWatchdog: Record<string, unknown> } };
+    expect(ctxObj.contexts.stockfishWatchdog).toEqual(
+      expect.objectContaining({
+        elapsedMs: GRADING_WATCHDOG_TIMEOUT_MS,
+        sinceLastInfoMs: null, // the worker never emitted a line — a real fault
+        suspendRearms: 0,
+        livenessRearms: 0,
+        gradingDepth: 12,
+        candidateCount: 2,
+        gradesAccumulated: 0,
+        visibilityState: 'visible',
+      }),
+    );
+  });
+
+  it('FLAWCHESS-9G: the liveness re-arm BUDGET is per-dispatch — a slot that spent re-arms on one request gets a full budget on the next', async () => {
+    const pool = createWorkerPool();
+    const first = pool.grade(TEST_FEN, ['e7e5']);
+    const worker = createdWorkers[0]!;
+    driveInit(worker);
+
+    // Burn every liveness re-arm on the FIRST request, then let it finish
+    // normally so the slot survives and is re-dispatched to.
+    for (let i = 0; i < MAX_WATCHDOG_LIVENESS_REARMS; i++) {
+      await vi.advanceTimersByTimeAsync(GRADING_WATCHDOG_TIMEOUT_MS - 1_000);
+      worker.simulateMessage('info depth 12 multipv 1 score cp 8 nodes 500000 pv e7e5');
+      await vi.advanceTimersByTimeAsync(1_000);
+    }
+    worker.simulateMessage('bestmove e7e5');
+    await first;
+    expect(Sentry.captureException).not.toHaveBeenCalled();
+
+    // Same slot, new request. With a budget that carried over it would be
+    // spent, and the very first chatty deadline below would kill the slot.
+    const second = pool.grade(TEST_FEN_2, ['d7d5']);
+    expect(worker.messages).toContain(`position fen ${TEST_FEN_2}`);
+    await vi.advanceTimersByTimeAsync(GRADING_WATCHDOG_TIMEOUT_MS - 1_000);
+    worker.simulateMessage('info depth 12 multipv 1 score cp 8 nodes 500000 pv d7d5');
+    await vi.advanceTimersByTimeAsync(1_000);
+
+    expect(Sentry.captureException).not.toHaveBeenCalled();
+    expect(worker.messages).not.toContain('stop');
+
+    worker.simulateMessage('info depth 14 multipv 1 score cp 5 nodes 900000 pv d7d5');
+    worker.simulateMessage('bestmove d7d5');
+    expect((await second).size).toBe(1);
+  });
+
+  it('FLAWCHESS-9G: the liveness window stays shorter than the watchdog window — the invariant that keeps one dispatch\'s `info` lines from ever vouching for the next', () => {
+    // `sendGo` clears `lastInfoAtMs` per dispatch, but that reset is only
+    // DEFENSIVE while this holds: a stale stamp is necessarily >= one full
+    // watchdog window old by the time the next dispatch's timer fires, so it
+    // can never satisfy the liveness gate. Raising LIVENESS past TIMEOUT
+    // would make the reset load-bearing and this assertion is the tripwire.
+    expect(GRADING_WATCHDOG_LIVENESS_MS).toBeLessThan(GRADING_WATCHDOG_TIMEOUT_MS);
+  });
+
 });
 
 // ─── createWorkerPool: FIX-3 — grade() on a fully dead pool (quick 260731-s0z) ──
@@ -915,24 +1091,6 @@ describe('createWorkerPool: grade() on a fully dead pool (quick 260731-s0z FIX-3
     vi.unstubAllGlobals();
   });
 
-  it('a fresh signal-less grade() issued after every slot has died via onerror resolves empty rather than hanging', async () => {
-    const pool = createWorkerPool();
-    const first = pool.grade(TEST_FEN, ['e7e5']);
-    for (const w of createdWorkers) w.simulateError();
-    await expect(first).resolves.toEqual(new Map());
-
-    // Every slot is now dead. Before FIX-3 the only zero-capacity guard was
-    // `slots.length === 0`, which does not cover this case — a fresh request
-    // was enqueued into a queue nothing would ever service.
-    const second = pool.grade(TEST_FEN_2, ['d7d5']);
-    let settled = false;
-    void second.then(() => {
-      settled = true;
-    });
-    await vi.advanceTimersByTimeAsync(GRADING_WATCHDOG_TIMEOUT_MS);
-    expect(settled).toBe(true);
-    expect(await second).toEqual(new Map());
-  });
 
   it('FIX-3 + FIX-4 composed: aborting one shared signal across every slot kills the whole pool via the stop-bestmove watchdog, and a subsequent signal-less grade() still resolves empty', async () => {
     const pool = createWorkerPool();

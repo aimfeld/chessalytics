@@ -1,6 +1,7 @@
 import { useState, useEffect, useCallback } from 'react';
 import * as Sentry from '@sentry/react';
-import { X, DoorOpen, Infinity as InfinityIcon } from 'lucide-react';
+import { X, DoorOpen, Infinity as InfinityIcon, ClipboardPaste } from 'lucide-react';
+import { useNavigate } from 'react-router';
 import { Alert } from '@/components/ui/alert';
 import { Card, CardHeader, CardBody } from '@/components/ui/card';
 import { PlatformIcon } from '@/components/icons/PlatformIcon';
@@ -26,6 +27,10 @@ import { useAuth } from '@/hooks/useAuth';
 import { useQueryClient } from '@tanstack/react-query';
 import { apiClient } from '@/api/client';
 import { extractPlatformUsername } from '@/lib/platformUsername';
+import { PasteModal } from '@/components/analysis/PasteModal';
+import type { PasteParseResult } from '@/lib/pastedGame';
+import { savePastedGameHandoff } from '@/lib/pastedGameHandoff';
+import { ANALYSIS_PATH, buildGameAnalysisUrl } from '@/lib/analysisUrl';
 
 
 // Refresh cadence for the eval-coverage ("Quick Scan") banner and readiness
@@ -258,6 +263,15 @@ export function ImportPage({ onImportStarted, activeJobIds, onJobDismissed }: Im
   const { data: importSettings } = useImportSettings();
   const trigger = useImportTrigger();
   const queryClient = useQueryClient();
+  const navigate = useNavigate();
+
+  // Quick 260826-qdl: the Import-tab paste entry point, mounting the SAME
+  // PasteModal the analysis board's PGN/FEN button opens (no second modal
+  // component). Load hands off through sessionStorage (see
+  // pastedGameHandoff.ts); "Analyze full game" needs no handoff at all — it
+  // navigates straight to the saved game's /analysis?game_id=N, mirroring
+  // Analysis.tsx::handlePasteSaved.
+  const [pasteModalOpen, setPasteModalOpen] = useState(false);
 
   // Username state — always editable, synced from profile on first load only
   const [chessComUsername, setChessComUsername] = useState('');
@@ -383,6 +397,18 @@ export function ImportPage({ onImportStarted, activeJobIds, onJobDismissed }: Im
   const handleDismiss = (jobId: string) => {
     setJobPlatforms((prev) => { const next = new Map(prev); next.delete(jobId); return next; });
     onJobDismissed(jobId);
+  };
+
+  // ── Paste modal handlers (Quick 260826-qdl) ─────────────────────────────────
+
+  const handlePasteLoad = (result: PasteParseResult, userColor: 'white' | 'black') => {
+    if (result.kind !== 'fen' && result.kind !== 'pgn') return;
+    savePastedGameHandoff({ result, userColor });
+    navigate(ANALYSIS_PATH);
+  };
+
+  const handlePasteSaved = (gameId: number) => {
+    navigate(buildGameAnalysisUrl(gameId));
   };
 
   // ── Render ────────────────────────────────────────────────────────────────
@@ -537,6 +563,16 @@ export function ImportPage({ onImportStarted, activeJobIds, onJobDismissed }: Im
               ))}
             </CardBody>
           </Card>
+
+          <Button
+            variant="brand-outline"
+            className="w-full"
+            data-testid="btn-import-single-game"
+            onClick={() => setPasteModalOpen(true)}
+          >
+            <ClipboardPaste className="h-4 w-4" aria-hidden="true" />
+            Import Single Game (PGN/FEN)
+          </Button>
           </div>
         </>
       )}
@@ -600,6 +636,15 @@ export function ImportPage({ onImportStarted, activeJobIds, onJobDismissed }: Im
           </DialogFooter>
         </DialogContent>
       </Dialog>
+
+      {/* Mounted outside the profileLoading ternary so a mid-flight profile
+          refetch cannot unmount an open modal. */}
+      <PasteModal
+        open={pasteModalOpen}
+        onOpenChange={setPasteModalOpen}
+        onLoad={handlePasteLoad}
+        onSaved={handlePasteSaved}
+      />
     </main>
   );
 }

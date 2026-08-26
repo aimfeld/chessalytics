@@ -30,7 +30,7 @@
 
 import { Chess } from 'chess.js';
 
-const ANALYSIS_PATH = '/analysis';
+export const ANALYSIS_PATH = '/analysis';
 const LINE_PARAM = 'line';
 const GAME_ID_PARAM = 'game_id';
 const PLY_PARAM = 'ply';

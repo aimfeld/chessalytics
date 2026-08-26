@@ -22,6 +22,8 @@ import { BEST_MOVE_ARROW, MAIA_ACCENT, GREAT_ACCENT } from '@/lib/theme';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { TooltipProvider } from '@/components/ui/tooltip';
 import type { GameFlawCard, EvalPoint } from '@/types/library';
+import { sniffPastedInput } from '@/lib/pastedGame';
+import { savePastedGameHandoff } from '@/lib/pastedGameHandoff';
 
 // ── Mock useStockfishEngine: jsdom has no real Worker for the classic engine file.
 // Drive isReady/pvLines states deterministically via the mutable engineState object.
@@ -2496,5 +2498,89 @@ describe('Custom-start games in game mode (Phase 210, SEED-042)', () => {
 
     await waitFor(() => expect(moveListText()).toContain('e4'));
     expect(moveListText()).toContain('e5');
+  });
+});
+
+// ── Import-tab paste handoff consume (Quick 260826-qdl) ─────────────────────
+describe('Import-tab paste handoff consume (Quick 260826-qdl)', () => {
+  afterEach(() => {
+    // A leaked handoff must not contaminate the file's other render tests —
+    // takePastedGameHandoff() is already destructive on every consume path
+    // (the mount effect always calls it), but a test that never mounts must
+    // still not leave a stale entry for the next test in this file.
+    sessionStorage.clear();
+    libraryGameById.clear();
+    libraryGameState.data = undefined;
+  });
+
+  function pgnResult(movetext: string): Extract<PasteParseResult, { kind: 'pgn' }> {
+    const result = sniffPastedInput(movetext);
+    if (result.kind !== 'pgn') throw new Error('expected a pgn-kind sniff result');
+    return result;
+  }
+
+  function fenResult(fen: string): Extract<PasteParseResult, { kind: 'fen' }> {
+    const result = sniffPastedInput(fen);
+    if (result.kind !== 'fen') throw new Error('expected a fen-kind sniff result');
+    return result;
+  }
+
+  it('a kind: pgn handoff written before render seeds the mainline', () => {
+    savePastedGameHandoff({
+      result: pgnResult('1. e4 e5 2. Nf3 Nc6'),
+      userColor: 'white',
+    });
+
+    renderAnalysis('/analysis');
+
+    expect(screen.getAllByText('Nf3').length).toBeGreaterThan(0);
+  });
+
+  it('the same handoff with userColor: black renders the parsed White/Black header line', () => {
+    savePastedGameHandoff({
+      result: pgnResult('[White "Magnus"]\n[Black "Hikaru"]\n\n1. e4 e5 2. Nf3 Nc6'),
+      userColor: 'black',
+    });
+
+    renderAnalysis('/analysis');
+
+    expect(screen.getAllByText(/Magnus/).length).toBeGreaterThan(0);
+    expect(screen.getAllByText(/Hikaru/).length).toBeGreaterThan(0);
+  });
+
+  it('a kind: fen handoff renders without throwing and leaves analysis-page present', () => {
+    savePastedGameHandoff({
+      result: fenResult('rnbqkbnr/pppppppp/8/8/4P3/8/PPPP1PPP/RNBQKBNR b KQkq - 0 1'),
+      userColor: 'white',
+    });
+
+    expect(() => renderAnalysis('/analysis')).not.toThrow();
+    expect(screen.getByTestId('analysis-page')).toBeTruthy();
+  });
+
+  it('a handoff present alongside ?game_id= does NOT seed the pasted game (game mode wins)', () => {
+    libraryGameById.set(1, buildGame({ moves: ['d4'] }));
+    savePastedGameHandoff({
+      result: pgnResult('1. e4 e5 2. Nf3 Nc6'),
+      userColor: 'white',
+    });
+
+    renderAnalysis('/analysis?game_id=1');
+
+    expect(screen.queryAllByText('Nf3').length).toBe(0);
+  });
+
+  it('a second render with only one handoff written seeds it the first time and starts bare the second (one-shot)', () => {
+    savePastedGameHandoff({
+      result: pgnResult('1. e4 e5 2. Nf3 Nc6'),
+      userColor: 'white',
+    });
+
+    const { unmount } = renderAnalysis('/analysis');
+    expect(screen.getAllByText('Nf3').length).toBeGreaterThan(0);
+    unmount();
+
+    renderAnalysis('/analysis');
+    expect(screen.queryAllByText('Nf3').length).toBe(0);
   });
 });

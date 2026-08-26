@@ -24,6 +24,16 @@ a completed scheduled-day session ticks the shield/count up (capped at
 `SHIELD_CAP`), a missed scheduled day drains the shield by one (floored at
 0, resetting the count when the shield empties), and a scheduled day before
 the user ever had trainable material is neutral (D-05/D-06).
+
+SEED-154 makes `apply_result`'s `fail_count` a LIFETIME lapse counter instead
+of one that resets on every correct solve. Before this change, an item
+alternately solved and failed could never leave the Train pool: `MASTERED`
+needs 3 *consecutive* correct solves (alternation caps the streak at 1
+forever) and the only park door (`PARK_FAIL_THRESHOLD`) required
+`ever_correct is False`, which the first correct solve permanently
+disqualified. `apply_result` now has two independent park doors: Door A
+(unchanged, never-solved + 3 lifetime lapses) and Door B (new, 6 lifetime
+lapses regardless of `ever_correct`) — see `LEECH_FAIL_THRESHOLD`.
 """
 
 from __future__ import annotations
@@ -49,8 +59,17 @@ LADDER_DAYS: dict[int, int] = {0: 0, 1: 3, 2: 10}
 # 3 consecutive spaced-correct solves masters an item (POOL-05).
 MASTERY_STREAK_THRESHOLD: int = 3
 
-# 3 fails with zero ever-correct solves parks an item (POOL-06).
+# Door A (POOL-06): 3 fails with zero ever-correct solves parks an item.
 PARK_FAIL_THRESHOLD: int = 3
+
+# Door B (SEED-154): 6 LIFETIME lapses parks an item regardless of
+# ever_correct. The counter is never reset by a correct solve, so an item the
+# user alternately solves and fails can still leave the pool. 6, not Anki's
+# leech default of 8: a Train session holds far fewer slots than an Anki
+# deck, so each wasted slot costs proportionally more. At 6, a genuine
+# coin-flip item retires, while a 70%-recall item (expected ~2 lifetime
+# lapses) almost never does.
+LEECH_FAIL_THRESHOLD: int = 6
 
 # D-06 default timezone for a brand-new train_settings row.
 DEFAULT_TIMEZONE: str = "UTC"
@@ -276,15 +295,23 @@ def apply_result(
     becomes MASTERED with `due_date` left UNTOUCHED (a mastered item is never
     re-scheduled); otherwise ACTIVE with a due date snapped via
     `next_scheduled_day(today + LADDER_DAYS[new_streak] days, weekday_mask)`.
-    Either way `fail_count` resets to 0 and `ever_correct` becomes True.
+    Either way `fail_count` is carried through UNCHANGED (SEED-154 — it is a
+    lifetime lapse count, never reset by a correct solve) and `ever_correct`
+    becomes True.
 
-    Wrong-move branch: `streak` resets to 0. `fail_count` increments ONLY
-    while `ever_correct` is False (Door B is a NEVER-solved counter, not a
-    rolling one — once a user has ever solved the item correctly, wrong
-    answers can no longer park it). The park check runs BEFORE the re-snap:
-    at PARK_FAIL_THRESHOLD with `ever_correct` False, the item becomes PARKED
-    with `due_date` left UNTOUCHED; otherwise ACTIVE with
-    `due_date = next_scheduled_day(today, weekday_mask)`.
+    Wrong-move branch: `streak` resets to 0. `fail_count` increments
+    unconditionally (SEED-154) — the counter is monotonic non-decreasing for
+    the life of the item, regardless of `ever_correct`. The park check runs
+    BEFORE the re-snap and evaluates two independent doors: Door A fires when
+    `not ever_correct and new_fail_count >= PARK_FAIL_THRESHOLD` (POOL-06,
+    never-solved); Door B fires when
+    `new_fail_count >= LEECH_FAIL_THRESHOLD` regardless of `ever_correct`
+    (SEED-154, the leech door). Either door parks the item with `due_date`
+    left UNTOUCHED and `ever_correct` propagated from the incoming state (not
+    hardcoded) — Door B can fire with `ever_correct` True, so hardcoding
+    `False` would silently rewrite a solved item's history. Otherwise the
+    item stays ACTIVE with `due_date = next_scheduled_day(today,
+    weekday_mask)`.
 
     Cross-reference: `next_scheduled_day` is the sibling this function must
     agree with on every due-date snap; `session_window` is the sibling for
@@ -297,7 +324,11 @@ def apply_result(
                 status=DrillStatus.MASTERED,
                 streak=new_streak,
                 due_date=state.due_date,
-                fail_count=0,
+                # SEED-154 bug fix: this used to hardcode 0, which zeroed the
+                # lifetime lapse counter on every correct solve. That made
+                # Door B unreachable for any item ever solved once, since the
+                # counter could never climb back to a park threshold.
+                fail_count=state.fail_count,
                 ever_correct=True,
             )
         ideal_due = today + datetime.timedelta(days=LADDER_DAYS[new_streak])
@@ -305,18 +336,30 @@ def apply_result(
             status=DrillStatus.ACTIVE,
             streak=new_streak,
             due_date=next_scheduled_day(ideal_due, weekday_mask),
-            fail_count=0,
+            # SEED-154 bug fix: see the MASTERED branch above — carry the
+            # lifetime lapse count through instead of zeroing it.
+            fail_count=state.fail_count,
             ever_correct=True,
         )
 
-    new_fail_count = state.fail_count if state.ever_correct else state.fail_count + 1
-    if not state.ever_correct and new_fail_count >= PARK_FAIL_THRESHOLD:
+    # SEED-154: the increment is now unconditional — fail_count is a lifetime
+    # lapse counter, not one gated on ever_correct being False.
+    new_fail_count = state.fail_count + 1
+    door_a_never_solved = not state.ever_correct and new_fail_count >= PARK_FAIL_THRESHOLD
+    door_b_leech = new_fail_count >= LEECH_FAIL_THRESHOLD
+    if door_a_never_solved or door_b_leech:
         return ItemState(
             status=DrillStatus.PARKED,
             streak=0,
             due_date=state.due_date,
             fail_count=new_fail_count,
-            ever_correct=False,
+            # SEED-154 silent-corruption trap: this used to hardcode False,
+            # which was safe only because the sole caller path (Door A) had
+            # already proven ever_correct false. Door B can now fire with
+            # ever_correct True, so the flag must be propagated from the
+            # incoming state or a leech park would silently rewrite a solved
+            # item's history to "never solved".
+            ever_correct=state.ever_correct,
         )
     return ItemState(
         status=DrillStatus.ACTIVE,
@@ -618,6 +661,7 @@ __all__ = [
     "DEFAULT_TIMEZONE",
     "DEFAULT_WEEKDAY_MASK",
     "LADDER_DAYS",
+    "LEECH_FAIL_THRESHOLD",
     "MASTERY_STREAK_THRESHOLD",
     "PARK_FAIL_THRESHOLD",
     "REMINDER_HOUR_MAX",

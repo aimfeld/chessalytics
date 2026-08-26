@@ -7,8 +7,10 @@ table-driven parametrized cases over the boundary conditions.
 
 Covers:
   - apply_result: correct-move streak progression 0->1->2->MASTERED(3),
-    fail_count accrual gated on ever_correct, PARKED at exactly 3 fails,
-    due-date snapping via next_scheduled_day.
+    fail_count as a lifetime lapse counter never reset by a correct solve
+    (SEED-154), PARKED via Door A (never-solved, 3 lifetime lapses) or Door B
+    (6 lifetime lapses regardless of ever_correct), due-date snapping via
+    next_scheduled_day.
   - next_scheduled_day: identity on weekday_mask=0, identity when `after` is
     already on a scheduled weekday, forward scan otherwise.
   - session_window: D-10 "open until the next scheduled session day".
@@ -36,6 +38,7 @@ from app.models.drill_item import DrillStatus
 from app.services.train_scheduler import (
     ALL_WEEKDAYS_MASK,
     LADDER_DAYS,
+    LEECH_FAIL_THRESHOLD,
     MASTERY_STREAK_THRESHOLD,
     PARK_FAIL_THRESHOLD,
     SHIELD_CAP,
@@ -121,9 +124,10 @@ class TestApplyResultCorrect:
         assert result.status == DrillStatus.MASTERED
         assert result.due_date == original_due, "a mastered item is never re-scheduled"
 
-    def test_correct_move_always_zeroes_fail_count_and_sets_ever_correct(self) -> None:
-        """Regardless of prior fail_count, a correct solve resets fail_count=0, ever_correct=True."""
-        for prior_fail_count in (0, 1, 2):
+    def test_correct_move_preserves_fail_count_and_sets_ever_correct(self) -> None:
+        """SEED-154: fail_count is a lifetime lapse counter — a correct solve
+        never resets it, only ever_correct flips to True."""
+        for prior_fail_count in (0, 1, 2, 5):
             state = ItemState(
                 status=DrillStatus.ACTIVE,
                 streak=0,
@@ -134,8 +138,22 @@ class TestApplyResultCorrect:
             result = apply_result(
                 state, correct_move=True, today=_TODAY, weekday_mask=_EVERY_DAY_MASK
             )
-            assert result.fail_count == 0
+            assert result.fail_count == prior_fail_count
             assert result.ever_correct is True
+
+    def test_five_lapses_then_three_in_a_row_masters_not_parks(self) -> None:
+        """SEED-154: an item the SR system is successfully teaching is not
+        retired — 5 lifetime lapses followed by 3 consecutive correct solves
+        reaches MASTERED with the lapse count preserved, never PARKED."""
+        state = ItemState(
+            status=DrillStatus.ACTIVE, streak=0, due_date=_TODAY, fail_count=5, ever_correct=True
+        )
+        for _ in range(MASTERY_STREAK_THRESHOLD):
+            state = apply_result(
+                state, correct_move=True, today=_TODAY, weekday_mask=_EVERY_DAY_MASK
+            )
+        assert state.status == DrillStatus.MASTERED
+        assert state.fail_count == 5
 
 
 class TestApplyResultWrong:
@@ -172,26 +190,110 @@ class TestApplyResultWrong:
         assert result.fail_count == 2
         assert result.status == DrillStatus.ACTIVE
 
-    def test_ever_correct_true_never_parks_regardless_of_fail_count(self) -> None:
-        """Door B is a NEVER-solved counter — once ever_correct=True, fail_count never accrues."""
+    def test_ever_correct_true_now_accrues_a_lapse(self) -> None:
+        """SEED-154: fail_count accrues unconditionally now — ever_correct no
+        longer gates the increment, only which park door can fire."""
         state = ItemState(
             status=DrillStatus.ACTIVE, streak=0, due_date=_TODAY, fail_count=0, ever_correct=True
         )
         result = apply_result(state, correct_move=False, today=_TODAY, weekday_mask=_EVERY_DAY_MASK)
-        assert result.fail_count == 0
+        assert result.fail_count == 1
         assert result.status == DrillStatus.ACTIVE
         assert result.ever_correct is True
 
-    def test_ever_correct_true_repeated_wrong_never_accrues_or_parks(self) -> None:
+    def test_ever_correct_true_repeated_wrong_parks_at_leech_threshold(self) -> None:
+        """SEED-154 Door B: once ever_correct is True, Door A can never fire,
+        but repeated wrong solves still park the item at LEECH_FAIL_THRESHOLD."""
         state = ItemState(
             status=DrillStatus.ACTIVE, streak=0, due_date=_TODAY, fail_count=0, ever_correct=True
         )
-        for _ in range(10):
+        for attempt in range(1, 11):
             state = apply_result(
                 state, correct_move=False, today=_TODAY, weekday_mask=_EVERY_DAY_MASK
             )
-        assert state.fail_count == 0
+            if attempt < LEECH_FAIL_THRESHOLD:
+                assert state.status == DrillStatus.ACTIVE, f"parked too early at attempt {attempt}"
+            else:
+                assert state.status == DrillStatus.PARKED, f"must have parked by attempt {attempt}"
+                break
+        assert state.status == DrillStatus.PARKED
+        assert state.fail_count == LEECH_FAIL_THRESHOLD
+        assert state.ever_correct is True
+
+    def test_never_solved_still_parks_at_door_a(self) -> None:
+        """Door A regression guard: three wrong solves from a fresh state
+        still park at exactly PARK_FAIL_THRESHOLD with ever_correct False."""
+        assert PARK_FAIL_THRESHOLD < LEECH_FAIL_THRESHOLD, (
+            "Door A must fire strictly before Door B, or a future threshold "
+            "edit could invert the doors silently"
+        )
+        state = _fresh_state()
+        for _ in range(PARK_FAIL_THRESHOLD):
+            state = apply_result(
+                state, correct_move=False, today=_TODAY, weekday_mask=_EVERY_DAY_MASK
+            )
+        assert state.status == DrillStatus.PARKED
+        assert state.fail_count == PARK_FAIL_THRESHOLD
+        assert state.ever_correct is False
+
+    def test_lapse_count_survives_a_correct_answer(self) -> None:
+        """wrong, wrong, correct, wrong from a fresh state leaves lapse count
+        3 and status ACTIVE — Door A cannot fire once ever_correct is True,
+        and Door B needs 6."""
+        state = _fresh_state()
+        state = apply_result(state, correct_move=False, today=_TODAY, weekday_mask=_EVERY_DAY_MASK)
+        state = apply_result(state, correct_move=False, today=_TODAY, weekday_mask=_EVERY_DAY_MASK)
+        state = apply_result(state, correct_move=True, today=_TODAY, weekday_mask=_EVERY_DAY_MASK)
+        state = apply_result(state, correct_move=False, today=_TODAY, weekday_mask=_EVERY_DAY_MASK)
+        assert state.fail_count == 3
         assert state.status == DrillStatus.ACTIVE
+        assert state.ever_correct is True
+
+    def test_leech_park_preserves_ever_correct_true(self) -> None:
+        """SEED-154 silent-corruption guard: the PARKED return must propagate
+        ever_correct from the incoming state, not hardcode False — Door B can
+        fire on an item that HAS been solved."""
+        original_due = datetime.date(2026, 7, 20)
+        state = ItemState(
+            status=DrillStatus.ACTIVE,
+            streak=0,
+            due_date=original_due,
+            fail_count=LEECH_FAIL_THRESHOLD - 1,
+            ever_correct=True,
+        )
+        result = apply_result(state, correct_move=False, today=_TODAY, weekday_mask=_EVERY_DAY_MASK)
+        assert result.status == DrillStatus.PARKED
+        assert result.fail_count == LEECH_FAIL_THRESHOLD
+        assert result.ever_correct is True
+        assert result.due_date == original_due
+
+
+class TestApplyResultAlternatingLeech:
+    """SEED-154's motivating case: an item alternately solved and failed must
+    still eventually leave the pool via Door B."""
+
+    def test_alternating_solve_and_fail_eventually_parks(self) -> None:
+        state = _fresh_state()
+        # Strict alternation: correct, wrong, correct, wrong, ... The streak
+        # never reaches MASTERY_STREAK_THRESHOLD (capped at 1 by alternation),
+        # so the only way out is Door B at LEECH_FAIL_THRESHOLD lifetime lapses.
+        wrong_count = 0
+        for attempt in range(1, 13):
+            correct_move = attempt % 2 == 1
+            state = apply_result(
+                state, correct_move=correct_move, today=_TODAY, weekday_mask=_EVERY_DAY_MASK
+            )
+            assert state.status != DrillStatus.MASTERED, (
+                f"alternation must never reach MASTERED (attempt {attempt})"
+            )
+            if not correct_move:
+                wrong_count += 1
+                if wrong_count >= LEECH_FAIL_THRESHOLD:
+                    assert state.status == DrillStatus.PARKED
+                    break
+                assert state.status == DrillStatus.ACTIVE
+        assert state.status == DrillStatus.PARKED
+        assert wrong_count == LEECH_FAIL_THRESHOLD
 
 
 class TestApplyResultNoGuessParameter:

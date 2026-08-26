@@ -86,7 +86,10 @@ export const MOBILE_CORE_THRESHOLD = 4;
  * to cap a merely slow position. Sized at 60s so it fires only on the former
  * — replaces the removed `GRADING_MOVETIME_SAFETY_CAP_MS` wall-clock bound
  * (D-05), which capped EVERY search regardless of whether the worker was
- * healthy.
+ * healthy. That "fault, not slowness" intent is only actually ENFORCED by the
+ * two re-arm gates in `fireWatchdog` (see `GRADING_WATCHDOG_SUSPEND_FACTOR`
+ * and `GRADING_WATCHDOG_LIVENESS_MS`); this constant alone cannot tell the
+ * two apart, which is what FLAWCHESS-9G was.
  */
 export const GRADING_WATCHDOG_TIMEOUT_MS = 60_000;
 
@@ -109,6 +112,45 @@ export const GRADING_WATCHDOG_SUSPEND_FACTOR = 1.5;
  * through to the normal kill path instead of re-arming again.
  */
 export const MAX_WATCHDOG_SUSPEND_REARMS = 3;
+
+/**
+ * Bug fix (FLAWCHESS-9G, second pass): silence window (ms) separating a
+ * genuinely wedged worker from a merely slow or CPU-starved one. Stockfish
+ * emits `info` lines continuously while it searches (depth completions, plus
+ * per-root-move `currmove` reports once an iteration passes ~3s), so a slot
+ * that produced a line recently is demonstrably ALIVE — its 60s deadline then
+ * says nothing about worker health, only that this position is slow on this
+ * machine, which `go depth N` explicitly permits (D-05 removed the wall-clock
+ * bound). Killing such a slot is a false positive.
+ *
+ * 20s is a judgement call, not a measurement: comfortably wider than the
+ * largest plausible gap between two `info` lines at the depths this pool
+ * searches (ladder 10-14, searchmoves-restricted, so only a handful of
+ * `currmove` reports per iteration), while still a third of the watchdog
+ * window — a worker that has gone completely silent is killed at its FIRST
+ * fire, with no added latency. This is the knob to widen if the enriched
+ * Sentry context (see `fireWatchdog`) starts showing fires whose
+ * `sinceLastInfoMs` sits just past it.
+ */
+export const GRADING_WATCHDOG_LIVENESS_MS = 20_000;
+
+/**
+ * Bug fix (FLAWCHESS-9G, second pass): per-dispatch cap on liveness re-arms
+ * (see `GRADING_WATCHDOG_LIVENESS_MS`) — the same containment
+ * `MAX_WATCHDOG_SUSPEND_REARMS` gives the suspension path. A worker that
+ * keeps emitting `info` forever without ever reaching `bestmove` must not
+ * re-arm forever: `mctsSearch` awaits this grade, so an unbounded re-arm
+ * turns a slow node into a stalled search. Counted separately from the
+ * suspend re-arms so the two causes stay distinguishable in Sentry.
+ *
+ * Trade-off, stated plainly: worst case a dispatch is now abandoned after
+ * `GRADING_WATCHDOG_TIMEOUT_MS * (1 + MAX_WATCHDOG_SUSPEND_REARMS +
+ * MAX_WATCHDOG_LIVENESS_REARMS)` rather than 60s. That is only reachable by a
+ * slot that is provably alive the whole time; the alternative is what this
+ * fix exists to stop — killing a healthy worker and settling its node with an
+ * empty grade, which dents search quality invisibly instead of visibly.
+ */
+export const MAX_WATCHDOG_LIVENESS_REARMS = 3;
 
 /**
  * Bug fix (quick 260731-s0z, FIX-4): host-side "stop-bestmove" watchdog (ms),
@@ -203,6 +245,10 @@ export interface PoolWorkerSlot {
   armedAtMs: number;
   /** FLAWCHESS-9G: suspend re-arms consumed by the current dispatch (see `MAX_WATCHDOG_SUSPEND_REARMS`). Reset to 0 on every fresh `sendGo` dispatch. */
   watchdogSuspendRearms: number;
+  /** FLAWCHESS-9G (second pass): wall-clock stamp of the last `info` line this slot emitted for `current`, or 0 when it has emitted none since `sendGo` — the worker-liveness signal `fireWatchdog` uses to tell a wedged worker from a slow one. */
+  lastInfoAtMs: number;
+  /** FLAWCHESS-9G (second pass): liveness re-arms consumed by the current dispatch (see `MAX_WATCHDOG_LIVENESS_REARMS`). Reset to 0 on every fresh `sendGo` dispatch. */
+  watchdogLivenessRearms: number;
 }
 
 /** The public surface `createWorkerPool()` returns — implements `EngineProviders.grade` (D-08). */
@@ -540,9 +586,25 @@ export function createWorkerPool(): WorkerPool {
   }
 
   /**
+   * Re-arm a slot's grading watchdog for another full
+   * `GRADING_WATCHDOG_TIMEOUT_MS` window, leaving its request untouched.
+   * Extracted for the same reason as `clearSlotWatchdog`: both of
+   * `fireWatchdog`'s false-positive branches must re-stamp `armedAtMs` and
+   * the timer together, or the next fire mis-measures its own elapsed time.
+   */
+  function rearmGradingWatchdog(slot: PoolWorkerSlot, nowMs: number): void {
+    slot.armedAtMs = nowMs;
+    slot.watchdogTimer = setTimeout(() => fireWatchdog(slot), GRADING_WATCHDOG_TIMEOUT_MS);
+  }
+
+  /**
    * D-06: fires when a slot's `sendGo` never produced a `bestmove` within
    * `GRADING_WATCHDOG_TIMEOUT_MS` — a genuinely hung/wedged worker, not a
-   * merely slow position. Treated as a worker fault, mirroring `onerror`
+   * merely slow position. Two false-positive gates run first and re-arm
+   * instead of killing (FLAWCHESS-9G): a fire far past its deadline is page
+   * suspension, and a fire from a slot still emitting `info` is a slow or
+   * CPU-starved search. Only a slot that is both on-time and silent falls
+   * through. Past the gates it is treated as a worker fault, mirroring `onerror`
    * exactly (reusing `dead` rather than inventing a new lifecycle state is
    * deliberate: a 60s grading `go` with no `bestmove` is not recoverable on
    * THAT worker, `dispatchNext` already skips non-`isReady` slots, and
@@ -567,22 +629,69 @@ export function createWorkerPool(): WorkerPool {
     // deliberately left unchanged — a slot in `'stopping'` has already been
     // sent `stop` and its request is being abandoned, and no production
     // Sentry event points at that path. `clearSlotWatchdog` is untouched.
-    const elapsedMs = Date.now() - slot.armedAtMs;
+    const nowMs = Date.now();
+    const elapsedMs = nowMs - slot.armedAtMs;
+    const sinceLastInfoMs = slot.lastInfoAtMs === 0 ? null : nowMs - slot.lastInfoAtMs;
     if (
       elapsedMs > GRADING_WATCHDOG_TIMEOUT_MS * GRADING_WATCHDOG_SUSPEND_FACTOR &&
       slot.watchdogSuspendRearms < MAX_WATCHDOG_SUSPEND_REARMS
     ) {
       slot.watchdogSuspendRearms++;
-      slot.armedAtMs = Date.now();
-      slot.watchdogTimer = setTimeout(() => fireWatchdog(slot), GRADING_WATCHDOG_TIMEOUT_MS);
+      rearmGradingWatchdog(slot, nowMs);
+      return;
+    }
+
+    // Bug fix (FLAWCHESS-9G, second pass): the suspension check above reads
+    // HOST wall clock, which says nothing about whether the WORKER got CPU —
+    // it only catches a deep freeze (a fire >90s past deadline). It missed
+    // the desktop-Chrome event that reopened this issue, and by construction
+    // it cannot catch either remaining false-positive shape: a moderately
+    // throttled background tab (timer fires ~62s, worker never stopped
+    // running) or a genuinely slow `go depth N` under CPU contention (D-05
+    // removed the wall-clock bound, so a sharp position on a loaded machine
+    // may legitimately outlast 60s with 2-4 WASM workers and Maia competing).
+    // Both leave the fingerprint a real fault does not: a live `info` stream.
+    // Re-arm on that instead — bounded by `MAX_WATCHDOG_LIVENESS_REARMS`, so
+    // a worker that natters on forever without ever reaching `bestmove` still
+    // reaches the kill path below.
+    if (
+      sinceLastInfoMs !== null &&
+      sinceLastInfoMs < GRADING_WATCHDOG_LIVENESS_MS &&
+      slot.watchdogLivenessRearms < MAX_WATCHDOG_LIVENESS_REARMS
+    ) {
+      slot.watchdogLivenessRearms++;
+      rearmGradingWatchdog(slot, nowMs);
       return;
     }
 
     // Best-effort: ask the worker to stop. It may never respond — that's
     // exactly why this fired — so this is not awaited or relied upon.
     slot.worker.postMessage('stop');
+    // FLAWCHESS-9G (second pass): the original capture carried only the
+    // `source` tag, so a fire could not be attributed to any of its three
+    // causes (wedged worker / throttled tab / slow search) after the fact —
+    // which is exactly why the one post-fix production event could not be
+    // classified. Everything needed to tell them apart rides in a context,
+    // never in the message: an interpolated value would fragment Sentry
+    // grouping (CLAUDE.md). `otherLiveSlots` excludes this slot, which is
+    // marked dead immediately below.
     Sentry.captureException(new Error('Stockfish worker pool: grading watchdog timeout'), {
       tags: { source: 'stockfish-worker-pool' },
+      contexts: {
+        stockfishWatchdog: {
+          elapsedMs,
+          sinceLastInfoMs,
+          suspendRearms: slot.watchdogSuspendRearms,
+          livenessRearms: slot.watchdogLivenessRearms,
+          gradingDepth: slot.current?.gradingDepth ?? null,
+          candidateCount: slot.current?.candidateUcis.length ?? null,
+          gradesAccumulated: slot.accumulator.size,
+          visibilityState: document.visibilityState,
+          poolSize: slots.length,
+          otherLiveSlots: slots.filter((other) => other !== slot && !other.dead).length,
+          slotRespawns,
+        },
+      },
     });
     slot.isReady = false;
     slot.dead = true;
@@ -645,10 +754,19 @@ export function createWorkerPool(): WorkerPool {
     slot.worker.postMessage(buildGradeGoCommand(req.gradingDepth, req.candidateUcis));
     slot.state = 'thinking';
     clearSlotWatchdog(slot); // defensive: a stale timer must never coexist with a fresh dispatch
-    // FLAWCHESS-9G: a fresh dispatch is the only place the suspend-rearm
-    // counter resets — each grading request gets its own re-arm budget.
+    // FLAWCHESS-9G: a fresh dispatch is the only place the re-arm counters
+    // reset — each grading request gets its own budget for both causes — and
+    // the only place `lastInfoAtMs` clears, so liveness is always measured
+    // against THIS dispatch's output, never the previous request's. That last
+    // reset is DEFENSIVE only while `GRADING_WATCHDOG_LIVENESS_MS <
+    // GRADING_WATCHDOG_TIMEOUT_MS` holds (a carried-over stamp is then always
+    // at least a full watchdog window stale, so it could never vouch for this
+    // dispatch anyway); raising the liveness window past the timeout makes it
+    // load-bearing, and a unit test pins that ordering as the tripwire.
     slot.armedAtMs = Date.now();
     slot.watchdogSuspendRearms = 0;
+    slot.watchdogLivenessRearms = 0;
+    slot.lastInfoAtMs = 0;
     slot.watchdogTimer = setTimeout(() => fireWatchdog(slot), GRADING_WATCHDOG_TIMEOUT_MS);
   }
 
@@ -683,6 +801,12 @@ export function createWorkerPool(): WorkerPool {
 
     if (line.startsWith('info ')) {
       if (slot.state !== 'thinking' || slot.stopPending || slot.current === null) return;
+      // FLAWCHESS-9G (second pass): stamp liveness BEFORE the parse filters
+      // below. A worker grinding through a hard position emits plenty of
+      // lines this branch goes on to discard (`currmove` reports carry no
+      // score; lower/upperbound scores are not `exact`) — every one of them
+      // is proof the worker is running, which is all `fireWatchdog` needs.
+      slot.lastInfoAtMs = Date.now();
       const parsed = parseInfoLine(line);
       if (parsed === null || parsed.bound !== 'exact') return;
       const uci = parsed.pv[0];
@@ -845,6 +969,8 @@ export function createWorkerPool(): WorkerPool {
       watchdogTimer: null,
       armedAtMs: 0,
       watchdogSuspendRearms: 0,
+      lastInfoAtMs: 0,
+      watchdogLivenessRearms: 0,
     };
     worker.onmessage = (e: MessageEvent<string>) => handleLine(slot, e.data);
     // WR-03/WR-04: an async script-load failure (404, CSP block, syntax

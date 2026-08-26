@@ -3,7 +3,8 @@
 Phase 189 Plan 01 (POOL-01/POOL-04/POOL-05/POOL-06). One row per (user, game,
 ply) that has entered the Train drill pool: an interval-ladder "streak" state
 machine tracks progress toward MASTERED (3 spaced-correct solves, POOL-05) or
-PARKED (3 never-correct fails, POOL-06); `due_date` drives session composition
+PARKED (two doors — POOL-06: 3 never-correct fails; SEED-154: 6 lifetime
+fails regardless of ever_correct); `due_date` drives session composition
 (POOL-04, snapped to a scheduled session day by
 `app.services.train_scheduler.next_scheduled_day`).
 

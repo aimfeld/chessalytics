@@ -35,13 +35,13 @@ export interface TrainStatsCardProps {
 
 /**
  * Copy mirrors `app.services.train_scheduler`'s `MASTERY_STREAK_THRESHOLD`
- * (3) and `PARK_FAIL_THRESHOLD` (3). Prose only — no client-side logic reads
- * these thresholds, so there is nothing here to keep numerically in sync
- * beyond the wording.
+ * (3), `PARK_FAIL_THRESHOLD` (3), and `LEECH_FAIL_THRESHOLD` (6). Prose only
+ * — no client-side logic reads these thresholds, so there is nothing here to
+ * keep numerically in sync beyond the wording.
  */
 const MASTERED_EXPLAINER = 'Solved correctly 3 times in a row. Mastered puzzles stop coming back.';
 const PARKED_EXPLAINER =
-  'Missed 3 times without ever solving it. Parked puzzles are set aside so they stop resurfacing.';
+  'Missed 6 times in total, or 3 times without ever solving it. Parked puzzles are set aside so they stop resurfacing.';
 
 function StatsCardShell({ children }: { children: ReactElement }): ReactElement {
   return (
