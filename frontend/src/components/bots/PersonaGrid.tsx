@@ -84,8 +84,8 @@ function HumanLikeOpponentsCard({
             below uses the same trailing-trigger shape. `align-middle` keeps the
             16px glyph on the text baseline when the sentence wraps. */}
         <p>
-          Not weakened engines: these bots are driven by the FlawChess Engine and play like
-          human players.{' '}
+          These bots are driven by the FlawChess Engine and play like
+          human players, not like weakened engines.{' '}
           <span className="inline-flex align-middle">
             <InfoPopover ariaLabel="About the bot opponents" testId="bots-intro-info">
               <div className="max-w-xs space-y-2">
