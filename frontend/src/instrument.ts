@@ -4,7 +4,7 @@ import * as Sentry from "@sentry/react";
 // instrumentation file which loads before the app bundle is ready.
 interface AxiosLikeError {
   isAxiosError: true;
-  response?: { status: number };
+  response?: { status: number; data?: unknown };
   code?: string;
   config?: { url?: string; method?: string };
 }
@@ -50,6 +50,34 @@ function isSuppressibleNetworkNoise(): boolean {
   return false;
 }
 
+/** The one endpoint whose 422 is a deliberate, user-facing rejection (below). */
+const PASTE_GAME_URL = "/imports/paste";
+
+/**
+ * FLAWCHESS-9W: true for the pasted-PGN endpoint rejecting text that is not a
+ * complete game. `PasteModal` renders the server's message in its
+ * `paste-save-error` slot and the user edits and retries, so there is nothing
+ * to fix — reporting it just files a Sentry issue per typo.
+ *
+ * Scoped to this one method+path rather than to the status: every OTHER 422
+ * in the API is `from_date must be <= to_date`, which our own date-range
+ * picker is supposed to make impossible and which therefore IS a bug.
+ *
+ * The string-`detail` check keeps the remaining bug case visible. FastAPI
+ * puts a plain string in `detail` for an explicit `HTTPException` (our
+ * deliberate rejection) but an ARRAY there for a Pydantic schema failure —
+ * and a schema failure on this endpoint means the frontend built a malformed
+ * request body, which still ships to Sentry.
+ */
+function isExpectedPastedPgnRejection(error: AxiosLikeError): boolean {
+  if (error.response?.status !== 422) return false;
+  if (error.config?.method?.toLowerCase() !== "post") return false;
+  if (error.config?.url !== PASTE_GAME_URL) return false;
+  const data = error.response.data;
+  if (typeof data !== "object" || data === null) return false;
+  return typeof (data as Record<string, unknown>)["detail"] === "string";
+}
+
 function sentryBeforeSend(
   event: Sentry.ErrorEvent,
   hint: Sentry.EventHint,
@@ -59,6 +87,11 @@ function sentryBeforeSend(
     // 401 Unauthorized is never a bug — it's a normal auth failure (expired session,
     // wrong credentials). Drop it to avoid noise in Sentry.
     if (error.response?.status === 401) {
+      return null;
+    }
+    // FLAWCHESS-9W: an unparseable pasted PGN is expected user input, not a
+    // bug — see isExpectedPastedPgnRejection() above.
+    if (isExpectedPastedPgnRejection(error)) {
       return null;
     }
     // FLAWCHESS-24: drop unactionable network noise — see SUPPRESSIBLE_AXIOS_CODES
@@ -123,6 +156,11 @@ Sentry.init({
     // by construction, and the sampled events share a trace id with the
     // offline XHR failure that produced them.
     /Failed to update a ServiceWorker/,
+    // FLAWCHESS-8P: WebKit's wording for that same failed revalidation.
+    // Chrome says "Failed to update a ServiceWorker ..."; Safari/iOS throws a
+    // TypeError reading "Script <url> load failed", so the pattern above never
+    // matched it and all 6 events were Mobile Safari.
+    /Script \S+\/sw\.js load failed/,
   ],
   // These frames are entirely inside Cloudflare Web Analytics, not our code.
   denyUrls: [/beacon\.min\.js/],

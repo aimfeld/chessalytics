@@ -21,7 +21,7 @@ vi.mock('@sentry/react', () => ({
 interface AxiosLikeErrorInput {
   isAxiosError: true;
   code?: string;
-  response?: { status: number };
+  response?: { status: number; data?: unknown };
   config?: { url?: string; method?: string };
 }
 
@@ -226,6 +226,70 @@ describe('sentryBeforeSend (FLAWCHESS-24)', () => {
   });
 });
 
+describe('sentryBeforeSend pasted-PGN rejection (FLAWCHESS-9W)', () => {
+  /** The real prod failure: POST /imports/paste rejecting text that is not a game. */
+  function pasteRejection(detail: unknown): AxiosLikeErrorInput {
+    return {
+      isAxiosError: true,
+      response: { status: 422, data: { detail } },
+      config: { url: '/imports/paste', method: 'post' },
+    };
+  }
+
+  it('drops the 422 from POST /imports/paste when detail is the server string', async () => {
+    const { sentryBeforeSend } = await import('@/instrument');
+
+    const result = sentryBeforeSend(
+      makeEvent() as never,
+      makeHint(pasteRejection('Could not read that PGN as a complete game')) as never,
+    );
+    expect(result).toBeNull();
+  });
+
+  it('KEEPS a Pydantic schema 422 on the same endpoint — an array detail means we built a bad request', async () => {
+    const { sentryBeforeSend } = await import('@/instrument');
+
+    const event = sentryBeforeSend(
+      makeEvent() as never,
+      makeHint(pasteRejection([{ loc: ['body', 'user_color'], msg: 'unexpected value' }])) as never,
+    );
+    expect(event).not.toBeNull();
+    expect((event as unknown as { fingerprint: string[] }).fingerprint).toEqual(['api-http-422']);
+  });
+
+  it('KEEPS a 422 from another endpoint — from_date > to_date is a frontend bug', async () => {
+    const { sentryBeforeSend } = await import('@/instrument');
+
+    const event = sentryBeforeSend(
+      makeEvent() as never,
+      makeHint({
+        isAxiosError: true,
+        response: { status: 422, data: { detail: 'from_date must be <= to_date' } },
+        config: { url: '/library/games', method: 'get' },
+      }) as never,
+    );
+    expect(event).not.toBeNull();
+    expect((event as unknown as { fingerprint: string[] }).fingerprint).toEqual(['api-http-422']);
+  });
+
+  it('KEEPS a non-422 failure of the paste endpoint (a 500 is still a bug)', async () => {
+    const { sentryBeforeSend } = await import('@/instrument');
+
+    const event = sentryBeforeSend(
+      makeEvent() as never,
+      makeHint({
+        isAxiosError: true,
+        response: { status: 500, data: { detail: 'Internal Server Error' } },
+        config: { url: '/imports/paste', method: 'post' },
+      }) as never,
+    );
+    expect(event).not.toBeNull();
+    expect((event as unknown as { fingerprint: string[] }).fingerprint).toEqual([
+      'api-server-error',
+    ]);
+  });
+});
+
 describe('sentryBeforeSend request attachment (FLAWCHESS-64)', () => {
   it("attaches config.url and the uppercased config.method to event.request", async () => {
     const { sentryBeforeSend } = await import('@/instrument');
@@ -278,6 +342,26 @@ describe('Sentry.init config (FLAWCHESS-24 / SEED-148 items 3)', () => {
     const prodMessage =
       "Failed to update a ServiceWorker for scope ('https://flawchess.com/'), script ('https://flawchess.com/sw.js')";
     expect(ignoreErrors.some((p) => p.test(prodMessage))).toBe(true);
+  });
+
+  it("ignoreErrors matches WebKit's wording for the same failure (FLAWCHESS-8P)", async () => {
+    const Sentry = await import('@sentry/react');
+    await import('@/instrument');
+
+    const initCall = vi.mocked(Sentry.init).mock.calls[0]?.[0];
+    const ignoreErrors = (initCall?.ignoreErrors ?? []) as RegExp[];
+    const prodMessage = 'Script https://flawchess.com/sw.js load failed';
+    expect(ignoreErrors.some((p) => p.test(prodMessage))).toBe(true);
+  });
+
+  it('ignoreErrors does NOT swallow an unrelated script load failure', async () => {
+    const Sentry = await import('@sentry/react');
+    await import('@/instrument');
+
+    const initCall = vi.mocked(Sentry.init).mock.calls[0]?.[0];
+    const ignoreErrors = (initCall?.ignoreErrors ?? []) as RegExp[];
+    const unrelated = 'Script https://flawchess.com/assets/index-abc123.js load failed';
+    expect(ignoreErrors.some((p) => p.test(unrelated))).toBe(false);
   });
 
   it('denyUrls matches a Cloudflare beacon.min.js frame URL', async () => {
