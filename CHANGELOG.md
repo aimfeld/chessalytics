@@ -12,6 +12,10 @@ in `YYYY-MM-DD` (Europe/Zurich).
 
 - Admins can now open the Activity Pulse dashboard at `/activity` from the main nav, instead of running it locally over an SSH tunnel. Data loads on open and refreshes only when asked.
 
+### Changed
+
+- Train no longer serves the same puzzle forever: a puzzle you keep missing is now set aside after 6 total misses, even if you solved it correctly somewhere in between. Previously only a puzzle you had never once solved could be parked, so a puzzle you alternately solved and missed stayed in the rotation indefinitely.
+
 ## [v2.13] Ways In & Honest Answers — 2026-08-22
 
 ### Added

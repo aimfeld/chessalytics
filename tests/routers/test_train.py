@@ -1333,7 +1333,8 @@ async def test_solve_masters_item_at_three(test_engine) -> None:
 
 @pytest.mark.asyncio
 async def test_solve_wrong_resets_streak_and_counts_fail(test_engine) -> None:
-    """A wrong solve resets streak to 0 and counts a fail while ever_correct is False."""
+    """A wrong solve resets streak to 0 and increments the lifetime fail count
+    (SEED-154: fail_count accrues unconditionally, not gated on ever_correct)."""
     email = f"train-wrong-{uuid.uuid4().hex[:8]}@example.com"
     user_id, token = await _register_and_login(email)
     game_id = await _seed_game_with_blunder(test_engine, user_id)
