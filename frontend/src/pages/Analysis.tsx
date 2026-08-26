@@ -70,6 +70,7 @@ import {
 } from '@/lib/analysisUrl';
 import { PasteModal } from '@/components/analysis/PasteModal';
 import type { PasteParseResult, PastedGameHeaders } from '@/lib/pastedGame';
+import { takePastedGameHandoff } from '@/lib/pastedGameHandoff';
 import { toDisplayDepthForOrientation } from '@/lib/tacticDepth';
 import { buildPvArrow } from '@/lib/tacticArrows';
 import { EvalBar } from '@/components/analysis/EvalBar';
@@ -925,6 +926,12 @@ export default function Analysis() {
   // game_id > fen > line precedence.
   const seededKey = useRef<string | null>(null);
   const navigatedInitialPlyKey = useRef<string | null>(null);
+  // Quick 260826-qdl: guards the Import-tab handoff consume effect below
+  // against StrictMode's double-invoke of effects. takePastedGameHandoff is
+  // destructive (it clears sessionStorage on every call), so a second
+  // invocation without this guard would silently discard the handoff before
+  // it is ever applied.
+  const pasteHandoffConsumed = useRef(false);
 
   // Quick 260702-fog: the tactic (if any) the board auto-opens to when the entry ply carries
   // a user tactic chip. Drives BOTH the initial navigation effect and the move-list top-align
@@ -2652,6 +2659,30 @@ export default function Analysis() {
     setPastedHeaders(null);
     navigate(buildGameAnalysisUrl(savedGameId));
   };
+
+  // Quick 260826-qdl: consume a handoff written by the Import tab's paste
+  // entry point (a second PasteModal mount, distinct from this page's own
+  // `pasteModalNode`). Mount-once, empty deps: the `pasteHandoffConsumed` ref
+  // guard exists because React StrictMode double-invokes effects and the take
+  // is destructive — without it the second invocation would find the key
+  // already cleared. `seededKey.current = 'paste'` claims the shared arbiter
+  // the `?line=`/`?fen=` seeding effects above read, so a stray `?line=`/
+  // `?fen=` on the /analysis destination URL cannot seed over the pasted
+  // game. Reusing `handlePasteLoad` verbatim (rather than re-deriving its
+  // logic here) is what makes the Import-tab path behave identically to the
+  // on-board paste path.
+  useEffect(() => {
+    if (pasteHandoffConsumed.current) return;
+    pasteHandoffConsumed.current = true;
+    const handoff = takePastedGameHandoff();
+    // A `?game_id=` URL always wins over a pending handoff (game mode), and
+    // the destructive take above has already discarded the stale payload
+    // either way — no cleanup branch is needed here.
+    if (handoff === null || isGameMode) return;
+    seededKey.current = 'paste';
+    handlePasteLoad(handoff.result, handoff.userColor);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   // Inline chip click: toggle off (SAME chip only — deleteSubtree removes just that
   // line, others stay open) or open a new line WITHOUT touching any other open line
