@@ -89,10 +89,19 @@ function HumanLikeOpponentsCard({
           <span className="inline-flex align-middle">
             <InfoPopover ariaLabel="About the bot opponents" testId="bots-intro-info">
               <div className="max-w-xs space-y-2">
+                {/* Non-technical engine explainer, kept in the register of
+                    Analysis.tsx's FlawChessInfoTooltip: no "Maia", no "MCTS",
+                    no "expectimax". It describes what the engine KNOWS (how
+                    players at a rating move), never that the bot calculates —
+                    16 of the 24 personas run no search at all. */}
                 <p>
-                  A normal engine turned down plays perfectly, then throws in a random blunder.
-                  These bots instead predict what a human at that rating would actually play, so
-                  their mistakes look like the ones you meet online.
+                  The FlawChess Engine is our own engine. Beyond which move is objectively best, it
+                  models how real players at a given rating actually move: which moves they find,
+                  and which they miss.
+                </p>
+                <p>
+                  So a bot never plays perfectly and then throws in a random blunder, the way a
+                  dialed-down engine does. Its mistakes look like the ones you meet online.
                 </p>
                 <p>
                   Each style tilts that further: Attackers press, Tricksters play for
