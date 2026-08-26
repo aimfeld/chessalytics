@@ -98,3 +98,30 @@ pair the change with a manual un-park affordance on the Train stats card.
 
 Captured from a design conversation on 2026-08-26, outside any phase scope.
 Claude recommended 8 lapses (Anki's default); Adrian chose 6.
+
+## Resolution
+
+**Closed 2026-08-26** by quick task `260826-pn3` (commits `92c62d4e5`, `4180adf2e`,
+`c278c9cef`). Implemented as sketched: `LEECH_FAIL_THRESHOLD = 6`, `fail_count`
+is now a lifetime lapse counter, and `apply_result` has two named park doors.
+
+Two things the sketch did not anticipate:
+
+- **The PARKED return hardcoded `ever_correct=False`.** That was safe only while
+  Door A was the sole path in. Door B can fire with the flag True, so the literal
+  would have silently rewritten a solved item's history to "never solved" at the
+  moment it parked. Now propagates `state.ever_correct`; guarded by
+  `test_leech_park_preserves_ever_correct_true`.
+- **No mass-parking on deploy, provably.** Every live `ever_correct=True` row
+  holds `fail_count = 0` and every unparked never-solved row holds <= 2, because
+  the old code zeroed on each correct solve and capped never-solved items at 3.
+  All six lapses below the new door, so the no-migration decision is safe rather
+  than merely hopeful.
+
+**Open Question resolved: park-only, no un-park.** Adrian's call, 2026-08-26.
+`PARKED` remains write-only with no path back. Rationale: the underlying flaw
+stays visible in the Games/flaws surfaces regardless, and an un-park affordance
+can be added later on evidence, once parked counts are actually non-zero for
+real users. If that evidence arrives, the cheap version is a single bulk
+"un-park all" endpoint plus a button on `TrainStatsCard` (reset `fail_count` to
+0 and re-snap `due_date`), not a per-item listing UI.
