@@ -149,7 +149,9 @@ class TestApplyResultCorrect:
             status=DrillStatus.ACTIVE, streak=0, due_date=_TODAY, fail_count=5, ever_correct=True
         )
         for _ in range(MASTERY_STREAK_THRESHOLD):
-            state = apply_result(state, correct_move=True, today=_TODAY, weekday_mask=_EVERY_DAY_MASK)
+            state = apply_result(
+                state, correct_move=True, today=_TODAY, weekday_mask=_EVERY_DAY_MASK
+            )
         assert state.status == DrillStatus.MASTERED
         assert state.fail_count == 5
 
@@ -212,9 +214,7 @@ class TestApplyResultWrong:
             if attempt < LEECH_FAIL_THRESHOLD:
                 assert state.status == DrillStatus.ACTIVE, f"parked too early at attempt {attempt}"
             else:
-                assert state.status == DrillStatus.PARKED, (
-                    f"must have parked by attempt {attempt}"
-                )
+                assert state.status == DrillStatus.PARKED, f"must have parked by attempt {attempt}"
                 break
         assert state.status == DrillStatus.PARKED
         assert state.fail_count == LEECH_FAIL_THRESHOLD
