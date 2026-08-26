@@ -55,8 +55,12 @@ export interface PersonaGridProps {
 
 /**
  * Intro card explaining what makes these opponents different from a dialed-down
- * engine. Renders unconditionally (guests included) — unlike the rating line
- * below it, which needs a `currentStrength` to say anything.
+ * engine, with the player's own strength reference as a separated second row.
+ *
+ * The CARD itself renders unconditionally (guests included — they get no rating
+ * row, and are exactly who needs the explanation most); only the rating row
+ * inside it is gated on `currentStrength`, which also gates its separator so a
+ * guest never sees a rule with nothing under it.
  *
  * Copy accuracy constraint: 16 of the 24 personas run at `HUMAN_BLEND` (rungs
  * 800-1400), where `selectBotMove` makes exactly ONE Maia policy call and never
@@ -66,28 +70,62 @@ export interface PersonaGridProps {
  * `contempt` only bite on the Light/Deep rungs, while the prior reweighting and
  * opening books tilt every rung.
  */
-function HumanLikeOpponentsCard(): ReactElement {
+function HumanLikeOpponentsCard({
+  currentStrength,
+}: {
+  currentStrength: CurrentStrength | null;
+}): ReactElement {
   return (
     <Card as="section" data-testid="bots-intro-card">
-      <CardHeader size="compact">
-        Human-like Opponents
-        <InfoPopover ariaLabel="About the bot opponents" testId="bots-intro-info">
-          <div className="max-w-xs space-y-2">
+      <CardHeader size="compact">Human-like Opponents</CardHeader>
+      <CardBody className="space-y-3 text-sm text-muted-foreground">
+        {/* The info trigger sits inline at the END of the sentence it expands,
+            not up in the header — it explains this claim, and the rating row
+            below uses the same trailing-trigger shape. `align-middle` keeps the
+            16px glyph on the text baseline when the sentence wraps. */}
+        <p>
+          Not weakened engines: these bots are driven by the FlawChess Engine and play similar to
+          human players.{' '}
+          <span className="inline-flex align-middle">
+            <InfoPopover ariaLabel="About the bot opponents" testId="bots-intro-info">
+              <div className="max-w-xs space-y-2">
+                <p>
+                  A normal engine turned down plays perfectly, then throws in a random blunder.
+                  These bots instead predict what a human at that rating would actually play, so
+                  their mistakes look like the ones you meet online.
+                </p>
+                <p>
+                  Each style tilts that further: Attackers press, Tricksters play for
+                  complications, Grinders trade down and never resign, Walls keep it quiet.
+                </p>
+              </div>
+            </InfoPopover>
+          </span>
+        </p>
+
+        {/* Strength reference for picking an opponent: the persona cards all
+            carry a `~ELO` label, but without the player's own number those
+            labels have nothing to be "similar" to. A null `rung` (anchor
+            fallback) does NOT suppress this row — only currentStrength ===
+            null does. The rule lives on this row (not as a standalone sibling)
+            so it disappears with the row it separates. */}
+        {currentStrength !== null && (
+          <div
+            className="flex items-center gap-1 border-t border-border/40 pt-3"
+            data-testid="bots-player-rating"
+          >
             <p>
-              A normal engine turned down plays perfectly, then throws in a random blunder. These
-              bots instead predict what a human at that rating would actually play, so their
-              mistakes look like the ones you meet online.
+              Your estimated blitz rating:{' '}
+              <span className="font-semibold text-foreground">{`~${Math.round(currentStrength.rating)}`}</span>
             </p>
-            <p>
-              Each style tilts that further: Attackers press, Tricksters play for complications,
-              Grinders trade down and never resign, Walls keep it quiet.
-            </p>
+            <InfoPopover
+              ariaLabel="About your estimated blitz rating"
+              testId="bots-player-rating-info"
+            >
+              <p>{currentStrengthCopy(currentStrength)}</p>
+            </InfoPopover>
           </div>
-        </InfoPopover>
-      </CardHeader>
-      <CardBody className="text-sm text-muted-foreground">
-        Not weakened engines — these bots are driven by the FlawChess Engine and play like real
-        players at their rating.
+        )}
       </CardBody>
     </Card>
   );
@@ -106,27 +144,7 @@ export function PersonaGrid({
       data-testid="bots-persona-grid"
       className="mx-auto flex max-w-2xl flex-col gap-6 p-4 pb-20 sm:pb-4"
     >
-      <HumanLikeOpponentsCard />
-
-      {/* Strength reference for picking an opponent: the persona cards all
-          carry a `~ELO` label, but without the player's own number those
-          labels have nothing to be "similar" to. A null `rung` (anchor
-          fallback) does NOT suppress this line — only currentStrength ===
-          null does. */}
-      {currentStrength !== null && (
-        <div className="-mb-3 flex items-center gap-1" data-testid="bots-player-rating">
-          <p className="text-sm text-muted-foreground">
-            Your estimated blitz rating:{' '}
-            <span className="font-semibold text-foreground">{`~${Math.round(currentStrength.rating)}`}</span>
-          </p>
-          <InfoPopover
-            ariaLabel="About your estimated blitz rating"
-            testId="bots-player-rating-info"
-          >
-            <p>{currentStrengthCopy(currentStrength)}</p>
-          </InfoPopover>
-        </div>
-      )}
+      <HumanLikeOpponentsCard currentStrength={currentStrength} />
 
       {/* Single grid-cols-4 container for the header row + all 6 rung body
           rows, so columns align exactly and row/column gaps stay uniform
