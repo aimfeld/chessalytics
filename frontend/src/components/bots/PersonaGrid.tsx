@@ -12,6 +12,7 @@
 import type { ReactElement } from 'react';
 import { PersonaCard } from '@/components/bots/PersonaCard';
 import { Button } from '@/components/ui/button';
+import { Card, CardHeader, CardBody } from '@/components/ui/card';
 import { InfoPopover } from '@/components/ui/info-popover';
 import { currentStrengthCopy } from '@/lib/currentStrengthCopy';
 import {
@@ -52,6 +53,93 @@ export interface PersonaGridProps {
   winsByPersona?: Record<string, number>;
 }
 
+/**
+ * Intro card explaining what makes these opponents different from a dialed-down
+ * engine, with the player's own strength reference as a separated second row.
+ *
+ * The CARD itself renders unconditionally (guests included — they get no rating
+ * row, and are exactly who needs the explanation most); only the rating row
+ * inside it is gated on `currentStrength`, which also gates its separator so a
+ * guest never sees a rule with nothing under it.
+ *
+ * Copy accuracy constraint: 16 of the 24 personas run at `HUMAN_BLEND` (rungs
+ * 800-1400), where `selectBotMove` makes exactly ONE Maia policy call and never
+ * searches. So this copy must never claim the bots "calculate" or "think" — it
+ * describes human move PREDICTION, which is what all 24 have in common. The
+ * style sentence stays directional for the same reason: `varianceBonus` and
+ * `contempt` only bite on the Light/Deep rungs, while the prior reweighting and
+ * opening books tilt every rung.
+ */
+function HumanLikeOpponentsCard({
+  currentStrength,
+}: {
+  currentStrength: CurrentStrength | null;
+}): ReactElement {
+  return (
+    <Card as="section" data-testid="bots-intro-card">
+      <CardHeader size="compact">Human-like Opponents</CardHeader>
+      <CardBody className="space-y-3 text-sm text-muted-foreground">
+        {/* The info trigger sits inline at the END of the sentence it expands,
+            not up in the header — it explains this claim, and the rating row
+            below uses the same trailing-trigger shape. `align-middle` keeps the
+            16px glyph on the text baseline when the sentence wraps. */}
+        <p>
+          These bots are driven by the FlawChess Engine and play like
+          human players, not like weakened engines.{' '}
+          <span className="inline-flex align-middle">
+            <InfoPopover ariaLabel="About the bot opponents" testId="bots-intro-info">
+              <div className="max-w-xs space-y-2">
+                {/* Non-technical engine explainer, kept in the register of
+                    Analysis.tsx's FlawChessInfoTooltip: no "Maia", no "MCTS",
+                    no "expectimax". It describes what the engine KNOWS (how
+                    players at a rating move), never that the bot calculates —
+                    16 of the 24 personas run no search at all. */}
+                <p>
+                  The FlawChess Engine is our own engine. Beyond which move is objectively best, it
+                  models how real players at a given rating actually move: which moves they find,
+                  and which they miss.
+                </p>
+                <p>
+                  So a bot never plays perfectly and then throws in a random blunder, the way a
+                  dialed-down engine does. Its mistakes look like the ones you meet online.
+                </p>
+                <p>
+                  Each style tilts that further: Attackers press, Tricksters play for
+                  complications, Grinders trade down and never resign, Walls keep it quiet.
+                </p>
+              </div>
+            </InfoPopover>
+          </span>
+        </p>
+
+        {/* Strength reference for picking an opponent: the persona cards all
+            carry a `~ELO` label, but without the player's own number those
+            labels have nothing to be "similar" to. A null `rung` (anchor
+            fallback) does NOT suppress this row — only currentStrength ===
+            null does. The rule lives on this row (not as a standalone sibling)
+            so it disappears with the row it separates. */}
+        {currentStrength !== null && (
+          <div
+            className="flex items-center gap-1 border-t border-border/40 pt-3"
+            data-testid="bots-player-rating"
+          >
+            <p>
+              Your estimated blitz rating:{' '}
+              <span className="font-semibold text-foreground">{`~${Math.round(currentStrength.rating)}`}</span>
+            </p>
+            <InfoPopover
+              ariaLabel="About your estimated blitz rating"
+              testId="bots-player-rating-info"
+            >
+              <p>{currentStrengthCopy(currentStrength)}</p>
+            </InfoPopover>
+          </div>
+        )}
+      </CardBody>
+    </Card>
+  );
+}
+
 export function PersonaGrid({
   onSelectPersona,
   onSelectCustom,
@@ -65,25 +153,7 @@ export function PersonaGrid({
       data-testid="bots-persona-grid"
       className="mx-auto flex max-w-2xl flex-col gap-6 p-4 pb-20 sm:pb-4"
     >
-      {/* Strength reference for picking an opponent: the persona cards all
-          carry a `~ELO` label, but without the player's own number those
-          labels have nothing to be "similar" to. A null `rung` (anchor
-          fallback) does NOT suppress this line — only currentStrength ===
-          null does. */}
-      {currentStrength !== null && (
-        <div className="-mb-3 flex items-center gap-1" data-testid="bots-player-rating">
-          <p className="text-sm text-muted-foreground">
-            Your estimated blitz rating:{' '}
-            <span className="font-semibold text-foreground">{`~${Math.round(currentStrength.rating)}`}</span>
-          </p>
-          <InfoPopover
-            ariaLabel="About your estimated blitz rating"
-            testId="bots-player-rating-info"
-          >
-            <p>{currentStrengthCopy(currentStrength)}</p>
-          </InfoPopover>
-        </div>
-      )}
+      <HumanLikeOpponentsCard currentStrength={currentStrength} />
 
       {/* Single grid-cols-4 container for the header row + all 6 rung body
           rows, so columns align exactly and row/column gaps stay uniform

@@ -112,7 +112,11 @@ export function PersonaCard({ persona, onSelect, winsForPersona }: PersonaCardPr
          Armadillo"). The card is avatar-bound (58px wide) so the horizontal
          padding is invisible around the avatar anyway; only the name row was
          paying for it. Desktop (sm:) keeps the original 8px. */
-      className="flex flex-col items-center gap-1 rounded border border-border bg-card px-0.5 py-2 text-center transition-colors sm:px-2 pointer-fine:hover:bg-inactive-bg-hover"
+      /* charcoal-texture (not bg-card) so the tiles sit on the same textured
+         surface as the intro Card above the grid — one material for the whole
+         page. It is an @layer components rule, so the utility-layer hover
+         background below still overrides it on pointer-fine devices. */
+      className="charcoal-texture flex flex-col items-center gap-1 rounded border border-border px-0.5 py-2 text-center transition-colors sm:px-2 pointer-fine:hover:bg-inactive-bg-hover"
     >
       <span
         aria-hidden="true"

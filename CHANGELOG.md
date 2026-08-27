@@ -16,6 +16,8 @@ in `YYYY-MM-DD` (Europe/Zurich).
 
 ### Changed
 
+- The Bots page now opens with a short intro card explaining what the opponents are: personas that play like human players of a given rating, powered by the FlawChess Engine. The rating line moved into that card, and the persona tiles are now charcoal.
+
 - Train no longer serves the same puzzle forever: a puzzle you keep missing is now set aside after 6 total misses, even if you solved it correctly somewhere in between. Previously only a puzzle you had never once solved could be parked, so a puzzle you alternately solved and missed stayed in the rotation indefinitely.
 
 ## [v2.13] Ways In & Honest Answers — 2026-08-22

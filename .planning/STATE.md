@@ -5,10 +5,10 @@ current_phase: 212
 current_phase_name: Benchmark Full-Game Analysis Lane
 status: executing
 stopped_at: Phase 212 wave 9 — code shipped to main; 212-10 Task 2 (classical tranche) in flight, Task 3 blocked until it ends
-last_updated: "2026-08-24T04:20:51.656Z"
-last_activity: 2026-08-23
+last_updated: "2026-08-26T17:45:03.370Z"
+last_activity: 2026-08-26
 last_activity_desc: Phase 212 code squash-merged to main; classical tranche running at 0.2%
-state_head: 1bc6766dff7f4a99724cd887c22454dd475c8400
+state_head: 6737194d3cc84b500c33ae19e1e64f7deffd52de
 progress:
   total_phases: 1
   completed_phases: 0
@@ -805,6 +805,7 @@ None active.
 | 260826-pn3 | Train SR: park leech items after 6 lifetime lapses (SEED-154). `apply_result`'s `fail_count` becomes a LIFETIME lapse counter (it no longer resets to 0 on a correct solve, in either the MASTERED or the ACTIVE return) and the wrong-move increment is now unconditional rather than gated on `ever_correct is False`. Adds Door B, `LEECH_FAIL_THRESHOLD = 6`, alongside the unchanged Door A (`PARK_FAIL_THRESHOLD = 3`, never-solved). Fixes the item that alternately solves and fails and therefore NEVER left the pool: MASTERED needs 3 *consecutive* correct (alternation caps the streak at 1 forever) and the old single park door required `ever_correct is False`, which the first correct solve permanently disqualified — so such an item occupied an SR slot at ~1.5 days/attempt indefinitely. 6 lapses, not Anki's leech default of 8, because a Train session holds far fewer slots than an Anki deck; a coin-flip item retires while a 70%-recall item (expected ~2 lifetime lapses) almost never does. Also fixed a silent-corruption trap the seed did not flag: the PARKED return hardcoded `ever_correct=False`, safe only while Door A was the sole path in — Door B can fire with the flag True, so it now propagates `state.ever_correct` (guarded by `test_leech_park_preserves_ever_correct_true`). No migration and no backfill: every live `ever_correct=True` row holds `fail_count=0` and every unparked never-solved row holds <= 2, all below the new door. Deliberately NOT done: any un-park affordance (user decision 2026-08-26 — `PARKED` is still write-only with no path back; the underlying flaw stays visible in the Games/flaws surfaces, and an affordance can be added later on evidence once parked counts are non-zero for real users). 4454 passed | 2026-08-26 | c278c9cef | [260826-pn3-train-sr-park-leech-items-after-6-lifeti](./quick/260826-pn3-train-sr-park-leech-items-after-6-lifeti/) |
 | 260826-qdl | Import tab: add an "Import Single Game (PGN/FEN)" button that opens the analysis-board paste modal and lands the result directly on the analysis board | 2026-08-26 | a95d63c38 | [260826-qdl-in-the-import-tab-below-the-lichess-impo](./quick/260826-qdl-in-the-import-tab-below-the-lichess-impo/) |
 | SEED-153 | Engine disagreement study, complete. On the 19,737-position tail where Stockfish and Maia back opposite winners, FlawChess ties Stockfish at both phases (+0.00145 z=+1.70 MG, +0.00218 z=+1.51 EG, recalibrated), beats Maia decisively, and beats the 50/50 blend of its own inputs. The null is decisive rather than underpowered: MDE 0.00301/0.00490 sits below the 0.00690/0.00829 pilot effects the targets were sized for. Found and fixed an eval-alignment defect worth +0.0234/+0.0291 Brier to Stockfish — `game_positions.eval_cp` carries TWO populations with opposite ply conventions (lichess post-move, entry-lane aligned), so a blanket shift would have corrupted SEED-145's 72% entry-lane frame; both studies repaired provenance-aware. Also established that the rating gradient favouring FlawChess at low ELO is a calibration artifact, not information. No public data story (reasons in the report). reports/engine-disagreement-study/engine-disagreement-study.md | 2026-08-25 | 03df1dd35 | [SEED-153](./seeds/closed/SEED-153-disagreement-hunt-fc-vs-sf.md) |
+| 73 | Bots page: Human-like Opponents intro card + InfoPopover on the persona grid | 2026-08-26 | 6737194d3 | — |
 
 ## Deferred Items
 
