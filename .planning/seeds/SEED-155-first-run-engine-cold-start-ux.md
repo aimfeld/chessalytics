@@ -5,13 +5,14 @@ planted: 2026-08-27
 planted_during: /gsd-explore, triggered by a real first-time user (a friend, guest account,
   Android phone) reporting that the bot took a very long time to play its first move and that
   the persona images loaded slowly
-trigger_when: next milestone with appetite for a first-run / onboarding track. Pull forward
-  immediately if the "bot clock runs during cold start" finding below is confirmed on a real
-  device — that one is a correctness bug, not a UX complaint, and it is cheap to fix alone
-scope: medium — one owned model loader (streaming fetch + progress), one clock gate wired to
-  an existing seam, an avatar resize, and one conditional spawn. No schema change, no new
-  backend surface, no calibration risk. The deliberately-deferred server-side option is
-  scoped separately at the bottom
+trigger_when: next milestone with appetite for a first-run / onboarding track. The "game only
+  starts when the engine is ready" decision below is LOCKED (2026-08-27), so this is a design
+  decision awaiting a plan, not an open question awaiting a verdict
+scope: medium — a new readiness surface on both engine providers, a fresh-game start gate on
+  the existing confirmLive() seam, one owned model loader (streaming fetch + progress), an
+  avatar resize, and one conditional spawn. No schema change, no new backend surface, no
+  calibration risk. The deliberately-deferred server-side option is scoped separately at the
+  bottom
 supersedes: nothing
 ---
 
@@ -22,6 +23,55 @@ supersedes: nothing
 A first-time visitor created a **guest** account on an **Android phone** and started a bot
 game. Two symptoms: the bot took a very long time to make its first move, and the persona
 images loaded slowly. Both trace to one cause.
+
+## LOCKED DECISION (2026-08-27)
+
+**The game does not start until the engine is downloaded and ready.** A bot game must never
+run a clock against an engine that does not yet exist. This supersedes any design in which the
+board goes live optimistically and the first move waits.
+
+Consequences, all of which the plan must carry:
+
+1. **Fresh games mount gated, like resumes do.** `useBotGame.ts:664` becomes readiness-gated
+   rather than `resume === undefined`, reusing the existing `confirmLive()` seam
+   (`useBotGame.ts:683`) instead of inventing a second start path. This generalizes Phase 170's
+   own stated principle (*"nobody pays for the engine cold-start"*, `useBotGame.ts:65`) from
+   the resume case to every case.
+
+2. **Neither provider exposes readiness today — this is the main new surface.** `MaiaQueue`'s
+   public interface (`frontend/src/lib/engine/maiaQueue.ts:57`) is `policy` / `warm` /
+   `terminate`; its `leaseReady`, `whenReady()` and `onFatal()` are module-internal.
+   `WorkerPool` (`frontend/src/lib/engine/workerPool.ts`) publishes `grade` / `stopAll` /
+   `terminate` / `warm`. Both need a public readiness signal and a consumer-visible fatal hook
+   before the gate can be written.
+
+3. **Readiness is per-persona, not global.** Gating on "both engines up" would make a blend-0
+   game wait on 7.3 MB of Stockfish it can never use (finding 3). Ready means Maia only when
+   `blend <= 0`, Maia + Stockfish otherwise. This makes finding 3 a prerequisite of the gate,
+   not an independent nice-to-have.
+
+4. **Do not auto-start the moment it becomes ready — above a threshold.** If the game goes live
+   by itself after a 60s download, a user who looked away returns to a clock already running:
+   the same defect moved from the bot's clock onto theirs, which is exactly what Phase 170's
+   ResumeGate exists to prevent (*"no away-time billed"*, D-02). Proposed rule: if ready within
+   a short threshold (warm cache, the common repeat case) start immediately with no gate and no
+   extra tap; if the user actually waited, show a ready-gate they tap to begin. Threshold value
+   is open.
+
+5. **A failure path becomes mandatory.** "Only start when ready" turns a dead worker into a game
+   that never starts at all. `useMaiaEngine` already models this (`onFatal` / CR-03, SEED-113,
+   Phase 172); the bot path needs an honest terminal error state rather than an indefinite
+   spinner. This matters most for the device population that can **never** run Maia (no WASM
+   SIMD) — for them the gate would otherwise hang forever.
+
+6. **This settles the progress-bar question.** A blocking pre-game wait has to be legible, so
+   the owned-fetch loader (finding 2) is now **required**, not optional. Prefetching is
+   demoted to a pure optimization: it shortens or removes the gate, and is no longer needed to
+   protect correctness.
+
+7. **The analysis board is out of scope for the gate.** It loads the same model but has no
+   clock, so it can keep loading progressively. It should still get the progress UI from
+   finding 2, since it is the other place the cold start is visible.
 
 ## Measured first-run cost
 
@@ -141,21 +191,22 @@ earliest first: guest/account creation (`loginAsGuest`, `frontend/src/hooks/useA
 an explicit landing-page click, so it precedes /bots by a long way), /bots mount, persona
 select, Start.
 
-Sketch of the pieces, roughly in value order:
+Sketch of the pieces, in dependency order (revised by the locked decision above):
 
-1. **Gate the fresh-game clock on engine readiness** via the existing `confirmLive()` seam
-   (finding 1). Highest value, smallest diff, and it is the part that is arguably a bug.
-2. **Own the model fetch** — streaming reader + byte counter, buffer into
-   `InferenceSession.create()` (finding 2). Unlocks everything else.
-3. **Surface progress wherever the engine cold-starts** — bot play AND the analysis board,
-   which loads the same model. Worth auditing the analysis board's current loading state and
-   reusing it rather than inventing a second one.
-4. **Skip `pool.warm()` for blend-0 personas** (finding 3). Mechanical.
-5. **Resize avatars to ~128px + `loading="lazy"`** (finding 5). Mechanical, independently
-   valuable, no dependency on any of the above.
-6. **Enable compression on the ONNX response** — Caddy's `encode gzip` does not match
-   `application/octet-stream`; Cloudflare could compress it. Only ~8.5% (fp16), so lowest
-   priority.
+1. **Publish a readiness signal (and a fatal hook) from `MaiaQueue` and `WorkerPool`.** Nothing
+   else in the gate can be written until this exists. Consequence 2 above.
+2. **Gate the fresh game on per-persona readiness** via `confirmLive()`, with the terminal
+   error path for a dead/unsupported worker. Consequences 1, 3, 4, 5.
+3. **Own the model fetch** — streaming reader + byte counter, buffer into
+   `InferenceSession.create()` (finding 2). Required, because the gate's wait must be legible.
+4. **Surface progress in the gate, and on the analysis board** (consequence 7).
+5. **Skip `pool.warm()` for blend-0 personas** (finding 3) — folded into step 2, since the
+   readiness definition already depends on it.
+6. **Resize avatars to ~128px + `loading="lazy"`** (finding 5). Fully independent of the above;
+   ship whenever.
+7. **Prefetch, with an adaptive trigger** — now an optimization that shrinks the gate rather
+   than a correctness measure. Lowest risk to defer.
+8. **Enable compression on the ONNX response** — only ~8.5% (fp16). Lowest priority.
 
 ## Verify before planning
 
