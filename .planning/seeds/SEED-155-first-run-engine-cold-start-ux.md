@@ -26,9 +26,27 @@ images loaded slowly. Both trace to one cause.
 
 ## LOCKED DECISION (2026-08-27)
 
-**The game does not start until the engine is downloaded and ready.** A bot game must never
-run a clock against an engine that does not yet exist. This supersedes any design in which the
+**The game does not start until the engine is downloaded and WARM.** A bot game must never run
+a clock against an engine that does not yet exist. This supersedes any design in which the
 board goes live optimistically and the first move waits.
+
+**Amended 2026-08-27: "ready" was upgraded to "warm"**, because bullet time controls are wanted
+for bot play soon (see "Bullet" below). Warm means the first inference has already completed,
+not merely that `InferenceSession.create()` resolved. The two are materially different and only
+one of the two code paths warms today:
+
+- The **WebGPU** branch already runs `await analyze(WARMUP_FEN, [WARMUP_ELO])`
+  (`frontend/public/maia/maia-worker.js:197`) — but incidentally, for an unrelated reason:
+  surfacing ORT's lazily-compiled shader failures at create time. Its comment says KEEP this
+  call.
+- The **WASM** branch (`maia-worker.js:141`) returns straight from `create()` with **no warmup
+  run**. So every device without WebGPU — much of Android, and all iOS below 18.2 per the
+  Maia-on-iOS investigation — pays full first-inference cost on the bot's clock, during the
+  game.
+
+Action: hoist the warmup run out of the WebGPU branch so both paths warm, and define the
+readiness signal (consequence 2) as *warm*, not *loaded*. Cheap, and it is a prerequisite for
+bullet rather than an optimization.
 
 Consequences, all of which the plan must carry:
 
@@ -207,6 +225,55 @@ Sketch of the pieces, in dependency order (revised by the locked decision above)
 7. **Prefetch, with an adaptive trigger** — now an optimization that shrinks the gate rather
    than a correctness measure. Lowest risk to defer.
 8. **Enable compression on the ONNX response** — only ~8.5% (fp16). Lowest priority.
+
+## Bullet time controls — SEPARATE SCOPE, flagged not folded in
+
+Bullet bot play is wanted soon (stated 2026-08-27). It is the reason the locked decision says
+*warm* rather than *ready*. But bullet also collides with two constants that were calibrated for
+blitz/rapid, and fixing those is **its own scope**, not part of this seed's first-run work.
+Recorded here so it is not rediscovered.
+
+Current shortest preset is **3+0 = 180s** (`frontend/src/lib/botTimeControlPresets.ts:31`),
+which is the bottom of the blitz bucket. Per CLAUDE.md's bucketing rule (<180s = bullet),
+anything faster crosses into bullet.
+
+### 1. The reveal-delay floor does not fit bullet
+
+`REVEAL_DELAY_MIN_MS = 500`, `REVEAL_DELAY_MAX_MS = 1500`
+(`frontend/src/lib/chessClock.ts:75,79`) is a **synthetic** "thinking" delay (D-03) so
+near-instant blend-0 moves do not feel robotic. It is run via `Promise.all` alongside the
+search and is debited to the bot's honest clock like any other elapsed time.
+
+At 1+0 (60s) a 500ms floor allows roughly 60 bot moves before the bot flags on synthetic delay
+alone; at the 1500ms end, roughly 20. The module header's own safety argument is explicitly
+scoped — the floor and the ~0.09s Maia cost "stay well under any realistic **blitz/rapid**
+budget" (`chessClock.ts:47`) — so bullet is outside what was ever claimed. The floor needs to
+scale with the time control.
+
+### 2. Blend>0 personas are structurally incompatible with bullet at the current budget
+
+`FLAWCHESS_BOT_MAX_NODES = 50` is locked from measurement to a **"~15s worst-case move target"**
+(D-07, `frontend/src/lib/engine/botBudget.ts:43`). D-19 (`chessClock.ts:51`) warns that the
+calibrated ELO holds **only** at the full node budget: when `computeThinkDeadlineMs` cuts a
+think short, `deadlineSearch.ts` returns a best-so-far snapshot from fewer nodes and the bot
+plays materially weaker than its advertised ELO. That divergence is accepted *in time trouble*
+— but at 1+0 a blend>0 persona would be deadline-cut on essentially every move, i.e.
+permanently below its label.
+
+This is explicitly NOT fixable by loosening the deadline (D-19 forbids exactly that reading).
+The options are: restrict bullet to **blend-0** personas (rungs 800-1400, Maia-only, ~0.09s per
+move, no search at all — which also happens to be the cheapest cold start), or recalibrate the
+personas at a bullet-appropriate node budget via `scripts/calibration-harness.mjs`. The latter
+is a significant piece of work; prior art warns that a full 24-persona recalibration is
+all-or-nothing under PAVA.
+
+### 3. A mid-game worker respawn becomes fatal
+
+Warm state is per-worker. Android backgrounding a tab can discard workers, and the pool already
+carries a `MAX_SLOT_RESPAWNS` budget for slot death. A respawn re-pays the cold start on the
+bot's clock: survivable at 10+5, an instant loss at 1+0. Bullet support should decide what
+happens here — abort the game honestly, or keep the engine pinned — rather than inheriting the
+blitz behaviour by default.
 
 ## Verify before planning
 
