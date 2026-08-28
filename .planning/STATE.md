@@ -4,10 +4,10 @@ milestone: v2.13
 current_phase: 212
 current_phase_name: Benchmark Full-Game Analysis Lane
 status: executing
-stopped_at: Phase 212 wave 9 — code shipped to main; 212-10 Task 2 (classical tranche) in flight, Task 3 blocked until it ends
+stopped_at: Phase 212 wave 9 — code shipped to main; 212-10 Task 2 (classical tranche) 84.4% drained, Task 3 blocked until it ends
 last_updated: "2026-08-26T17:45:03.370Z"
-last_activity: 2026-08-26
-last_activity_desc: Phase 212 code squash-merged to main; classical tranche running at 0.2%
+last_activity: 2026-08-28
+last_activity_desc: Classical tranche at 84.4%, leak gate delta zero; operator chose to wait for 100% before closing
 state_head: 6737194d3cc84b500c33ae19e1e64f7deffd52de
 progress:
   total_phases: 1
@@ -21,9 +21,9 @@ milestone_name: Ways In & Honest Answers
 
 ## Current Position
 
-Phase: 212 (Benchmark Full-Game Analysis Lane) — **CODE SHIPPED, TRANCHE IN FLIGHT**
+Phase: 212 (Benchmark Full-Game Analysis Lane) — **CODE SHIPPED, TRANCHE 84.4% DRAINED**
 Plans: 9 of 10 complete
-Status: not complete — BENCHLANE-06 needs a run, and the run is ~3.4 days long
+Status: not complete — BENCHLANE-06's run is in flight and healthy; closing on completion
 
 All phase-212 code is squash-merged to `main` (`4cf72842d`, 26 files / ~5,300 insertions)
 and the phase branch `gsd/phase-212-benchmark-full-game-analysis-lane` is deleted after
@@ -35,10 +35,23 @@ the merge (worker target logging, `EVAL_FALLBACK_OPERATOR_TOKEN` /
 
 **What is left is not code.** 212-10 Task 1 was authorized 2026-08-23 (`start`, second
 presentation) after the blocker from the first presentation was fixed; Task 2 — the
-classical tranche itself — is running now at **0.2%** (46 / 27,020 lichess-arm,
-62 / 23,717 engine-arm). Task 3 (record, vacuum, three invariant proofs) cannot run until
-the drain completes or is stopped at the classical TC boundary. `212-VERIFICATION.md`
-correctly still reads `gaps_found`.
+classical tranche itself — has been draining since. Measured 2026-08-28 08:11 UTC:
+**84.4% complete**, 42,805 / 50,737 selected classical games stamped `best_moves_done`
+(lichess arm 22,918 / 27,020; never-analyzed arm 19,887 / 23,717), running at ~540
+games/hour, so roughly **15 hours** remain. Task 3 (record, vacuum, three invariant
+proofs) cannot run until the drain completes or is stopped at the classical TC boundary.
+`212-VERIFICATION.md` correctly still reads `gaps_found`.
+
+**Operator decision 2026-08-28 (asked at 84.4%, answered `wait for completion`)**: do NOT
+stop the drain at 84.4% and label the tranche partial. Let it run to 100%, then stop the
+workers at the classical boundary, run 212-10 Task 3, and close the phase on a complete
+classical tranche. 212-10's must-have forbids an ambiguous half-stopped state, so the
+alternative would have been a permanently partial-labelled deliverable.
+
+**Health at that measurement**: the leak gate `stamped_but_unselected` reads **1,805,063
+against its 1,805,063 baseline — delta zero**, and `benchmark_selection` still holds
+classical only (0 rows for rapid/blitz/bullet), so the locked TC ordering is intact and
+nothing has leaked outside the selection.
 
 The blocker that forced the first checkpoint to defer: 212-08's finding that the tier-3
 branch (b) lane stamped a game complete after ONE analyzed ply. Root-caused and fixed in
