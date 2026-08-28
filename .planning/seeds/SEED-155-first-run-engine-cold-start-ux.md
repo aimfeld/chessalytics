@@ -5,9 +5,9 @@ planted: 2026-08-27
 planted_during: /gsd-explore, triggered by a real first-time user (a friend, guest account,
   Android phone) reporting that the bot took a very long time to play its first move and that
   the persona images loaded slowly
-trigger_when: next milestone with appetite for a first-run / onboarding track. The "game only
-  starts when the engine is ready" decision below is LOCKED (2026-08-27), so this is a design
-  decision awaiting a plan, not an open question awaiting a verdict
+trigger_when: next milestone with appetite for a first-run / onboarding track. The decision
+  below (revised 2026-08-28) is settled direction awaiting a plan, not an open question
+  awaiting a verdict
 scope: medium — a new readiness surface on both engine providers, a fresh-game start gate on
   the existing confirmLive() seam, one owned model loader (streaming fetch + progress), an
   avatar resize, and one conditional spawn. No schema change, no new backend surface, no
@@ -24,16 +24,26 @@ A first-time visitor created a **guest** account on an **Android phone** and sta
 game. Two symptoms: the bot took a very long time to make its first move, and the persona
 images loaded slowly. Both trace to one cause.
 
-## LOCKED DECISION (2026-08-27)
+## DECISION (revised 2026-08-28, supersedes the 2026-08-27 "warm" lock)
 
-**The game does not start until the engine is downloaded and WARM.** A bot game must never run
-a clock against an engine that does not yet exist. This supersedes any design in which the
-board goes live optimistically and the first move waits.
+**Whenever an engine is used — Stockfish, Maia, or the combined FlawChess engine — first check
+that all models/assets it needs are available. If not, download them behind a progress UI**
+showing overall progress and which asset is currently downloading. This applies to every engine
+consumer (bot play, analysis board, future ones); bot play additionally gates the clock on it.
+A bot game must never run a clock against an engine that does not yet exist.
 
-**Amended 2026-08-27: "ready" was upgraded to "warm"**, because bullet time controls are wanted
-for bot play soon (see "Bullet" below). Warm means the first inference has already completed,
-not merely that `InferenceSession.create()` resolved. The two are materially different and only
-one of the two code paths warms today:
+**Warmup before the game begins is conditional, not mandatory: do it only if it is fast
+(<~1s).** If the first inference would take longer on this device, start the game once the
+download completes and rely on the opening book to cover the first moves while the engine warms
+in the background.
+
+Caveat the plan must resolve: the opening book cannot cover an unwarmed engine today —
+`resolveBookMove` calls `policy()`, one Maia eval (finding 4). Options: (a) let the first book
+move double as the warmup, acceptable if a cold first inference is itself ~1s-class, since a
+book ply is clock-cheap; or (b) add a policy-free book fallback (weighted sample from the ECO
+corpus) used only until the engine is warm.
+
+Warmup state of the two code paths today:
 
 - The **WebGPU** branch already runs `await analyze(WARMUP_FEN, [WARMUP_ELO])`
   (`frontend/public/maia/maia-worker.js:197`) — but incidentally, for an unrelated reason:
@@ -41,12 +51,11 @@ one of the two code paths warms today:
   call.
 - The **WASM** branch (`maia-worker.js:141`) returns straight from `create()` with **no warmup
   run**. So every device without WebGPU — much of Android, and all iOS below 18.2 per the
-  Maia-on-iOS investigation — pays full first-inference cost on the bot's clock, during the
-  game.
+  Maia-on-iOS investigation — pays full first-inference cost on its first real move.
 
-Action: hoist the warmup run out of the WebGPU branch so both paths warm, and define the
-readiness signal (consequence 2) as *warm*, not *loaded*. Cheap, and it is a prerequisite for
-bullet rather than an optimization.
+Action: hoist the warmup run out of the WebGPU branch so both paths can warm, but trigger it
+per the conditional rule above. Measure actual cold-first-inference time on a weak device to
+set the threshold.
 
 Consequences, all of which the plan must carry:
 
@@ -180,6 +189,9 @@ Resizing to ~128px (comfortable for a 3x-DPR 58px circle) plus lazy-loading shou
 roughly 120 KB — an ~85% reduction. Regeneration path already exists:
 `scripts/gen_persona_avatars.py` + `frontend/src/data/personaAvatarPrompts.md`.
 
+**Keep the original high-res images** (the 512x512 sources and any larger generation outputs):
+resize only what ships in the frontend bundle; the originals may be needed later.
+
 ## Already handled — do not re-solve
 
 - **Cloudflare CDN is already in front of everything.** Verified in prod on 2026-08-27:
@@ -228,8 +240,10 @@ Sketch of the pieces, in dependency order (revised by the locked decision above)
 
 ## Bullet time controls — SEPARATE SCOPE, flagged not folded in
 
-Bullet bot play is wanted soon (stated 2026-08-27). It is the reason the locked decision says
-*warm* rather than *ready*. But bullet also collides with two constants that were calibrated for
+Bullet bot play is wanted soon (stated 2026-08-27). Note: under bullet the conditional-warmup
+rule effectively becomes mandatory pre-warm — there is no clock room to warm mid-game, so the
+book-covered background warmup path is a blitz/rapid affordance only. But bullet also collides
+with two constants that were calibrated for
 blitz/rapid, and fixing those is **its own scope**, not part of this seed's first-run work.
 Recorded here so it is not rediscovered.
 
@@ -275,32 +289,4 @@ bot's clock: survivable at 10+5, an instant loss at 1+0. Bullet support should d
 happens here — abort the game honestly, or keep the engine pinned — rather than inheriting the
 blitz behaviour by default.
 
-## Verify before planning
 
-The whole diagnosis above assumes **bandwidth** is the binding constraint. That is well
-supported by the byte counts but has NOT been confirmed on the actual device. Prior art warns
-against assuming a single population: the Maia-on-iOS investigation mixed two independent
-failure modes (no WASM SIMD, so Maia could never run at all, vs. genuine low-memory OOM). An
-Android phone could similarly be hitting slow WASM instantiation or a memory-pressure path
-that no amount of prefetching or progress UI would fix.
-
-So the first task in any phase built from this seed: **measure on a real Android over mobile
-data, cold cache** — separate timings for model fetch, ORT instantiation, session create, and
-first move. If session-create dominates fetch, most of the plan above is aimed at the wrong
-target.
-
-## Explicitly deferred: server-side Maia for guest first moves
-
-Considered and consciously postponed on 2026-08-27 in favour of measuring the cheap client-side
-wins first. Recorded because it is cheaper than it looks and should not have to be rediscovered.
-
-The backend **already runs Maia**: `app/services/maia_engine.py` with a pinned
-`onnxruntime==1.20.1` (`pyproject.toml:45`, `maia-inference` group, opted into by the backend
-Dockerfile). It currently exposes only `score_move()` — a single move's probability — but
-`mask_and_softmax` already computes the full distribution, so a policy endpoint is a small
-change. Crucially, beginner personas are blend 0 (finding 3), so serving a guest's first moves
-needs **policy only** — no server-side Stockfish, no MCTS.
-
-Revisit if, after the client-side work above ships, measured first-move latency on a real
-device is still bad. Costs to weigh then: a new guest-facing endpoint, rate limiting, and CPU
-on a prod box that is already contended during eval backfills.
