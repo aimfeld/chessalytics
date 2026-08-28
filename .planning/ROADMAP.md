@@ -174,6 +174,7 @@
 | 210. Custom-Start Games — Crash Containment & Insight Eviction (SEED-042, v2.13) | 3/3 | Complete    | 2026-08-15 |
 | 211. Vetted "Also Fine" Moves & Server-Key Grading (SEED-150, v2.13) | 3/3 | Complete    | 2026-08-16 |
 | 212. Benchmark Full-Game Analysis Lane (SEED-152, unassigned) | 9/10 | Code shipped, tranche in flight | 2026-08-23 |
+| 213. First-Run Engine Cold Start — Asset-Check Gate & Download Progress UI (SEED-155, unassigned) | 0/0 | Not started | — |
 
 ## Active Phases (unassigned milestone)
 
@@ -379,6 +380,87 @@ Plans:
 **Wave 9** *(blocked on Wave 8 completion)*
 
 - [ ] 212-10-PLAN.md — Classical tranche run: decision gate, execute, record, vacuum (wave 9) — *Task 1 authorized 2026-08-23 (`start`), Task 2 IN FLIGHT, Task 3 blocked until the drain ends*
+
+### Phase 213: First-Run Engine Cold Start — Asset-Check Gate & Download Progress UI
+
+**Goal**: A first-time visitor on a phone can start a bot game without the bot silently
+burning its clock on a 45.7 MB model download. Whenever an engine is used — Stockfish,
+Maia, or the combined FlawChess engine — the consumer first checks that every model/asset
+it needs is available and, if not, downloads them behind a progress UI showing overall
+progress and which asset is currently downloading. Bot play additionally gates the clock
+on readiness: a fresh game mounts gated on the existing `confirmLive()` seam
+(`useBotGame.ts:683`) exactly as resumed games already do, so a bot game never runs a
+clock against an engine that does not yet exist. The analysis board gets the same
+progress UI but no gate (it has no clock). Warmup before the game is conditional, not
+mandatory: run it only if fast (<~1s) on this device; otherwise start when the download
+completes and let the opening book cover the first moves while the engine warms in the
+background. Persona avatars ship at ~128px with lazy loading (today 512x512, ~9x
+oversampled, 794 KB eager-globbed).
+
+**Depends on**: nothing — frontend-only; no schema change, no new backend surface, no
+calibration risk.
+
+**Source**: [SEED-155](../seeds/SEED-155-first-run-engine-cold-start-ux.md) — planted
+2026-08-27 from a real first-time user report (guest account, Android phone: bot took a
+very long time to make its first move, persona images loaded slowly); decision revised
+2026-08-28 (asset-check gate everywhere, conditional warmup, keep hi-res avatar sources).
+The seed carries the measured first-run cost table (the uncompressed 45.7 MB ONNX is ~85%
+of it) and all code-level findings.
+
+**Locked in the seed — do not re-open**:
+
+- Asset-check-then-download-with-progress applies to **every** engine consumer (bot play,
+  analysis board, future ones); bot play gates the clock on it.
+- **Readiness is per-persona, not global**: ready means Maia only when `blend <= 0`,
+  Maia + Stockfish otherwise. `pool.warm()` is skipped for blend-0 personas (finding 3 is
+  a prerequisite of the gate, not a nice-to-have) — gate the *call*, not the `[]`-deps
+  effect, which is load-bearing per D-03.
+- **No auto-start after a long wait**: ready within a short threshold (warm-cache repeat
+  case) → start immediately, no gate, no extra tap; user actually waited → show a
+  ready-gate they tap to begin (Phase 170 D-02, "no away-time billed"). Threshold value
+  is open for the plan.
+- **The owned model loader is required, not optional**: streaming fetch + byte counter,
+  buffer handed to `InferenceSession.create()` (both WASM and WebGPU branches). Progress
+  is impossible without owning the fetch. Prefetching is demoted to a pure optimization
+  with an adaptive trigger (respect `saveData`/`effectiveType`), deferrable.
+- **A terminal failure path is mandatory**: "only start when ready" turns a dead worker
+  into a game that never starts; devices without WASM SIMD can *never* run Maia and must
+  hit an honest error state, not an indefinite spinner (`useMaiaEngine` `onFatal` is the
+  model, CR-03/SEED-113/Phase 172).
+- **Avatars**: resize what ships to ~128px + `loading="lazy"`; **keep the 512x512
+  sources** and any larger generation outputs.
+- **Out of scope**: INT8 model shrink (moves the policy distribution, invalidates the
+  24-persona calibration); bullet time controls (the seed records why bullet collides
+  with `REVEAL_DELAY_MIN_MS` and `FLAWCHESS_BOT_MAX_NODES` — its own scope); the
+  deliberately-deferred server-side option; ONNX response compression (~8.5% on fp16,
+  lowest priority).
+
+**Planning notes** (the plan must resolve):
+
+- **The opening book cannot cover an unwarmed engine today** — `resolveBookMove`
+  (`useBotGame.ts:457`) calls `policy()`, one Maia eval. Options: (a) let the first book
+  move double as the warmup, acceptable iff a cold first inference is itself ~1s-class;
+  or (b) a policy-free book fallback (weighted sample from the ECO corpus) used only
+  until the engine is warm.
+- **Neither provider exposes readiness — this is the main new surface.** `MaiaQueue`
+  (`maiaQueue.ts:57`) publishes `policy`/`warm`/`terminate` with `leaseReady`,
+  `whenReady()`, `onFatal()` module-internal; `WorkerPool` publishes
+  `grade`/`stopAll`/`terminate`/`warm`. Both need a public readiness signal and a
+  consumer-visible fatal hook before the gate can be written.
+- **Warmup exists only in the WebGPU branch** (`maia-worker.js:197`, incidentally, for
+  surfacing lazy shader-compile failures — its KEEP comment stands); the WASM branch
+  (`:141`) returns from `create()` unwarmed. Hoist the warmup so both paths can warm,
+  triggered per the conditional rule; measure cold first-inference time on a weak device
+  to set the threshold.
+- **The clock bug is NOT yet verified on a real device** (`useBotGame.ts:664`,
+  `live: true` on fresh mount). Confirm before treating as a bug; the arithmetic says a
+  2 Mbps link (~183s for the model) can flag the bot at 3+0 before move 1.
+- **Already handled — do not re-solve**: Cloudflare CDN fronts the model and avatars
+  (`cf-cache-status: HIT` verified 2026-08-27), Caddy cache headers are tuned
+  (`deploy/Caddyfile:128`), and the ONNX is deliberately excluded from the SW precache
+  (iOS ~50 MB Cache API limit).
+
+**Plans**: not planned yet — run `/gsd-plan-phase 213`.
 
 ## Backlog
 
