@@ -24,6 +24,7 @@ import {
   type EngineAssetId,
   type EngineAssetStatus,
 } from '@/lib/engine/engineAssetProgress';
+import type { MaiaFailureKind } from '@/lib/maiaWorkerErrors';
 
 const MIN_PERCENT = 0;
 const MAX_PERCENT = 100;
@@ -40,6 +41,12 @@ export interface EngineAssetsState {
   totalBytes: number;
   /** True once every id in `required` is done. */
   ready: boolean;
+  /**
+   * Quick 260829-tku: which Maia worker failure bucket caused the current
+   * `'failed'` status, or `null` when there is no failure (or an unclassified
+   * one). Read straight off the snapshot — it needs no per-`required` derivation.
+   */
+  failureKind: MaiaFailureKind | null;
 }
 
 /**
@@ -79,6 +86,7 @@ export function useEngineAssets(required: readonly EngineAssetId[]): EngineAsset
       loadedBytes: loadedSum,
       totalBytes: totalSum,
       ready,
+      failureKind: snapshot.failureKind,
     };
   }, [snapshot, required]);
 }

@@ -42,7 +42,7 @@
  */
 
 import * as Sentry from '@sentry/react';
-import { captureMaiaWorkerError, type MaiaErrorSource } from '@/lib/maiaWorkerErrors';
+import { captureMaiaWorkerError, classifyMaiaWorkerError, type MaiaErrorSource } from '@/lib/maiaWorkerErrors';
 import { supportsWasmSimd } from './wasmSimd';
 import {
   getEngineAssetsSnapshot,
@@ -613,7 +613,12 @@ function failAllLeasesAndDropWorker(err: Error): void {
   // and determined this device can never run Maia regardless of how many
   // times it retries; offering Retry there would be a lie.
   if (getEngineAssetsSnapshot().status !== 'unsupported') {
-    markEngineAssetFailed('maia-model');
+    // Bug fix (quick 260829-tku): classification used to stop at the Sentry
+    // tag in captureMaiaWorkerError — a session-init memory exhaustion (real
+    // prod string, FLAWCHESS-92: onnxruntime "Out of memory" while creating
+    // the inference session) reached the user as generic download-failure
+    // copy instead of being told to free device memory.
+    markEngineAssetFailed('maia-model', classifyMaiaWorkerError(err.message));
   }
 
   if (worker) {

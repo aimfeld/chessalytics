@@ -337,6 +337,43 @@ describe('EngineReadyGate', () => {
     expect(screen.queryByTestId('engine-gate-failed')).toBeNull();
   });
 
+  // ─── Quick 260829-tku: the Maia out-of-memory terminal variant ────────────
+
+  describe.each([['bots'], ['analysis']] as const)(
+    'the out-of-memory terminal state (surface=%s)',
+    (surface) => {
+      it('renders the oom testid and free-memory copy, not the generic failed testid, with a working Retry and a single tagged Sentry capture', () => {
+        markEngineAssetFailed('maia-model', 'oom');
+        const onRetry = vi.fn();
+        render(<EngineReadyGate surface={surface} onStart={vi.fn()} onRetry={onRetry} />);
+
+        expect(screen.getByTestId('engine-gate-oom')).toBeTruthy();
+        expect(screen.queryByTestId('engine-gate-failed')).toBeNull();
+        const gate = screen.getByTestId('engine-ready-gate');
+        expect(gate.textContent).toContain('Your device ran out of memory');
+        expect(gate.textContent).toContain('Close your other browser tabs and apps');
+
+        // Exactly one button, the existing Retry testid, behaving identically
+        // to the generic failed state.
+        expect(within(gate).queryAllByRole('button')).toHaveLength(1);
+        const retryButton = screen.getByTestId('btn-engine-retry');
+        fireEvent.click(retryButton);
+        expect(onRetry).toHaveBeenCalledTimes(1);
+        expect(screen.queryByTestId('engine-gate-oom')).toBeNull();
+
+        expect(Sentry.captureException).toHaveBeenCalledTimes(1);
+        expect(Sentry.captureException).toHaveBeenCalledWith(
+          expect.objectContaining({
+            message: 'Engine cold start: device ran out of memory starting the engine',
+          }),
+          expect.objectContaining({
+            tags: expect.objectContaining({ source: 'engine-ready-gate', engine_failure: 'oom' }),
+          }),
+        );
+      });
+    },
+  );
+
   // ─── Phase 213-04 D-16/D-17: Umami wait/abandonment + Sentry terminal capture ──
 
   describe('telemetry (D-16/D-17)', () => {
