@@ -28,6 +28,7 @@ def _():
     from pathlib import Path
 
     import numpy as np
+    import plotly.graph_objects as go
     import polars as pl
 
     REPO_ROOT = Path(__file__).resolve().parents[2]
@@ -43,7 +44,7 @@ def _():
     # noinspection PyUnresolvedReferences
     from scripts.benchmarks import sql as bsql
 
-    return bsql, db, np, pl
+    return bsql, db, go, np, pl
 
 
 @app.cell
@@ -246,7 +247,15 @@ def _(np, pl):
 
 
 @app.cell
-def _(bootstrap_reps, cluster_bootstrap_ci, frame, mh_delta, mo, paired_frame, pl):
+def _(
+    bootstrap_reps,
+    cluster_bootstrap_ci,
+    frame,
+    mh_delta,
+    mo,
+    paired_frame,
+    pl,
+):
     # Core probe reproduction + bullet extension: the three locked contrasts,
     # per boundary x TC. Matches the seed's probe table (plus bullet).
     CONTRASTS = [
@@ -286,14 +295,123 @@ def _(bootstrap_reps, cluster_bootstrap_ci, frame, mh_delta, mo, paired_frame, p
 
 @app.cell
 def _(mo):
+    chart_contrast = mo.ui.dropdown(
+        options={
+            "blown loss − comeback win": "blown_loss|comeback_win",
+            "expected loss − held win": "expected_loss|held_win",
+            "blown draw − comeback draw": "blown_draw|comeback_draw",
+        },
+        value="blown loss − comeback win",
+        label="Contrast",
+    )
+    chart_boundary = mo.ui.radio(options=["MG", "EG"], value="MG", label="Boundary")
+    mo.hstack([chart_contrast, chart_boundary])
+    return chart_boundary, chart_contrast
+
+
+@app.cell
+def _(
+    bootstrap_reps,
+    chart_boundary,
+    chart_contrast,
+    cluster_bootstrap_ci,
+    frame,
+    go,
+    mh_delta,
+    mo,
+    paired_frame,
+    pl,
+):
+    # Δpp per (ELO bucket × TC): the per-ELO paired cuts from the locked EDA scope.
+    # TC colors match the two-pawns-up story palette; bullet's purple was added and
+    # the 4-hue set passes the dataviz validator (CVD ΔE 28.7 worst adjacent pair).
+    TC_COLORS = {
+        "bullet": "#7C3AED",
+        "blitz": "#C97A00",
+        "rapid": "#3B82F6",
+        "classical": "#166534",
+    }
+    ELO_BUCKETS = [800, 1200, 1600, 2000, 2400]
+    # Below this many paired users the MH point estimate is noise, not signal.
+    MIN_USERS_PER_CELL = 50
+
+    _cls_a, _cls_b = chart_contrast.value.split("|")
+    fig_elo_tc = go.Figure()
+    for _tc, _color in TC_COLORS.items():
+        _xs, _ys, _users, _lo_arm, _hi_arm = [], [], [], [], []
+        for _elo in ELO_BUCKETS:
+            _paired = paired_frame(
+                frame.filter(
+                    (pl.col("boundary") == chart_boundary.value)
+                    & (pl.col("tc") == _tc)
+                    & (pl.col("elo_bucket") == _elo)
+                ),
+                _cls_a,
+                _cls_b,
+            )
+            if _paired.height < MIN_USERS_PER_CELL:
+                continue
+            _delta = mh_delta(_paired)
+            _xs.append(_elo)
+            _ys.append(_delta)
+            _users.append(_paired.height)
+            if bootstrap_reps.value:
+                _lo, _hi = cluster_bootstrap_ci(_paired, int(bootstrap_reps.value))
+                _lo_arm.append(_delta - _lo)
+                _hi_arm.append(_hi - _delta)
+        if not _xs:
+            continue
+        fig_elo_tc.add_trace(
+            go.Scatter(
+                x=_xs,
+                y=_ys,
+                mode="lines+markers",
+                name=_tc,
+                line=dict(color=_color, width=2),
+                marker=dict(size=8),
+                customdata=_users,
+                error_y=(
+                    dict(type="data", array=_hi_arm, arrayminus=_lo_arm, thickness=1)
+                    if bootstrap_reps.value
+                    else None
+                ),
+                hovertemplate=(
+                    _tc + " · %{x}<br>Δ %{y:+.1f} pp · %{customdata} paired users<extra></extra>"
+                ),
+            )
+        )
+    fig_elo_tc.update_layout(
+        title=f"{_cls_a} − {_cls_b} · {chart_boundary.value} boundary",
+        xaxis=dict(title="ELO bucket (game-time rating)", tickvals=ELO_BUCKETS),
+        yaxis=dict(
+            title="Δ analysis rate (pp)",
+            zeroline=True,
+            zerolinecolor="#B0B0B0",
+            zerolinewidth=1,
+        ),
+        legend=dict(orientation="h", yanchor="bottom", y=1.02),
+        height=440,
+        margin=dict(t=90),
+    )
+    mo.vstack([
+        mo.md(
+            "## Δ analysis rate by ELO × TC (paired within-user)\n"
+            f"Cells with fewer than {MIN_USERS_PER_CELL} paired users are dropped. "
+            "Enable bootstrap reps above for 95% cluster-bootstrap error bars."
+        ),
+        fig_elo_tc,
+    ])
+    return
+
+
+@app.cell
+def _(mo):
     mo.md(r"""
     ## TODO — remaining EDA sections (locked scope, SEED-157)
 
     - **Threshold sweep**: re-render the contrast table at 300/400/500cp (dropdown
       above already re-classifies) and chart delta-vs-threshold stability per TC.
       This is the eval-source-homogeneity guard.
-    - **Per-ELO paired cuts**: same contrasts split by `elo_bucket` (game-time
-      rating, already in the frame). Is classical homework a strong-player thing?
     - **Metadata tier** (needs its own query — ALL cohort games, no boundary join):
       analysis rate by result, termination type (are flagged/timeout losses
       buried?), game length (miniatures vs grinds), upsets vs expected results.
