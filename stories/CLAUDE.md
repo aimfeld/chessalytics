@@ -4,6 +4,10 @@ Rules for the public data-story site (`stories/`, deployed to https://stories.fl
 
 The blog is named **Chess Data Stories** (not "FlawChess Data Stories"): use that name in page `<title>`s, the header label, and bylines.
 
+## Workflow (no GSD)
+
+Data-story work is exempt from GSD phase planning: no roadmap phase, no PLAN.md, no executor agents. Work directly on a long-lived `study/<slug>` branch (e.g. `study/game-review-study`) covering the whole study — EDA notebook, generation scripts, report, and story — and squash-merge it to `main` when the story ships. Seeds under `.planning/seeds/` may still track story ideas and findings; they just don't spawn phases.
+
 ## Structure
 
 - One directory per story: `stories/<slug>/index.html` (kebab-case slug = URL). Self-contained pages: inline CSS/JS, vanilla SVG charts, no CDNs or JS libraries. The only allowed external resources are Google Fonts (Fredoka, for the brand label) and the Umami analytics tag (below).

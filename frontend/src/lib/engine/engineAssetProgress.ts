@@ -14,6 +14,8 @@
  * special path a second asset has to be bolted onto later.
  */
 
+import type { MaiaFailureKind } from '@/lib/maiaWorkerErrors';
+
 // ─── Types ──────────────────────────────────────────────────────────────────
 
 /** A discriminated literal union — never a bare `string` (CLAUDE.md). */
@@ -36,6 +38,15 @@ export interface EngineAssetsSnapshot {
   status: EngineAssetStatus;
   /** `noUncheckedIndexedAccess` is on — narrow every read before use. */
   assets: Partial<Record<EngineAssetId, EngineAssetEntry>>;
+  /**
+   * Quick 260829-tku: which Maia worker failure bucket caused the current
+   * `'failed'` status, or `null` when there is no failure (or an unclassified
+   * one). This store is engine-generic (it also tracks Stockfish and the ORT
+   * runtime), while `MaiaFailureKind` is Maia-specific — the Stockfish pool
+   * and `useStockfishEngine` call sites therefore never pass one, and this
+   * field simply stays `null` for those failures.
+   */
+  failureKind: MaiaFailureKind | null;
 }
 
 // ─── Named constants (CLAUDE.md no-magic-numbers) ──────────────────────────
@@ -113,12 +124,18 @@ const MAX_ROUNDED_PERCENT = 100;
 
 let currentStatus: EngineAssetStatus = 'idle';
 let currentAssets: Partial<Record<EngineAssetId, EngineAssetEntry>> = {};
+/** Quick 260829-tku: the classified kind behind the current `'failed'` status. */
+let currentFailureKind: MaiaFailureKind | null = null;
 /**
  * Cached snapshot object — referentially stable between mutations so
  * `useSyncExternalStore` (in `useEngineAssets.ts`) does not loop forever.
  * Only `commit()` below may reassign this.
  */
-let cachedSnapshot: EngineAssetsSnapshot = { status: currentStatus, assets: currentAssets };
+let cachedSnapshot: EngineAssetsSnapshot = {
+  status: currentStatus,
+  assets: currentAssets,
+  failureKind: currentFailureKind,
+};
 const listeners = new Set<() => void>();
 
 /**
@@ -144,7 +161,7 @@ function roundedAssetPercent(loaded: number, total: number): number {
  * true current bytes and `useSyncExternalStore`'s tearing guarantee holds.
  */
 function refreshSnapshot(): void {
-  cachedSnapshot = { status: currentStatus, assets: currentAssets };
+  cachedSnapshot = { status: currentStatus, assets: currentAssets, failureKind: currentFailureKind };
 }
 
 /** Notifies every subscriber. Only the caller decides whether this runs. */
@@ -301,8 +318,23 @@ export function markEngineAssetsUnsupported(): void {
   commit();
 }
 
-/** A specific asset's download/init failed. Plan 04 owns this state's UI. */
-export function markEngineAssetFailed(id: EngineAssetId): void {
+/**
+ * A specific asset's download/init failed. Plan 04 owns this state's UI.
+ *
+ * Quick 260829-tku: `failureKind` is OPTIONAL so the Stockfish pool and
+ * `useStockfishEngine` call sites (which have no Maia-specific classification
+ * to offer) keep compiling and keep today's behavior unchanged. When passed,
+ * it records which `MaiaFailureKind` bucket caused the failure so
+ * `EngineReadyGate` can pick a matching terminal variant.
+ *
+ * Precedence: `failureKind ?? currentFailureKind` — a classified failure
+ * wins and is never overwritten by a LATER unclassified one (e.g. the
+ * Stockfish pool giving up on a device that is already out of memory). The
+ * only exit from a terminal failure is Retry (`markEngineAssetsRetrying`,
+ * below), which clears the field, so there is no stale-state window where an
+ * old classification could survive past the failure it described.
+ */
+export function markEngineAssetFailed(id: EngineAssetId, failureKind?: MaiaFailureKind): void {
   const existing = currentAssets[id];
   currentAssets = {
     ...currentAssets,
@@ -313,6 +345,7 @@ export function markEngineAssetFailed(id: EngineAssetId): void {
     },
   };
   currentStatus = 'failed';
+  currentFailureKind = failureKind ?? currentFailureKind;
   commit();
 }
 
@@ -370,6 +403,9 @@ export function resetEngineAssetForRefetch(id: EngineAssetId): void {
  */
 export function markEngineAssetsRetrying(): void {
   currentStatus = 'idle';
+  // Quick 260829-tku: clear the recorded failure kind so a retried-then-
+  // differently-failed session never shows stale out-of-memory copy.
+  currentFailureKind = null;
   currentAssets = Object.fromEntries(
     Object.entries(currentAssets).map(([id, entry]) =>
       entry.done ? [id, entry] : [id, { ...entry, loaded: 0 }],
@@ -445,7 +481,8 @@ export function engineGateRequired(): boolean {
 export function resetEngineAssetsForTests(): void {
   currentStatus = 'idle';
   currentAssets = {};
-  cachedSnapshot = { status: currentStatus, assets: currentAssets };
+  currentFailureKind = null;
+  cachedSnapshot = { status: currentStatus, assets: currentAssets, failureKind: currentFailureKind };
   listeners.clear();
   lastNotifiedPercentById.clear();
 }

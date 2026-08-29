@@ -46,6 +46,7 @@ from sqlalchemy import (
     ForeignKey,
     String,
     UniqueConstraint,
+    text,
 )
 from sqlalchemy.orm import Mapped, mapped_column
 from sqlalchemy.sql import func
@@ -69,6 +70,36 @@ class BenchmarkSelection(Base):
         (212-04) can override the derived is_lichess_eval_game boolean at claim
         time, so the two arms stay separable after homogenization runs.
     selected_at: when this row was inserted (selection time, not game time).
+    armed: false until the tranche's lichess-eval snapshot is complete. The
+        benchmark selection gate (app/services/eval_utils.py's
+        selection_gate_clause) requires it, so an unarmed row is invisible to
+        all five claim lanes and no worker can overwrite its evals.
+
+        This exists because `select` and `snapshot` publish and protect in the
+        wrong order. The instant `select` commits, every selected game
+        satisfies the gate; `snapshot` -- the ONLY recovery path for the
+        original lichess evals that BENCHMARK_HOMOGENIZE_EVAL_SOURCE
+        overwrites in place -- then takes minutes. On the 2026-08-29 rapid
+        tranche five lichess-arm games were processed inside that window. They
+        survived only because _snapshot_source_sql is a single streaming
+        SELECT whose MVCC snapshot predated them; a snapshot STARTED after
+        processing began would have captured our engine's values and stored
+        them as lichess's, silently, with the coverage-gap check still
+        reporting zero because it counts rows rather than checking values.
+
+        Arming is therefore gated on that coverage check (see
+        arm_tranche in scripts/benchmark_lane.py): a tranche arms only when
+        every lichess-arm game has snapshot rows. Note the direction of
+        failure -- forget to arm and NOTHING drains, which is loud and
+        harmless; the pre-armed behaviour failed the other way.
+
+        Existing benchmark DBs need this column added by hand, since this
+        table is deliberately outside the Alembic chain and create_all() does
+        not alter an existing table:
+
+            ALTER TABLE benchmark_selection
+              ADD COLUMN armed boolean NOT NULL DEFAULT false;
+            UPDATE benchmark_selection SET armed = true;  -- already-live tranches
     """
 
     __tablename__ = "benchmark_selection"
@@ -90,3 +121,6 @@ class BenchmarkSelection(Base):
     tc_tranche: Mapped[str] = mapped_column(String(20), nullable=False)
     lichess_arm: Mapped[bool] = mapped_column(Boolean, nullable=False)
     selected_at: Mapped[datetime] = mapped_column(server_default=func.now(), nullable=False)
+    armed: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, server_default=text("false"), default=False
+    )

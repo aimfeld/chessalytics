@@ -15,6 +15,7 @@ import { BOT_ACTION_BUTTON_CLASS } from '@/components/bots/chipStyles';
 import { markEngineAssetsRetrying, requiredEngineAssets } from '@/lib/engine/engineAssetProgress';
 import { useEngineAssets } from '@/hooks/useEngineAssets';
 import { trackEvent } from '@/lib/analytics';
+import type { MaiaFailureKind } from '@/lib/maiaWorkerErrors';
 
 // ─── Named constants (CLAUDE.md no-magic-numbers) ──────────────────────────
 
@@ -111,15 +112,23 @@ function waitBucket(elapsedMs: number): WaitBucketLabel {
 
 const SENTRY_MESSAGE_UNSUPPORTED = 'Engine cold start: device cannot run the Maia model';
 const SENTRY_MESSAGE_FAILED = 'Engine cold start: engine failed to start';
+/** Quick 260829-tku: distinct fixed literal for the memory-exhaustion case —
+ * never interpolates the raw worker string (CLAUDE.md grouping rule). */
+const SENTRY_MESSAGE_OOM = 'Engine cold start: device ran out of memory starting the engine';
+
+/** Quick 260829-tku: named constants for the Sentry `engine_failure` tag
+ * values, so the two strings are not bare literals at the capture call site. */
+const ENGINE_FAILURE_TAG_DOWNLOAD = 'download';
+const ENGINE_FAILURE_TAG_OOM = 'oom';
 
 /**
- * D-14: two genuinely different terminal states, never the canonical
- * data-load error component's copy (that component's mandated trailer
- * sentence always implies a retry will help, which is false for the
- * `unsupported` state below). `unsupported` renders NO button of any kind;
- * `failed` renders exactly one, Retry.
+ * D-14: genuinely different terminal states, never the canonical data-load
+ * error component's copy (that component's mandated trailer sentence always
+ * implies a retry will help, which is false for the `unsupported` state
+ * below). `unsupported` renders NO button of any kind; `failed` and `oom`
+ * (quick 260829-tku) each render exactly one, Retry.
  */
-type TerminalVariant = 'unsupported' | 'failed';
+type TerminalVariant = 'unsupported' | 'failed' | 'oom';
 
 const TERMINAL_COPY: Record<TerminalVariant, { title: string; body: string; testId: string }> = {
   // G-213-34: reachable ONLY from the bots surface — the analysis mount
@@ -147,6 +156,22 @@ const TERMINAL_COPY: Record<TerminalVariant, { title: string; body: string; test
       'from scratch, so it can take a little while.',
     testId: 'engine-gate-failed',
   },
+  // Quick 260829-tku: a real user (FLAWCHESS Sentry, 2026-08-29, iOS 18.7
+  // Mobile Safari) hit an onnxruntime "Out of memory" error while the model
+  // bytes were already cached — the download was never the problem, so the
+  // generic `failed` copy above misled them into retrying a download that
+  // had already succeeded. Keeps Retry (unlike `unsupported`): freeing
+  // memory is something the user can actually do, and on the analysis
+  // surface `onRetry` is a full page reload, which also releases the failed
+  // attempt's wasm heap.
+  oom: {
+    title: 'Your device ran out of memory',
+    body:
+      'The engine files downloaded fine, but your device did not have enough free memory ' +
+      'to start the engine. Close your other browser tabs and apps to free some up, then ' +
+      'try again.',
+    testId: 'engine-gate-oom',
+  },
 };
 
 export interface EngineReadyGateProps {
@@ -158,6 +183,17 @@ export interface EngineReadyGateProps {
   /** D-15: called after the manual Retry button clears the failed status —
    * re-triggers the provider `warm()` calls so the dropped worker respawns. */
   onRetry: () => void;
+}
+
+/**
+ * Quick 260829-tku: picks the terminal variant from the store's status +
+ * failure kind. `'unsupported'` always wins (checked first by the gate); a
+ * `'failed'` status splits into `'oom'` for a classified memory exhaustion
+ * and `'failed'` for every other case (`'load'`, `'inference'`, or `null`).
+ */
+function pickTerminalVariant(status: 'unsupported' | 'failed', failureKind: MaiaFailureKind | null): TerminalVariant {
+  if (status === 'unsupported') return 'unsupported';
+  return failureKind === 'oom' ? 'oom' : 'failed';
 }
 
 /** D-17 device context for the terminal-failure Sentry captures. Read
@@ -252,12 +288,20 @@ export function EngineReadyGate({ surface, onStart, onRetry }: EngineReadyGatePr
     }
     if (assets.status === 'failed' && !failedCapturedRef.current) {
       failedCapturedRef.current = true;
-      Sentry.captureException(new Error(SENTRY_MESSAGE_FAILED), {
-        tags: { source: 'engine-ready-gate', engine_failure: 'download' },
+      // Quick 260829-tku: select message + tag from the SAME variant decision
+      // as the render below — memory exhaustion reports its own message and
+      // tag, every other failure keeps today's message and 'download' tag
+      // verbatim so existing Sentry dashboard filters keep matching.
+      const isOom = pickTerminalVariant('failed', assets.failureKind) === 'oom';
+      Sentry.captureException(new Error(isOom ? SENTRY_MESSAGE_OOM : SENTRY_MESSAGE_FAILED), {
+        tags: {
+          source: 'engine-ready-gate',
+          engine_failure: isOom ? ENGINE_FAILURE_TAG_OOM : ENGINE_FAILURE_TAG_DOWNLOAD,
+        },
         contexts: { engine_device: readDeviceContext() },
       });
     }
-  }, [assets.status]);
+  }, [assets.status, assets.failureKind]);
 
   // D-18: the single start path for BOTH surfaces — a bots-surface click and
   // an analysis-surface auto-close both funnel through this one function, so
@@ -301,7 +345,7 @@ export function EngineReadyGate({ surface, onStart, onRetry }: EngineReadyGatePr
   }, [surface, assets.ready, handleStart]);
 
   if (assets.status === 'unsupported' || assets.status === 'failed') {
-    const variant: TerminalVariant = assets.status;
+    const variant = pickTerminalVariant(assets.status, assets.failureKind);
     const copy = TERMINAL_COPY[variant];
     return (
       <Dialog open onOpenChange={() => {}}>
@@ -315,7 +359,7 @@ export function EngineReadyGate({ surface, onStart, onRetry }: EngineReadyGatePr
               <DialogDescription className="text-sm">{copy.body}</DialogDescription>
             </DialogHeader>
           </div>
-          {variant === 'failed' && (
+          {variant !== 'unsupported' && (
             <DialogFooter>
               <Button
                 variant="default"

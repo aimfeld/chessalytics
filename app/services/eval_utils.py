@@ -226,8 +226,15 @@ def derive_raw_lichess_eval_game(lichess_evals_at: datetime | None) -> bool:
 # eval_queue_service.py all query `games g`; the entry-ply probe and claim in
 # eval_remote.py / eval_entry.py both query `games` with no alias at all, hence
 # the "games" alias those two callers pass explicitly).
+# `bs.armed` is what closes the select/snapshot publish-before-protect window
+# (see app/models/benchmark_selection.py's `armed` docstring). `select` inserts
+# unarmed rows that no lane can see; `arm_tranche` flips them only once every
+# lichess-arm game in the tranche has snapshot rows, so a worker can never
+# overwrite an eval whose original value is not yet preserved. Forgetting to arm
+# stops the drain, which is loud; the pre-armed behaviour corrupted the recovery
+# table silently instead.
 BENCHMARK_SELECTION_GATE_SQL_TEMPLATE = (
-    "AND EXISTS (SELECT 1 FROM benchmark_selection bs WHERE bs.game_id = {alias}.id)"
+    "AND EXISTS (SELECT 1 FROM benchmark_selection bs WHERE bs.game_id = {alias}.id AND bs.armed)"
 )
 
 
