@@ -52,7 +52,7 @@ function PersonaAvatar({ persona }: { persona: Persona }): ReactElement {
       style={{ backgroundColor: avatar.tint, width: AVATAR_SIZE_PX, height: AVATAR_SIZE_PX }}
     >
       {avatarSrc !== undefined ? (
-        <img src={avatarSrc} alt="" className="h-full w-full object-cover" />
+        <img src={avatarSrc} alt="" loading="lazy" className="h-full w-full object-cover" />
       ) : (
         avatar.emoji
       )}

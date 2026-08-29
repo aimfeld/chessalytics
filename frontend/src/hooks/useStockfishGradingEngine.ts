@@ -31,11 +31,12 @@ import { Chess } from 'chess.js';
 import { parseInfoLine } from './uciParser';
 import { sanToUci, uciToSquares } from '@/lib/sanToSquares';
 import type { MoveGrade } from '@/lib/moveQuality';
+import {
+  createStockfishWorker,
+  ensureStockfishWorkerUrl,
+} from '@/lib/engine/stockfishWorkerSource';
 
 // ─── Constants (SC4 degradation knobs — tunable without touching logic) ──────
-
-/** Path to the vendored Stockfish engine served from public/engine/. Same binary as the primary worker, a SEPARATE Worker() load. */
-const ENGINE_PATH = '/engine/stockfish-18-lite-single.js';
 
 /**
  * Wall-clock cap (ms) — the grading run's ONLY search-termination clause, no
@@ -346,131 +347,160 @@ export function useStockfishGradingEngine({
   useEffect(() => {
     if (!enabled) return;
 
-    // Classic (non-module) Worker — same vendored Emscripten glue as the
-    // primary engine, a SEPARATE instance (SC3 isolation).
-    const worker = new Worker(ENGINE_PATH);
-    workerRef.current = worker;
+    // Phase 213-08 (G-213-35): an unmount that beats the shared fetch must
+    // not construct (and immediately leak) a worker nobody will ever clean
+    // up — mirrors useStockfishEngine.ts's identical guard.
+    let cancelled = false;
 
-    /** Handle a single UCI line emitted by the grading Worker. */
-    function handleLine(line: string): void {
-      if (line === 'uciok') {
-        // MultiPV is set dynamically per-search (candidate count varies by
-        // position) rather than once at init — see prepareSearch.
-        worker.postMessage('isready');
-        return;
-      }
+    function setupWorker(sharedUrl: string | null): void {
+      if (cancelled) return;
 
-      if (line === 'readyok') {
-        setIsReady(true);
-        isReadyRef.current = true;
-        return;
-      }
+      // Classic (non-module) Worker — same vendored Emscripten glue as the
+      // primary engine, a SEPARATE instance (SC3 isolation). Phase 213-08:
+      // constructed through the shared source module — a non-null
+      // `sharedUrl` routes to the already-fetched-once `.wasm`; a null
+      // `sharedUrl` constructs against the served path exactly as before.
+      // Neither hook reports asset progress today and does not start doing
+      // so here — the only change is where the worker's `.wasm` comes from.
+      const worker = createStockfishWorker(sharedUrl);
+      workerRef.current = worker;
 
-      if (line.startsWith('info ')) {
-        // Stale-eval guard: ignore info lines from a superseded search.
-        if (stateRef.current !== 'thinking' || stopPendingRef.current) return;
-        const parsed = parseInfoLine(line);
-        if (parsed === null) return;
-        const uci = parsed.pv[0];
-        if (uci === undefined) return;
-        const fenKey = gradingFenRef.current;
-        if (fenKey === null) return;
+      runWorkerHandshake(worker);
+    }
 
-        // Pitfall 1 (confirmed on the real binary, 151.1-01-SUMMARY.md): key
-        // by pv[0]'s SAN, NEVER by parsed.multipv (an eval rank that reorders
-        // as depth climbs).
-        const san = sanFromUci(fenKey, uci);
-        if (san === null) return;
-
-        // Normalize the mover-POV UCI score to white-POV (D-08).
-        const whitePovSign = gradingSideRef.current === 'b' ? -1 : 1;
-        const toWhitePov = (v: number | null): number | null => (v === null ? null : v * whitePovSign);
-
-        let cache = cacheRef.current.get(fenKey);
-        if (!cache) {
-          cache = new Map<string, MoveGrade>();
-          cacheRef.current.set(fenKey, cache);
-          // FIFO eviction on new-FEN insert only (mirrors useMaiaEngine's cacheResult).
-          if (cacheRef.current.size > GRADE_CACHE_MAX) {
-            const oldest = cacheRef.current.keys().next().value;
-            if (oldest !== undefined) cacheRef.current.delete(oldest);
-          }
-        }
-        cache.set(san, {
-          evalCp: toWhitePov(parsed.scoreCp),
-          evalMate: toWhitePov(parsed.scoreMate),
-          depth: parsed.depth,
-          // 162 UAT: retain the full PV so the Stockfish card can render a
-          // graded line's move sequence when the reconciled ranking surfaces
-          // a move outside the free run's own top-2 (option-2 card re-source).
-          pv: parsed.pv,
-        });
-
-        // Stream progressively: refine the displayed gradeMap on every info
-        // line (D-05).
-        commitDisplayedGradeMap(fenKey, candidateSansRef.current);
-        return;
-      }
-
-      if (line.startsWith('bestmove')) {
-        if (stopPendingRef.current) {
-          // Discard: this bestmove is the termination response to our stop —
-          // it reflects a superseded search. Re-trigger with the LATEST
-          // fen/candidateSans (deferred re-go, Pitfall 5 / FLAWCHESS-7V).
-          stopPendingRef.current = false;
-          stateRef.current = 'idle';
-          const latestFen = currentFenRef.current;
-          const latestSans = candidateSansRef.current;
-          if (latestFen !== null && latestSans.length > 0 && document.visibilityState !== 'hidden') {
-            prepareSearchRef.current(latestFen, latestSans);
-          } else {
-            // CR-03 (Phase 172, SEED-106): no re-`go` will be issued (position
-            // cleared, no candidates, or tab hidden). Without clearing the flag
-            // here, `isGrading` stays true forever — which the gem sweep's C2
-            // guard reads as "still working", one of the ways a swept candidate
-            // could sit with no timeout out of it (the watchdog now covers that,
-            // but the state must still reflect reality here).
-            setIsGrading(false);
-          }
+    /** Wires the UCI line handler and kicks off the handshake for `worker`. */
+    function runWorkerHandshake(worker: Worker): void {
+      /** Handle a single UCI line emitted by the grading Worker. */
+      function handleLine(line: string): void {
+        if (line === 'uciok') {
+          // MultiPV is set dynamically per-search (candidate count varies by
+          // position) rather than once at init — see prepareSearch.
+          worker.postMessage('isready');
           return;
         }
 
-        stateRef.current = 'idle';
-        setIsGrading(false);
+        if (line === 'readyok') {
+          setIsReady(true);
+          isReadyRef.current = true;
+          return;
+        }
+
+        if (line.startsWith('info ')) {
+          // Stale-eval guard: ignore info lines from a superseded search.
+          if (stateRef.current !== 'thinking' || stopPendingRef.current) return;
+          const parsed = parseInfoLine(line);
+          if (parsed === null) return;
+          const uci = parsed.pv[0];
+          if (uci === undefined) return;
+          const fenKey = gradingFenRef.current;
+          if (fenKey === null) return;
+
+          // Pitfall 1 (confirmed on the real binary, 151.1-01-SUMMARY.md): key
+          // by pv[0]'s SAN, NEVER by parsed.multipv (an eval rank that reorders
+          // as depth climbs).
+          const san = sanFromUci(fenKey, uci);
+          if (san === null) return;
+
+          // Normalize the mover-POV UCI score to white-POV (D-08).
+          const whitePovSign = gradingSideRef.current === 'b' ? -1 : 1;
+          const toWhitePov = (v: number | null): number | null => (v === null ? null : v * whitePovSign);
+
+          let cache = cacheRef.current.get(fenKey);
+          if (!cache) {
+            cache = new Map<string, MoveGrade>();
+            cacheRef.current.set(fenKey, cache);
+            // FIFO eviction on new-FEN insert only (mirrors useMaiaEngine's cacheResult).
+            if (cacheRef.current.size > GRADE_CACHE_MAX) {
+              const oldest = cacheRef.current.keys().next().value;
+              if (oldest !== undefined) cacheRef.current.delete(oldest);
+            }
+          }
+          cache.set(san, {
+            evalCp: toWhitePov(parsed.scoreCp),
+            evalMate: toWhitePov(parsed.scoreMate),
+            depth: parsed.depth,
+            // 162 UAT: retain the full PV so the Stockfish card can render a
+            // graded line's move sequence when the reconciled ranking surfaces
+            // a move outside the free run's own top-2 (option-2 card re-source).
+            pv: parsed.pv,
+          });
+
+          // Stream progressively: refine the displayed gradeMap on every info
+          // line (D-05).
+          commitDisplayedGradeMap(fenKey, candidateSansRef.current);
+          return;
+        }
+
+        if (line.startsWith('bestmove')) {
+          if (stopPendingRef.current) {
+            // Discard: this bestmove is the termination response to our stop —
+            // it reflects a superseded search. Re-trigger with the LATEST
+            // fen/candidateSans (deferred re-go, Pitfall 5 / FLAWCHESS-7V).
+            stopPendingRef.current = false;
+            stateRef.current = 'idle';
+            const latestFen = currentFenRef.current;
+            const latestSans = candidateSansRef.current;
+            if (latestFen !== null && latestSans.length > 0 && document.visibilityState !== 'hidden') {
+              prepareSearchRef.current(latestFen, latestSans);
+            } else {
+              // CR-03 (Phase 172, SEED-106): no re-`go` will be issued (position
+              // cleared, no candidates, or tab hidden). Without clearing the flag
+              // here, `isGrading` stays true forever — which the gem sweep's C2
+              // guard reads as "still working", one of the ways a swept candidate
+              // could sit with no timeout out of it (the watchdog now covers that,
+              // but the state must still reflect reality here).
+              setIsGrading(false);
+            }
+            return;
+          }
+
+          stateRef.current = 'idle';
+          setIsGrading(false);
+        }
       }
+
+      worker.onmessage = (e: MessageEvent<string>) => {
+        handleLine(e.data);
+      };
+
+      // CR-03 (Phase 172, SEED-106): mirror workerPool.createSlot — an async
+      // script-load failure (404, CSP block, syntax error) never throws a
+      // catchable JS exception on the main thread; it only surfaces here. Without
+      // this handler the worker dies silently: no `uciok` -> `isReady` never flips
+      // -> any in-flight grading request (including a gem-sweep candidate whose C2
+      // depends on this instance) hangs forever. Capture to Sentry (CLAUDE.md
+      // frontend rules — a classic Worker has no Sentry init of its own) and
+      // surface `hasFailed` so the sweep can abandon a candidate stuck on it.
+      worker.onerror = () => {
+        Sentry.captureException(new Error('Stockfish grading worker: worker load failure'), {
+          tags: { source: 'stockfish-grading-worker' },
+        });
+        setHasFailed(true);
+        setIsReady(false);
+        isReadyRef.current = false;
+        setIsGrading(false);
+        stateRef.current = 'idle';
+      };
+
+      // Kick off UCI initialisation — the engine will respond with 'uciok'.
+      worker.postMessage('uci');
     }
 
-    worker.onmessage = (e: MessageEvent<string>) => {
-      handleLine(e.data);
-    };
-
-    // CR-03 (Phase 172, SEED-106): mirror workerPool.createSlot — an async
-    // script-load failure (404, CSP block, syntax error) never throws a
-    // catchable JS exception on the main thread; it only surfaces here. Without
-    // this handler the worker dies silently: no `uciok` -> `isReady` never flips
-    // -> any in-flight grading request (including a gem-sweep candidate whose C2
-    // depends on this instance) hangs forever. Capture to Sentry (CLAUDE.md
-    // frontend rules — a classic Worker has no Sentry init of its own) and
-    // surface `hasFailed` so the sweep can abandon a candidate stuck on it.
-    worker.onerror = () => {
-      Sentry.captureException(new Error('Stockfish grading worker: worker load failure'), {
-        tags: { source: 'stockfish-grading-worker' },
-      });
-      setHasFailed(true);
-      setIsReady(false);
-      isReadyRef.current = false;
-      setIsGrading(false);
-      stateRef.current = 'idle';
-    };
-
-    // Kick off UCI initialisation — the engine will respond with 'uciok'.
-    worker.postMessage('uci');
+    ensureStockfishWorkerUrl().then(setupWorker);
 
     return () => {
-      // Always stop + terminate on unmount to prevent CPU/battery drain.
-      worker.postMessage('stop');
-      worker.terminate();
-      workerRef.current = null;
+      cancelled = true;
+      // Phase 213-08: the shared-URL promise may not have resolved yet — if
+      // `setupWorker` never ran, there is no worker to stop/terminate, and
+      // `cancelled` above stops the deferred continuation from constructing
+      // one after this cleanup has already run.
+      const worker = workerRef.current;
+      if (worker) {
+        // Always stop + terminate on unmount to prevent CPU/battery drain.
+        worker.postMessage('stop');
+        worker.terminate();
+        workerRef.current = null;
+      }
     };
   }, [enabled]); // re-run only if enabled toggles
 

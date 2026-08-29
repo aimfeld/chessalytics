@@ -43,6 +43,18 @@
 
 import * as Sentry from '@sentry/react';
 import { captureMaiaWorkerError, type MaiaErrorSource } from '@/lib/maiaWorkerErrors';
+import { supportsWasmSimd } from './wasmSimd';
+import {
+  getEngineAssetsSnapshot,
+  markEngineAssetFailed,
+  markEngineAssetPending,
+  markEngineAssetReady,
+  markEngineAssetsUnsupported,
+  reportEngineAssetProgress,
+  resetEngineAssetForRefetch,
+} from './engineAssetProgress';
+import { ensureOrtRuntime, fetchWasmOnlyOrtRuntime, type OrtBackend } from './ortRuntimeSource';
+import { ENGINE_ASSET_CACHE_NAME } from './engineAssetCache';
 
 // ─── Constants ───────────────────────────────────────────────────────────────
 
@@ -89,9 +101,49 @@ interface WorkerResultMessage {
 
 type WorkerMessage =
   | { type: 'ready'; backend: 'webgpu' | 'wasm' }
+  | { type: 'progress'; loaded: number; total: number }
   | WorkerResultMessage
   | { type: 'error'; message: string }
+  // Phase 213-12 (D-20): LOST its modelBuffer field (G-213-8 retired) — every
+  // spawn now reads the model from CacheStorage instead of a one-shot handoff.
   | { type: 'webgpu-unavailable'; message: string };
+
+/**
+ * Outgoing init message shape (Phase 213-09, G-213-35). `backend` is now
+ * REQUIRED and always exactly `'webgpu' | 'wasm'` — the main thread (this
+ * host, via `ortRuntimeSource.ts`'s adapter probe) makes the backend decision
+ * BEFORE the Worker is constructed, so the worker's own former `'auto'` mode
+ * (probe-inside-the-worker) no longer exists. `runtimeBuffer` is the
+ * onnxruntime-web runtime `.wasm` bytes for `ort.env.wasm.wasmBinary` — absent
+ * when the shared runtime fetch degraded to `null` (T-213-09-02), in which
+ * case the worker leaves `wasmBinary` unset and onnxruntime-web resolves the
+ * binary from `wasmPaths` exactly as before this change.
+ *
+ * Phase 213-12 (D-20, closing G-213-37): `assetCacheName` is set from
+ * `ENGINE_ASSET_CACHE_NAME` (imported, never duplicated as a literal — the
+ * worker cannot `import` this TS module) on EVERY spawn in `constructWorker`,
+ * covering both the `'auto'` and the `'wasm'` respawn branch with the one
+ * assignment. It is the SAME versioned CacheStorage name `engineAssetCache.ts`
+ * opens on the main thread, so `maia-worker.js`'s own small mirror of that
+ * cache logic reaches the identical cache by name rather than a duplicated
+ * literal — the mechanism that makes a second Maia worker spawn (the
+ * per-game respawn `BotsGame`'s `key={boot.nonce}` remount guarantees) cost
+ * zero network after the first complete download.
+ *
+ * Phase 213-12 (D-20): LOST `modelBuffer` — the `G-213-8` handoff (a dying
+ * WebGPU worker transferring its downloaded model to its wasm replacement)
+ * is retired. CacheStorage supersedes it: every replacement worker now reads
+ * the model from the SAME versioned cache via `assetCacheName`, which costs
+ * zero network whenever the model was already downloaded, without keeping a
+ * second transferable in this message (the exact shape that produced
+ * `G-213-36`).
+ */
+interface InitMessage {
+  type: 'init';
+  backend: OrtBackend;
+  runtimeBuffer?: ArrayBuffer;
+  assetCacheName?: string;
+}
 
 /** One `analyze()` call awaiting dispatch or resolution. */
 interface QueuedRequest {
@@ -124,6 +176,42 @@ let spawnSource: MaiaErrorSource | null = null;
 
 let nextLeaseId = 1;
 const leases = new Map<number, LeaseRecord>();
+
+/** D-13: cached `supportsWasmSimd()` result — `null` until the first `ensureSpawned()` probes it, so repeated calls do not re-validate. */
+let simdSupported: boolean | null = null;
+
+/**
+ * Bug fix (213-UAT G-213-8): true once a WebGPU session has failed in this
+ * page session. `respawnPinnedToWasm()` only pins the ONE replacement it
+ * spawns; if that replacement later died fatally, `worker` went back to
+ * `null` and the next `ensureSpawned()` re-probed WebGPU in `'auto'` mode —
+ * re-running the same doomed GPU init AND a fresh 45.7 MB model download,
+ * once per cycle. WebGPU availability cannot change within a page session,
+ * so once it has failed every later spawn is pinned to wasm.
+ */
+let webgpuFailed = false;
+
+/**
+ * Phase 213-09 (G-213-35): true from the moment `spawn()` starts awaiting the
+ * shared onnxruntime-web runtime fetch until the Worker has actually been
+ * constructed. `ensureSpawned()` re-entry during this window is a no-op
+ * rather than a second spawn — the same hazard plan 213-08 closed for
+ * `workerPool.ts`'s `grade()` (T-213-09-03). While this is true, `worker`
+ * stays `null`, so `dispatchNext()`'s existing `!worker` guard already lets a
+ * request enqueue rather than dispatch — no separate "in-flight" branch is
+ * needed on the queuing side, only on the re-spawn side.
+ */
+let spawnInFlight = false;
+
+/**
+ * Phase 213-09: bumped by `resetModuleState()` (the last-lease-release
+ * teardown) — a spawn continuation captures the generation BEFORE its
+ * runtime-fetch await and compares against the current value once the fetch
+ * resolves, so a `spawn()` that was already in flight when the last lease
+ * released constructs nothing into an already-torn-down module state.
+ * Mirrors `workerPool.ts`'s `spawnGeneration` for its own `terminate()`.
+ */
+let spawnGeneration = 0;
 
 /** Requests not yet dispatched to the worker, ordered priority-first, FIFO within each priority tier. */
 const queue: QueuedRequest[] = [];
@@ -165,21 +253,124 @@ function dispatchNext(): void {
 
 // ─── Worker lifecycle ───────────────────────────────────────────────────────
 
-/** Lazily spawns the worker on the first `analyze()`/`whenReady()` call — never eagerly at `acquireMaiaWorker`. */
+/**
+ * Lazily spawns the worker on the first `analyze()`/`whenReady()` call — never
+ * eagerly at `acquireMaiaWorker`. D-13: probes WASM-SIMD support BEFORE ever
+ * constructing a `Worker` — this is the single choke point every Maia
+ * consumer funnels through (bot play, the analysis chart, the gem sweep, and
+ * the FlawChess Engine's policy queue all reach the worker via this
+ * function), so a device that can never run the model never spends 45.7 MB of
+ * mobile data finding out. The probe result is cached in `simdSupported` so
+ * repeated `ensureSpawned()` calls do not re-validate.
+ *
+ * Phase 213-09 (T-213-09-03): also guards on `spawnInFlight` — `spawn()` now
+ * awaits the shared onnxruntime-web runtime fetch before constructing a
+ * Worker, so `worker` stays `null` for the whole fetch window. Without this
+ * guard, every `analyze()`/`whenReady()` call arriving during that window
+ * would re-enter this function and start a SECOND spawn (and a second
+ * runtime fetch) rather than joining the one already in flight.
+ */
 function ensureSpawned(source: MaiaErrorSource): void {
   if (worker) return;
-  spawn(source, 'auto');
+  if (spawnInFlight) return;
+  if (simdSupported === null) {
+    simdSupported = supportsWasmSimd();
+  }
+  if (!simdSupported) {
+    markEngineAssetsUnsupported();
+    failAllLeasesAndDropWorker(new Error('Maia worker: device lacks WASM SIMD'));
+    return;
+  }
+  spawn(source, webgpuFailed ? 'wasm' : 'auto');
 }
 
 /**
- * Constructs a fresh Worker and wires its handlers. `mode: 'wasm'` is used
- * exactly once, for the respawn after a `webgpu-unavailable` message (quick
- * 260729-sod, FIX 1, moved here from the two consumers in FIX 3) — it pins
- * the fresh worker to the WASM-only path so it never loads the WebGPU bundle
- * that failed in the dead one.
+ * Async-at-the-seam spawn (Phase 213-09, G-213-35, mirrors 213-08's
+ * `workerPool.ts::ensureSpawned()` pattern): resolves the onnxruntime-web
+ * runtime binary (and the backend it implies) BEFORE constructing the
+ * Worker, so the worker never probes the adapter itself and never issues its
+ * own runtime fetch.
+ *
+ * `mode: 'auto'` (the normal spawn) joins `ensureOrtRuntime()`'s memoised
+ * probe-then-fetch — the adapter decision is made here, once, and every
+ * later `analyze()`/`whenReady()` call for the life of the page reuses it.
+ * `mode: 'wasm'` (used exactly once, for the respawn after a
+ * `webgpu-unavailable` message — quick 260729-sod, FIX 1, moved here from
+ * the two consumers in FIX 3) calls `fetchWasmOnlyOrtRuntime()` directly:
+ * the host already knows the replacement is pinned to wasm, so there is no
+ * adapter left to probe and no reason to reuse `ensureOrtRuntime()`'s
+ * (differently-backended) memoised promise.
  */
 function spawn(source: MaiaErrorSource, mode: 'auto' | 'wasm'): void {
   spawnSource = source;
+  spawnInFlight = true;
+  const myGeneration = spawnGeneration;
+
+  // CR-02 (213-REVIEW.md): register BOTH ids as in-flight in the SAME
+  // synchronous call, before either await — 'ort-runtime' can never be
+  // absent from the readiness check while 'maia-model' is still pending, or
+  // vice versa. No-op (via `markEngineAssetPending`'s own guard) on a
+  // respawn where the id is already registered from the initial spawn.
+  markEngineAssetPending('maia-model');
+  markEngineAssetPending('ort-runtime');
+
+  // Deliberately TWO separate `.then()` call sites rather than composing an
+  // extra `.then()` on top of `fetchWasmOnlyOrtRuntime()`'s return value to
+  // unify the two shapes into one `runtimePromise` variable: the test
+  // double's synchronous "thenable" pattern (mirrors 213-08's
+  // `stockfishWorkerSource` mock) only stays synchronous across EXACTLY one
+  // `.then()` call layered directly on the mocked function's own return
+  // value — composing a second `.then()` before this point would silently
+  // reintroduce a real microtask hop for the `mode: 'wasm'` respawn path
+  // only, breaking every pre-existing test that asserts on `createdWorkers`
+  // immediately after triggering a respawn.
+  if (mode === 'wasm') {
+    fetchWasmOnlyOrtRuntime().then((runtimeBuffer) => {
+      // Phase 213-09: the last lease released mid-fetch (`resetModuleState()`
+      // bumped `spawnGeneration`) — construct nothing into an already-torn-down
+      // module state. Mirrors `workerPool.ts::ensureSpawned()`'s
+      // `myGeneration !== spawnGeneration` guard for `terminate()`.
+      if (myGeneration !== spawnGeneration) return;
+      spawnInFlight = false;
+      constructWorker(source, 'wasm', runtimeBuffer);
+    });
+    return;
+  }
+
+  ensureOrtRuntime().then(({ backend: chosenBackend, buffer: runtimeBuffer }) => {
+    if (myGeneration !== spawnGeneration) return;
+    spawnInFlight = false;
+    constructWorker(source, chosenBackend, runtimeBuffer);
+  });
+}
+
+/**
+ * Constructs a fresh Worker and wires its handlers, once the backend
+ * decision and the runtime buffer are both already resolved. `runtimeBuffer`
+ * is TRANSFERRED, not copied — a zero-copy pointer handoff rather than a
+ * structured clone of 13.5-24.3 MB (213-RESEARCH.md Pitfall 2).
+ *
+ * Buffer-safety audit (G-213-36, Phase 213-11; mechanism moved in Phase
+ * 213-12, D-20): transferring — and thereby detaching — `runtimeBuffer` here
+ * is safe because every caller of `getEngineAsset()` (which both
+ * `ensureOrtRuntime()` and `fetchWasmOnlyOrtRuntime()` now route through,
+ * `ortRuntimeSource.ts`) receives an instance it exclusively owns: a fresh
+ * cache read, or an independent copy for a single-flight joiner. No
+ * ArrayBuffer is ever retained across calls in `ortRuntimeSource.ts`'s own
+ * module scope, so there is no shared value any transfer could detach — a
+ * structural guarantee from the cache layer rather than a copy discipline
+ * this function has to reason about.
+ *
+ * Phase 213-12 (D-20, closing G-213-37): `modelBuffer` (G-213-8) is RETIRED
+ * — it used to be the second transferable in this message, the exact shape
+ * that produced `G-213-36`. Every spawn now reads the model from
+ * CacheStorage inside `maia-worker.js` itself instead.
+ */
+function constructWorker(
+  source: MaiaErrorSource,
+  chosenBackend: OrtBackend,
+  runtimeBuffer: ArrayBuffer | null,
+): void {
   let w: Worker;
   try {
     w = new Worker(ENGINE_PATH);
@@ -211,8 +402,16 @@ function spawn(source: MaiaErrorSource, mode: 'auto' | 'wasm'): void {
     failAllLeasesAndDropWorker(new Error('Maia worker: worker load failure'));
   };
 
-  // Auto mode probes WebGPU worker-side; a post-fallback respawn is pinned to wasm.
-  w.postMessage(mode === 'wasm' ? { type: 'init', backend: 'wasm' } : { type: 'init' });
+  // Phase 213-12 (D-20, G-213-37): sent on EVERY spawn — this single
+  // assignment covers both the 'auto' spawn and the 'wasm' respawn branch,
+  // since both funnel through this one function.
+  const initMsg: InitMessage = { type: 'init', backend: chosenBackend, assetCacheName: ENGINE_ASSET_CACHE_NAME };
+  const transfer: Transferable[] = [];
+  if (runtimeBuffer) {
+    initMsg.runtimeBuffer = runtimeBuffer;
+    transfer.push(runtimeBuffer);
+  }
+  w.postMessage(initMsg, transfer);
 }
 
 /**
@@ -228,6 +427,8 @@ function spawn(source: MaiaErrorSource, mode: 'auto' | 'wasm'): void {
  */
 function respawnPinnedToWasm(rawMessage: string, breadcrumbMessage: string): void {
   const source = spawnSource ?? 'maia-worker';
+  // G-213-8: WebGPU has now failed for this page session — never re-probe it.
+  webgpuFailed = true;
   if (worker) {
     worker.onmessage = null;
     worker.onerror = null;
@@ -236,6 +437,35 @@ function respawnPinnedToWasm(rawMessage: string, breadcrumbMessage: string): voi
   worker = null;
   isReady = false;
   backend = null;
+  // Bug fix (WR-02, 213-REVIEW.md): the replacement worker reads the model
+  // again via `fetchModelBuffer` (both the pre-ready `webgpu-unavailable`
+  // path and this post-ready mid-inference death re-run the full init
+  // sequence) — if this respawn follows a completed
+  // `markEngineAssetReady('maia-model')`, the store's entry is still
+  // `{ done: true, loaded: total }` from the dead worker's earlier success.
+  // Without resetting it, `useEngineAssets(['maia-model']).ready`/`.percent`
+  // would keep reporting the asset 100% ready throughout the replacement's
+  // own init — a real state/reality mismatch a caller gating new work on
+  // `.ready` (rather than a provider's own `whenReady()`) could act on.
+  //
+  // Phase 213-12 (D-20): now UNCONDITIONAL. Before this plan it was
+  // conditional on whether the dying worker had handed its model bytes over
+  // (G-213-8) — a handoff meant no fetch would occur, so resetting would
+  // have dropped the bar to 0% for a "download" that was never going to
+  // happen. That handoff is retired: every respawn now reads the model
+  // through `fetchModelBuffer`'s own cache-first path, which reports full
+  // progress IMMEDIATELY on a cache hit — so resetting first and letting the
+  // cache-hit report drive the bar back to 100% is correct on every path,
+  // cached or not.
+  resetEngineAssetForRefetch('maia-model');
+  // Bug fix (213-09, G-213-35): also unconditional, for the same reason —
+  // this respawn path only ever fires after a WebGPU attempt, i.e. the
+  // runtime binary already fetched was the asyncify build — the wasm-only
+  // replacement about to be requested (see `spawn(source, 'wasm')` below) is
+  // ALWAYS different bytes, so the gate's bar must not keep reporting the
+  // asyncify build's already-`done` state while the wasm-only one is
+  // resolved fresh (cache hit or genuine fetch).
+  resetEngineAssetForRefetch('ort-runtime');
   Sentry.addBreadcrumb({
     category: 'maia',
     level: 'info',
@@ -246,9 +476,27 @@ function respawnPinnedToWasm(rawMessage: string, breadcrumbMessage: string): voi
 }
 
 function handleMessage(msg: WorkerMessage): void {
+  if (msg.type === 'progress') {
+    // D-01/D-07: forward directly to the module-level store singleton — the
+    // host is already a module singleton and the store is another, so a
+    // direct call is the smaller surface and is what makes progress survive
+    // component unmount.
+    reportEngineAssetProgress('maia-model', msg.loaded, msg.total);
+    return;
+  }
+
   if (msg.type === 'ready') {
     isReady = true;
     backend = msg.backend;
+    markEngineAssetReady('maia-model');
+    // Phase 213-09 (G-213-35): 'ready' fires only after the worker's
+    // `InferenceSession.create()` has already succeeded — on EVERY path,
+    // including the degraded one where our own runtime fetch returned a null
+    // buffer and the worker fell back to `wasmPaths` resolution. Marking
+    // 'ort-runtime' done here (never anywhere else) is what keeps the
+    // non-dismissible gate from locking a device out forever behind an asset
+    // nothing on the degraded path would otherwise ever mark done.
+    markEngineAssetReady('ort-runtime');
     const waiters = readyWaiters.splice(0, readyWaiters.length);
     for (const w of waiters) w.resolve(msg.backend);
     dispatchNext();
@@ -280,6 +528,11 @@ function handleMessage(msg: WorkerMessage): void {
     // here — dispatchNext() never sends analyze before `ready`): the fresh
     // worker services every already-queued request, unlike `worker death`
     // below where nothing will ever run again.
+    //
+    // Phase 213-12 (D-20): the `modelBuffer` handoff (G-213-8) that used to
+    // ride along on this message is RETIRED — the replacement worker now
+    // reads the model from CacheStorage instead (zero network on a cache
+    // hit), so there is nothing left to transfer here.
     respawnPinnedToWasm(msg.message, 'Maia worker WebGPU session failed — respawning worker pinned to wasm');
     return;
   }
@@ -353,6 +606,16 @@ function failAllLeasesAndDropWorker(err: Error): void {
   for (const w of waiters) w.reject(err);
   for (const lease of leases.values()) lease.onFatal?.();
 
+  // Phase 213 D-14/D-15: a terminal model-fetch/init failure marks the asset
+  // store 'failed' so EngineReadyGate can offer Retry — but NEVER downgrade
+  // an already-`'unsupported'` status to the generic `'failed'` one. The
+  // D-13 SIMD probe already ran (in `ensureSpawned`, above this call site)
+  // and determined this device can never run Maia regardless of how many
+  // times it retries; offering Retry there would be a lie.
+  if (getEngineAssetsSnapshot().status !== 'unsupported') {
+    markEngineAssetFailed('maia-model');
+  }
+
   if (worker) {
     worker.onmessage = null;
     worker.onerror = null;
@@ -403,6 +666,11 @@ function resetModuleState(): void {
   isReady = false;
   backend = null;
   spawnSource = null;
+  // Phase 213-09: invalidates any spawn continuation already awaiting the
+  // runtime fetch when the last lease released — its generation check will
+  // no longer match, so it constructs nothing into this torn-down state.
+  spawnGeneration += 1;
+  spawnInFlight = false;
   const remainingQueue = queue.splice(0, queue.length);
   for (const req of remainingQueue) req.reject(new Error('Maia worker terminated'));
   if (inFlight) {
@@ -461,4 +729,15 @@ export function resetMaiaWorkerHostForTests(): void {
   readyWaiters.length = 0;
   leases.clear();
   nextLeaseId = 1;
+  // D-13: the module-level SIMD-probe cache must also be cleared, or a test
+  // that stubs WebAssembly.validate to false in one case would leak that
+  // cached result into every subsequent case in the same file.
+  simdSupported = null;
+  // G-213-8: the WebGPU pin is page-session state — a test that forces a
+  // WebGPU failure in one case must not leak the pin into the next.
+  webgpuFailed = false;
+  // Phase 213-09: the in-flight/generation pair must also reset, or a test
+  // that leaves a spawn mid-fetch would leak state into the next case.
+  spawnInFlight = false;
+  spawnGeneration = 0;
 }

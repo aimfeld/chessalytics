@@ -45,11 +45,12 @@ import { classifyLiveSeverity, evalToExpectedScore, sideToMoveFromFen } from '@/
 import type { MoverColor } from '@/lib/liveFlaw';
 import { moveTierFromSeverity } from '@/lib/trainScore';
 import type { TrainMoveTier } from '@/lib/trainScore';
+import {
+  createStockfishWorker,
+  ensureStockfishWorkerUrl,
+} from '@/lib/engine/stockfishWorkerSource';
 
 // ─── Constants ──────────────────────────────────────────────────────────────
-
-/** Path to the vendored Stockfish engine served from public/engine/. */
-const ENGINE_PATH = '/engine/stockfish-18-lite-single.js';
 
 /**
  * Grading search budget — MEASURED 2026-07-25 via
@@ -437,132 +438,162 @@ export function useTrainGradingEngine({
     hasErrorRef.current = false;
     setHasError(false);
 
-    // Classic (non-module) Worker — Emscripten glue uses self.onmessage /
-    // self.postMessage. Do NOT pass { type: 'module' }.
-    const worker = new Worker(ENGINE_PATH);
-    workerRef.current = worker;
+    // Phase 213-08 (G-213-35): an unmount that beats the shared fetch must
+    // not construct (and immediately leak) a worker nobody will ever clean
+    // up — mirrors useStockfishEngine.ts's identical guard.
+    let cancelled = false;
 
-    function handleLine(line: string): void {
-      if (line === 'uciok') {
-        worker.postMessage('isready');
-        return;
-      }
-      if (line === 'readyok') {
-        setIsReady(true);
-        isReadyRef.current = true;
-        // CR-01: drain whatever search() call arrived while the Worker was
-        // still completing its UCI handshake, exactly once, for real.
-        const pendingReady = pendingReadyDispatchRef.current;
-        pendingReadyDispatchRef.current = null;
-        if (pendingReady) {
-          dispatchNow(
-            pendingReady.fen,
-            pendingReady.generation,
-            pendingReady.resolve,
-            pendingReady.reject,
-            pendingReady.width,
-            pendingReady.movetimeMs,
-          );
-        }
-        return;
-      }
-      if (line.startsWith('info ')) {
-        if (stateRef.current !== 'thinking' || stopPendingRef.current) return;
-        const parsed = parseInfoLine(line);
-        // Bug fix (190.1 UAT round 4): drop lowerbound/upperbound lines
-        // instead of letting them overwrite the map (uciParser Pitfall 5).
-        // An aspiration-window fail at the end of the movetime budget emits
-        // e.g. "info depth 20 ... upperbound ... pv <2 moves>" as the LAST
-        // rank-1 line, clobbering the previous exact iteration's full PV —
-        // verified against the vendored engine headlessly (depth-19 exact
-        // 30-ply PV replaced by a depth-20 UB 2-ply PV). That made the
-        // reveal's Your-move / Played-in-game lines often 2-3 moves long.
-        // Every completed iteration emits exact lines for all ranks, so the
-        // map is never left empty by this filter.
-        if (parsed !== null && parsed.bound === 'exact') {
-          pvMapRef.current.set(parsed.multipv, {
-            multipv: parsed.multipv,
-            depth: parsed.depth,
-            moves: parsed.pv,
-            evalCp: parsed.scoreCp,
-            evalMate: parsed.scoreMate,
-          });
-        }
-        return;
-      }
-      if (line.startsWith('bestmove')) {
-        const bestMoveUci = parseBestmove(line);
+    function setupWorker(sharedUrl: string | null): void {
+      if (cancelled) return;
 
-        if (stopPendingRef.current) {
-          // Termination response to an explicit stop — always discard its
-          // content and fire whatever dispatch was queued behind it.
-          stopPendingRef.current = false;
-          stateRef.current = 'idle';
-          pendingRef.current = null;
-          const queued = queuedDispatchRef.current;
-          queuedDispatchRef.current = null;
-          if (queued) {
-            dispatchNow(queued.fen, queued.generation, queued.resolve, queued.reject, queued.width, queued.movetimeMs);
+      // Classic (non-module) Worker — Emscripten glue uses self.onmessage /
+      // self.postMessage. Do NOT pass { type: 'module' }. Phase 213-08:
+      // constructed through the shared source module — a non-null
+      // `sharedUrl` routes to the already-fetched-once `.wasm`; a null
+      // `sharedUrl` constructs against the served path exactly as before.
+      // This hook reports no asset progress today and does not start doing
+      // so here — the only change is where the worker's `.wasm` comes from.
+      const worker = createStockfishWorker(sharedUrl);
+      workerRef.current = worker;
+
+      runWorkerHandshake(worker);
+    }
+
+    /** Wires the UCI line handler and kicks off the handshake for `worker`. */
+    function runWorkerHandshake(worker: Worker): void {
+      function handleLine(line: string): void {
+        if (line === 'uciok') {
+          worker.postMessage('isready');
+          return;
+        }
+        if (line === 'readyok') {
+          setIsReady(true);
+          isReadyRef.current = true;
+          // CR-01: drain whatever search() call arrived while the Worker was
+          // still completing its UCI handshake, exactly once, for real.
+          const pendingReady = pendingReadyDispatchRef.current;
+          pendingReadyDispatchRef.current = null;
+          if (pendingReady) {
+            dispatchNow(
+              pendingReady.fen,
+              pendingReady.generation,
+              pendingReady.resolve,
+              pendingReady.reject,
+              pendingReady.width,
+              pendingReady.movetimeMs,
+            );
           }
           return;
         }
+        if (line.startsWith('info ')) {
+          if (stateRef.current !== 'thinking' || stopPendingRef.current) return;
+          const parsed = parseInfoLine(line);
+          // Bug fix (190.1 UAT round 4): drop lowerbound/upperbound lines
+          // instead of letting them overwrite the map (uciParser Pitfall 5).
+          // An aspiration-window fail at the end of the movetime budget emits
+          // e.g. "info depth 20 ... upperbound ... pv <2 moves>" as the LAST
+          // rank-1 line, clobbering the previous exact iteration's full PV —
+          // verified against the vendored engine headlessly (depth-19 exact
+          // 30-ply PV replaced by a depth-20 UB 2-ply PV). That made the
+          // reveal's Your-move / Played-in-game lines often 2-3 moves long.
+          // Every completed iteration emits exact lines for all ranks, so the
+          // map is never left empty by this filter.
+          if (parsed !== null && parsed.bound === 'exact') {
+            pvMapRef.current.set(parsed.multipv, {
+              multipv: parsed.multipv,
+              depth: parsed.depth,
+              moves: parsed.pv,
+              evalCp: parsed.scoreCp,
+              evalMate: parsed.scoreMate,
+            });
+          }
+          return;
+        }
+        if (line.startsWith('bestmove')) {
+          const bestMoveUci = parseBestmove(line);
 
+          if (stopPendingRef.current) {
+            // Termination response to an explicit stop — always discard its
+            // content and fire whatever dispatch was queued behind it.
+            stopPendingRef.current = false;
+            stateRef.current = 'idle';
+            pendingRef.current = null;
+            const queued = queuedDispatchRef.current;
+            queuedDispatchRef.current = null;
+            if (queued) {
+              dispatchNow(queued.fen, queued.generation, queued.resolve, queued.reject, queued.width, queued.movetimeMs);
+            }
+            return;
+          }
+
+          stateRef.current = 'idle';
+          const pending = pendingRef.current;
+          pendingRef.current = null;
+          if (!pending) return;
+          // 190.1-02: commit the accumulated MultiPV map — sorted by rank,
+          // sign-normalized to white POV — exactly once, at bestmove. Never
+          // assume the requested width was returned (Map may have fewer
+          // entries than requested); a width-1 search still yields one entry.
+          const lines: PvLine[] = dedupePvLinesByFirstMove(
+            [...pvMapRef.current.values()].sort((a, b) => a.multipv - b.multipv),
+          ).map((l) => ({
+            ...l,
+            evalCp: l.evalCp === null ? null : l.evalCp * pending.whitePovSign,
+            evalMate: l.evalMate === null ? null : l.evalMate * pending.whitePovSign,
+          }));
+          const rank1 = lines[0];
+          pending.resolve({
+            evalCp: rank1 !== undefined ? rank1.evalCp : null,
+            evalMate: rank1 !== undefined ? rank1.evalMate : null,
+            bestMoveUci,
+            pv: rank1 !== undefined ? rank1.moves : [],
+            lines,
+          });
+        }
+      }
+
+      worker.onmessage = (e: MessageEvent<string>) => {
+        handleLine(e.data);
+      };
+
+      // Bug fix (Phase 190-01 checkpoint): a Worker construction/load failure
+      // (e.g. the vendored WASM asset 404s or the browser can't instantiate
+      // it) previously left every pending/queued search unresolved forever —
+      // gradeMove would hang on `await bestSearchReadyRef.current` with no
+      // visible error. Surface it via `hasError` and reject anything waiting
+      // immediately rather than making callers wait out the full
+      // TRAIN_GRADING_TIMEOUT_MS on a definitively-dead engine.
+      worker.onerror = () => {
+        hasErrorRef.current = true;
+        setHasError(true);
         stateRef.current = 'idle';
+        stopPendingRef.current = false;
         const pending = pendingRef.current;
         pendingRef.current = null;
-        if (!pending) return;
-        // 190.1-02: commit the accumulated MultiPV map — sorted by rank,
-        // sign-normalized to white POV — exactly once, at bestmove. Never
-        // assume the requested width was returned (Map may have fewer
-        // entries than requested); a width-1 search still yields one entry.
-        const lines: PvLine[] = dedupePvLinesByFirstMove(
-          [...pvMapRef.current.values()].sort((a, b) => a.multipv - b.multipv),
-        ).map((l) => ({
-          ...l,
-          evalCp: l.evalCp === null ? null : l.evalCp * pending.whitePovSign,
-          evalMate: l.evalMate === null ? null : l.evalMate * pending.whitePovSign,
-        }));
-        const rank1 = lines[0];
-        pending.resolve({
-          evalCp: rank1 !== undefined ? rank1.evalCp : null,
-          evalMate: rank1 !== undefined ? rank1.evalMate : null,
-          bestMoveUci,
-          pv: rank1 !== undefined ? rank1.moves : [],
-          lines,
-        });
-      }
+        pending?.reject(new Error('Grading engine failed to load'));
+        const queued = queuedDispatchRef.current;
+        queuedDispatchRef.current = null;
+        queued?.reject(new Error('Grading engine failed to load'));
+      };
+
+      worker.postMessage('uci');
     }
 
-    worker.onmessage = (e: MessageEvent<string>) => {
-      handleLine(e.data);
-    };
-
-    // Bug fix (Phase 190-01 checkpoint): a Worker construction/load failure
-    // (e.g. the vendored WASM asset 404s or the browser can't instantiate
-    // it) previously left every pending/queued search unresolved forever —
-    // gradeMove would hang on `await bestSearchReadyRef.current` with no
-    // visible error. Surface it via `hasError` and reject anything waiting
-    // immediately rather than making callers wait out the full
-    // TRAIN_GRADING_TIMEOUT_MS on a definitively-dead engine.
-    worker.onerror = () => {
-      hasErrorRef.current = true;
-      setHasError(true);
-      stateRef.current = 'idle';
-      stopPendingRef.current = false;
-      const pending = pendingRef.current;
-      pendingRef.current = null;
-      pending?.reject(new Error('Grading engine failed to load'));
-      const queued = queuedDispatchRef.current;
-      queuedDispatchRef.current = null;
-      queued?.reject(new Error('Grading engine failed to load'));
-    };
-
-    worker.postMessage('uci');
+    ensureStockfishWorkerUrl().then(setupWorker);
 
     return () => {
-      worker.postMessage('stop');
-      worker.terminate();
-      workerRef.current = null;
+      cancelled = true;
+      // Phase 213-08: the shared-URL promise may not have resolved yet — if
+      // `setupWorker` never ran, there is no worker to stop/terminate, and
+      // `cancelled` above stops the deferred continuation from constructing
+      // one after this cleanup has already run. Every other reset below is
+      // unconditional — it must happen whether or not a worker ever existed.
+      const worker = workerRef.current;
+      if (worker) {
+        worker.postMessage('stop');
+        worker.terminate();
+        workerRef.current = null;
+      }
       setIsReady(false);
       isReadyRef.current = false;
       stateRef.current = 'idle';

@@ -52,6 +52,18 @@ export function placeholderAvatarFor(persona: Persona): PlaceholderAvatar {
  * persona id). `query: '?url'` + `import: 'default'` yields a plain URL
  * string per matched file, matching `<img src>`'s expected type — no raw
  * asset objects leak out of this module.
+ *
+ * Eager glob decision (213-02, D-18): kept `eager: true` deliberately, rather
+ * than switching to a lazy per-persona `import()`. At `BUNDLE_AVATAR_SIZE_PX`
+ * (128px, see `scripts/gen_persona_avatars.py`) the 24 variants are roughly
+ * 5-8 KB each — about 150 KB of URL-only string imports, no longer the
+ * payload problem the 512px masters were. A lazy glob would force
+ * `resolveAvatarSrc` to become async and ripple through all three call sites
+ * (`PersonaCard`, `PersonaDetailSurface`, `ClockDisplay`) for no measurable
+ * win. `frontend/src/assets/personas-source/` holds the 512x512 masters and
+ * is deliberately outside this glob pattern — the delete-a-master-and-rerun
+ * curation loop (`scripts/gen_persona_avatars.py`) keys off that directory,
+ * not this one.
  */
 const AVATAR_MODULES = import.meta.glob('../../assets/personas/*.webp', {
   eager: true,

@@ -212,7 +212,12 @@ class FakeWorker {
     private pv = bestMove,
   ) {}
 
-  postMessage(msg: string): void {
+  postMessage(msg: string | { progressPort: unknown }): void {
+    // Phase 213: useStockfishEngine now also hands the worker a
+    // `{ progressPort }` MessageChannel port before the 'uci' handshake —
+    // this fake has no progress-reporting to simulate, so it just ignores
+    // any non-string payload.
+    if (typeof msg !== 'string') return;
     if (msg === 'uci') {
       this.emit('uciok');
     } else if (msg === 'isready') {
@@ -936,7 +941,10 @@ describe('TrainSolveScreen — progress, last move, grading state, engine failur
     private width = 1;
     private readonly ranked = ['e2e4', 'd2d4', 'g1f3', 'c2c4'];
 
-    postMessage(msg: string): void {
+    postMessage(msg: string | { progressPort: unknown }): void {
+      // Phase 213: ignore the non-string `{ progressPort }` handoff
+      // useStockfishEngine now sends before the 'uci' handshake.
+      if (typeof msg !== 'string') return;
       if (msg === 'uci') {
         this.emit('uciok');
       } else if (msg === 'isready') {
@@ -993,7 +1001,10 @@ describe('TrainSolveScreen — progress, last move, grading state, engine failur
       private readonly defaultScoreCp = 20,
     ) {}
 
-    postMessage(msg: string): void {
+    postMessage(msg: string | { progressPort: unknown }): void {
+      // Phase 213: ignore the non-string `{ progressPort }` handoff
+      // useStockfishEngine now sends before the 'uci' handshake.
+      if (typeof msg !== 'string') return;
       if (msg === 'uci') {
         this.emit('uciok');
       } else if (msg === 'isready') {

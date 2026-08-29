@@ -14,7 +14,7 @@
 import { afterEach, beforeAll, describe, expect, it, vi } from 'vitest';
 import { cleanup, fireEvent, render, screen } from '@testing-library/react';
 
-import { EngineLines } from '../EngineLines';
+import { EngineLines, EngineLinesSkeleton } from '../EngineLines';
 import { TooltipProvider } from '@/components/ui/tooltip';
 import type { PvLine } from '@/hooks/uciParser';
 
@@ -278,5 +278,35 @@ describe('EngineLines', () => {
       />,
     );
     expect(screen.queryByTestId('engine-line-0-expand')).toBeNull();
+  });
+});
+
+// ─── G-213-34 (supersedes D-12): EngineLinesSkeleton reads no download state ──
+
+describe('EngineLinesSkeleton', () => {
+  it('renders the pulsing placeholder rows (the ONLY thing this skeleton ever renders now)', () => {
+    render(<EngineLinesSkeleton testId="skel" />);
+    const el = screen.getByTestId('skel');
+    expect(el).toBeTruthy();
+    expect(el.getAttribute('aria-busy')).toBe('true');
+    expect(el.getAttribute('aria-label')).toBe('Loading engine lines');
+    expect(screen.queryByTestId('skel-progress')).toBeNull();
+  });
+
+  it('the outer container className expression is stable for the default, compact, and three-row variants', () => {
+    render(<EngineLinesSkeleton testId="default-variant" />);
+    render(<EngineLinesSkeleton testId="compact-variant" compact />);
+    render(<EngineLinesSkeleton testId="three-row-variant" rows={3} />);
+
+    expect(screen.getByTestId('default-variant').className).toContain('min-h-[60px]');
+    expect(screen.getByTestId('compact-variant').className).toContain('min-h-[50px]');
+    expect(screen.getByTestId('three-row-variant').className).toContain('min-h-[90px]');
+  });
+
+  it('aria-busy and aria-label are always set', () => {
+    render(<EngineLinesSkeleton testId="skel-aria" />);
+    const el = screen.getByTestId('skel-aria');
+    expect(el.getAttribute('aria-busy')).toBe('true');
+    expect(el.getAttribute('aria-label')).toBe('Loading engine lines');
   });
 });

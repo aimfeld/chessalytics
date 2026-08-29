@@ -523,6 +523,37 @@ function movesTooltipContent(
 }
 
 /**
+ * Fixed-height placeholder shown while `perElo` is empty (Maia not yet ready
+ * for this position). Kept as its own component (the extraction that used to
+ * be required by rules of hooks is no longer load-bearing after G-213-34, but
+ * re-inlining it into `MovesByRatingChart`'s early return is an unrelated
+ * refactor outside this gap's scope).
+ *
+ * G-213-34 (supersedes D-12): shows no download state of any kind — download
+ * progress lives exclusively in the `EngineReadyGate` modal now. Always
+ * renders today's plain pulsing block, whether or not Maia is downloading.
+ */
+function MaiaChartSkeleton({ heightClass }: { heightClass: string }): React.ReactElement {
+  return (
+    <div
+      data-testid="moves-by-rating-chart"
+      className={`w-full ${heightClass}`}
+      role="img"
+      aria-label="Moves by rating chart: waiting for Maia analysis"
+    >
+      {/* Fixed-height pulsing placeholder — same no-jump loading pattern as the
+          engine (Stockfish) card, so the card keeps its size until Maia is ready. */}
+      <div
+        data-testid="moves-by-rating-chart-skeleton"
+        aria-busy="true"
+        className="h-full w-full animate-pulse rounded-md bg-muted/30"
+      />
+      <span className="sr-only">Waiting for Maia analysis...</span>
+    </div>
+  );
+}
+
+/**
  * "Moves by Rating" chart: one probability line per shown candidate move over the
  * Maia ELO ladder (caller-selected `shownSans`), colored by Stockfish-graded
  * quality, with a "you are here" reference line at the selected ELO. Renders a
@@ -540,23 +571,7 @@ export function MovesByRatingChart({
   heightClass = CHART_HEIGHT_CLASS,
 }: MovesByRatingChartProps): React.ReactElement {
   if (perElo.length === 0) {
-    return (
-      <div
-        data-testid="moves-by-rating-chart"
-        className={`w-full ${heightClass}`}
-        role="img"
-        aria-label="Moves by rating chart: waiting for Maia analysis"
-      >
-        {/* Fixed-height pulsing placeholder — same no-jump loading pattern as the
-            engine (Stockfish) card, so the card keeps its size until Maia is ready. */}
-        <div
-          data-testid="moves-by-rating-chart-skeleton"
-          aria-busy="true"
-          className="h-full w-full animate-pulse rounded-md bg-muted/30"
-        />
-        <span className="sr-only">Waiting for Maia analysis...</span>
-      </div>
-    );
+    return <MaiaChartSkeleton heightClass={heightClass} />;
   }
 
   const rows = pivotRows(perElo, shownSans);

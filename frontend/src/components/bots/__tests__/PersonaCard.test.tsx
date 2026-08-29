@@ -84,6 +84,19 @@ describe('PersonaCard', () => {
     expect(img).not.toBeNull();
     expect(img?.getAttribute('src')).toBe(personaWithArt.avatarSrc);
   });
+
+  it('lazy-loads the real-art avatar image (213-02, D-18)', () => {
+    // A persona whose webp exists in the assets glob renders the real-art
+    // <img>, which must carry loading="lazy" so the /bots grid does not
+    // eagerly fetch every persona's avatar on mount.
+    const personaWithArt = { ...PERSONA, avatarSrc: '/personas/attacker-800.webp' };
+    render(<PersonaCard persona={personaWithArt} onSelect={vi.fn()} />);
+
+    const card = screen.getByTestId(`bots-persona-card-${personaWithArt.id}`);
+    const img = card.querySelector('img');
+    expect(img).not.toBeNull();
+    expect(img?.getAttribute('loading')).toBe('lazy');
+  });
 });
 
 describe('PersonaCard win-stars row (Phase 185)', () => {

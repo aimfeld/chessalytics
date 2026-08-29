@@ -407,6 +407,32 @@ describe('createMaiaQueue', () => {
     const providerPolicy: EngineProviders['policy'] = queue.policy;
     expect(typeof providerPolicy).toBe('function');
   });
+
+  // ─── whenReady() forwarding (Phase 213-01, D-01) ───────────────────────
+
+  it('whenReady() is still pending before the lease reports ready, and resolves with the backend once it does', async () => {
+    const queue = createMaiaQueue();
+    let settled: 'webgpu' | 'wasm' | null = null;
+    const promise = queue.whenReady().then((backend) => {
+      settled = backend;
+      return backend;
+    });
+
+    await Promise.resolve();
+    expect(settled).toBeNull();
+
+    const lease = createdLeases[0]!;
+    lease.simulateReady('wasm');
+    await expect(promise).resolves.toBe('wasm');
+  });
+
+  it('whenReady() acquires a priority:false lease with source maia-queue-worker, same as policy()/warm()', () => {
+    const queue = createMaiaQueue();
+    void queue.whenReady();
+    expect(acquireMaiaWorker).toHaveBeenCalledWith(
+      expect.objectContaining({ source: 'maia-queue-worker', priority: false }),
+    );
+  });
 });
 
 // ─── Throw containment in the fulfilment handler (Phase 194 code-review WR-03) ──

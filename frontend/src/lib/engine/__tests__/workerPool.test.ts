@@ -32,22 +32,113 @@ import {
 import type { EngineProviders, SearchBudget } from '../types';
 import { mctsSearch } from '../mctsSearch';
 import { buildGradeGoCommand, GRADING_ROOT_DEPTH } from '../gradingLadder';
+import {
+  getEngineAssetsSnapshot,
+  resetEngineAssetsForTests,
+  STOCKFISH_WASM_BYTES_FALLBACK,
+} from '../engineAssetProgress';
+import { ensureStockfishWorkerUrl } from '../stockfishWorkerSource';
 
 // @sentry/react's ESM module namespace is not configurable, so vi.spyOn cannot
 // redefine captureException on the real module — mock the module instead
 // (mirrors maiaQueue.test.ts).
 vi.mock('@sentry/react', () => ({ captureException: vi.fn() }));
 
+// ─── stockfishWorkerSource mock (Phase 213-08, G-213-35) ───────────────────
+//
+// `createSlot()` now constructs through the shared source module instead of
+// a bare `new Worker(ENGINE_PATH)`. This file's job is the POOL's own
+// dispatch/watchdog/priority-queue logic, not the shared-fetch mechanics
+// (covered by `stockfishWorkerSource.test.ts`) — the DEFAULT mock resolves
+// `ensureStockfishWorkerUrl()` via a synchronous "thenable" (a `.then` that
+// invokes its callback immediately, in the SAME synchronous call, rather
+// than deferring to a real microtask) so every pre-existing test in this
+// file that asserts on `createdWorkers` right after calling `pool.grade()`/
+// `pool.warm()` — with NO await in between — keeps working completely
+// unchanged: `ensureSpawned()`'s `ensureStockfishWorkerUrl().then(...)` call
+// resolves and runs its continuation synchronously, so slots exist by the
+// time control returns to the test. Only the NEW tests that specifically
+// prove the queue-instead-of-empty / terminate-mid-fetch race behavior
+// override this default with a real, test-controlled Promise via
+// `vi.mocked(ensureStockfishWorkerUrl).mockReturnValueOnce(...)`.
+function syncThenable<T>(value: T): PromiseLike<T> {
+  return {
+    then<TResult1 = T, TResult2 = never>(
+      onfulfilled?: ((value: T) => TResult1 | PromiseLike<TResult1>) | null,
+    ): PromiseLike<TResult1 | TResult2> {
+      const result = onfulfilled ? onfulfilled(value) : (value as unknown as TResult1);
+      return Promise.resolve(result);
+    },
+  };
+}
+
+vi.mock('../stockfishWorkerSource', () => ({
+  ensureStockfishWorkerUrl: vi.fn(() => syncThenable<string | null>(null)),
+  createStockfishWorker: vi.fn((sharedUrl: string | null) => {
+    const WorkerCtor = globalThis.Worker as unknown as new (url: string) => Worker;
+    return sharedUrl === null
+      ? new WorkerCtor('/engine/stockfish-18-lite-single.js')
+      : new WorkerCtor(`/engine/stockfish-18-lite-single.js#${encodeURIComponent(sharedUrl)}`);
+  }),
+}));
+
 // ─── Mock Worker (multi-instance — a pool spawns N separate Worker()s) ──────
+
+/**
+ * Phase 213: a minimal synchronous double for the `MessageChannel`/
+ * `MessagePort` pair `createSlot()` uses to wire the vendored Stockfish
+ * glue's `progressPort` protocol. A real jsdom `MessageChannel` delivers
+ * messages asynchronously (a real event-loop tick), which would force every
+ * progress-wiring test to await a tick for no reason — this double fires
+ * synchronously instead, like `MockWorker.simulateMessage` does for the UCI
+ * line protocol.
+ */
+class MockMessagePort {
+  onmessage: ((e: MessageEvent<{ loaded: number; total: number }>) => void) | null = null;
+  peer: MockMessagePort | null = null;
+
+  postMessage(data: { loaded: number; total: number }): void {
+    this.peer?.onmessage?.(new MessageEvent('message', { data }));
+  }
+}
+
+function createMockMessageChannel(): { port1: MockMessagePort; port2: MockMessagePort } {
+  const port1 = new MockMessagePort();
+  const port2 = new MockMessagePort();
+  port1.peer = port2;
+  port2.peer = port1;
+  return { port1, port2 };
+}
+
+/** Stubs the global `MessageChannel` constructor with the synchronous double above. */
+function stubMessageChannel(): void {
+  vi.stubGlobal(
+    'MessageChannel',
+    vi.fn(function (this: unknown) {
+      return createMockMessageChannel();
+    }),
+  );
+}
 
 class MockWorker {
   onmessage: ((e: MessageEvent<string>) => void) | null = null;
   onerror: ((e: ErrorEvent) => void) | null = null;
   messages: string[] = [];
+  /**
+   * Phase 213: every `postMessage` call in arrival order, including
+   * non-string payloads (the `{ progressPort }` handoff) — `messages` above
+   * stays string-only so every pre-existing `.startsWith('go ')`-style
+   * assertion keeps working untouched. Use this array for ordering
+   * assertions the string-only log cannot express.
+   */
+  allMessages: unknown[] = [];
   terminated = false;
 
-  postMessage(msg: string): void {
-    this.messages.push(msg);
+  postMessage(msg: string | { progressPort: MockMessagePort }): void {
+    this.allMessages.push(msg);
+    if (typeof msg === 'string') {
+      this.messages.push(msg);
+    }
   }
 
   terminate(): void {
@@ -62,6 +153,15 @@ class MockWorker {
   /** Fire the onerror handler (async script-load failure — never a sync throw). */
   simulateError(): void {
     this.onerror?.(new ErrorEvent('error', { message: 'simulated worker load failure' }));
+  }
+
+  /** The `MockMessagePort` (port2) this slot transferred to the worker at spawn, or undefined if `MessageChannel` was unstubbed/unavailable. */
+  capturedProgressPort(): MockMessagePort | undefined {
+    const found = this.allMessages.find(
+      (m): m is { progressPort: MockMessagePort } =>
+        typeof m === 'object' && m !== null && 'progressPort' in m,
+    );
+    return found?.progressPort;
   }
 }
 
@@ -2070,5 +2170,517 @@ describe('createWorkerPool: lifecycle', () => {
     for (const w of createdWorkers) w.simulateError();
 
     await expect(gradePromise).resolves.toEqual(new Map());
+  });
+});
+
+// ─── createWorkerPool: whenReady() (Phase 213 D-01) ────────────────────────
+
+describe('createWorkerPool: whenReady() (Phase 213 D-01)', () => {
+  beforeEach(() => {
+    stubDesktopSizing(6); // computePoolSize() -> 4 slots
+    stubWorkerCtor();
+    resetEngineAssetsForTests();
+  });
+
+  afterEach(() => {
+    vi.unstubAllGlobals();
+    resetEngineAssetsForTests();
+  });
+
+  it('is still pending before any slot has reported readyok', async () => {
+    const pool = createWorkerPool();
+    let resolved = false;
+    void pool.whenReady().then(() => {
+      resolved = true;
+    });
+    await Promise.resolve();
+    await Promise.resolve();
+    expect(resolved).toBe(false);
+  });
+
+  it('resolves once the FIRST slot reports readyok, without waiting for the other computePoolSize() slots', async () => {
+    const pool = createWorkerPool();
+    const readyPromise = pool.whenReady();
+    expect(createdWorkers.length).toBe(4); // stubDesktopSizing(6) -> 4 slots, spawned eagerly by ensureSpawned()
+
+    // Drive ONLY the first slot to readyok — slots 1-3 are left un-driven.
+    driveInit(createdWorkers[0]!);
+
+    await readyPromise; // must resolve without any of the other 3 slots ever reporting readyok
+  });
+
+  it('a second whenReady() call after readiness resolves immediately, without spawning anything new', async () => {
+    const pool = createWorkerPool();
+    const first = pool.whenReady();
+    driveInit(createdWorkers[0]!);
+    await first;
+
+    const countBefore = createdWorkers.length;
+    await pool.whenReady();
+    expect(createdWorkers.length).toBe(countBefore);
+  });
+
+  it('whenReady() on a never-spawned pool triggers ensureSpawned() so the promise can actually settle', () => {
+    const pool = createWorkerPool();
+    expect(createdWorkers.length).toBe(0);
+    void pool.whenReady();
+    expect(createdWorkers.length).toBeGreaterThan(0);
+  });
+
+  it('terminate() resets readiness — a fresh whenReady() is pending again until the re-spawned pool reports its own readyok', async () => {
+    const pool = createWorkerPool();
+    const firstReady = pool.whenReady();
+    driveInit(createdWorkers[0]!);
+    await firstReady;
+
+    pool.terminate();
+
+    let resolved = false;
+    void pool.whenReady().then(() => {
+      resolved = true;
+    });
+    await Promise.resolve();
+    expect(resolved).toBe(false);
+
+    // terminate() reset `spawned`, so this second whenReady() call re-ran
+    // ensureSpawned() and produced a fresh batch of mock workers.
+    const freshWorkers = createdWorkers.slice(4);
+    expect(freshWorkers.length).toBeGreaterThan(0);
+    driveInit(freshWorkers[0]!);
+    await Promise.resolve();
+    expect(resolved).toBe(true);
+  });
+
+  it('marks stockfish-wasm ready in the shared engine-asset store the moment readiness resolves', async () => {
+    const pool = createWorkerPool();
+    const readyPromise = pool.whenReady();
+    driveInit(createdWorkers[0]!);
+    await readyPromise;
+
+    expect(getEngineAssetsSnapshot().assets['stockfish-wasm']?.done).toBe(true);
+  });
+});
+
+// ─── createWorkerPool: markPoolFailed (CR-01, 213-REVIEW.md) ───────────────
+//
+// Before this fix, `markEngineAssetFailed` was imported and called exactly
+// once anywhere in the codebase (maiaWorkerHost.ts, tagged 'maia-model') —
+// nothing ever called it for 'stockfish-wasm', and `whenReady()` had no
+// reject path at all. A totally dead Stockfish pool left `EngineReadyGate`
+// permanently stuck: Start disabled forever, no Retry ever shown.
+
+describe('createWorkerPool: markPoolFailed (CR-01, 213-REVIEW.md)', () => {
+  beforeEach(() => {
+    stubDesktopSizing(6); // computePoolSize() -> 4 slots
+    resetEngineAssetsForTests();
+  });
+
+  afterEach(() => {
+    vi.unstubAllGlobals();
+    resetEngineAssetsForTests();
+  });
+
+  it('marks stockfish-wasm failed and rejects whenReady() when every slot construction attempt throws', async () => {
+    vi.stubGlobal(
+      'Worker',
+      vi.fn(function (this: unknown): never {
+        throw new Error('simulated construction failure');
+      }),
+    );
+    const pool = createWorkerPool();
+
+    await expect(pool.whenReady()).rejects.toThrow();
+    expect(getEngineAssetsSnapshot().status).toBe('failed');
+  });
+
+  it('marks stockfish-wasm failed and rejects a pending whenReady() once every slot has died with the respawn budget exhausted', async () => {
+    stubWorkerCtor();
+    const pool = createWorkerPool();
+    const rejectSpy = vi.fn();
+    void pool.whenReady().catch(rejectSpy);
+    expect(createdWorkers.length).toBeGreaterThan(0);
+
+    // Repeatedly fail every currently-alive worker via onerror. Each failure
+    // consumes one unit of MAX_SLOT_RESPAWNS until the budget is spent, at
+    // which point a dying slot is spliced out instead of replaced — this
+    // eventually drains the pool to zero live slots.
+    let guard = 0;
+    while (getEngineAssetsSnapshot().status !== 'failed' && guard < 50) {
+      const alive = createdWorkers.filter((w) => !w.terminated);
+      for (const w of alive) w.simulateError();
+      guard++;
+    }
+    await Promise.resolve(); // let the .catch(rejectSpy) microtask run
+
+    expect(getEngineAssetsSnapshot().status).toBe('failed');
+    expect(rejectSpy).toHaveBeenCalled();
+  });
+
+  it('a later whenReady() call rejects immediately once the pool has already been marked failed (no waiter ever settles otherwise)', async () => {
+    vi.stubGlobal(
+      'Worker',
+      vi.fn(function (this: unknown): never {
+        throw new Error('simulated construction failure');
+      }),
+    );
+    const pool = createWorkerPool();
+    pool.warm(); // triggers ensureSpawned() -> markPoolFailed(), before any whenReady() call subscribes
+
+    expect(getEngineAssetsSnapshot().status).toBe('failed');
+    await expect(pool.whenReady()).rejects.toThrow();
+  });
+});
+
+// ─── createWorkerPool: progressPort wiring (Phase 213 D-01, T-213-01/T-213-07) ──
+
+describe('createWorkerPool: progressPort wiring (Phase 213 D-01, T-213-01/T-213-07)', () => {
+  beforeEach(() => {
+    stubDesktopSizing(6); // computePoolSize() -> 4 slots
+    stubWorkerCtor();
+    stubMessageChannel();
+    resetEngineAssetsForTests();
+  });
+
+  afterEach(() => {
+    vi.unstubAllGlobals();
+    resetEngineAssetsForTests();
+  });
+
+  it('hands every fresh worker a progressPort before the uci handshake, and the handshake still runs last', () => {
+    const pool = createWorkerPool();
+    pool.warm(); // ensureSpawned() — no search, just spawn
+    expect(createdWorkers.length).toBe(4);
+
+    for (const w of createdWorkers) {
+      expect(w.allMessages[0]).toEqual(
+        expect.objectContaining({ progressPort: expect.anything() }),
+      );
+      expect(w.allMessages[w.allMessages.length - 1]).toBe('uci');
+    }
+  });
+
+  it('a progressPort message with { loaded, total } reaches the shared store under stockfish-wasm', () => {
+    const pool = createWorkerPool();
+    pool.warm();
+    const worker = createdWorkers[0]!;
+    const port = worker.capturedProgressPort();
+    expect(port).toBeDefined();
+
+    port!.postMessage({ loaded: 1_000_000, total: STOCKFISH_WASM_BYTES_FALLBACK });
+
+    const entry = getEngineAssetsSnapshot().assets['stockfish-wasm'];
+    expect(entry?.loaded).toBe(1_000_000);
+    expect(entry?.total).toBe(STOCKFISH_WASM_BYTES_FALLBACK);
+  });
+
+  it('a progressPort message with a missing/zero total still produces a finite percent via the store fallback (T-213-01)', () => {
+    const pool = createWorkerPool();
+    pool.warm();
+    const worker = createdWorkers[0]!;
+    const port = worker.capturedProgressPort()!;
+
+    port.postMessage({ loaded: 500, total: 0 });
+
+    const entry = getEngineAssetsSnapshot().assets['stockfish-wasm'];
+    expect(entry?.total).toBe(STOCKFISH_WASM_BYTES_FALLBACK);
+    expect(Number.isFinite(entry?.loaded)).toBe(true);
+  });
+
+  it('a MessageChannel-less environment skips the wiring without breaking engine spawn (T-213-07)', () => {
+    vi.unstubAllGlobals();
+    stubDesktopSizing(6);
+    stubWorkerCtor();
+    // Deliberately do NOT stub MessageChannel — simulate an environment
+    // lacking it entirely.
+    vi.stubGlobal('MessageChannel', undefined);
+
+    const pool = createWorkerPool();
+    expect(() => pool.warm()).not.toThrow();
+    expect(createdWorkers.length).toBe(4);
+    for (const w of createdWorkers) {
+      expect(w.allMessages).toEqual(['uci']); // no progressPort handoff, handshake still runs
+    }
+  });
+});
+
+// ─── createWorkerPool: shared Stockfish wasm source (Phase 213-08, G-213-35) ──
+//
+// Every OTHER describe block above relies on the module-level mock's DEFAULT
+// synchronous-thenable `ensureStockfishWorkerUrl()` (see the mock comment at
+// the top of this file) so slot construction stays synchronous with
+// `pool.grade()`/`pool.warm()` exactly as it always has been. This block is
+// the one place that overrides that default with a REAL, test-controlled
+// Promise to exercise the async spawn seam itself: the in-flight queueing
+// window, the terminate-mid-fetch race, and the shared-URL propagation to
+// every constructed (and replaced) slot.
+
+/** A controllable Promise the test resolves/rejects on demand. */
+function createDeferred<T>(): {
+  promise: Promise<T>;
+  resolve: (value: T) => void;
+  reject: (err: unknown) => void;
+} {
+  let resolve!: (value: T) => void;
+  let reject!: (err: unknown) => void;
+  const promise = new Promise<T>((res, rej) => {
+    resolve = res;
+    reject = rej;
+  });
+  return { promise, resolve, reject };
+}
+
+/** Every `new Worker(url)` call's `url` argument, in construction order. */
+function constructedWorkerUrls(): string[] {
+  return vi
+    .mocked(globalThis.Worker as unknown as new (url: string) => Worker)
+    .mock.calls.map((call) => call[0]);
+}
+
+describe('createWorkerPool: shared Stockfish wasm source (Phase 213-08, G-213-35)', () => {
+  const POOL_SIZE = 4;
+
+  beforeEach(() => {
+    stubDesktopSizing(6); // computePoolSize() -> 4 slots
+    stubWorkerCtor();
+  });
+
+  afterEach(() => {
+    vi.unstubAllGlobals();
+    resetEngineAssetsForTests();
+  });
+
+  it('slots are constructed only after the shared URL resolves, and every slot is constructed with that URL', async () => {
+    const deferred = createDeferred<string | null>();
+    vi.mocked(ensureStockfishWorkerUrl).mockImplementationOnce(() => deferred.promise);
+
+    const pool = createWorkerPool();
+    pool.warm(); // ensureSpawned() — the shared fetch is now "in flight"
+
+    // No slot exists yet — construction is gated on the shared URL.
+    expect(createdWorkers.length).toBe(0);
+
+    deferred.resolve('blob:mock-shared-url');
+    await vi.waitFor(() => {
+      expect(createdWorkers.length).toBe(POOL_SIZE);
+    });
+
+    // Every constructed Worker's URL carries the SAME shared URL, hash-encoded.
+    const urls = constructedWorkerUrls();
+    expect(urls).toHaveLength(POOL_SIZE);
+    for (const url of urls) {
+      expect(url).toBe(
+        `/engine/stockfish-18-lite-single.js#${encodeURIComponent('blob:mock-shared-url')}`,
+      );
+    }
+  });
+
+  it('a grade() issued while the shared fetch is still in flight is QUEUED and resolves with real grades once slots appear and report readyok — never resolved empty', async () => {
+    const deferred = createDeferred<string | null>();
+    vi.mocked(ensureStockfishWorkerUrl).mockImplementationOnce(() => deferred.promise);
+
+    const pool = createWorkerPool();
+    const gradePromise = pool.grade(TEST_FEN, ['e7e5']);
+
+    // The shared fetch has not resolved yet — no slot exists, but the
+    // request must NOT have resolved empty (it is queued, not drained).
+    expect(createdWorkers.length).toBe(0);
+    let settled = false;
+    void gradePromise.then(() => {
+      settled = true;
+    });
+    await Promise.resolve();
+    await Promise.resolve();
+    expect(settled).toBe(false);
+
+    deferred.resolve(null); // shared fetch resolves (degraded path is fine here)
+    await vi.waitFor(() => {
+      expect(createdWorkers.length).toBe(POOL_SIZE);
+    });
+
+    const worker = createdWorkers[0]!;
+    driveInit(worker);
+    worker.simulateMessage('info depth 14 multipv 1 score cp 22 nodes 1000 pv e7e5');
+    worker.simulateMessage('bestmove e7e5');
+
+    const grades = await gradePromise;
+    expect(grades.get('e7e5')?.evalCp).toBe(-22); // real grade, not an empty Map
+  });
+
+  it("MUTATION CHECK: the queue-instead-of-empty behavior is load-bearing — reverting grade()'s in-flight guard to its unconditional form makes the queued-request test fail", async () => {
+    // Mirrors the unconditional pre-Phase-213-08 guard
+    // (`if (slots.length === 0) return Promise.resolve(new Map())`) to prove
+    // the `!spawnInFlight` gate added to that guard is the thing keeping the
+    // test above green, not a coincidence of the mock setup.
+    const deferred = createDeferred<string | null>();
+    vi.mocked(ensureStockfishWorkerUrl).mockImplementationOnce(() => deferred.promise);
+
+    const pool = createWorkerPool();
+    // Simulates the REVERTED guard directly: `slots.length === 0` is true the
+    // instant `ensureSpawned()` starts (nothing has been constructed yet),
+    // and the unconditional pre-fix guard would have returned empty right
+    // here — before the shared fetch (and therefore the queue) ever had a
+    // chance to matter.
+    pool.warm();
+    const unconditionalGuardResult = createdWorkers.length === 0 ? new Map<string, never>() : null;
+    expect(unconditionalGuardResult).toEqual(new Map());
+
+    // The REAL (fixed) grade() call, on the same in-flight pool, correctly
+    // queues instead — proven by NOT settling before the fetch resolves.
+    const gradePromise = pool.grade(TEST_FEN, ['e7e5']);
+    let settled = false;
+    void gradePromise.then(() => {
+      settled = true;
+    });
+    await Promise.resolve();
+    await Promise.resolve();
+    // With the fix in place this is false (queued). The reverted guard
+    // shown above would have made an equivalent check `true` instead —
+    // resolved empty on the spot, exactly what the mutation would produce.
+    expect(settled).toBe(false);
+
+    deferred.resolve(null);
+    await vi.waitFor(() => expect(createdWorkers.length).toBe(POOL_SIZE));
+    const worker = createdWorkers[0]!;
+    driveInit(worker);
+    worker.simulateMessage('info depth 14 multipv 1 score cp 8 nodes 1000 pv e7e5');
+    worker.simulateMessage('bestmove e7e5');
+    expect((await gradePromise).get('e7e5')?.evalCp).toBe(-8);
+  });
+
+  it('a grade() issued after the shared fetch resolved and every construction attempt threw resolves empty rather than hanging, and the pool is marked failed', async () => {
+    vi.mocked(ensureStockfishWorkerUrl).mockImplementationOnce(() => syncThenable<string | null>(null));
+    vi.stubGlobal(
+      'Worker',
+      vi.fn(function () {
+        throw new Error('simulated construction failure');
+      }),
+    );
+
+    const pool = createWorkerPool();
+    const grades = await pool.grade(TEST_FEN, ['e7e5']);
+
+    expect(grades.size).toBe(0);
+    expect(getEngineAssetsSnapshot().status).toBe('failed');
+
+    // A LATER grade() call also resolves empty rather than hanging.
+    const later = await pool.grade(TEST_FEN_2, ['d7d5']);
+    expect(later.size).toBe(0);
+  });
+
+  it('whenReady() resolves on the first slot\'s readyok once the deferred shared fetch resolves — later, not never', async () => {
+    const deferred = createDeferred<string | null>();
+    vi.mocked(ensureStockfishWorkerUrl).mockImplementationOnce(() => deferred.promise);
+
+    const pool = createWorkerPool();
+    let ready = false;
+    void pool.whenReady().then(() => {
+      ready = true;
+    });
+
+    await Promise.resolve();
+    await Promise.resolve();
+    expect(ready).toBe(false); // shared fetch still in flight — not ready yet
+
+    deferred.resolve(null);
+    await vi.waitFor(() => expect(createdWorkers.length).toBe(POOL_SIZE));
+    driveInit(createdWorkers[0]!);
+
+    await vi.waitFor(() => expect(ready).toBe(true));
+  });
+
+  it('whenReady() still rejects when the pool can never become ready (every construction attempt threw)', async () => {
+    vi.mocked(ensureStockfishWorkerUrl).mockImplementationOnce(() => syncThenable<string | null>(null));
+    vi.stubGlobal(
+      'Worker',
+      vi.fn(function () {
+        throw new Error('simulated construction failure');
+      }),
+    );
+
+    const pool = createWorkerPool();
+    await expect(pool.whenReady()).rejects.toThrow(
+      'Stockfish worker pool: failed to become ready',
+    );
+  });
+
+  it('terminate() called while the shared fetch is in flight leaves no slot behind — the late continuation constructs nothing', async () => {
+    const deferred = createDeferred<string | null>();
+    vi.mocked(ensureStockfishWorkerUrl).mockImplementationOnce(() => deferred.promise);
+
+    const pool = createWorkerPool();
+    pool.warm(); // shared fetch now in flight
+    expect(createdWorkers.length).toBe(0);
+
+    pool.terminate(); // bumps the spawn generation before the fetch resolves
+
+    deferred.resolve('blob:mock-shared-url'); // the late continuation fires now
+    // Let every queued microtask run — if the generation guard were absent,
+    // this is where slots would (wrongly) appear.
+    await Promise.resolve();
+    await Promise.resolve();
+    await Promise.resolve();
+
+    expect(createdWorkers.length).toBe(0); // nothing was constructed
+  });
+
+  it('a slot that dies is replaced with a worker built from the SAME shared URL — no re-fetch, no re-await', async () => {
+    vi.mocked(ensureStockfishWorkerUrl).mockImplementationOnce(() =>
+      syncThenable<string | null>('blob:mock-shared-url'),
+    );
+    // Call-count assertions below are scoped to THIS test — clear the shared
+    // mock's accumulated call history from every earlier test in this file
+    // (mockClear() resets `.mock.calls` only, not the queued
+    // mockImplementationOnce above).
+    vi.mocked(ensureStockfishWorkerUrl).mockClear();
+
+    const pool = createWorkerPool();
+    pool.warm();
+    expect(createdWorkers.length).toBe(POOL_SIZE);
+    // ensureStockfishWorkerUrl() is called exactly once per pool — the
+    // memoisation contract belongs to the SOURCE module (Task 1), but this
+    // proves the pool itself never calls it a second time for a respawn.
+    expect(vi.mocked(ensureStockfishWorkerUrl)).toHaveBeenCalledTimes(1);
+
+    const dyingWorker = createdWorkers[0]!;
+    dyingWorker.simulateError(); // WR-03/WR-04 death path -> replaceDeadSlot()
+
+    await vi.waitFor(() => expect(createdWorkers.length).toBe(POOL_SIZE + 1));
+    expect(vi.mocked(ensureStockfishWorkerUrl)).toHaveBeenCalledTimes(1); // still just once
+
+    const replacementUrl = constructedWorkerUrls()[POOL_SIZE]!;
+    expect(replacementUrl).toBe(
+      `/engine/stockfish-18-lite-single.js#${encodeURIComponent('blob:mock-shared-url')}`,
+    );
+  });
+
+  it("markEngineAssetPending('stockfish-wasm') still happens synchronously inside ensureSpawned(), before it returns — even while the shared fetch is deferred", () => {
+    const deferred = createDeferred<string | null>();
+    vi.mocked(ensureStockfishWorkerUrl).mockImplementationOnce(() => deferred.promise);
+
+    const pool = createWorkerPool();
+    pool.warm();
+
+    // Synchronously right after warm() returns — no await.
+    const snapshot = getEngineAssetsSnapshot();
+    expect(snapshot.assets['stockfish-wasm']).toEqual({
+      loaded: 0,
+      total: STOCKFISH_WASM_BYTES_FALLBACK,
+      done: false,
+    });
+  });
+
+  it('a shared URL of null still spawns the full computePoolSize() pool and the pool behaves exactly as it does today', async () => {
+    const pool = createWorkerPool();
+    const gradePromise = pool.grade(TEST_FEN, ['e7e5']); // default mock resolves null synchronously
+    expect(createdWorkers.length).toBe(POOL_SIZE);
+    expect(constructedWorkerUrls().every((u) => u === '/engine/stockfish-18-lite-single.js')).toBe(
+      true,
+    );
+
+    const worker = createdWorkers[0]!;
+    driveInit(worker);
+    worker.simulateMessage('info depth 14 multipv 1 score cp 7 nodes 1000 pv e7e5');
+    worker.simulateMessage('bestmove e7e5');
+    expect((await gradePromise).get('e7e5')?.evalCp).toBe(-7);
   });
 });

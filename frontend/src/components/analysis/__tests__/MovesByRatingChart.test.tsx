@@ -47,6 +47,10 @@ import {
 import type { MoveQualityEval } from '../MovesByRatingChart';
 import type { MoveCurvePoint } from '@/hooks/useMaiaEngine';
 import { MOVE_QUALITY_BLUNDER, MOVE_QUALITY_PENDING } from '@/lib/theme';
+import {
+  reportEngineAssetProgress,
+  resetEngineAssetsForTests,
+} from '@/lib/engine/engineAssetProgress';
 
 beforeAll(() => {
   Object.defineProperty(window, 'matchMedia', {
@@ -73,6 +77,7 @@ beforeAll(() => {
 
 afterEach(() => {
   cleanup();
+  resetEngineAssetsForTests();
 });
 
 /**
@@ -237,6 +242,34 @@ describe('MovesByRatingChart', () => {
     expect(screen.getByTestId('moves-by-rating-chart-skeleton')).toBeTruthy();
     // The waiting text is kept (sr-only) for screen readers.
     expect(el.textContent).toMatch(/Waiting/i);
+  });
+
+  // ─── G-213-34 (supersedes D-12): the Maia chart skeleton reads no download state ──
+
+  it('even while the Maia model asset is actively downloading, the perElo-empty skeleton renders no progress element and no percent text (inverted regression guard)', () => {
+    // Drive the REAL store into its downloading state — the exact condition
+    // that used to trigger a Progress + readout in this skeleton. Keeping
+    // this setup and inverting the assertion is what makes this a guard
+    // against reintroducing the readout, not a vacuous test (mutation-proof
+    // below).
+    reportEngineAssetProgress('maia-model', 42, 100);
+
+    render(
+      <MovesByRatingChart
+        perElo={[]}
+        playedSan={null}
+        bestSan={null}
+        selectedElo={1500}
+        shownSans={[]}
+        engineTopLines={[]}
+        qualityBySan={new Map()}
+      />,
+    );
+
+    const el = screen.getByTestId('moves-by-rating-chart');
+    expect(screen.queryByTestId('moves-by-rating-chart-progress')).toBeNull();
+    expect(el.textContent).not.toContain('%');
+    expect(screen.getByTestId('moves-by-rating-chart-skeleton')).toBeTruthy();
   });
 });
 

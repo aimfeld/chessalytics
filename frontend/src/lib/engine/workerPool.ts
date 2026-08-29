@@ -34,12 +34,22 @@ import * as Sentry from '@sentry/react';
 import { parseInfoLine } from '@/hooks/uciParser';
 import type { MoveGrade } from './types';
 import { buildGradeGoCommand, GRADING_ROOT_DEPTH } from './gradingLadder';
+import {
+  markEngineAssetFailed,
+  markEngineAssetPending,
+  markEngineAssetReady,
+  reportEngineAssetProgress,
+} from './engineAssetProgress';
+import { createStockfishWorker, ensureStockfishWorkerUrl } from './stockfishWorkerSource';
 export type { MoveGrade };
 
 // ─── Tunable constants (SC4 degradation knobs — tunable without touching logic) ──
-
-/** Path to the vendored Stockfish engine served from public/engine/. Same binary as the primary/grading workers, N SEPARATE Worker() loads (one per pool slot). */
-export const ENGINE_PATH = '/engine/stockfish-18-lite-single.js';
+//
+// Phase 213-08 (G-213-35): this file's `ENGINE_PATH` constant was removed —
+// worker construction now routes through `createStockfishWorker()`
+// (`stockfishWorkerSource.ts`), which owns the served glue path. Confirmed
+// via repo-wide grep (including `scripts/*.mjs`) that nothing outside this
+// file imported the removed export.
 
 /**
  * Pool-level grade-cache cap, counted in `(fen, gradingDepth)` entries. A full
@@ -307,6 +317,20 @@ export interface WorkerPool {
    * a subsequent identical `grade()` request still reports a hit.
    */
   resetCacheStats(): void;
+  /**
+   * Phase 213 D-01: resolves the first time ANY slot completes its UCI init
+   * handshake (`uciok` then `readyok`) — the Stockfish-side readiness
+   * definition, matching Maia's "bytes downloaded and the engine usable"
+   * (`maiaWorkerHost.ts`'s own `whenReady()`). "First slot ready" is
+   * sufficient because `dispatchNext()` already skips non-`isReady` slots; it
+   * does not wait for the other `computePoolSize()` slots. Lazily spawns the
+   * pool (via `ensureSpawned()`) if it has not been spawned yet, so the
+   * promise can actually settle. Consumers: this pool's own `stockfish-wasm`
+   * asset-store transition (below) and `useFlawChessEngine` (Plan 05).
+   * Resets on `terminate()` — a subsequent call is pending again until the
+   * re-spawned pool reports its own first `readyok`.
+   */
+  whenReady(): Promise<void>;
 }
 
 // ─── Priority queue (POOL-02): plain array, linear max-scan ────────────────
@@ -574,8 +598,95 @@ export function createWorkerPool(): WorkerPool {
   const pending: QueuedGradeRequest[] = [];
   const gradeCache = createGradeCache();
   let spawned = false;
+  /**
+   * Phase 213-08 (G-213-35): true from the moment `ensureSpawned()` starts
+   * until the construction loop (the `ensureStockfishWorkerUrl()`
+   * continuation) has run. While true, `grade()`'s first zero-slot guard
+   * must NOT short-circuit — a request arriving during this window is
+   * queued and dispatched once slots appear, never resolved empty.
+   */
+  let spawnInFlight = false;
+  /**
+   * Phase 213-08: bumped by `terminate()` and captured by `ensureSpawned()`
+   * before its `ensureStockfishWorkerUrl()` await — a spawn continuation
+   * that resolves after a `terminate()` ran mid-fetch compares its captured
+   * generation against the current one and constructs nothing if they no
+   * longer match. Prevents a late continuation from pushing slots into a
+   * pool the caller already tore down.
+   */
+  let spawnGeneration = 0;
+  /**
+   * Phase 213-08: the shared `.wasm` URL once `ensureStockfishWorkerUrl()`
+   * resolves (or `null` on the degraded/failed path) — set once by the
+   * initial spawn's continuation and reused by every later
+   * `replaceDeadSlot()` respawn, which must never re-await the shared fetch.
+   */
+  let resolvedSharedUrl: string | null = null;
   /** Respawns consumed so far — see `MAX_SLOT_RESPAWNS`. */
   let slotRespawns = 0;
+  /** Phase 213 D-01: true once ANY slot has completed its UCI init handshake. Reset by `terminate()`. */
+  let poolReady = false;
+  /**
+   * CR-01 (213-REVIEW.md): true once the pool has been marked irrecoverably
+   * dead by `markPoolFailed()` (with no `readyok` ever having landed). Lets a
+   * `whenReady()` call arriving AFTER that point (e.g. `warm()` triggered the
+   * failure earlier, before any consumer awaited readiness) reject
+   * immediately instead of registering a waiter nothing will ever settle —
+   * `ensureSpawned()` is a no-op once `spawned` is already true, so without
+   * this flag `markPoolFailed()`'s own reject-on-fire is the ONLY chance a
+   * late `whenReady()` caller would ever get. Reset by `terminate()`.
+   */
+  let poolFailed = false;
+  /** Callers awaiting `whenReady()` before the first slot has reported `readyok`. */
+  const poolReadyWaiters: (() => void)[] = [];
+  /**
+   * CR-01 (213-REVIEW.md): callers awaiting `whenReady()` to be REJECTED once
+   * the pool can never dispatch another request — settled by `markPoolFailed()`
+   * below, the same moment `markEngineAssetFailed('stockfish-wasm')` fires.
+   * Parallel array to `poolReadyWaiters`, same index per pending `whenReady()`
+   * call (both pushed together in `whenReady()`).
+   */
+  const poolReadyRejecters: ((err: Error) => void)[] = [];
+
+  /**
+   * Phase 213 D-01: the single place both `whenReady()`'s promise and the
+   * `stockfish-wasm` asset-store transition fire, so they can never diverge.
+   * No-ops if the pool is already marked ready (idempotent — `handleLine`'s
+   * `readyok` branch calls this on every slot's readyok, not just the first).
+   */
+  function markPoolReady(): void {
+    if (poolReady) return;
+    poolReady = true;
+    const waiters = poolReadyWaiters.splice(0, poolReadyWaiters.length);
+    poolReadyRejecters.length = 0; // the promise is settling via resolve(); these are now moot
+    for (const resolve of waiters) resolve();
+    markEngineAssetReady('stockfish-wasm');
+  }
+
+  /**
+   * CR-01 (213-REVIEW.md): fires wherever the pool can never dispatch another
+   * request — either every construction attempt in `ensureSpawned()` threw,
+   * or `replaceDeadSlot()` has exhausted every slot with no live replacement.
+   * Marks the shared `stockfish-wasm` asset entry `'failed'` (so
+   * `EngineReadyGate` can show Retry instead of leaving the Start button
+   * disabled forever — the store-level fix for the deadlock) AND rejects
+   * every outstanding `whenReady()` waiter (so `useFlawChessEngine`'s
+   * `Promise.all([...]).catch()` can actually fire instead of hanging).
+   * No-op on the reject side once the pool has already reported ready once —
+   * `poolReadyWaiters`/`poolReadyRejecters` are already empty by then
+   * (spliced out by `markPoolReady()`), so a later fatal failure still flips
+   * the shared store to `'failed'` without retroactively un-resolving an
+   * already-settled `whenReady()` promise.
+   */
+  function markPoolFailed(): void {
+    poolFailed = true;
+    markEngineAssetFailed('stockfish-wasm');
+    const rejecters = poolReadyRejecters.splice(0, poolReadyRejecters.length);
+    poolReadyWaiters.length = 0; // paired resolvers for the same promises — now moot
+    for (const reject of rejecters) {
+      reject(new Error('Stockfish worker pool: failed to become ready'));
+    }
+  }
 
   /** Clear a slot's in-flight watchdog timer, if any. Idempotent. Extracted so the call sites that take a slot out of `thinking` cannot drift apart — bestmove, abort, `stopAll`, `terminate`, `onerror`, and the defensive clear in `sendGo`. */
   function clearSlotWatchdog(slot: PoolWorkerSlot): void {
@@ -795,6 +906,7 @@ export function createWorkerPool(): WorkerPool {
     if (line === 'readyok') {
       clearSlotWatchdog(slot); // disarms a replacement slot's init watchdog, if one is armed
       slot.isReady = true;
+      markPoolReady();
       dispatchNext();
       return;
     }
@@ -922,7 +1034,10 @@ export function createWorkerPool(): WorkerPool {
     } else {
       slotRespawns++;
       try {
-        const fresh = createSlot();
+        // Phase 213-08: reuses the ALREADY-RESOLVED shared URL from the
+        // initial spawn — a slot death must never re-trigger (or wait on)
+        // the shared fetch.
+        const fresh = createSlot(resolvedSharedUrl);
         slots[idx] = fresh;
         armInitWatchdog(fresh);
       } catch (err) {
@@ -941,6 +1056,13 @@ export function createWorkerPool(): WorkerPool {
     // otherwise splicing out the last slot would skip the drain and hang every
     // queued request.
     if (slots.length === 0 || noLiveSlotRemains()) {
+      // CR-01 (213-REVIEW.md): every constructed slot has died and none can be
+      // replaced (respawn budget spent, or replacement construction also
+      // failed) — the pool can never dispatch another request. Without this,
+      // `stockfish-wasm` never reaches `done: true` NOR `'failed'` in the
+      // shared asset store, so `EngineReadyGate`'s Start button stays
+      // disabled forever with no Retry affordance.
+      markPoolFailed();
       drainPending();
       return;
     }
@@ -956,8 +1078,45 @@ export function createWorkerPool(): WorkerPool {
     }
   }
 
-  function createSlot(): PoolWorkerSlot {
-    const worker = new Worker(ENGINE_PATH);
+  /**
+   * Phase 213-08 (G-213-35): `sharedUrl` is the ALREADY-RESOLVED shared
+   * `.wasm` URL (or `null` on the degraded direct-construction path) — this
+   * function never awaits `ensureStockfishWorkerUrl()` itself. The initial
+   * spawn resolves it once in `ensureSpawned()`'s continuation and passes it
+   * through; `replaceDeadSlot()` reuses the same already-resolved
+   * `resolvedSharedUrl` closure variable for every later respawn, so a slot
+   * death never re-triggers (or waits on) the shared fetch.
+   */
+  function createSlot(sharedUrl: string | null): PoolWorkerSlot {
+    const worker = createStockfishWorker(sharedUrl);
+
+    // Phase 213 D-01/T-213-01/T-213-07: wire the vendored glue's own,
+    // already-shipped `progressPort` protocol (213-RESEARCH.md Pattern 2) —
+    // this is wiring, not an owned fetch. The glue
+    // (`stockfish-18-lite-single.js`) already streams the `.wasm` internally
+    // against a hardcoded raw byte total; an app-side fetch of the same URL
+    // would download 7.3 MB twice (213-RESEARCH.md Pitfall 4). Do not edit
+    // the vendored file. Feature-detect `MessageChannel` (some environments,
+    // and possibly a bare jsdom test env, may lack it) and skip the wiring
+    // rather than throwing out of createSlot() — a missing progress bar must
+    // never break engine spawn (T-213-07); the try/catch around this whole
+    // function call in `ensureSpawned()`/`replaceDeadSlot()` remains the
+    // graceful-degradation floor for everything else in this function.
+    if (typeof MessageChannel !== 'undefined') {
+      const { port1, port2 } = new MessageChannel();
+      port1.onmessage = (e: MessageEvent<{ loaded: number; total: number }>) => {
+        // T-213-01: discard the glue's own `percent`/`speedBytesPerSec`/
+        // `etaText` entirely and re-derive percent in the store, so Maia and
+        // Stockfish share one clamping/coercion path. `total` is a hardcoded
+        // constant in the glue today but the app must not assume that: the
+        // store's own coercion falls back to STOCKFISH_WASM_BYTES_FALLBACK
+        // when `total` is missing or non-positive.
+        const { loaded, total } = e.data;
+        reportEngineAssetProgress('stockfish-wasm', loaded, total);
+      };
+      worker.postMessage({ progressPort: port2 }, [port2]);
+    }
+
     const slot: PoolWorkerSlot = {
       worker,
       state: 'idle',
@@ -997,16 +1156,25 @@ export function createWorkerPool(): WorkerPool {
     return slot;
   }
 
-  function ensureSpawned(): void {
-    if (spawned) return;
-    spawned = true;
+  /**
+   * Phase 213-08 (G-213-35): the construction loop, run once the shared
+   * `.wasm` URL has settled (either resolved or, via the defensive `.catch`
+   * below, treated as `null`). Verbatim continuation of the pre-Phase-213-08
+   * synchronous loop: same per-slot try/catch so a throwing constructor
+   * keeps the smaller live pool (Pitfall 1), same `markPoolFailed()` when
+   * the loop produced zero slots (CR-01) — plus `drainPending()` on that
+   * zero-slot path and `dispatchNext()` on the success path, because
+   * requests may have queued up while the fetch was in flight.
+   */
+  function runSpawnConstructionLoop(sharedUrl: string | null): void {
+    resolvedSharedUrl = sharedUrl;
     const size = computePoolSize();
     for (let i = 0; i < size; i++) {
       // Graceful-degradation floor (Pitfall 1): if a worker fails to
       // construct, keep whatever slots already succeeded and carry on with
       // a smaller live pool rather than throwing out of grade().
       try {
-        slots.push(createSlot());
+        slots.push(createSlot(sharedUrl));
       } catch (err) {
         Sentry.captureException(err instanceof Error ? err : new Error(String(err)), {
           tags: { source: 'stockfish-worker-pool' },
@@ -1014,6 +1182,55 @@ export function createWorkerPool(): WorkerPool {
         continue;
       }
     }
+    spawnInFlight = false;
+    if (slots.length === 0) {
+      // CR-01 (213-REVIEW.md): every construction attempt threw — no slot
+      // will ever report `readyok`, so nothing will dispatch a request and
+      // `whenReady()` would hang forever without this (mirrors
+      // `replaceDeadSlot()`'s equivalent guard below). Phase 213-08: also
+      // drains every request that queued up during the (now-finished) spawn
+      // window — `grade()`'s in-flight guard let them enqueue instead of
+      // resolving empty immediately, so this is where they finally settle.
+      markPoolFailed();
+      drainPending();
+    } else {
+      // Phase 213-08: a sibling may have queued requests while spawning.
+      dispatchNext();
+    }
+  }
+
+  function ensureSpawned(): void {
+    if (spawned) return;
+    spawned = true;
+    // CR-02 (213-REVIEW.md): register 'stockfish-wasm' as in-flight BEFORE
+    // any slot's async progress/ready message can arrive, so a concurrently
+    // spawning, still-downloading 'maia-model' can never be silently absent
+    // from `markEngineAssetReady`'s readiness check (see
+    // `markEngineAssetPending`'s doc comment for the full race). Still
+    // synchronous — Phase 213-08 only defers the WORKER CONSTRUCTION loop
+    // below, not this registration.
+    markEngineAssetPending('stockfish-wasm');
+    spawnInFlight = true;
+    // Captured BEFORE the await: a `terminate()` that runs while this fetch
+    // is in flight bumps `spawnGeneration`, and the continuation below
+    // compares against the (possibly stale) captured value to know its own
+    // spawn was invalidated.
+    const myGeneration = spawnGeneration;
+    ensureStockfishWorkerUrl()
+      .then((sharedUrl) => {
+        if (myGeneration !== spawnGeneration) return; // terminate() ran mid-fetch — construct nothing
+        runSpawnConstructionLoop(sharedUrl);
+      })
+      .catch(() => {
+        // Belt-and-braces (T-213-07): `ensureStockfishWorkerUrl()` is
+        // documented to NEVER reject — every failure mode resolves `null`
+        // instead. This defensive `.catch` exists only so a queued grade()
+        // can never hang if that guarantee ever stops holding; it runs the
+        // exact same construction loop with a null URL, degrading to
+        // today's direct construction.
+        if (myGeneration !== spawnGeneration) return;
+        runSpawnConstructionLoop(null);
+      });
   }
 
   function grade(
@@ -1044,15 +1261,26 @@ export function createWorkerPool(): WorkerPool {
     // WR-03: if every slot construction attempt threw (0 live slots after the
     // spawn loop), nothing will ever dispatch a queued request — resolve
     // empty now rather than enqueuing into a queue nothing will service.
-    if (slots.length === 0) return Promise.resolve(new Map());
+    // Phase 213-08: gated on `!spawnInFlight` — an empty `slots` array DURING
+    // the shared-fetch/construction window is expected (nothing has been
+    // built yet), not a failure, so this must fall through to the enqueue
+    // path below rather than resolving empty. `spawnInFlight` is false again
+    // once the construction loop has actually run and either built slots or
+    // genuinely produced zero.
+    if (slots.length === 0 && !spawnInFlight) return Promise.resolve(new Map());
     // Bug fix (quick 260731-s0z, FIX-3): the guard above only covers "no slot
     // was ever constructed". Once every constructed slot has since died (via
     // `worker.onerror`, `fireWatchdog`, or FIX-4's `fireStopWatchdog`), a NEW
     // request enqueued here was reachable and unrecoverable — `dispatchNext`
     // skips every non-`isReady` slot and `drainPending` only runs at a death
     // TRANSITION, not for a request queued afterward, so `useBotGame.ts`'s
-    // signal-less `.grade(fen, [uci])` call hung unconditionally. Requires
-    // `slots.length > 0`, which the guard above has just established.
+    // signal-less `.grade(fen, [uci])` call hung unconditionally.
+    // `noLiveSlotRemains()`'s OWN precondition (`slots.length > 0`) is what
+    // makes this correct during the Phase 213-08 in-flight window too — it is
+    // vacuously `false` for the still-empty `slots` array while a spawn is in
+    // flight, so this guard does not fire before the guard above has settled
+    // that case; it does not rely on the guard above having already
+    // established a non-empty array.
     if (noLiveSlotRemains()) return Promise.resolve(new Map());
 
     return new Promise((resolve) => {
@@ -1158,12 +1386,57 @@ export function createWorkerPool(): WorkerPool {
     }
     slots.length = 0;
     spawned = false;
+    // Phase 213-08 (G-213-35): invalidate any in-flight spawn continuation —
+    // a `terminate()` that lands while `ensureStockfishWorkerUrl()` is still
+    // pending must not let that continuation push slots into this (now torn
+    // down) pool once it finally resolves. `spawnInFlight` is cleared
+    // unconditionally too: even if no spawn was in flight, this keeps the
+    // flag's invariant ("true only between ensureSpawned() starting and its
+    // construction loop finishing") honest across a terminate/re-spawn cycle.
+    spawnGeneration++;
+    spawnInFlight = false;
     slotRespawns = 0; // a re-spawned pool starts with a fresh respawn budget
+    // Phase 213 T-213-08: settle (never leave hanging) every waiter of a
+    // terminated pool — a re-spawned pool calls markPoolReady() again on its
+    // own first readyok, so a caller awaiting THIS pool's readiness must not
+    // be left dangling across the terminate/re-spawn boundary.
+    poolReady = false;
+    poolFailed = false; // a re-spawned pool gets a fresh chance at readyok
+    const waiters = poolReadyWaiters.splice(0, poolReadyWaiters.length);
+    poolReadyRejecters.length = 0; // paired rejecters for the same (now-resolved) promises
+    for (const resolve of waiters) resolve();
   }
 
   /** Prewarm: spawn the pool without searching. See `WorkerPool.warm()`. */
   function warm(): void {
     ensureSpawned();
+  }
+
+  /**
+   * See `WorkerPool.whenReady()`.
+   *
+   * CR-01 (213-REVIEW.md): now has a real reject path. Previously this
+   * promise's executor only destructured `resolve`, so a totally dead pool
+   * (every slot construction failed, or every slot died with the respawn
+   * budget spent) left this promise pending forever — `useFlawChessEngine`'s
+   * `Promise.all([...]).catch()` could then never fire. `reject` is pushed to
+   * `poolReadyRejecters` and settled by `markPoolFailed()` wherever the pool
+   * becomes irrecoverably dead. Also rejects IMMEDIATELY if the pool was
+   * already marked failed before this call (e.g. `warm()` triggered the
+   * failure earlier) — `ensureSpawned()` no-ops once `spawned` is already
+   * true, so a late caller would otherwise register a waiter nothing will
+   * ever settle.
+   */
+  function whenReady(): Promise<void> {
+    if (poolReady) return Promise.resolve();
+    if (poolFailed) {
+      return Promise.reject(new Error('Stockfish worker pool: failed to become ready'));
+    }
+    return new Promise<void>((resolve, reject) => {
+      poolReadyWaiters.push(resolve);
+      poolReadyRejecters.push(reject);
+      ensureSpawned();
+    });
   }
 
   return {
@@ -1173,5 +1446,6 @@ export function createWorkerPool(): WorkerPool {
     warm,
     cacheStats: () => gradeCache.stats(),
     resetCacheStats: () => gradeCache.resetCacheStats(),
+    whenReady,
   };
 }

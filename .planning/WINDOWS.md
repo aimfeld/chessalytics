@@ -1,10 +1,10 @@
 ---
 schema_version: 1
-open_count: 4
+open_count: 6
 waived_count: 0
 fixed_count: 2
-total_count: 6
-last_updated: 2026-08-16T14:55:04.258Z
+total_count: 8
+last_updated: 2026-08-28T20:23:06.035Z
 ---
 
 # Broken Windows Ledger
@@ -21,6 +21,8 @@ last_updated: 2026-08-16T14:55:04.258Z
 | 4 | 207 | unrun-verify | .planning/phases/207-self-serve-password-reset/207-03-SUMMARY.md |  | RESET-05 real-mailbox eligibility observation (plan step 9: no-password account produces zero sends with identical confirmation copy) was NOT PERFORMED at the Task 2 checkpoint; automated coverage (TestPasswordResetEligibility) stands in its place | open |  | 2026-08-08T13:27:04.997Z |  |
 | 5 | 208 | stub | frontend/src/components/analysis/PasteModal.tsx |  | Analyze full game button is a no-op click handler; wiring to POST /imports/paste + tier-1 enqueue is intentionally deferred to Plan 03 per this plan's own action text | open |  | 2026-08-08T17:58:51.847Z |  |
 | 6 | 211 | skipped-test | frontend/src/components/train/__tests__/TrainSolveScreen.test.tsx |  | ORACLE-01 free-play root-ply test skipped: Phase 205 guarantee transiently degraded at width 1 (211-02 Known transient); Plan 211-03 re-points the seam at the server key and must unskip/re-express this test | fixed |  | 2026-08-16T14:34:50.766Z | 2026-08-16T14:55:04.258Z |
+| 7 | 213 | deviation | frontend/src/lib/engine/__tests__/engineAssetProgress.test.ts |  | markEngineAssetFailed shipped in Task 1 with no production caller (Plan 04 owns wiring it); Task 2 added a direct unit test to close the knip dead-export gap rather than inventing a caller Task 1 forbade. | open |  | 2026-08-28T10:49:36.569Z |  |
+| 8 | 213 | unrun-verify | frontend/src/components/bots/EngineReadyGate.tsx |  | G-213-34 cold-cache Slow-4G Network-tab human-check (213-07 Task 2 <verify><human-check>) not yet run — deferred to end-of-phase UAT per human_verify_mode default | closed | Run across the 213-08..12 UAT rounds; final zero-refetch measurement approved by the user 2026-08-29 (213-12 Task 4 checkpoint, commit 197b1c37e). | 2026-08-28T20:23:06.035Z | 2026-08-29 |
 
 ````json
 [
@@ -95,6 +97,30 @@ last_updated: 2026-08-16T14:55:04.258Z
     "reason": "",
     "recorded_at": "2026-08-16T14:34:50.766Z",
     "resolved_at": "2026-08-16T14:55:04.258Z"
+  },
+  {
+    "id": 7,
+    "kind": "deviation",
+    "phase": "213",
+    "file": "frontend/src/lib/engine/__tests__/engineAssetProgress.test.ts",
+    "line": null,
+    "description": "markEngineAssetFailed shipped in Task 1 with no production caller (Plan 04 owns wiring it); Task 2 added a direct unit test to close the knip dead-export gap rather than inventing a caller Task 1 forbade.",
+    "status": "open",
+    "reason": "",
+    "recorded_at": "2026-08-28T10:49:36.569Z",
+    "resolved_at": null
+  },
+  {
+    "id": 8,
+    "kind": "unrun-verify",
+    "phase": "213",
+    "file": "frontend/src/components/bots/EngineReadyGate.tsx",
+    "line": null,
+    "description": "G-213-34 cold-cache Slow-4G Network-tab human-check (213-07 Task 2 <verify><human-check>) not yet run — deferred to end-of-phase UAT per human_verify_mode default",
+    "status": "open",
+    "reason": "",
+    "recorded_at": "2026-08-28T20:23:06.035Z",
+    "resolved_at": null
   }
 ]
 ````

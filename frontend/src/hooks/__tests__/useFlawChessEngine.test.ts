@@ -20,17 +20,41 @@
 
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { renderHook, act } from '@testing-library/react';
+import * as Sentry from '@sentry/react';
 import type { EngineSnapshot } from '@/lib/engine/types';
 
+vi.mock('@sentry/react', () => ({ captureException: vi.fn() }));
+
 // ─── Mocks ───────────────────────────────────────────────────────────────────
+
+/**
+ * Controllable deferred — lets a test resolve/reject a provider's
+ * `whenReady()` at a chosen moment instead of racing real async timing.
+ */
+function createDeferred<T>(): {
+  promise: Promise<T>;
+  resolve: (value: T) => void;
+  reject: (reason: unknown) => void;
+} {
+  let resolve!: (value: T) => void;
+  let reject!: (reason: unknown) => void;
+  const promise = new Promise<T>((res, rej) => {
+    resolve = res;
+    reject = rej;
+  });
+  return { promise, resolve, reject };
+}
 
 const mockGrade = vi.fn();
 const mockStopAll = vi.fn();
 const mockPoolTerminate = vi.fn();
+/** Latest pool's whenReady() deferred — tests can resolve/reject it directly. */
+let poolWhenReadyDeferred = createDeferred<void>();
 const mockCreateWorkerPool = vi.fn(() => ({
   grade: mockGrade,
   stopAll: mockStopAll,
   terminate: mockPoolTerminate,
+  whenReady: () => poolWhenReadyDeferred.promise,
 }));
 const mockComputePoolSize = vi.fn(() => 2);
 
@@ -41,9 +65,12 @@ vi.mock('@/lib/engine/workerPool', () => ({
 
 const mockPolicy = vi.fn();
 const mockQueueTerminate = vi.fn();
+/** Latest queue's whenReady() deferred — tests can resolve/reject it directly. */
+let queueWhenReadyDeferred = createDeferred<'webgpu' | 'wasm'>();
 const mockCreateMaiaQueue = vi.fn(() => ({
   policy: mockPolicy,
   terminate: mockQueueTerminate,
+  whenReady: () => queueWhenReadyDeferred.promise,
 }));
 
 vi.mock('@/lib/engine/maiaQueue', () => ({
@@ -102,6 +129,9 @@ describe('useFlawChessEngine', () => {
     mockPolicy.mockReset();
     mockQueueTerminate.mockReset();
     mockCreateMaiaQueue.mockClear();
+    poolWhenReadyDeferred = createDeferred<void>();
+    queueWhenReadyDeferred = createDeferred<'webgpu' | 'wasm'>();
+    vi.mocked(Sentry.captureException).mockClear();
     mockMctsSearch.mockReset();
     // Default: never resolves (tests drive onSnapshot directly and don't rely
     // on the returned promise settling unless explicitly testing that path).
@@ -310,5 +340,138 @@ describe('useFlawChessEngine', () => {
     expect(result.current.rankedLines).not.toBe(snapshot2.rankedLines);
     expect(mockMctsSearch).toHaveBeenCalledTimes(2);
     expect(mockMctsSearch.mock.calls[1]?.[0]).toBe(TEST_FEN_2);
+  });
+
+  // ─── Phase 213 D-01: isReady reflects real asset readiness ─────────────────
+
+  describe('D-01: isReady reflects real asset readiness', () => {
+    it('isReady stays false until BOTH queue.whenReady() and pool.whenReady() resolve, then becomes true', async () => {
+      const { result } = renderHook(() =>
+        useFlawChessEngine({ fen: TEST_FEN, enabled: true, elo: 1500 }),
+      );
+
+      expect(result.current.isReady).toBe(false);
+
+      await act(async () => {
+        queueWhenReadyDeferred.resolve('wasm');
+        await Promise.resolve();
+      });
+      // Only the queue resolved — pool.whenReady() is still pending.
+      expect(result.current.isReady).toBe(false);
+
+      await act(async () => {
+        poolWhenReadyDeferred.resolve();
+        await Promise.resolve();
+        await Promise.resolve();
+      });
+
+      expect(result.current.isReady).toBe(true);
+    });
+
+    it('unmounting before both whenReady() promises settle does not throw or log a console error when they later resolve', async () => {
+      const consoleError = vi.spyOn(console, 'error').mockImplementation(() => {});
+      const { unmount } = renderHook(() =>
+        useFlawChessEngine({ fen: TEST_FEN, enabled: true, elo: 1500 }),
+      );
+
+      unmount();
+
+      await act(async () => {
+        queueWhenReadyDeferred.resolve('wasm');
+        poolWhenReadyDeferred.resolve();
+        await Promise.resolve();
+        await Promise.resolve();
+      });
+
+      expect(consoleError).not.toHaveBeenCalled();
+      consoleError.mockRestore();
+    });
+
+    it('disabling before both whenReady() promises settle does NOT flip isReady back to true once they later resolve — the cancelled guard is load-bearing', async () => {
+      // Unlike the unmount case above, the component here stays MOUNTED after
+      // disable, so a stale (uncancelled) `.then`/`.catch` callback calling
+      // `setIsReady(true)` WOULD be visible in `result.current` on the next
+      // render — this is the case that actually proves the `cancelled` guard
+      // does something, since React 18 silently drops post-unmount state
+      // updates with no observable signal either way.
+      const { result, rerender } = renderHook(
+        ({ enabled }: { enabled: boolean }) =>
+          useFlawChessEngine({ fen: TEST_FEN, enabled, elo: 1500 }),
+        { initialProps: { enabled: true } },
+      );
+
+      rerender({ enabled: false });
+      expect(result.current.isReady).toBe(false);
+
+      await act(async () => {
+        queueWhenReadyDeferred.resolve('wasm');
+        poolWhenReadyDeferred.resolve();
+        await Promise.resolve();
+        await Promise.resolve();
+      });
+
+      // The disabled provider pair's stale whenReady() resolution must not
+      // resurrect isReady after the effect's cleanup already reset it.
+      expect(result.current.isReady).toBe(false);
+    });
+
+    it('a rejected whenReady() captures to Sentry once with tags: { source: "flawchess-engine" } and still sets isReady true (card falls through to its normal empty rendering)', async () => {
+      const { result } = renderHook(() =>
+        useFlawChessEngine({ fen: TEST_FEN, enabled: true, elo: 1500 }),
+      );
+
+      await act(async () => {
+        queueWhenReadyDeferred.reject(new Error('worker died'));
+        poolWhenReadyDeferred.resolve();
+        await Promise.resolve();
+        await Promise.resolve();
+        await Promise.resolve();
+      });
+
+      expect(result.current.isReady).toBe(true);
+      expect(Sentry.captureException).toHaveBeenCalledTimes(1);
+      expect(Sentry.captureException).toHaveBeenCalledWith(expect.any(Error), {
+        tags: { source: 'flawchess-engine' },
+      });
+      const capturedError = vi.mocked(Sentry.captureException).mock.calls[0]?.[0] as Error;
+      // Sentry grouping rule: a fixed, variable-free message string — no
+      // template-literal interpolation of the rejection.
+      expect(capturedError.message).not.toMatch(/[`]|\$\{/);
+    });
+
+    it('re-enabling after a disable restarts the readiness cycle from isReady === false', async () => {
+      const { result, rerender } = renderHook(
+        ({ enabled }: { enabled: boolean }) =>
+          useFlawChessEngine({ fen: TEST_FEN, enabled, elo: 1500 }),
+        { initialProps: { enabled: true } },
+      );
+
+      await act(async () => {
+        queueWhenReadyDeferred.resolve('wasm');
+        poolWhenReadyDeferred.resolve();
+        await Promise.resolve();
+        await Promise.resolve();
+      });
+      expect(result.current.isReady).toBe(true);
+
+      // Disable — providers terminate, isReady resets to false.
+      rerender({ enabled: false });
+      expect(result.current.isReady).toBe(false);
+
+      // Re-enable — a fresh provider pair is created with fresh (pending)
+      // whenReady() deferreds; isReady must start false again.
+      poolWhenReadyDeferred = createDeferred<void>();
+      queueWhenReadyDeferred = createDeferred<'webgpu' | 'wasm'>();
+      rerender({ enabled: true });
+      expect(result.current.isReady).toBe(false);
+
+      await act(async () => {
+        queueWhenReadyDeferred.resolve('wasm');
+        poolWhenReadyDeferred.resolve();
+        await Promise.resolve();
+        await Promise.resolve();
+      });
+      expect(result.current.isReady).toBe(true);
+    });
   });
 });

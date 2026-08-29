@@ -107,7 +107,15 @@ export interface FlawChessEngineState {
   budgetExhausted: boolean;
   /** True while a search is in flight for the current position. */
   isSearching: boolean;
-  /** True once the WorkerPool/MaiaQueue instances are created (enabled-gated). */
+  /**
+   * Phase 213 D-01: true once BOTH engine providers' underlying workers have
+   * finished loading their assets and are ready to serve — not merely once
+   * `createWorkerPool()`/`createMaiaQueue()` have been constructed. This
+   * hook's `isReady` has exactly ONE consumer in the codebase
+   * (`Analysis.tsx`'s `flawChessLoading`), so it is rewired in place rather
+   * than adding a parallel `assetsReady` value — a second signal would leave
+   * this one permanently dishonest for no risk reduction.
+   */
   isReady: boolean;
   /**
    * Code review WR-01 (196-REVIEW.md): the FEN `rankedLines` was most
@@ -174,8 +182,38 @@ export function useFlawChessEngine({
     const queue = createMaiaQueue();
     poolRef.current = pool;
     queueRef.current = queue;
-    setIsReady(true);
+
+    // Phase 213 D-01: isReady must reflect real asset readiness, not merely
+    // that the pool/queue objects were constructed. Await BOTH providers —
+    // unlike bot play (D-06's per-persona asymmetry, which does NOT apply on
+    // this surface), the FlawChess Engine card always runs mctsSearch over
+    // BOTH providers.policy (Maia) AND providers.grade (Stockfish), so both
+    // assets are genuinely required before the card can search.
+    //
+    // Note: awaiting whenReady() here spawns both providers at enable time
+    // rather than on the first grade()/policy() call — this is not a new
+    // cost, because the search-trigger effect below fires for the current
+    // FEN on this same render pass and would have spawned them immediately
+    // anyway.
+    let cancelled = false;
+    void Promise.all([queue.whenReady(), pool.whenReady()])
+      .then(() => {
+        if (!cancelled) setIsReady(true);
+      })
+      .catch(() => {
+        // A dead worker (whenReady() rejects) must not leave the card behind
+        // a permanent loading skeleton — capture once, then fall through to
+        // the card's normal empty rendering by still flipping isReady true.
+        // Fixed, variable-free message string (Sentry grouping rule).
+        Sentry.captureException(
+          new Error('FlawChess engine: a provider failed to become ready'),
+          { tags: { source: 'flawchess-engine' } },
+        );
+        if (!cancelled) setIsReady(true);
+      });
+
     return () => {
+      cancelled = true;
       pool.terminate();
       queue.terminate();
       poolRef.current = null;

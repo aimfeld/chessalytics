@@ -195,7 +195,12 @@ class FakeWorker {
   goCount = 0;
   private width = 1;
 
-  postMessage(msg: string): void {
+  postMessage(msg: string | { progressPort: unknown }): void {
+    // Phase 213: useStockfishEngine now also hands the worker a
+    // `{ progressPort }` MessageChannel port before the 'uci' handshake —
+    // this fake has no progress-reporting to simulate, so it just ignores
+    // any non-string payload.
+    if (typeof msg !== 'string') return;
     if (msg === 'uci') {
       this.emit('uciok');
     } else if (msg === 'isready') {
@@ -259,6 +264,12 @@ describe('Train solve loop (end-to-end tracer)', () => {
     cleanup();
     vi.unstubAllGlobals();
     sessionStorage.clear();
+    // Phase 213: useStockfishEngine now writes a
+    // `flawchess.engineAsset.seen.stockfish-wasm` localStorage flag on
+    // readyok (markEngineAssetReady) — clear it so it cannot leak into a
+    // later test's own localStorage.length assertions (jsdom's localStorage
+    // persists across tests within a file unless explicitly cleared).
+    localStorage.clear();
   });
 
   // Per-test timeout: this end-to-end tracer transforms/mounts the whole Train

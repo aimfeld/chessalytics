@@ -123,6 +123,7 @@ import { styleBookWeighting, type BotStyleParams } from '@/lib/engine/botStyle';
 import { styleLinesFor, type Style } from '@/lib/engine/styleOpeningLines';
 import { BOT_STYLE_BUNDLES } from '@/lib/engine/botStyleBundles';
 import type { PersonaId } from '@/lib/personas/personaRegistry';
+import { engineGateRequired } from '@/lib/engine/engineAssetProgress';
 import { loadOpeningPrefixSet } from '@/lib/openings';
 import { createDeadlineSearch, BOT_MIN_SEARCH_NODES } from '@/lib/engine/deadlineSearch';
 import {
@@ -274,6 +275,19 @@ export interface UseBotGameState {
   /** Confirms a resumed game is ready to become live — call from the resume
    * gate's Resume button. No-op (already true) for a fresh game. */
   confirmLive: () => void;
+  /**
+   * Phase 213 D-15: the manual-retry seam behind `EngineReadyGate`'s Retry
+   * button. After a terminal download failure the shared Maia worker was
+   * dropped by `maiaWorkerHost` (see `failAllLeasesAndDropWorker`), so
+   * re-triggering `warm()` here re-enters the SAME self-heal path the
+   * bring-up effect below already uses: `queue.warm()`/`pool.warm()` forward
+   * to `ensureLease()`/`ensureSpawned()`, which lazily spawns a fresh worker.
+   * `pool.warm()` is a no-op when the pool is already spawned — the
+   * Stockfish pool self-heals through its own `replaceDeadSlot()` and needs
+   * no explicit retry call here; it is included anyway because G-213-19b
+   * requires both assets for every persona now.
+   */
+  retryEngineWarm: () => void;
   /** Attempt a user move; returns false (board snaps back) if illegal, off-turn, or off-live-position. */
   attemptMove: (from: string, to: string) => boolean;
   /** View a historical ply (board becomes read-only until returnToLive()). */
@@ -658,10 +672,16 @@ export function useBotGame(
   const [movesSinceLastDecline, setMovesSinceLastDecline] = useState(
     resume?.movesSinceLastDecline ?? DRAW_OFFER_COOLDOWN_MOVES,
   );
-  /** Phase 170 D-03: false only for a resumed-but-unconfirmed game — see
-   * `UseBotGameState.live`. True from mount for a fresh game (zero behavior
-   * change on today's only path). */
-  const [live, setLive] = useState(resume === undefined);
+  /** Phase 170 D-03 / Phase 213 D-05 / G-213-19b: false for a
+   * resumed-but-unconfirmed game, OR for a fresh game whose required engine
+   * assets (the unconditional maia-model + stockfish-wasm bundle, every
+   * persona alike) are still a cache-miss (`engineGateRequired`, evaluated
+   * once at mount) — see `UseBotGameState.live`. `confirmLive()` (below) is
+   * the SAME single start path both the resume gate's Resume button and the
+   * new engine-ready gate's Start button call — generalizing Phase 170's own
+   * stated principle, "nobody pays for the engine cold-start", from the
+   * resume case to every case. */
+  const [live, setLive] = useState(() => resume === undefined && !engineGateRequired());
   /** Phase 170 D-11: minted once at game start, carried unchanged through a
    * resume, re-minted ONLY by `newGame()` — see `UseBotGameState.gameUuid`.
    * State (not a ref) because it is read in the render-phase return value
@@ -682,6 +702,17 @@ export function useBotGame(
    * true; a no-op re-render for an already-live (fresh) game. */
   const confirmLive = useCallback((): void => {
     setLive(true);
+  }, []);
+
+  /** Phase 213 D-15 — see `UseBotGameState.retryEngineWarm`'s doc comment.
+   * Reads `poolRef`/`queueRef` (set by the bring-up effect below) and warms
+   * BOTH providers unconditionally (G-213-19b) — every persona needs both
+   * assets, so there is no guard left to apply here. */
+  const retryEngineWarm = useCallback((): void => {
+    const pool = poolRef.current;
+    const queue = queueRef.current;
+    pool?.warm();
+    queue?.warm();
   }, []);
 
   // ─── Keep liveGamePlyRef / movesSinceLastDeclineRef in sync (WR-05) ─────
@@ -1293,6 +1324,13 @@ export function useBotGame(
   // warmed from OUTSIDE this hook because they are constructed HERE — there
   // is no external handle `Bots.tsx` could warm before this hook mounts. A
   // future reader must not "tidy" this into the `live` gate.
+  //
+  // G-213-19b (supersedes Phase 213 D-03/D-06): `pool.warm()` (the Stockfish
+  // download trigger) now fires unconditionally alongside `queue.warm()`
+  // (Maia) — both providers are warmed for EVERY persona. The accepted cost
+  // is the one D-06 refused: a blend-0 persona spends 7.3 MB of mobile data
+  // on a Stockfish binary it will never use, in exchange for one predictable
+  // download bundle instead of a persona-dependent one.
 
   useEffect(() => {
     const pool = createWorkerPool();
@@ -1611,6 +1649,7 @@ export function useBotGame(
     gameUuid,
     live,
     confirmLive,
+    retryEngineWarm,
     attemptMove,
     viewPly,
     returnToLive,
