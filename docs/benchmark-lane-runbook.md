@@ -80,7 +80,16 @@ asyncio.run(main())
 ```bash
 uv run python scripts/benchmark_lane.py select --tranche classical --db benchmark
 uv run python scripts/benchmark_lane.py snapshot --tranche classical --db benchmark
+# snapshot arms the tranche itself on success; `arm` is only needed to retry
+# after a refusal, or after a --limit (partial) snapshot.
+uv run python scripts/benchmark_lane.py arm --tranche classical --db benchmark
 ```
+
+**`select` now inserts UNARMED rows, which no claim lane can see.** A tranche
+becomes claimable only when `arm` flips `benchmark_selection.armed`, and `arm`
+refuses unless every lichess-arm game in the tranche has snapshot rows. That is
+what makes the ordering below enforced rather than merely documented -- forget to
+arm and nothing drains, which is loud and harmless.
 
 `select` materializes `benchmark_selection` for the tranche: a capped
 (100 games/user/TC), randomly-selected, equal-footing (±100 opponent rating)
@@ -619,9 +628,23 @@ tranche.** It would not save a snapshot started *after* processing began — tha
 silently capture our engine's values and label them lichess's, with `record`'s coverage
 count still reading a reassuring zero gap, because coverage counts rows, not correctness.
 
-**So for the blitz and bullet tranches, do one of these before `select`:** stop the
-worker fleet's fallback (or the :8001 backend) until `snapshot` completes, or run
-`select` and `snapshot` back to back and accept the same MVCC protection knowingly rather
-than by luck. The cheap post-hoc check is the one used above: for any game processed
-before the snapshot finished, its snapshot values must **differ** from current
+**FIXED 2026-08-29 — this window no longer exists.** `benchmark_selection.armed`
+closes it structurally: `select` inserts unarmed rows that the gate hides from all five
+lanes, and `arm` (run automatically at the end of a successful full `snapshot`) flips
+them only after verifying that every lichess-arm game in the tranche has snapshot rows.
+No worker can reach a game whose original evals are not yet preserved, whatever order
+the operator uses and whether or not the backend is already live.
+
+Blitz and bullet therefore need no special handling: run `select`, then `snapshot`, and
+the tranche arms itself. Coordinating the three worker boxes is no longer necessary.
+
+The regression net is
+`test_pick_pending_game_ids_gate_on_skips_UNARMED_selected` in
+`tests/test_eval_worker_endpoints.py` — two selection rows identical but for `armed`,
+asserting only the armed one is claimable. Verified by reverting `AND bs.armed` from the
+gate template and confirming the test goes red (`assert [2, 1] == [2]`); every other gate
+test stays green under that revert, which is exactly why this one had to exist.
+
+The old post-hoc check remains valid if you ever need it: for any game processed before
+its snapshot finished, its snapshot values must **differ** from current
 `game_positions`.

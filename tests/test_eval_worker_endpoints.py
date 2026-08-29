@@ -885,6 +885,9 @@ class TestEntryLeaseSelectionGate:
                     user_id=user_id,
                     tc_tranche="blitz",
                     lichess_arm=False,
+                    # Armed: this fixture asserts a SELECTED game IS claimable.
+                    # The unarmed case has its own test below.
+                    armed=True,
                 )
             )
             await session.commit()
@@ -977,7 +980,8 @@ class TestEntryLeaseSelectionGate:
             claim_sql = _entry_claim_sql()
 
             selection_fragment = (
-                "EXISTS (SELECT 1 FROM benchmark_selection bs WHERE bs.game_id = games.id)"
+                "EXISTS (SELECT 1 FROM benchmark_selection bs"
+                " WHERE bs.game_id = games.id AND bs.armed)"
             )
             assert selection_fragment in probe_sql, "probe must carry the selection fragment"
             assert selection_fragment in claim_sql, "claim must carry the selection fragment"
@@ -1060,6 +1064,9 @@ class TestEntryLeaseSelectionGate:
                     user_id=user_id,
                     tc_tranche="blitz",
                     lichess_arm=False,
+                    # Armed: this fixture asserts a SELECTED game IS claimable.
+                    # The unarmed case has its own test below.
+                    armed=True,
                 )
             )
             await session.commit()
@@ -1120,6 +1127,9 @@ class TestEntryLeaseSelectionGate:
                     user_id=user_id,
                     tc_tranche="blitz",
                     lichess_arm=False,
+                    # Armed: this fixture asserts a SELECTED game IS claimable.
+                    # The unarmed case has its own test below.
+                    armed=True,
                 )
             )
             await session.commit()
@@ -1136,6 +1146,77 @@ class TestEntryLeaseSelectionGate:
             async with eval_worker_session_maker() as session:
                 await session.execute(
                     delete(BenchmarkSelection).where(BenchmarkSelection.game_id == selected_game)
+                )
+                await session.commit()
+            await _delete_games(eval_worker_session_maker, game_ids)
+
+    async def test_pick_pending_game_ids_gate_on_skips_UNARMED_selected(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+        eval_worker_session_maker: async_sessionmaker[AsyncSession],
+        eval_worker_test_user: int,
+        test_engine: object,
+    ) -> None:
+        """A SELECTED but UNARMED game must not be claimable.
+
+        This is the half of the invariant its sibling above does not cover.
+        Every other gate test asserts that selected games ARE returned, so
+        deleting `AND bs.armed` from BENCHMARK_SELECTION_GATE_SQL_TEMPLATE
+        would leave all of them green while silently reopening the window this
+        column exists to close: `select` publishes rows to the gate instantly,
+        `snapshot` protects them minutes later, and anything claimed in
+        between has its original lichess evals overwritten with no recovery
+        path (see the `armed` docstring in app/models/benchmark_selection.py).
+
+        Two rows, identical but for `armed`, so the assertion isolates that
+        column and nothing else.
+        """
+        from app.models.benchmark_selection import BenchmarkSelection
+        from app.services.eval_drain import _pick_pending_game_ids
+
+        await _create_benchmark_selection_table(test_engine)
+        _patch_router_session(monkeypatch, eval_worker_session_maker)
+
+        user_id = eval_worker_test_user
+        unarmed_game = await _insert_game(
+            eval_worker_session_maker, user_id, evals_completed_at=None
+        )
+        armed_game = await _insert_game(eval_worker_session_maker, user_id, evals_completed_at=None)
+        game_ids = [unarmed_game, armed_game]
+
+        async with eval_worker_session_maker() as session:
+            session.add(
+                BenchmarkSelection(
+                    game_id=unarmed_game,
+                    user_id=user_id,
+                    tc_tranche="blitz",
+                    lichess_arm=False,
+                    armed=False,
+                )
+            )
+            session.add(
+                BenchmarkSelection(
+                    game_id=armed_game,
+                    user_id=user_id,
+                    tc_tranche="blitz",
+                    lichess_arm=False,
+                    armed=True,
+                )
+            )
+            await session.commit()
+
+        monkeypatch.setattr(settings, "BENCHMARK_SELECTION_GATE_ENABLED", True)
+        try:
+            picked = await _pick_pending_game_ids(limit=50)
+            assert picked == [armed_game], (
+                f"gate-on must return ONLY the armed game {armed_game}; the unarmed "
+                f"game {unarmed_game} is selected but not yet snapshot-protected. Got {picked}"
+            )
+        finally:
+            monkeypatch.setattr(settings, "BENCHMARK_SELECTION_GATE_ENABLED", False)
+            async with eval_worker_session_maker() as session:
+                await session.execute(
+                    delete(BenchmarkSelection).where(BenchmarkSelection.game_id.in_(game_ids))
                 )
                 await session.commit()
             await _delete_games(eval_worker_session_maker, game_ids)

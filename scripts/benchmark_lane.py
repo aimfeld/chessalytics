@@ -271,6 +271,9 @@ async def persist_selection(
                     user_id=user_id,
                     tc_tranche=tranche,
                     lichess_arm=lichess_arm,
+                    # Unarmed: invisible to every claim lane until the
+                    # tranche's snapshot is complete. See arm_tranche below.
+                    armed=False,
                 )
             )
             existing.add(key)
@@ -281,6 +284,11 @@ async def persist_selection(
     _log(
         f"select {tranche}: inserted {inserted:,}, skipped (already selected) "
         f"{skipped_dupes:,}, total considered {len(eligible_rows):,}"
+    )
+    _log(
+        f"select {tranche}: rows are UNARMED and invisible to every claim lane. "
+        f"Run `snapshot --tranche {tranche}` (which arms on success) or "
+        f"`arm --tranche {tranche}` before the fleet can work on them."
     )
     return inserted, skipped_dupes
 
@@ -417,6 +425,71 @@ async def snapshot_lichess_evals(
     await engine.dispose()
     _log(f"snapshot {tranche}: inserted {inserted:,}, skipped (already captured) {skipped_dupes:,}")
     return inserted, skipped_dupes
+
+
+def _arm_coverage_gap_sql() -> str:
+    """SQL for the count of lichess-arm games in a tranche with NO snapshot rows.
+
+    This is the predicate arming is conditional on. It must be 0 before a
+    tranche is armed: a lichess-arm game with no preserved evals is one whose
+    original lichess values are destroyed the moment a worker claims it, with
+    no recovery path (see the model docstring on `armed`).
+
+    Deliberately scoped to lichess_arm IS TRUE -- a never-analyzed-arm game has
+    nothing lichess-provided to preserve, so it never contributes a gap.
+    Binds: :tranche.
+    """
+    return """
+SELECT count(*)
+FROM benchmark_selection bs
+WHERE bs.tc_tranche = :tranche
+  AND bs.lichess_arm IS TRUE
+  AND NOT EXISTS (
+    SELECT 1 FROM benchmark_lichess_eval_snapshot s WHERE s.game_id = bs.game_id
+  )
+"""
+
+
+async def arm_tranche(db_url: str, tranche: TcTranche) -> tuple[int, int]:
+    """Arm a tranche's selection rows, but only if its snapshot is complete.
+
+    Returns (armed_count, coverage_gap). When coverage_gap > 0 NOTHING is armed
+    and armed_count is 0 -- the caller reports the gap and the tranche stays
+    invisible to every claim lane.
+
+    Arming is the step that makes a tranche claimable at all. Gating it on the
+    coverage check turns "verify the gap is zero before starting the fleet"
+    from an operator instruction that can be skipped into a precondition that
+    cannot be. Idempotent: re-running on an armed tranche arms 0 more rows and
+    still reports the gap.
+    """
+    engine = create_async_engine(db_url, echo=False)
+    async with async_sessionmaker(engine, expire_on_commit=False)() as session:
+        gap_result = await session.execute(text(_arm_coverage_gap_sql()), {"tranche": tranche})
+        coverage_gap = int(gap_result.scalar_one())
+        if coverage_gap > 0:
+            await engine.dispose()
+            return 0, coverage_gap
+        # Counted with a SELECT rather than read off the UPDATE's rowcount:
+        # session.execute is typed Result[Any], which has no rowcount, and an
+        # admin command run once per tranche does not need the round trip back.
+        pending_result = await session.execute(
+            text(
+                "SELECT count(*) FROM benchmark_selection WHERE tc_tranche = :tranche AND NOT armed"
+            ),
+            {"tranche": tranche},
+        )
+        armed_count = int(pending_result.scalar_one())
+        await session.execute(
+            text(
+                "UPDATE benchmark_selection SET armed = true "
+                "WHERE tc_tranche = :tranche AND NOT armed"
+            ),
+            {"tranche": tranche},
+        )
+        await session.commit()
+    await engine.dispose()
+    return armed_count, coverage_gap
 
 
 def _status_counts_sql() -> str:
@@ -780,6 +853,27 @@ def _add_snapshot_subparser(
     )
 
 
+def _add_arm_subparser(
+    subparsers: "argparse._SubParsersAction[argparse.ArgumentParser]",
+) -> None:
+    arm_parser = subparsers.add_parser(
+        "arm",
+        help="Make a tranche claimable, only if its lichess-eval snapshot is complete.",
+    )
+    arm_parser.add_argument(
+        "--tranche",
+        choices=TC_TRANCHES,
+        required=True,
+        help="TC tranche to arm.",
+    )
+    arm_parser.add_argument(
+        "--db",
+        choices=["dev", "test", "prod", "benchmark"],
+        default="benchmark",
+        help="DB target (default: benchmark).",
+    )
+
+
 def _add_status_subparser(
     subparsers: "argparse._SubParsersAction[argparse.ArgumentParser]",
 ) -> None:
@@ -835,6 +929,7 @@ def parse_args() -> argparse.Namespace:
     subparsers = parser.add_subparsers(dest="command", required=True)
     _add_select_subparser(subparsers)
     _add_snapshot_subparser(subparsers)
+    _add_arm_subparser(subparsers)
     _add_status_subparser(subparsers)
     _add_record_subparser(subparsers)
     args = parser.parse_args()
@@ -853,6 +948,35 @@ async def _run_snapshot(args: argparse.Namespace) -> None:
     db_url = db_url_for_target(args.db)
     inserted, skipped = await snapshot_lichess_evals(db_url, args.tranche, args.limit)
     _log(f"snapshot-mode summary: inserted={inserted} skipped={skipped} total={inserted + skipped}")
+    # Arm here rather than as a separate operator step: a snapshot that just
+    # completed is exactly when the tranche becomes safe to claim, and leaving
+    # arming to a remembered follow-up command reintroduces the ordering
+    # mistake this column exists to prevent. A --limit run is a partial
+    # snapshot by construction, so it never arms.
+    if args.limit is not None:
+        _log(
+            f"snapshot {args.tranche}: --limit given, so this is a PARTIAL snapshot; "
+            f"not arming. Run a full snapshot, then `arm --tranche {args.tranche}`."
+        )
+        return
+    await _arm_and_log(db_url, args.tranche)
+
+
+async def _arm_and_log(db_url: str, tranche: TcTranche) -> None:
+    """Arm a tranche and report the outcome, including a refusal."""
+    armed_count, coverage_gap = await arm_tranche(db_url, tranche)
+    if coverage_gap > 0:
+        _log(
+            f"arm {tranche}: REFUSED -- {coverage_gap:,} lichess-arm game(s) have no "
+            f"snapshot rows. Nothing was armed and the tranche stays invisible to every "
+            f"claim lane. Re-run `snapshot --tranche {tranche}` and arm again."
+        )
+        return
+    _log(f"arm {tranche}: armed {armed_count:,} row(s); coverage gap 0. Tranche is claimable.")
+
+
+async def _run_arm(args: argparse.Namespace) -> None:
+    await _arm_and_log(db_url_for_target(args.db), args.tranche)
 
 
 async def _run_status(args: argparse.Namespace) -> None:
@@ -879,6 +1003,8 @@ async def main() -> None:
         await _run_select(args)
     elif args.command == "snapshot":
         await _run_snapshot(args)
+    elif args.command == "arm":
+        await _run_arm(args)
     elif args.command == "status":
         await _run_status(args)
     elif args.command == "record":

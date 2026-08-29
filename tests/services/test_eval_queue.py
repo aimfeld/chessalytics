@@ -3305,6 +3305,9 @@ class TestBenchmarkSelectionGate:
                     user_id=user_id,
                     tc_tranche="blitz",
                     lichess_arm=False,
+                    # Armed: this fixture asserts a SELECTED game IS claimable.
+                    # The unarmed case has its own test below.
+                    armed=True,
                 )
             )
             await session.commit()
@@ -3493,6 +3496,9 @@ class TestBenchmarkSelectionGate:
                     user_id=user_id,
                     tc_tranche="blitz",
                     lichess_arm=False,
+                    # Armed: this fixture asserts a SELECTED game IS claimable.
+                    # The unarmed case has its own test below.
+                    armed=True,
                 )
             )
             await session.commit()
@@ -3574,6 +3580,9 @@ class TestBenchmarkSelectionGate:
                     user_id=user_id,
                     tc_tranche="blitz",
                     lichess_arm=False,
+                    # Armed: this fixture asserts a SELECTED game IS claimable.
+                    # The unarmed case has its own test below.
+                    armed=True,
                 )
             )
             await session.commit()
@@ -3736,6 +3745,9 @@ class TestBenchmarkSelectionGate:
                     user_id=user_id,
                     tc_tranche="rapid",
                     lichess_arm=False,
+                    # Armed: this fixture asserts a SELECTED game IS claimable.
+                    # The unarmed case has its own test below.
+                    armed=True,
                 )
             )
             await session.commit()
