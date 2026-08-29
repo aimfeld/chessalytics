@@ -292,6 +292,32 @@ describe('markEngineAssetFailed — Plan 04 owns this UI; Task 1 owns the transp
     const { result } = renderHook(() => useEngineAssets(['maia-model']));
     expect(result.current.status).toBe('failed');
   });
+
+  // ─── Quick 260829-tku: failureKind transport ──────────────────────────────
+
+  it('called WITH a kind records that kind on the snapshot alongside status:failed, without disturbing prior byte progress', () => {
+    reportEngineAssetProgress('maia-model', 20_000_000, MAIA_MODEL_BYTES_FALLBACK);
+
+    markEngineAssetFailed('maia-model', 'oom');
+
+    const snapshot = getEngineAssetsSnapshot();
+    expect(snapshot.status).toBe('failed');
+    expect(snapshot.failureKind).toBe('oom');
+    expect(snapshot.assets['maia-model']?.loaded).toBe(20_000_000);
+  });
+
+  it('called WITHOUT a kind leaves the recorded kind null — the Stockfish pool and useStockfishEngine call sites rely on this', () => {
+    markEngineAssetFailed('maia-model');
+
+    expect(getEngineAssetsSnapshot().failureKind).toBeNull();
+  });
+
+  it('a classified failure followed by an unclassified one on a DIFFERENT asset keeps the classification', () => {
+    markEngineAssetFailed('maia-model', 'oom');
+    markEngineAssetFailed('stockfish-wasm');
+
+    expect(getEngineAssetsSnapshot().failureKind).toBe('oom');
+  });
 });
 
 describe('markEngineAssetsRetrying — D-15 manual retry seam', () => {
@@ -324,6 +350,15 @@ describe('markEngineAssetsRetrying — D-15 manual retry seam', () => {
       total: MAIA_MODEL_BYTES_FALLBACK,
       done: false,
     });
+  });
+
+  it('clears a classified failure kind back to null, while the existing status/byte/seen-flag assertions in this describe still hold', () => {
+    reportEngineAssetProgress('maia-model', 20_000_000, MAIA_MODEL_BYTES_FALLBACK);
+    markEngineAssetFailed('maia-model', 'oom');
+
+    markEngineAssetsRetrying();
+
+    expect(getEngineAssetsSnapshot().failureKind).toBeNull();
   });
 
   it("WR-01: a fresh worker's first near-zero progress report is not clamped up to the failed attempt's old high-water mark", () => {

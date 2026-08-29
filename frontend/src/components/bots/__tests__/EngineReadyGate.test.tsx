@@ -374,6 +374,22 @@ describe('EngineReadyGate', () => {
     },
   );
 
+  // ─── Quick 260829-tku Task 2: the new branch must not swallow the generic path ──
+
+  it.each([
+    ['a load-classified failure', 'load' as const],
+    ['an unclassified failure', undefined],
+  ])('%s still renders the pre-existing engine-gate-failed testid, title, body, and Retry', (_label, kind) => {
+    markEngineAssetFailed('maia-model', kind);
+    render(<EngineReadyGate surface="bots" onStart={vi.fn()} onRetry={vi.fn()} />);
+
+    const failedPanel = screen.getByTestId('engine-gate-failed');
+    expect(failedPanel.textContent).toContain('The engine did not start');
+    expect(failedPanel.textContent).toContain('Something interrupted the download');
+    expect(screen.queryByTestId('engine-gate-oom')).toBeNull();
+    expect(screen.getByTestId('btn-engine-retry')).toBeTruthy();
+  });
+
   // ─── Phase 213-04 D-16/D-17: Umami wait/abandonment + Sentry terminal capture ──
 
   describe('telemetry (D-16/D-17)', () => {
