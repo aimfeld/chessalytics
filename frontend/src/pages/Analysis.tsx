@@ -58,6 +58,9 @@ import {
   FREE_PLAY_DEFAULT_ELO,
 } from '@/hooks/useMaiaEloDefault';
 import { useFlawChessEngine } from '@/hooks/useFlawChessEngine';
+import { useEngineAssetStatus } from '@/hooks/useEngineAssets';
+import { engineGateRequired } from '@/lib/engine/engineAssetProgress';
+import { EngineReadyGate } from '@/components/bots/EngineReadyGate';
 import { useUserProfile } from '@/hooks/useUserProfile';
 import { useGameOverlay } from '@/hooks/useGameOverlay';
 import { useLiveMoveFlaw } from '@/hooks/useLiveMoveFlaw';
@@ -588,6 +591,15 @@ export default function Analysis() {
   const isMobile = layoutMode === 'mobile';
   const isMid = layoutMode === 'mid';
 
+  // G-213-34 (supersedes D-12): the same non-dismissible gate Bots.tsx mounts,
+  // now on the analysis board too. The lazy initializer form is load-bearing
+  // and mirrors useBotGame's `live` state: it evaluates the cache-miss
+  // predicate exactly once, at mount, so the gate cannot reappear later when
+  // the store's asset entries change (a mid-session WebGPU-to-wasm refetch
+  // resets an asset's progress and would otherwise re-open a gate the user
+  // has already passed).
+  const [engineGateOpen, setEngineGateOpen] = useState(() => engineGateRequired());
+
   // D-06: engine on by default; toggle available via infoSlot button.
   const [engineEnabled, setEngineEnabled] = useState(true);
   // Phase 155 D-02/D-03: the Maia and FlawChess Engine header switches — all
@@ -1089,9 +1101,29 @@ export default function Analysis() {
   // of the FlawChess Engine, so this no longer depends on flawChessEnabled).
   const engineLoading = engineEnabled && !engine.isReady;
   // Mirrors engineLoading: true only while the FlawChess Engine's WorkerPool/
-  // MaiaQueue are still spinning up (pre-`isReady`); once ready,
-  // FlawChessEngineLines handles its own pre-first-snapshot skeleton.
+  // MaiaQueue are still spinning up. Phase 213 D-01/Plan 05 Task 1: `isReady`
+  // is now backed by real asset readiness (both providers' `whenReady()`
+  // settling), not merely by provider construction — so this flag is honest
+  // for the same reason `engineLoading` above always was.
   const flawChessLoading = flawChessEnabled && !flawChessEngine.isReady;
+
+  // G-213-34: the gate's own read of the unconditional asset bundle — the
+  // page's ONLY store read now (supersedes D-12's three per-card reads;
+  // download progress lives exclusively in the gate modal).
+  //
+  // Bug fix (G-213-35 third part, 213-10-PLAN.md): this used to call the full
+  // `useEngineAssets(requiredEngineAssets())` for a SINGLE boolean use below
+  // (`status !== 'unsupported'`) — that subscribed the whole 3,600-line page
+  // to every per-chunk download notification, re-rendering the board, charts
+  // and every panel on the order of a thousand-plus times during a 45.7 MB
+  // cold-start download. `useEngineAssetStatus()` returns just the status
+  // PRIMITIVE, so `useSyncExternalStore`'s `Object.is` check skips the
+  // re-render on a byte-only progress tick — only a real status transition
+  // (idle -> downloading -> ready/failed/unsupported) re-renders this page.
+  // `EngineReadyGate` (mounted below) still gets full byte-level progress via
+  // its own internal `useEngineAssets` call — this narrowing does not touch
+  // that.
+  const engineAssetStatus = useEngineAssetStatus();
 
   const rootPly = fenToRootPly(rootFen);
   const currentPly = fenToRootPly(position);
@@ -3846,6 +3878,37 @@ export default function Analysis() {
     />
   );
 
+  const closeEngineGate = useCallback((): void => {
+    setEngineGateOpen(false);
+  }, []);
+
+  // G-213-34: unlike the bots surface, which re-warms its own provider
+  // handles through `useBotGame.retryEngineWarm`, this page has no handle on
+  // the three independent worker lifecycles behind it (`useStockfishEngine`'s
+  // standalone worker, `useFlawChessEngine`'s pool and queue, `useMaiaEngine`'s
+  // lease), so a reload is the only re-entry that cannot leave a partially
+  // healed worker graph. It is safe here precisely because the gate has been
+  // up since mount: there is provably no user work behind it to lose.
+  const handleEngineGateRetry = useCallback((): void => {
+    window.location.reload();
+  }, []);
+
+  // G-213-34: the analysis-board mount of the same gate Bots.tsx uses.
+  // Suppressed when the store reports `unsupported` — a device whose
+  // capability probe failed can never reach a ready state, so gating it
+  // would lock it out of the analysis board permanently, the exact fallback
+  // the gate's own unsupported copy promises. There is no progress to show
+  // on a device that will never download, so nothing is lost by suppressing
+  // it here.
+  const engineGateNode =
+    engineGateOpen && engineAssetStatus !== 'unsupported' ? (
+      <EngineReadyGate
+        surface="analysis"
+        onStart={closeEngineGate}
+        onRetry={handleEngineGateRetry}
+      />
+    ) : null;
+
   // ── Mid-range two-column layout (MOBILE_BREAKPOINT_PX .. desk3col) ─────────────
   // Two columns split 60/40:
   //   • left (60%):  the board (JS-sized to the column width), its flanking eval bars, the
@@ -3874,6 +3937,7 @@ export default function Analysis() {
     return (
       <div data-testid="analysis-page" className="flex min-h-0 flex-1 flex-col bg-background">
         {pasteModalNode}
+        {engineGateNode}
         <main
           className="mx-auto w-full px-4 py-4 pb-20 md:px-6"
           style={{ maxWidth: DESKTOP_GRID_MAX_WIDTH_PX }}
@@ -3916,6 +3980,7 @@ export default function Analysis() {
         className="flex min-h-0 flex-1 flex-col bg-background"
       >
         {pasteModalNode}
+        {engineGateNode}
         {/* Board + eval bar. */}
         {/* Board block: source caps + top player, board, bottom player. max-w-[92vw]
             shrinks the board a touch so the name/clock strips top and bottom stay on
@@ -3970,6 +4035,7 @@ export default function Analysis() {
   return (
     <div data-testid="analysis-page" className="flex min-h-0 flex-1 flex-col bg-background">
       {pasteModalNode}
+      {engineGateNode}
       {/* Phase 161 D-03: max-w-7xl removed at desk3col+ to reclaim horizontal space
           for the fluid grid; min-h-0/flex/h-full complete the min-h-0 chain from the
           App shell (D-01) down into the grid row below. */}

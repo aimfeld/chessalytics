@@ -12,21 +12,106 @@
  * 7. Exact info line paints evalCp before bestmove; bestmove confirms + stops analysis.
  * 8. Visibility hidden → stop sent, worker NOT terminated.
  * 9. Unmount → stop + terminate.
+ *
+ * Phase 213-08 (G-213-35): the worker-lifecycle effect now constructs its
+ * Worker asynchronously, via `ensureStockfishWorkerUrl().then(setupWorker)`
+ * — this file mocks `stockfishWorkerSource` so the hook's own UCI/debounce
+ * logic stays the thing under test (the shared-fetch mechanics are covered
+ * by `stockfishWorkerSource.test.ts`), and every test that needs the mock
+ * Worker to already exist awaits `flushWorkerSpawn()` once, right after the
+ * initial render, before driving the UCI handshake.
  */
 
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { renderHook, act } from '@testing-library/react';
+import * as Sentry from '@sentry/react';
 import { useStockfishEngine } from '../useStockfishEngine';
+import {
+  getEngineAssetsSnapshot,
+  resetEngineAssetsForTests,
+} from '@/lib/engine/engineAssetProgress';
+
+// @sentry/react's ESM module namespace is not configurable, so vi.spyOn cannot
+// redefine captureException on the real module — mock the module instead
+// (mirrors useFlawChessEngine.test.ts).
+vi.mock('@sentry/react', () => ({ captureException: vi.fn() }));
+
+// Phase 213-08: the hook now routes construction through the shared source
+// module. This file's job is the hook's own UCI/debounce/state-machine
+// logic, not the shared-fetch mechanics (covered by
+// `stockfishWorkerSource.test.ts`) — mock the module so
+// `ensureStockfishWorkerUrl()` resolves to `null` (today's direct-
+// construction path) on every call, and `createStockfishWorker` constructs
+// against the exact same literal path the pre-refactor local `ENGINE_PATH`
+// constant held.
+const STOCKFISH_ENGINE_PATH = '/engine/stockfish-18-lite-single.js';
+vi.mock('@/lib/engine/stockfishWorkerSource', () => ({
+  ensureStockfishWorkerUrl: vi.fn(() => Promise.resolve(null)),
+  createStockfishWorker: vi.fn((sharedUrl: string | null) => {
+    const WorkerCtor = globalThis.Worker as unknown as new (url: string) => Worker;
+    return sharedUrl === null
+      ? new WorkerCtor(STOCKFISH_ENGINE_PATH)
+      : new WorkerCtor(`${STOCKFISH_ENGINE_PATH}#${encodeURIComponent(sharedUrl)}`);
+  }),
+}));
 
 // ─── Mock Worker ─────────────────────────────────────────────────────────────
 
+/**
+ * Phase 213: a minimal synchronous double for the `MessageChannel`/
+ * `MessagePort` pair the worker-lifecycle effect uses to wire the vendored
+ * Stockfish glue's `progressPort` protocol. Mirrors `workerPool.test.ts`'s
+ * identical double — a real Node/jsdom `MessageChannel` delivers messages
+ * asynchronously, which would force every progress-wiring test to await a
+ * tick for no reason; this double fires synchronously instead, like
+ * `MockWorker.simulateMessage` does for the UCI line protocol.
+ */
+class MockMessagePort {
+  onmessage: ((e: MessageEvent<{ loaded: number; total: number }>) => void) | null = null;
+  peer: MockMessagePort | null = null;
+
+  postMessage(data: { loaded: number; total: number }): void {
+    this.peer?.onmessage?.(new MessageEvent('message', { data }));
+  }
+}
+
+function createMockMessageChannel(): { port1: MockMessagePort; port2: MockMessagePort } {
+  const port1 = new MockMessagePort();
+  const port2 = new MockMessagePort();
+  port1.peer = port2;
+  port2.peer = port1;
+  return { port1, port2 };
+}
+
+/** Stubs the global `MessageChannel` constructor with the synchronous double above. */
+function stubMessageChannel(): void {
+  vi.stubGlobal(
+    'MessageChannel',
+    vi.fn(function (this: unknown) {
+      return createMockMessageChannel();
+    }),
+  );
+}
+
 class MockWorker {
   onmessage: ((e: MessageEvent<string>) => void) | null = null;
+  onerror: ((e: ErrorEvent) => void) | null = null;
   messages: string[] = [];
+  /**
+   * Phase 213: every `postMessage` call in arrival order, including
+   * non-string payloads (the `{ progressPort }` handoff) — `messages` above
+   * stays string-only so every pre-existing assertion keeps working
+   * untouched. Use this array for ordering assertions the string-only log
+   * cannot express.
+   */
+  allMessages: unknown[] = [];
   terminated = false;
 
-  postMessage(msg: string): void {
-    this.messages.push(msg);
+  postMessage(msg: string | { progressPort: MockMessagePort }): void {
+    this.allMessages.push(msg);
+    if (typeof msg === 'string') {
+      this.messages.push(msg);
+    }
   }
 
   terminate(): void {
@@ -36,6 +121,20 @@ class MockWorker {
   /** Fire the onmessage handler with a synthetic UCI line. */
   simulateMessage(data: string): void {
     this.onmessage?.(new MessageEvent('message', { data }));
+  }
+
+  /** Fire the onerror handler (async script-load failure — never a sync throw). */
+  simulateError(): void {
+    this.onerror?.(new ErrorEvent('error', { message: 'simulated worker load failure' }));
+  }
+
+  /** The `MockMessagePort` (port2) this worker was handed at spawn, or undefined if `MessageChannel` was unstubbed/unavailable. */
+  capturedProgressPort(): MockMessagePort | undefined {
+    const found = this.allMessages.find(
+      (m): m is { progressPort: MockMessagePort } =>
+        typeof m === 'object' && m !== null && 'progressPort' in m,
+    );
+    return found?.progressPort;
   }
 }
 
@@ -50,6 +149,22 @@ function driveInit(worker: MockWorker): void {
   });
   act(() => {
     worker.simulateMessage('readyok');
+  });
+}
+
+/**
+ * Phase 213-08: flushes the microtask the worker-lifecycle effect's deferred
+ * `ensureStockfishWorkerUrl().then(setupWorker)` continuation needs to run
+ * and construct the mock Worker. Every test that reads `mockWorker` (or
+ * asserts on the Worker constructor) after the INITIAL render must await
+ * this once — a FEN-only `rerender` does not re-run the worker effect
+ * (deps are `[enabled, clearPendingPvCommit]`), so no further flush is
+ * needed after that.
+ */
+async function flushWorkerSpawn(): Promise<void> {
+  await act(async () => {
+    await Promise.resolve();
+    await Promise.resolve();
   });
 }
 
@@ -70,6 +185,9 @@ describe('useStockfishEngine', () => {
     // Use a regular function (not arrow) so `new Worker(url)` works.
     // A constructor that returns a plain object has that object override `this`.
     vi.stubGlobal('Worker', vi.fn(function () { return mockWorker; }));
+    // Phase 213: deterministic synchronous double for the progressPort wiring.
+    stubMessageChannel();
+    resetEngineAssetsForTests();
     // Test hygiene fix (quick 260731-s0z): the 'visibility hidden...' test
     // below redefines document.visibilityState via Object.defineProperty,
     // which leaks across tests in this file (jsdom's document is not
@@ -85,10 +203,13 @@ describe('useStockfishEngine', () => {
   afterEach(() => {
     vi.useRealTimers();
     vi.unstubAllGlobals();
+    resetEngineAssetsForTests();
+    vi.clearAllMocks();
   });
 
-  it('creates a classic Worker — no module option', () => {
+  it('creates a classic Worker — no module option', async () => {
     renderHook(() => useStockfishEngine({ fen: null, enabled: true }));
+    await flushWorkerSpawn();
     // The Worker constructor must be called with only the engine path.
     // A second argument ({ type: 'module' }) would break the Emscripten glue.
     const WorkerCtor = vi.mocked(globalThis.Worker as new (url: string) => Worker);
@@ -96,24 +217,27 @@ describe('useStockfishEngine', () => {
     expect(WorkerCtor).toHaveBeenCalledTimes(1);
   });
 
-  it('sends uci as the first command on mount', () => {
+  it('sends uci as the first command on mount', async () => {
     renderHook(() => useStockfishEngine({ fen: null, enabled: true }));
+    await flushWorkerSpawn();
     expect(mockWorker.messages[0]).toBe('uci');
   });
 
-  it('setoption MultiPV uses value 2', () => {
+  it('setoption MultiPV uses value 2', async () => {
     renderHook(() => useStockfishEngine({ fen: null, enabled: true }));
+    await flushWorkerSpawn();
     act(() => {
       mockWorker.simulateMessage('uciok');
     });
     expect(mockWorker.messages).toContain('setoption name MultiPV value 2');
   });
 
-  it('sends isready after setoption and transitions isReady false→true on readyok', () => {
+  it('sends isready after setoption and transitions isReady false→true on readyok', async () => {
     const { result } = renderHook(() =>
       useStockfishEngine({ fen: null, enabled: true }),
     );
     expect(result.current.isReady).toBe(false);
+    await flushWorkerSpawn();
 
     act(() => {
       mockWorker.simulateMessage('uciok');
@@ -126,13 +250,14 @@ describe('useStockfishEngine', () => {
     expect(result.current.isReady).toBe(true);
   });
 
-  it('settled first move fires the search near-instantly (no fixed delay)', () => {
+  it('settled first move fires the search near-instantly (no fixed delay)', async () => {
     // Advance fake time past RAPID_STEP_DEBOUNCE_MS (150ms) so Date.now() >> 0.
     // lastFenChangeAtRef is initialized to 0, so sinceLast = 200 - 0 = 200 > 150,
     // which triggers the immediate (non-debounced) path.
     vi.advanceTimersByTime(200);
 
     renderHook(() => useStockfishEngine({ fen: TEST_FEN, enabled: true }));
+    await flushWorkerSpawn();
     driveInit(mockWorker);
 
     // debouncedFen was set synchronously during mount, and the debouncedFen+isReady
@@ -146,6 +271,7 @@ describe('useStockfishEngine', () => {
       ({ fen }: { fen: string }) => useStockfishEngine({ fen, enabled: true }),
       { initialProps: { fen: TEST_FEN } },
     );
+    await flushWorkerSpawn();
     driveInit(mockWorker);
 
     // Advance to 140ms — just before the TEST_FEN debounce fires at 150ms.
@@ -175,6 +301,7 @@ describe('useStockfishEngine', () => {
     const { result } = renderHook(() =>
       useStockfishEngine({ fen: TEST_FEN, enabled: true }),
     );
+    await flushWorkerSpawn();
     driveInit(mockWorker);
 
     await act(async () => {
@@ -188,6 +315,7 @@ describe('useStockfishEngine', () => {
 
   it('search command contains movetime 1500 and nodes 2000000', async () => {
     renderHook(() => useStockfishEngine({ fen: TEST_FEN, enabled: true }));
+    await flushWorkerSpawn();
     driveInit(mockWorker);
 
     await act(async () => {
@@ -204,6 +332,7 @@ describe('useStockfishEngine', () => {
     const { result } = renderHook(() =>
       useStockfishEngine({ fen: TEST_FEN, enabled: true }),
     );
+    await flushWorkerSpawn();
     driveInit(mockWorker);
     await act(async () => {
       await vi.advanceTimersByTimeAsync(200);
@@ -224,6 +353,7 @@ describe('useStockfishEngine', () => {
     const { result } = renderHook(() =>
       useStockfishEngine({ fen: TEST_FEN, enabled: true }),
     );
+    await flushWorkerSpawn();
     driveInit(mockWorker);
     await act(async () => {
       await vi.advanceTimersByTimeAsync(200);
@@ -244,6 +374,7 @@ describe('useStockfishEngine', () => {
     const { result } = renderHook(() =>
       useStockfishEngine({ fen: TEST_FEN, enabled: true }),
     );
+    await flushWorkerSpawn();
     driveInit(mockWorker);
     await act(async () => {
       await vi.advanceTimersByTimeAsync(200);
@@ -277,6 +408,7 @@ describe('useStockfishEngine', () => {
       { initialProps: { fen: TEST_FEN } },
     );
 
+    await flushWorkerSpawn();
     driveInit(mockWorker);
     await act(async () => {
       await vi.advanceTimersByTimeAsync(200);
@@ -326,6 +458,7 @@ describe('useStockfishEngine', () => {
       { initialProps: { fen: TEST_FEN } },
     );
 
+    await flushWorkerSpawn();
     driveInit(mockWorker);
     await act(async () => {
       await vi.advanceTimersByTimeAsync(200);
@@ -362,6 +495,7 @@ describe('useStockfishEngine', () => {
 
   it('visibility hidden sends stop without terminating the Worker', async () => {
     renderHook(() => useStockfishEngine({ fen: TEST_FEN, enabled: true }));
+    await flushWorkerSpawn();
     driveInit(mockWorker);
     await act(async () => {
       await vi.advanceTimersByTimeAsync(200);
@@ -384,10 +518,11 @@ describe('useStockfishEngine', () => {
     expect(mockWorker.terminated).toBe(false);
   });
 
-  it('unmount sends stop and terminates the Worker (no leak)', () => {
+  it('unmount sends stop and terminates the Worker (no leak)', async () => {
     const { unmount } = renderHook(() =>
       useStockfishEngine({ fen: null, enabled: true }),
     );
+    await flushWorkerSpawn();
 
     unmount();
 
@@ -395,14 +530,37 @@ describe('useStockfishEngine', () => {
     expect(mockWorker.terminated).toBe(true);
   });
 
+  // ─── Phase 213-08 (G-213-35): unmount racing the deferred worker spawn ────
+
+  it('Phase 213-08: unmounting before the shared fetch resolves constructs no worker and leaves nothing behind', async () => {
+    const { unmount } = renderHook(() =>
+      useStockfishEngine({ fen: null, enabled: true }),
+    );
+
+    // Unmount SYNCHRONOUSLY, before the deferred `ensureStockfishWorkerUrl()
+    // .then(setupWorker)` continuation has had a chance to run — this sets
+    // `cancelled = true` in the same tick, before any microtask fires.
+    unmount();
+
+    // Now let the deferred continuation actually run.
+    await flushWorkerSpawn();
+
+    // `setupWorker`'s `if (cancelled) return;` guard must have prevented
+    // construction entirely — no live worker was created, let alone leaked.
+    const WorkerCtor = vi.mocked(globalThis.Worker as new (url: string) => Worker);
+    expect(WorkerCtor).not.toHaveBeenCalled();
+    expect(mockWorker.terminated).toBe(false); // never constructed, nothing to terminate
+  });
+
   // ─── FIX-5 (quick 260731-s0z): stop the superseded search on a RAPID FEN change ──
 
-  it('FIX-5: stops the superseded search immediately on a RAPID FEN change, discarding its info lines and bestmove', () => {
+  it('FIX-5: stops the superseded search immediately on a RAPID FEN change, discarding its info lines and bestmove', async () => {
     vi.advanceTimersByTime(200); // settled path: first FEN fires the search immediately
     const { rerender, result } = renderHook(
       ({ fen }: { fen: string }) => useStockfishEngine({ fen, enabled: true }),
       { initialProps: { fen: TEST_FEN } },
     );
+    await flushWorkerSpawn();
     driveInit(mockWorker);
     expect(mockWorker.messages.filter((m) => m.startsWith('go ')).length).toBe(1);
 
@@ -450,6 +608,7 @@ describe('useStockfishEngine', () => {
     const { result } = renderHook(() =>
       useStockfishEngine({ fen: TEST_FEN, enabled: true }),
     );
+    await flushWorkerSpawn();
     driveInit(mockWorker);
     await act(async () => {
       await vi.advanceTimersByTimeAsync(200);
@@ -495,5 +654,87 @@ describe('useStockfishEngine', () => {
     });
     expect(result.current.evalCp).toBe(-30);
     expect(result.current.isAnalyzing).toBe(false);
+  });
+
+  // ─── Phase 213 D-01: standalone worker reports progress + marks ready ─────
+
+  describe('D-01: reports download progress and marks stockfish-wasm ready', () => {
+    it('wires a progressPort before the uci handshake, and reporting progress through it updates the shared asset store', async () => {
+      renderHook(() => useStockfishEngine({ fen: null, enabled: true }));
+      await flushWorkerSpawn();
+
+      // Handshake ordering: progressPort wiring happens before 'uci' is sent.
+      expect(mockWorker.allMessages[mockWorker.allMessages.length - 1]).toBe('uci');
+      const port = mockWorker.capturedProgressPort();
+      expect(port).toBeDefined();
+
+      act(() => {
+        port?.postMessage({ loaded: 50, total: 100 });
+      });
+
+      const snapshot = getEngineAssetsSnapshot();
+      expect(snapshot.assets['stockfish-wasm']?.loaded).toBe(50);
+      expect(snapshot.assets['stockfish-wasm']?.total).toBe(100);
+    });
+
+    it('marks stockfish-wasm ready on the readyok line', async () => {
+      renderHook(() => useStockfishEngine({ fen: null, enabled: true }));
+      await flushWorkerSpawn();
+      driveInit(mockWorker);
+
+      const snapshot = getEngineAssetsSnapshot();
+      expect(snapshot.assets['stockfish-wasm']?.done).toBe(true);
+    });
+
+    it('a MessageChannel-less environment skips the wiring without breaking engine spawn', async () => {
+      vi.stubGlobal('MessageChannel', undefined);
+
+      const { result } = renderHook(() => useStockfishEngine({ fen: null, enabled: true }));
+      await flushWorkerSpawn();
+      // No progressPort message was sent — 'uci' is the only message.
+      expect(mockWorker.allMessages).toEqual(['uci']);
+
+      driveInit(mockWorker);
+      expect(result.current.isReady).toBe(true);
+    });
+  });
+
+  // ─── CR-01 (213-REVIEW.md): worker.onerror must not be invisible ──────────
+  //
+  // Before this fix, this hook installed NO worker.onerror handler at all
+  // (contrast with workerPool.ts's createSlot(), which does) — a 404/CSP-
+  // blocked engine script failed completely silently: no Sentry capture,
+  // isReady never became true, and the shared 'stockfish-wasm' asset store
+  // never learned about the failure either.
+  describe('CR-01: worker.onerror is Sentry-captured and marks stockfish-wasm failed', () => {
+    it('captures to Sentry with the stockfish-engine source tag on an async script-load failure', async () => {
+      renderHook(() => useStockfishEngine({ fen: null, enabled: true }));
+      await flushWorkerSpawn();
+
+      mockWorker.simulateError();
+
+      expect(Sentry.captureException).toHaveBeenCalledWith(
+        expect.any(Error),
+        expect.objectContaining({ tags: expect.objectContaining({ source: 'stockfish-engine' }) }),
+      );
+    });
+
+    it('marks the shared stockfish-wasm asset store failed', async () => {
+      renderHook(() => useStockfishEngine({ fen: null, enabled: true }));
+      await flushWorkerSpawn();
+
+      mockWorker.simulateError();
+
+      expect(getEngineAssetsSnapshot().status).toBe('failed');
+    });
+
+    it('never fires for a clean uciok/readyok init sequence', async () => {
+      renderHook(() => useStockfishEngine({ fen: null, enabled: true }));
+      await flushWorkerSpawn();
+      driveInit(mockWorker);
+
+      expect(Sentry.captureException).not.toHaveBeenCalled();
+      expect(getEngineAssetsSnapshot().status).not.toBe('failed');
+    });
   });
 });

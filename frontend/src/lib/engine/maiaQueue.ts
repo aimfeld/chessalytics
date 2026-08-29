@@ -79,6 +79,15 @@ export interface MaiaQueue {
    * nothing. Idempotent.
    */
   warm(): void;
+  /**
+   * Resolves once the shared Maia worker (D-01) is ready to serve `policy()`
+   * — pure forwarding to the lease's own `whenReady()`, lazily acquiring the
+   * lease exactly like `warm()` does. Consumed by `useBotGame.ts`'s D-05
+   * readiness gate via `engineAssetProgress.ts`'s `'ready'` message forward,
+   * not directly by this method today — exposed for parity with
+   * `WorkerPool.whenReady()` (Phase 213-03).
+   */
+  whenReady(): Promise<'webgpu' | 'wasm'>;
 }
 
 /** One policy() call awaiting dispatch or resolution. */
@@ -256,5 +265,10 @@ export function createMaiaQueue(): MaiaQueue {
     ensureLease();
   }
 
-  return { policy, terminate, warm };
+  /** Pure forward to the lease's own `whenReady()` — see `MaiaQueue.whenReady()`. */
+  function whenReady(): Promise<'webgpu' | 'wasm'> {
+    return ensureLease().whenReady();
+  }
+
+  return { policy, terminate, warm, whenReady };
 }

@@ -459,9 +459,169 @@ parallel-query DSM segments; prod already carries `shm_size: "256m"` for exactly
 this reason and the benchmark compose file did not. Now added to
 `docker-compose.benchmark.yml`.
 
-It is **inert until the container is recreated** (`docker compose -f
+It was **inert until the container was recreated** (`docker compose -f
 docker-compose.benchmark.yml -p flawchess-benchmark up -d db`) — a bare
-`restart` does not apply a changed `shm_size`. Do that at a boundary, not
-mid-tranche. Until then, prefix analytic queries with
-`SET max_parallel_workers_per_gather = 0`, which is what made the query above
-succeed.
+`restart` does not apply a changed `shm_size`.
+
+**RESOLVED — the fix is live.** The container was recreated 2026-08-25 18:49 UTC
+(mid-tranche, incidentally, without harming the run) and has carried a 256 MB
+`/dev/shm` ever since; verified 2026-08-29 by `df -h /dev/shm` inside the
+container (256.0M) and `HostConfig.ShmSize` = 268435456. The compose config hash
+matches the container's `com.docker.compose.config-hash` label exactly, so there
+is **no pending recreate** — `up -d db` is a no-op. Do not recreate the container
+to "apply" this; it is already applied, and the only effect would be dropping the
+:8001 backend's connection pool, which needs its five command-line flags and two
+operator secrets to relaunch.
+
+The `SET max_parallel_workers_per_gather = 0` prefix is therefore no longer
+required for analytic queries. It remains harmless, and is still worth reaching
+for if a parallel-query DSM error ever reappears.
+
+### 2026-08-23 → 2026-08-29: the classical tranche run (212-10 Task 2/3)
+
+**Tranche**: classical, both arms. **Date range**: started 2026-08-23 ~08:00 UTC
+(212-10 Task 1, operator choice `start` at the second presentation), reached its
+terminal state 2026-08-29 ~04:33 UTC. **Worker boxes**: one — the local 8-worker
+`ai-slim` invocation (`--base-url https://flawchess.com --fallback-url
+http://192.168.50.179:8001`), i.e. the fleet's normal prod-first configuration
+with the benchmark backend as fallback only.
+
+**Final `status`**: lichess arm 27,020 / 27,020 on every axis (full evals, PV,
+best moves, blobs). Never-analyzed arm 23,662 / 23,717. Headline 99.9%.
+
+**The tranche is complete, not stopped.** The 55-game shortfall is not undrained
+backlog: all 55 have **zero movetext** — PGN headers only, ~355 bytes, a decisive
+result and no moves — so they produced zero `game_positions` rows and there is
+nothing for any lane to evaluate. They are forfeit/no-show tournament games
+(lichess Swiss and team events). The worker log confirms the queue answering
+`204 Queue fully empty` continuously once the last real game finished. Treat
+50,682 as the analyzable denominator; no later tranche should expect these 55 to
+resolve.
+
+**Deviations from the documented procedure**: none. `STOCKFISH_POOL_SIZE` was
+unchanged, there was no unplanned restart, and Maia loaded correctly (best moves
+tracked PV done throughout rather than lagging at zero, the symptom §8 warns
+about).
+
+**Throughput and the prod-priority pauses.** Steady-state was ~535–560
+games/hour. Two dips are on the record and both were correct behavior, not
+faults: a hard stop 2026-08-28 14:19–16:15 UTC when a real user imported 1,468
+chess.com games and prod's ladder reclaimed the fleet (the fallback is strictly
+gated on prod having no work, §8), and a softer 21:00–00:00 UTC period of
+intermittent prod competition. Neither required intervention; the drain resumed
+to full rate on its own each time.
+
+**Diagnostic note for whoever debugs this next**: the fleet's Stockfish binary is
+`~/.local/stockfish/sf`, not `stockfish`. `pgrep stockfish` returns zero while
+eight engines are pinned at 87% CPU, which reads exactly like a dead fleet and
+is not one. Check `ps --ppid <worker-pid>` instead.
+
+**Flaw-blob lane traffic near the end is expected.** A burst of
+`/flaw-blob-lease` + `/flaw-blob-submit` after the eval lanes drain is by design,
+not a regression: `_apply_atomic_submit` passes `blobs_pending=True`, so a flaw
+the server's authoritative `classify_game_flaws` finds but the worker's local
+hint-classify missed writes a NULL blob and is deliberately left for the tier-4
+blob backfill. `blobs_written=0` on such a lease is the mirror case — a token for
+a ply the server does not classify as a flaw is silently dropped at the join.
+Blob-pending reached 0 in both arms at the end, so blobs did not lag the final
+counts.
+
+**Invariants, all three confirmed** (full numbers in
+`reports/benchmark-lane/benchmark-lane-classical-2026-08-29.md`):
+
+1. **The gate held across the whole multi-day full-fleet run.**
+   `stamped_but_unselected` = 1,805,063 against a 1,805,063 baseline, **delta
+   zero**. Note this is the *replacement* criterion: 212-10's plan text still
+   names the retired corpus-wide `evals_completed_at = 1,846,458` predicate,
+   which was superseded during the run because it fires on correct behavior (see
+   the leak-gate subsection above).
+2. **The homogenized overwrite happened and D-04 held.** 1,736,689 of 1,924,579
+   snapshot plies (90.2%) now differ from their preserved lichess value, across
+   all 27,020 lichess-arm games, while **27,020 / 27,020** of those games still
+   carry `lichess_evals_at`. The paired same-position comparison the user asked
+   to keep possible therefore works — verified concretely on game 72283.
+3. **The stop state is unambiguous** — stated above and in the report's prose.
+
+**TC ordering intact**: `benchmark_selection` still holds classical only (0 rows
+for rapid, blitz and bullet). No later tranche was selected or snapshotted.
+
+### 2026-08-29: the rapid tranche — start, and three things classical did not teach
+
+**Tranche**: rapid, both arms. **Started**: 2026-08-29 ~04:48 UTC, immediately after
+the classical tranche closed. **Selection**: 95,623 games (34,777 lichess arm / 60,846
+never-analyzed) across ~1,000 users — **nearly double classical's 50,737**, so budget
+proportionally. Snapshot: 2,599,458 rows, coverage gap **0**.
+
+#### 1. Re-base the leak baseline after every `select`
+
+`stamped_but_unselected` dropped from **1,805,063 to 1,735,048** the moment the rapid
+selection was inserted. That is not a leak — it is arithmetic. 70,015 of the 95,623
+newly-selected rapid games were *already* stamped, so they moved out of the "stamped but
+unselected" set by being selected. A leak shows up as an **increase**.
+
+**The baseline for the rapid run is 1,735,048.** Monitoring rapid against the classical
+baseline would show a permanent phantom −70,015 and mask a real leak of up to that size.
+Re-measure the baseline immediately after each `select`, before the fleet starts.
+
+#### 2. The entry-ply stamping burst on a fresh tranche is expected
+
+Right after `select`, the worker log fills with, at roughly 50 games/second:
+
+```
+Leased 0 entry-ply position(s) [target=...:8001]. Evaluating at depth-15...
+Entry-submit complete: game_ids=[...50 ids...], stamped_count=50
+```
+
+This is the **same log shape as the 212-06 incident** and is not the same event. It is
+the entry-ply lane saturating `evals_completed_at` across the newly-selected tranche;
+`Leased 0` means those games have no entry-ply eval targets, so they are stamped having
+consumed zero engine work (`_mark_evals_completed`: "all *limit* games are marked
+regardless of whether they had any eval targets"). The giveaway that no Stockfish ran is
+the rate — no evaluation path achieves 50 games/second.
+
+Verified on this run: 25,608 games stamped in the burst window, **0 of them unselected**,
+all rapid. Classical went through the identical saturation. The distinguishing query is
+the one in the leak-gate section, scoped to the burst window:
+
+```sql
+SELECT count(*) AS stamped_in_window,
+       count(*) FILTER (WHERE bs.game_id IS NULL) AS of_which_unselected
+FROM games g
+LEFT JOIN benchmark_selection bs ON bs.game_id = g.id
+WHERE g.evals_completed_at > '<burst start>';
+```
+
+`of_which_unselected` must be 0. In the 212-06 incident it was 76,040.
+
+#### 3. Ordering hazard: `select` opens a window when the backend is already live
+
+§2's order (select → snapshot → launch backend) assumes a **cold start**. When the :8001
+backend is already running from a previous tranche — the normal case for tranches 2, 3
+and 4 — `select` makes every game in the new tranche claimable **instantly**, while
+`snapshot` still needs minutes to run. The fleet can begin overwriting lichess-arm evals
+inside that window.
+
+On this run five rapid lichess-arm games were processed before `snapshot` finished
+(2789228, 2224013, 1620260, 2776165, 2773792), one of them 41 seconds before its own
+snapshot rows were written.
+
+**No data was lost, for a reason worth understanding rather than relying on.**
+`_snapshot_source_sql` is a single streaming `SELECT` over `game_positions`, so its MVCC
+snapshot is fixed at statement start — before any of those games were touched.
+`captured_at` records when each row was *inserted*, not when it was *read*, which is why
+a row can carry a late `captured_at` and still hold the correct pre-overwrite value.
+Verified: all five games' snapshot values differ from current `game_positions` on nearly
+every ply (5/5, 31/31, 61/65, 67/78, 142/161), and game 2789228's five snapshot values
+(15, 27, -7, 0, -10) match its PGN's `%eval` tags exactly (0.15, 0.27, -0.07, 0.0, -0.1).
+
+**This protects you only if the streaming SELECT starts before the fleet reaches the new
+tranche.** It would not save a snapshot started *after* processing began — that run would
+silently capture our engine's values and label them lichess's, with `record`'s coverage
+count still reading a reassuring zero gap, because coverage counts rows, not correctness.
+
+**So for the blitz and bullet tranches, do one of these before `select`:** stop the
+worker fleet's fallback (or the :8001 backend) until `snapshot` completes, or run
+`select` and `snapshot` back to back and accept the same MVCC protection knowingly rather
+than by luck. The cheap post-hoc check is the one used above: for any game processed
+before the snapshot finished, its snapshot values must **differ** from current
+`game_positions`.

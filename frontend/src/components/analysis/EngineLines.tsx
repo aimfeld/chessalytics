@@ -125,6 +125,11 @@ export const LINES_MIN_HEIGHT_3 = 'min-h-[90px]';
  * Pulsing placeholder rows shaped like PV lines (eval badge + move chips) — the
  * card-content loading animation that replaces the "Analyzing…" / "Loading
  * engine…" text while the engine spins up or searches (Quick 260627-r9g item 3).
+ *
+ * G-213-34 (supersedes D-12): download progress lives EXCLUSIVELY in the
+ * `EngineReadyGate` modal now — this skeleton never renders a download
+ * readout of any kind, on any surface. Do not reintroduce one here; the one
+ * aggregate bar in the gate is the only progress surface in the app.
  */
 export function EngineLinesSkeleton({
   testId,

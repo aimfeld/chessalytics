@@ -10,20 +10,64 @@
  * a global `ort` — the same reason the Stockfish worker glue is not an ES module.
  *
  * Message protocol (structured objects, not UCI text — this is not Stockfish):
- *   in:  { type: 'init', backend?: 'wasm' }   // absent/any-other-value = auto (probe WebGPU);
- *                                              // 'wasm' skips the probe entirely — this is the
- *                                              // mode a respawned worker is sent (see below)
+ *   in:  { type: 'init', backend: 'webgpu' | 'wasm', runtimeBuffer?: ArrayBuffer,
+ *          assetCacheName?: string }
+ *                                              // Phase 213-09 (G-213-35): `backend` is now
+ *                                              // REQUIRED — the main thread (`maiaWorkerHost.ts`,
+ *                                              // via `ortRuntimeSource.ts`'s WebGPU adapter
+ *                                              // probe) makes the backend decision BEFORE this
+ *                                              // Worker is even constructed, so this worker no
+ *                                              // longer probes `navigator.gpu` itself and no
+ *                                              // longer has an 'auto' mode. `runtimeBuffer`
+ *                                              // (transferred) is the onnxruntime-web runtime
+ *                                              // `.wasm` bytes for `ort.env.wasm.wasmBinary` —
+ *                                              // absent when the main thread's own runtime fetch
+ *                                              // degraded to null, in which case this worker
+ *                                              // leaves `wasmBinary` unset and onnxruntime-web
+ *                                              // resolves the binary from `wasmPaths` exactly as
+ *                                              // it always has.
+ *                                              // Phase 213-12 (D-20, closing G-213-37):
+ *                                              // `assetCacheName`, when present AND `caches` is
+ *                                              // defined, is the SAME versioned CacheStorage name
+ *                                              // `engineAssetCache.ts` opens on the main thread
+ *                                              // (`ENGINE_ASSET_CACHE_NAME` — this worker cannot
+ *                                              // import that TS module, so the name arrives via
+ *                                              // this field instead of being duplicated as a
+ *                                              // literal). `fetchModelBuffer` below reads/writes
+ *                                              // the model under this cache name so a SECOND
+ *                                              // spawn (the ordinary per-game respawn this
+ *                                              // worker's own termination-at-zero-leases policy
+ *                                              // guarantees) costs zero network. Absent, or
+ *                                              // `caches` undefined, means byte-for-byte today's
+ *                                              // plain-fetch behavior.
  *        { type: 'analyze', fen: string, eloInputs: number[] }
  *        { type: 'terminate' }
  *   out: { type: 'ready', backend: 'webgpu' | 'wasm' }
+ *        { type: 'progress', loaded: number, total: number }   // Phase 213: byte
+ *                                                            progress on the owned
+ *                                                            ONNX model fetch
+ *                                                            (fetchModelBuffer, below).
+ *                                                            Fired on every chunk,
+ *                                                            before 'ready'.
  *        { type: 'webgpu-unavailable', message: string }   // TERMINAL for this worker instance:
  *                                                            a WebGPU session/warmup failure was
  *                                                            caught WITHOUT falling through to a
  *                                                            second importScripts (quick
  *                                                            260729-sod, FIX 1) — the main thread
  *                                                            owner must terminate this worker and
- *                                                            spawn a fresh one with
- *                                                            { type: 'init', backend: 'wasm' }
+ *                                                            spawn a fresh one, requesting the
+ *                                                            wasm-only runtime binary directly
+ *                                                            (Phase 213-09: a DIFFERENT `.wasm`
+ *                                                            than whatever this dying worker was
+ *                                                            given) and sending
+ *                                                            { type: 'init', backend: 'wasm',
+ *                                                            runtimeBuffer?: ArrayBuffer }.
+ *                                                            Phase 213-12 (D-20): NO LONGER
+ *                                                            carries a `modelBuffer` field (the
+ *                                                            G-213-8 handoff is retired) — the
+ *                                                            replacement reads the model from
+ *                                                            CacheStorage instead, via its own
+ *                                                            `assetCacheName`.
  *        { type: 'result', fen, rawPolicyByElo: {elo, policy: Float32Array}[],
  *                           wdlByElo: {elo, wdl: Float32Array}[], backend }
  *        { type: 'error', message: string }
@@ -46,6 +90,24 @@
 // ─── Asset paths (served verbatim, absolute so worker-relative resolution never matters) ──
 
 const MODEL_PATH = '/maia/maia3_simplified.onnx';
+
+/** Raw byte size verified live 2026-08-28 (Phase 213 D-01/T-213-01) — the
+ *  defense-in-depth fallback used when `content-length` is missing, zero, or
+ *  garbage. Mirrors the fallback constant in engineAssetProgress.ts (kept as
+ *  two literals rather than a shared import: this file is a classic, non-
+ *  bundled Worker script — see the file header — and cannot import a
+ *  TypeScript ES module). */
+const MAIA_MODEL_BYTES_FALLBACK = 45_683_686;
+
+/** Phase 213 D-15: total attempts (including the first) for the owned model
+ *  fetch. Exactly 2 — one silent retry covers the common transient drop
+ *  (a dropped connection, a flaky mobile link), and a SECOND failure needs
+ *  explicit user consent before trying again, because each attempt re-
+ *  downloads the full 45.7 MB model from scratch (there is no resumable
+ *  partial fetch here). No backoff/delay between attempts — the retry is
+ *  immediate (D-04's no-timer rule: nothing in this cold-start path may poll
+ *  or wait on a clock). */
+const MODEL_FETCH_ATTEMPTS = 2;
 
 /** WASM-CPU-only bundle (small, mobile-Safari-safe) — matches the ort-wasm-simd-threaded.{mjs,wasm} pair. */
 const WASM_ONLY_RUNTIME_PATH = '/maia/ort.wasm.min.js';
@@ -129,16 +191,173 @@ let session = null;
 let backend = null;
 
 /**
- * Loads the WASM-only runtime and creates the session. Shared by both the
- * `mode: 'wasm'` respawn path and the auto-mode no-adapter path — in both
- * cases this is the ONLY importScripts this worker instance will ever make,
- * so there is never a second ORT build competing for the same wasm heap.
+ * Streams the ONNX model bytes and counts them as they arrive (Phase 213
+ * D-01/D-07) — this worker OWNS the fetch rather than letting session
+ * creation issue an opaque request with no progress visibility. Runs INSIDE
+ * this worker (already has `fetch` available) — do not add a main-thread
+ * fetch + Transferable-buffer hop (213-RESEARCH.md Pitfall 2). Never trusts a
+ * bare `content-length` as the divisor (T-213-01, 213-RESEARCH.md Pitfall 3):
+ * coerced via `Number(header) || MAIA_MODEL_BYTES_FALLBACK`. Calls
+ * `onProgress(loaded, total)` once per chunk, then assembles and returns one
+ * `Uint8Array`.
+ *
+ * D-15: retried up to `MODEL_FETCH_ATTEMPTS` times. A non-final failure is
+ * swallowed and the attempt restarts from a fresh `chunks`/`loaded` (each is
+ * declared inside the loop body, so a new attempt is a genuinely clean
+ * slate), emitting `onProgress(0, total)` first so the bar visibly restarts
+ * rather than freezing at whatever byte count the dropped attempt reached.
+ * The FINAL attempt's failure rethrows — the caller (`self.onmessage`)
+ * catches it and posts `{ type: 'error' }`, which the host marks 'failed'.
+ * No delay/backoff between attempts — the retry is immediate.
+ *
+ * BUG FIX (Phase 213-12, D-20, closing G-213-37): before this fix, this
+ * fetch was the model's ONLY source, with no cache of its own. This worker
+ * is deliberately terminated at zero leases (FLAWCHESS-92's mobile-OOM
+ * policy) every time a `BotsGame` unmounts — i.e. on EVERY new game or
+ * rematch, by design — so a fresh worker's ONLY way to get the 45.7 MB model
+ * was this fetch, and the only thing that had ever hidden the resulting
+ * per-game re-download was the browser's HTTP cache. DevTools "Disable
+ * cache" — exactly how this phase is verified — removes it. `assetCacheName`
+ * (see the file header's message-protocol doc) is the SAME versioned
+ * CacheStorage name `engineAssetCache.ts` opens on the main thread; a cache
+ * hit here short-circuits BEFORE the retry loop below (never replacing it —
+ * a genuine miss still gets the full D-15 retry discipline), and a
+ * completed miss writes the body back so the NEXT spawn is the hit.
  */
-async function initWasmOnlySession() {
+async function fetchModelBuffer(onProgress, assetCacheName) {
+  const cacheUsable = Boolean(assetCacheName) && typeof caches !== 'undefined';
+  let cache = null;
+  if (cacheUsable) {
+    try {
+      cache = await caches.open(assetCacheName);
+      const match = await cache.match(MODEL_PATH);
+      if (match) {
+        const cached = new Uint8Array(await match.arrayBuffer());
+        if (cached.length > 0) {
+          // Report the bytes as already complete so the gate's bar shows
+          // done immediately instead of sitting at 0% for a download that is
+          // not going to occur.
+          onProgress(cached.length, cached.length);
+          return cached;
+        }
+        // A zero-length entry is treated as a miss — a truncated write must
+        // never be served back and compiled into a broken ONNX session.
+      }
+    } catch {
+      // Any cache-read failure degrades to the plain fetch path below —
+      // a broken CacheStorage read must never block engine startup.
+      cache = null;
+    }
+  }
+
+  for (let attempt = 1; attempt <= MODEL_FETCH_ATTEMPTS; attempt++) {
+    try {
+      const response = await fetch(MODEL_PATH);
+      if (!response.ok || !response.body) {
+        throw new Error(`maia-worker: model fetch failed (status ${response.status})`);
+      }
+      const declaredLength = Number(response.headers.get('content-length')) || 0;
+      const total = declaredLength || MAIA_MODEL_BYTES_FALLBACK;
+      // CR-01 (mirrors engineAssetCache.ts): content-length is only
+      // comparable to the decoded byte count on an unencoded response.
+      const contentEncoding = response.headers.get('content-encoding');
+      const lengthTrustworthy = declaredLength > 0 && (contentEncoding === null || contentEncoding === 'identity');
+      if (attempt > 1) {
+        // Visibly restart the bar for the retry attempt rather than leaving
+        // it frozen at the dropped attempt's last reported byte count.
+        onProgress(0, total);
+      }
+      const reader = response.body.getReader();
+      const chunks = [];
+      let loaded = 0;
+      for (;;) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        chunks.push(value);
+        loaded += value.length;
+        onProgress(loaded, total);
+      }
+      // CR-01 fix (mirrors engineAssetCache.ts): a clean-EOF stream short of
+      // its declared length is a failed download, not a success — before this
+      // guard the truncated bytes were cached and served back as complete on
+      // every later spawn. Throwing here engages this loop's own retry
+      // discipline (D-15) instead of persisting a broken model.
+      if (lengthTrustworthy && loaded !== declaredLength) {
+        throw new Error(`maia-worker: truncated model download (got ${loaded} of ${declaredLength} bytes)`);
+      }
+      const buffer = new Uint8Array(loaded);
+      let offset = 0;
+      for (const chunk of chunks) {
+        buffer.set(chunk, offset);
+        offset += chunk.length;
+      }
+      // CR-01 fix: only persist a body verified complete against a
+      // trustworthy content-length; unverifiable bytes are returned but
+      // never cached.
+      if (cache && lengthTrustworthy) {
+        try {
+          await cache.put(MODEL_PATH, new Response(buffer));
+        } catch {
+          // A quota / storage-pressure write failure must never strand
+          // startup — the already-downloaded bytes are returned below
+          // regardless. Best-effort: this worker has no Sentry access of its
+          // own (main-thread-only SDK), so a write failure here is silent by
+          // design; the main thread's own engineAssetCache.ts write path
+          // (used by the other two assets) is what reports quota failures.
+        }
+      }
+      return buffer;
+    } catch (err) {
+      if (attempt === MODEL_FETCH_ATTEMPTS) {
+        throw err;
+      }
+      // Non-final attempt: swallow and loop again immediately — no backoff.
+    }
+  }
+  // Unreachable (the loop always either returns or throws on its final
+  // iteration), but keeps a static analyzer from flagging a missing return.
+  throw new Error('maia-worker: model fetch failed after all retry attempts');
+}
+
+/**
+ * Loads the WASM-only runtime and creates the session. Shared by both the
+ * `backend: 'wasm'` respawn path and the `backend: 'wasm'` initial-spawn path
+ * (the main thread already decided this device lacks the WebGPU f16 feature,
+ * per Phase 213-09) — in both cases this is the ONLY importScripts this
+ * worker instance will ever make, so there is never a second ORT build
+ * competing for the same wasm heap.
+ *
+ * Phase 213-09 (G-213-35): `runtimeBuffer`, when supplied, is set onto
+ * `ort.env.wasm.wasmBinary` BEFORE `InferenceSession.create()` — this is what
+ * suppresses onnxruntime-web's own runtime `.wasm` fetch, verified
+ * empirically for this exact build (213-09-PLAN.md Task 1; see the vendored
+ * README's "Runtime binary ownership" section). Cleared immediately after
+ * `create()` succeeds: the raw bytes are only needed at create time (ORT
+ * compiles them into a `WebAssembly.Module`), so retaining the duplicate
+ * 13.5 MB buffer on this worker's heap past that point is pure waste
+ * (T-213-09-06).
+ *
+ * Phase 213-12 (D-20, closing G-213-37): LOST its `prefetchedBuffer`
+ * parameter — the `G-213-8` model-buffer handoff (a dying WebGPU worker
+ * transferring its downloaded model to its wasm replacement) is retired.
+ * `fetchModelBuffer` below is now the ONLY model source on every path, and
+ * it already reads from CacheStorage first when `assetCacheName` is usable
+ * — a respawn following a completed download costs zero network there too,
+ * without a second transferable in the init message (the exact shape that
+ * produced `G-213-36`).
+ */
+async function initWasmOnlySession(onProgress, runtimeBuffer, assetCacheName) {
   importScripts(WASM_ONLY_RUNTIME_PATH);
   ort.env.wasm.numThreads = 1; // NEVER > 1 — no cross-origin isolation (Phase 136 D-3)
   ort.env.wasm.wasmPaths = WASM_ASSET_PREFIX;
-  session = await ort.InferenceSession.create(MODEL_PATH, { executionProviders: ['wasm'] });
+  if (runtimeBuffer) {
+    ort.env.wasm.wasmBinary = new Uint8Array(runtimeBuffer);
+  }
+  const modelBuffer = await fetchModelBuffer(onProgress, assetCacheName);
+  session = await ort.InferenceSession.create(modelBuffer, { executionProviders: ['wasm'] });
+  if (runtimeBuffer) {
+    ort.env.wasm.wasmBinary = undefined;
+  }
   backend = 'wasm';
 }
 
@@ -152,14 +371,16 @@ async function initWasmOnlySession() {
  * failure used to leave 452 MB committed in one worker — see
  * 260729-sod-FINDINGS.md §2-3).
  *
- * `mode: 'wasm'` is the path a RESPAWNED worker takes: no adapter probe, no
- * WebGPU bundle ever loaded into this heap — this is why a respawn is cheap.
- * Any other mode ("auto") probes for a GPU adapter and either loads WASM-only
- * directly (no adapter — must NOT report a failure outcome, since no dirty
- * heap exists yet and doing so would force a needless respawn+double worker
- * boot for every non-WebGPU browser) or attempts WebGPU with a warmup
- * inference and reports `{ ok: false, message }` on ANY throw — the caller
- * (self.onmessage) is responsible for turning that into a terminal
+ * Phase 213-09 (G-213-35): this worker no longer probes `navigator.gpu`
+ * itself — the main thread (`maiaWorkerHost.ts`, via `ortRuntimeSource.ts`)
+ * makes the backend decision BEFORE this Worker is even constructed and
+ * tells it via `chosenBackend`, which is always exactly `'webgpu'` or
+ * `'wasm'`, never an "auto, probe here" mode. `chosenBackend: 'wasm'` loads
+ * WASM-only directly (no WebGPU bundle ever loaded into this heap — this is
+ * why a respawn, or a device the main thread already knew lacked the f16
+ * feature, is cheap). `chosenBackend: 'webgpu'` attempts WebGPU with a
+ * warmup inference and reports `{ ok: false, message }` on ANY throw — the
+ * caller (self.onmessage) is responsible for turning that into a terminal
  * `webgpu-unavailable` message instead of a second `importScripts`.
  *
  * `ort.env.wasm.numThreads` is forced to 1 on EVERY path before any session
@@ -168,58 +389,66 @@ async function initWasmOnlySession() {
  * SharedArrayBuffer) must never be attempted, regardless of which execution
  * provider ends up active.
  */
-async function initSession(mode) {
-  if (mode === 'wasm') {
-    await initWasmOnlySession();
+async function initSession(chosenBackend, onProgress, runtimeBuffer, assetCacheName) {
+  if (chosenBackend === 'wasm') {
+    await initWasmOnlySession(onProgress, runtimeBuffer, assetCacheName);
     return { ok: true };
   }
 
-  let gpuAdapter = null;
+  importScripts(WEBGPU_RUNTIME_PATH);
+  ort.env.wasm.numThreads = 1;
+  ort.env.wasm.wasmPaths = WASM_ASSET_PREFIX;
+  if (runtimeBuffer) {
+    ort.env.wasm.wasmBinary = new Uint8Array(runtimeBuffer);
+  }
+  // BUG FIX (213-UAT G-213-8, handoff itself retired Phase 213-12/D-20): the
+  // model fetch is deliberately OUTSIDE the try below — a fetch that fails
+  // after all MODEL_FETCH_ATTEMPTS is a terminal download failure, NOT
+  // "WebGPU is unavailable"; it must throw out of initSession so
+  // `self.onmessage` posts `error` and the host offers Retry, instead of
+  // triggering a respawn that re-runs the same doomed download from scratch.
+  const modelBuffer = await fetchModelBuffer(onProgress, assetCacheName);
   try {
-    gpuAdapter = self.navigator && self.navigator.gpu ? await navigator.gpu.requestAdapter() : null;
-  } catch {
-    gpuAdapter = null;
-  }
-
-  if (gpuAdapter) {
-    try {
-      importScripts(WEBGPU_RUNTIME_PATH);
-      ort.env.wasm.numThreads = 1;
-      ort.env.wasm.wasmPaths = WASM_ASSET_PREFIX;
-      session = await ort.InferenceSession.create(MODEL_PATH, { executionProviders: ['webgpu'] });
-      // BUG FIX: WebGPU compiles compute shaders LAZILY on first run, not at create().
-      // On Firefox/Windows the `Clip` shader ("ShaderModule with 'Clip' label is invalid",
-      // sequential_executor.cc ExecuteKernel) fails only at run time, so wrapping create()
-      // alone let a broken webgpu session slip through — the first real analyze() then threw
-      // and Maia died with no WASM fallback. A warmup run inside this try surfaces the shader
-      // failure here so the catch below can report it (KEEP this call — do not remove or move
-      // it outside the try; it is the thing that detects the failure at all).
-      await analyze(WARMUP_FEN, [WARMUP_ELO]);
-      backend = 'webgpu';
-      return { ok: true };
-    } catch (err) {
-      // ANY throw inside the WebGPU block (session-create, op-support, or lazy
-      // shader-compile failure — Pitfall 4): release best-effort (optional-chained
-      // for ORT version/backend safety) — this will NOT reclaim the wasm linear
-      // heap, that's what the caller's respawn is for, but dropping a session
-      // without releasing it is wrong regardless. Do NOT importScripts the WASM
-      // bundle here — that second load into this same worker global is the bug.
-      try {
-        await session?.release?.();
-      } catch {
-        // best-effort: a session that failed to construct fully may not be
-        // releasable at all — swallow and proceed to report the outcome.
-      }
-      session = null;
-      return { ok: false, message: err && err.message ? err.message : String(err) };
+    session = await ort.InferenceSession.create(modelBuffer, { executionProviders: ['webgpu'] });
+    if (runtimeBuffer) {
+      // Phase 213-09: see initWasmOnlySession's doc comment — the raw bytes
+      // are only needed at create() time.
+      ort.env.wasm.wasmBinary = undefined;
     }
+    // BUG FIX: WebGPU compiles compute shaders LAZILY on first run, not at create().
+    // On Firefox/Windows the `Clip` shader ("ShaderModule with 'Clip' label is invalid",
+    // sequential_executor.cc ExecuteKernel) fails only at run time, so wrapping create()
+    // alone let a broken webgpu session slip through — the first real analyze() then threw
+    // and Maia died with no WASM fallback. A warmup run inside this try surfaces the shader
+    // failure here so the catch below can report it (KEEP this call — do not remove or move
+    // it outside the try; it is the thing that detects the failure at all).
+    await analyze(WARMUP_FEN, [WARMUP_ELO]);
+    backend = 'webgpu';
+    return { ok: true };
+  } catch (err) {
+    // ANY throw inside the WebGPU block (session-create, op-support, or lazy
+    // shader-compile failure — Pitfall 4): release best-effort (optional-chained
+    // for ORT version/backend safety) — this will NOT reclaim the wasm linear
+    // heap, that's what the caller's respawn is for, but dropping a session
+    // without releasing it is wrong regardless. Do NOT importScripts the WASM
+    // bundle here — that second load into this same worker global is the bug.
+    if (runtimeBuffer) {
+      ort.env.wasm.wasmBinary = undefined;
+    }
+    try {
+      await session?.release?.();
+    } catch {
+      // best-effort: a session that failed to construct fully may not be
+      // releasable at all — swallow and proceed to report the outcome.
+    }
+    session = null;
+    // Phase 213-12 (D-20): no longer hands the downloaded model bytes to the
+    // replacement (G-213-8 retired) — the replacement's own
+    // `fetchModelBuffer` call reads the model from CacheStorage instead,
+    // which costs zero network on a cache hit without a second transferable
+    // in the init message (the exact shape that produced `G-213-36`).
+    return { ok: false, message: err && err.message ? err.message : String(err) };
   }
-
-  // No GPU adapter at all: no ORT build has been loaded yet, so there is no
-  // dirty heap to escape — load WASM-only directly, exactly as the auto path
-  // always has. This must NOT report a failure outcome (see doc comment).
-  await initWasmOnlySession();
-  return { ok: true };
 }
 
 /**
@@ -291,7 +520,18 @@ self.onmessage = async (e) => {
   const msg = e.data || {};
   try {
     if (msg.type === 'init') {
-      initPromise = initSession(msg.backend === 'wasm' ? 'wasm' : 'auto');
+      const onProgress = (loaded, total) => {
+        self.postMessage({ type: 'progress', loaded, total });
+      };
+      // Phase 213-09: `msg.backend` is always sent by the host now, but a
+      // defensive fallback to 'wasm' on any unexpected value matches D-13's
+      // fail-safe-toward-wasm philosophy — the wasm path always works.
+      initPromise = initSession(
+        msg.backend === 'webgpu' ? 'webgpu' : 'wasm',
+        onProgress,
+        msg.runtimeBuffer || null,
+        msg.assetCacheName || null,
+      );
       const outcome = await initPromise;
       if (!outcome.ok) {
         // Terminal for THIS worker instance — do not fall through to a second
@@ -299,6 +539,8 @@ self.onmessage = async (e) => {
         // termination, and racing it here risks losing this message before the
         // main thread's onmessage handler processes it. The worker just sits
         // idle until the owner terminates it and spawns a fresh wasm-pinned one.
+        // Phase 213-12 (D-20): no model-buffer handoff (G-213-8 retired) — the
+        // replacement worker reads the model from CacheStorage instead.
         self.postMessage({ type: 'webgpu-unavailable', message: outcome.message });
         return;
       }

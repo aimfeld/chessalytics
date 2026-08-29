@@ -14,7 +14,15 @@ in `YYYY-MM-DD` (Europe/Zurich).
 
 - You can now paste a single FEN or PGN directly from the Import tab, not just from the analysis board — it opens the same paste dialog and lands you on the analysis board with the position or game already loaded.
 
+- Starting your first bot game or opening the analysis board on a new device now shows exactly what is downloading and how far along it is. The engine needs about 66 MB of assets (the persona model, the ONNX runtime, and Stockfish); previously they came down silently, so a bot could burn most of its clock before playing its first move. Bot games now wait for the engine to be ready before the clock starts, and the analysis board dismisses the dialog on its own as soon as the engine is live. (Phase 213)
+
+- Engine assets are now cached in the browser, so the second bot game or analysis session downloads nothing at all, even after a page reload or navigating between Bots and Analysis. (Phase 213)
+
+- If your device cannot run the engine, or a download fails, you now get a clear message and a Retry button instead of a board that never moves. (Phase 213)
+
 ### Changed
+
+- Persona avatars now ship at 128px WebP and load lazily, cutting what the Bots page pulls down on first paint. (Phase 213)
 
 - The Bots page now opens with a short intro card explaining what the opponents are: personas that play like human players of a given rating, powered by the FlawChess Engine. The rating line moved into that card, and the persona tiles are now charcoal.
 

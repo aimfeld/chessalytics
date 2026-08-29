@@ -93,6 +93,14 @@
  * 18. "newgame-pending-store" (Phase 170 D-12, Plan 04) — `newGame()` clears
  *     the in-progress snapshot but leaves an existing pending-store entry
  *     untouched.
+ * 19. "engine-ready-gate" (Phase 213 D-04/D-05, G-213-19b) — a FRESH mount (no
+ *     resume) whose required engine assets are a cache-miss starts
+ *     `live: false` and flips true only after `confirmLive()`; the SAME
+ *     fresh mount starts `live: true` immediately once BOTH seen-flags are
+ *     already written (D-04). Separately, `pool.warm()` (Stockfish) and
+ *     `queue.warm()` (Maia) in the `[]`-deps bring-up effect both fire
+ *     unconditionally, at every blend (G-213-19b, supersedes D-03/D-06's
+ *     blend-0 skip).
  *
  * NOTE: the "Plan 04 REVERT PROOF #N" labels above are Plan 04's OWN
  * numbering (Task 1: #1-#3, Task 2: #4-#5) — distinct from the pre-existing
@@ -249,6 +257,8 @@ import {
 } from '@/lib/botGameSnapshot';
 import { listPendingStore, enqueuePendingStore } from '@/lib/botPendingStore';
 import type { BotStyleParams } from '@/lib/engine/botStyle';
+import { markEngineAssetReady, resetEngineAssetsForTests } from '@/lib/engine/engineAssetProgress';
+import { HUMAN_BLEND } from '@/lib/playStyle';
 
 // ─── Fixtures ────────────────────────────────────────────────────────────────
 
@@ -373,6 +383,24 @@ function setHidden(hidden: boolean): void {
 describe('useBotGame', () => {
   beforeEach(() => {
     localStorage.clear();
+    // Phase 213: engineAssetProgress.ts is a module-level singleton, separate
+    // from localStorage.clear() above — without this reset, a blend<=0 test
+    // in the new "engine-ready-gate" describe block below would leak its
+    // 'maia-model' done/ready state into whichever test runs next in this file.
+    resetEngineAssetsForTests();
+    // Phase 213-03: DEFAULT_SETTINGS.blend (0.5) is > HUMAN_BLEND, so once
+    // Task 3 switches the blend>0 gate on, EVERY test in this file that
+    // mounts with DEFAULT_SETTINGS is gated unless all engine assets are
+    // already "seen". Prime all three here so `live` starts true by default
+    // everywhere in this file, matching this suite's pre-Phase-213-03
+    // behavior — the `engine-ready-gate` describe block below resets back to
+    // a genuinely clean slate (its own nested `beforeEach`) to exercise the
+    // gate itself. Phase 213-09 (G-213-35) adds 'ort-runtime' as a third
+    // required asset — without priming it here too, `engineGateRequired()`
+    // stays true for every test in this file, since it now checks all three.
+    markEngineAssetReady('maia-model');
+    markEngineAssetReady('stockfish-wasm');
+    markEngineAssetReady('ort-runtime');
     vi.useFakeTimers({ now: 0 });
     mockSelectBotMove.mockReset();
     // Default: never resolves — tests that don't care about the bot's reply
@@ -2344,6 +2372,96 @@ describe('useBotGame', () => {
       // that resign is unreachable.
       await playRound(result, RESIGN_TEST_ROUNDS[19]!);
       expect(result.current.outcome).toEqual({ reason: 'resignation', winner: 'white' });
+    });
+  });
+
+  // ─── engine-ready-gate (Phase 213-01/213-06, D-04/D-05, G-213-19b) ─────────
+  // G-213-19b (supersedes Phase 213-03's per-persona D-06 switch-on): the gate
+  // and both warm() call sites are now UNCONDITIONAL — every persona is gated
+  // on, and warms, BOTH maia-model and stockfish-wasm. BLEND_0_SETTINGS and
+  // BLEND_POSITIVE_SETTINGS are kept only to prove the "at ANY blend" claim,
+  // not because behavior still branches on the value.
+
+  describe('engine-ready-gate', () => {
+    const BLEND_0_SETTINGS: BotGameSettings = { ...DEFAULT_SETTINGS, blend: HUMAN_BLEND };
+    const BLEND_POSITIVE_SETTINGS: BotGameSettings = { ...DEFAULT_SETTINGS, blend: 1 };
+
+    // Undo the outer `beforeEach`'s default priming (both assets pre-seen) —
+    // this describe block exercises the gate predicate itself, so every test
+    // here needs explicit, genuinely clean control over cache state.
+    beforeEach(() => {
+      localStorage.clear();
+      resetEngineAssetsForTests();
+    });
+
+    it('a fresh blend-0 mount with a cache-miss starts live:false, and flips true only after confirmLive()', () => {
+      const { result } = renderHook(() => useBotGame(BLEND_0_SETTINGS));
+
+      expect(result.current.live).toBe(false);
+
+      act(() => {
+        result.current.confirmLive();
+      });
+
+      expect(result.current.live).toBe(true);
+    });
+
+    it('a fresh blend-0 mount stays live:false when only maia-model has been seen — G-213-19b requires BOTH assets, not a blend-0 subset', () => {
+      markEngineAssetReady('maia-model');
+
+      const { result } = renderHook(() => useBotGame(BLEND_0_SETTINGS));
+
+      expect(result.current.live).toBe(false);
+    });
+
+    it('a fresh blend-0 mount starts live:true immediately once ALL THREE seen-flags are already written (D-04, Phase 213-09 adds ort-runtime)', () => {
+      markEngineAssetReady('maia-model');
+      markEngineAssetReady('stockfish-wasm');
+      markEngineAssetReady('ort-runtime');
+
+      const { result } = renderHook(() => useBotGame(BLEND_0_SETTINGS));
+
+      expect(result.current.live).toBe(true);
+    });
+
+    // ─── The blend>0 fixture below proves the gate is blend-independent ────
+
+    it('a fresh blend>0 mount with a clean localStorage (neither asset seen) starts live:false', () => {
+      const { result } = renderHook(() => useBotGame(BLEND_POSITIVE_SETTINGS));
+
+      expect(result.current.live).toBe(false);
+    });
+
+    it('a fresh blend>0 mount starts live:true immediately once ALL THREE seen flags are already written', () => {
+      markEngineAssetReady('maia-model');
+      markEngineAssetReady('stockfish-wasm');
+      markEngineAssetReady('ort-runtime');
+
+      const { result } = renderHook(() => useBotGame(BLEND_POSITIVE_SETTINGS));
+
+      expect(result.current.live).toBe(true);
+    });
+
+    it('a fresh mount at ANY blend calls pool.warm() exactly once and queue.warm() exactly once — Stockfish is now warmed at every rung (G-213-19b, supersedes D-03/D-06)', () => {
+      renderHook(() => useBotGame(BLEND_0_SETTINGS));
+
+      expect(mockPoolWarm).toHaveBeenCalledTimes(1);
+      expect(mockQueueWarm).toHaveBeenCalledTimes(1);
+    });
+
+    // ─── Phase 213-04 D-15: retryEngineWarm() — the manual Retry seam ────────
+
+    it('retryEngineWarm() calls BOTH queue.warm() and pool.warm() exactly once, regardless of blend (G-213-19b)', () => {
+      const { result } = renderHook(() => useBotGame(BLEND_0_SETTINGS));
+      mockQueueWarm.mockClear();
+      mockPoolWarm.mockClear();
+
+      act(() => {
+        result.current.retryEngineWarm();
+      });
+
+      expect(mockQueueWarm).toHaveBeenCalledTimes(1);
+      expect(mockPoolWarm).toHaveBeenCalledTimes(1);
     });
   });
 });

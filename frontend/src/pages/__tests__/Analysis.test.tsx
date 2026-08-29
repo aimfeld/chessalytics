@@ -16,7 +16,8 @@
  */
 
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
+import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
+import { Profiler } from 'react';
 import { MemoryRouter, useNavigate } from 'react-router';
 import { BEST_MOVE_ARROW, MAIA_ACCENT, GREAT_ACCENT } from '@/lib/theme';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
@@ -24,6 +25,15 @@ import { TooltipProvider } from '@/components/ui/tooltip';
 import type { GameFlawCard, EvalPoint } from '@/types/library';
 import { sniffPastedInput } from '@/lib/pastedGame';
 import { savePastedGameHandoff } from '@/lib/pastedGameHandoff';
+import {
+  MAIA_MODEL_BYTES_FALLBACK,
+  markEngineAssetFailed,
+  markEngineAssetReady,
+  markEngineAssetsUnsupported,
+  reportEngineAssetProgress,
+  resetEngineAssetForRefetch,
+  resetEngineAssetsForTests,
+} from '@/lib/engine/engineAssetProgress';
 
 // ── Mock useStockfishEngine: jsdom has no real Worker for the classic engine file.
 // Drive isReady/pvLines states deterministically via the mutable engineState object.
@@ -370,6 +380,19 @@ afterEach(() => {
   flawChessCalls.length = 0;
   libraryGameState.data = undefined;
   libraryGameById.clear();
+  resetEngineAssetsForTests();
+  // G-213-34: warm cache is the DEFAULT for every test in this file — the
+  // returning-user state — so none of the 79 pre-existing cases (all written
+  // before the gate existed) suddenly render a modal over the page they
+  // assert against. This writes the localStorage seen flags through the
+  // real production path (markEngineAssetReady), the same one the gate reads
+  // via engineGateRequired(). The dedicated gate describe below opts out
+  // explicitly, clearing localStorage in its own beforeEach. Phase 213-09
+  // (G-213-35) adds 'ort-runtime' as a third required asset — all three must
+  // be primed or engineGateRequired() stays true for every test in this file.
+  markEngineAssetReady('maia-model');
+  markEngineAssetReady('stockfish-wasm');
+  markEngineAssetReady('ort-runtime');
 });
 
 // Late import after vi.mock calls — Analysis.tsx is a default export (required by React.lazy).
@@ -470,6 +493,215 @@ describe('Analysis page shell', () => {
     expect(screen.queryByTestId('analysis-engine-merged-message')).toBeNull();
     expect(screen.getByTestId('engine-line-0-move-0')).toBeTruthy();
     expect(screen.queryByTestId('analysis-engine-loading')).toBeNull();
+  });
+});
+
+// ─── Mobile-layout test helper ────────────────────────────────────────────
+//
+// useAnalysisLayoutMode renders EXACTLY ONE of the three layouts per mount
+// (mobile/mid/desktop never coexist — see the comment on that hook), so the
+// desktop and mobile `analysis-engine-loading` slots cannot both be present
+// in the same render. The default test config (window.matchMedia always
+// `matches: false`, set up top-of-file) yields the DESKTOP layout; the mobile
+// layout is forced the same way `Mobile Stats tab` (above) does it. Used by
+// the gate describe below to prove mobile/desktop parity (G-213-34).
+
+/** Forces the mobile takeover layout for the duration of a test (mirrors the
+ *  `Mobile Stats tab` describe block's own override above). */
+function withMobileLayout(run: () => void): void {
+  const origMatchMedia = window.matchMedia;
+  window.matchMedia = vi.fn().mockImplementation((query: string) => ({
+    matches: /max-width/.test(query),
+    media: query,
+    onchange: null,
+    addEventListener: vi.fn(),
+    removeEventListener: vi.fn(),
+    addListener: vi.fn(),
+    removeListener: vi.fn(),
+    dispatchEvent: vi.fn(),
+  })) as unknown as typeof window.matchMedia;
+  try {
+    run();
+  } finally {
+    window.matchMedia = origMatchMedia;
+  }
+}
+
+describe('Analysis page: engine readiness gate (G-213-34)', () => {
+  // Undo the outer `afterEach`'s default warm-cache priming (both assets
+  // pre-seen) — this describe block exercises the gate predicate itself, so
+  // every test here needs explicit, genuinely clean control over cache state
+  // (mirrors the `engine-ready-gate` describe in useBotGame.test.ts).
+  beforeEach(() => {
+    localStorage.clear();
+    resetEngineAssetsForTests();
+  });
+
+  it('cold cache mounts the gate, with no Start button of any kind (D-18: analysis auto-closes, never a click)', () => {
+    renderAnalysis();
+
+    const gate = screen.getByTestId('engine-ready-gate');
+    expect(gate).toBeTruthy();
+    expect(screen.queryByTestId('btn-engine-start')).toBeNull();
+  });
+
+  it('exactly one progress element is rendered on the whole page', () => {
+    renderAnalysis();
+
+    expect(screen.getByTestId('engine-ready-gate')).toBeTruthy();
+    expect(screen.getAllByRole('progressbar')).toHaveLength(1);
+  });
+
+  it('D-18: marking all three assets ready closes the gate on its own — no click, no button, ever present', () => {
+    renderAnalysis();
+
+    expect(screen.queryByTestId('btn-engine-start')).toBeNull();
+
+    act(() => {
+      markEngineAssetReady('maia-model');
+      markEngineAssetReady('stockfish-wasm');
+      markEngineAssetReady('ort-runtime');
+    });
+
+    expect(screen.queryByTestId('engine-ready-gate')).toBeNull();
+    expect(screen.queryByTestId('btn-engine-start')).toBeNull();
+  });
+
+  it('after the auto-close, resetting the Maia asset for refetch does not bring the gate back (one-shot initializer, not a live predicate)', () => {
+    renderAnalysis();
+
+    act(() => {
+      markEngineAssetReady('maia-model');
+      markEngineAssetReady('stockfish-wasm');
+      markEngineAssetReady('ort-runtime');
+    });
+    expect(screen.queryByTestId('engine-ready-gate')).toBeNull();
+
+    // Mid-session self-heal path (WebGPU->wasm respawn) resets an asset's
+    // progress without touching `status` — must NOT re-open a gate the user
+    // has already passed.
+    act(() => {
+      resetEngineAssetForRefetch('maia-model');
+    });
+
+    expect(screen.queryByTestId('engine-ready-gate')).toBeNull();
+  });
+
+  it('warm cache (all three seen flags written before render) mounts no gate', () => {
+    markEngineAssetReady('maia-model');
+    markEngineAssetReady('stockfish-wasm');
+    markEngineAssetReady('ort-runtime');
+
+    renderAnalysis();
+
+    expect(screen.queryByTestId('engine-ready-gate')).toBeNull();
+  });
+
+  it('an unsupported store status mounts no gate, and the page and board containers are both present', () => {
+    markEngineAssetsUnsupported();
+
+    renderAnalysis();
+
+    expect(screen.queryByTestId('engine-ready-gate')).toBeNull();
+    expect(screen.getByTestId('analysis-page')).toBeTruthy();
+    expect(screen.getByTestId('analysis-board')).toBeTruthy();
+  });
+
+  it('the mobile layout mounts the gate on a cold cache exactly as desktop does, with no Start button', () => {
+    withMobileLayout(() => {
+      renderAnalysis();
+
+      const gate = screen.getByTestId('engine-ready-gate');
+      expect(gate).toBeTruthy();
+      expect(screen.queryByTestId('btn-engine-start')).toBeNull();
+    });
+  });
+
+  it('with the store in its failed state, the analysis gate renders the retry button', () => {
+    markEngineAssetFailed('maia-model');
+
+    renderAnalysis();
+
+    // Not clicked: jsdom implements no real navigation, so the
+    // `window.location.reload()` retry handler can't be exercised here.
+    expect(screen.getByTestId('btn-engine-retry')).toBeTruthy();
+  });
+
+  // G-213-34 (supersedes D-12): with the store actually downloading, the
+  // rendered page contains exactly one progress element in total — the
+  // gate's — proving both that the inline per-card readouts are gone AND
+  // that the modal's bar is the only progress surface anywhere on the page.
+  it('with the store driven into its downloading state, the rendered page contains exactly one progress element in total (the gate\'s)', () => {
+    reportEngineAssetProgress('stockfish-wasm', 30, 100);
+
+    renderAnalysis();
+
+    expect(screen.getByTestId('engine-ready-gate')).toBeTruthy();
+    expect(screen.getAllByRole('progressbar')).toHaveLength(1);
+  });
+
+  // ─── Phase 213-10 (G-213-35 third part): Analysis() re-renders only on
+  // status transitions, proven by RENDER COUNT — not merely by reading the
+  // gate's rendered output, which would pass under the old page-wide
+  // `useEngineAssets` subscription too and prove nothing (see the plan's
+  // revert-check requirement). `Profiler`'s `onRender` fires once per commit
+  // of the profiled subtree, so it counts actual re-renders anywhere in
+  // `<AnalysisPage>` — including `EngineReadyGate`, which independently
+  // subscribes to full byte-level progress via its OWN `useEngineAssets`
+  // call and is EXPECTED to re-render on its own notification cadence. That
+  // is a different subscription than the one this test targets, so the test
+  // reaches Start and lets the gate unmount (`engineGateOpen` is a one-shot)
+  // before measuring — isolating Analysis()'s own `useEngineAssetStatus`
+  // subscription from the gate's.
+  it("Analysis() does NOT re-render on a store notification that leaves status unchanged, but DOES re-render on a status transition (render count)", () => {
+    let renderCount = 0;
+    const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    render(
+      <QueryClientProvider client={queryClient}>
+        <MemoryRouter initialEntries={['/analysis']}>
+          <TooltipProvider>
+            <Profiler id="analysis-render-count" onRender={() => { renderCount += 1; }}>
+              <AnalysisPage />
+            </Profiler>
+          </TooltipProvider>
+        </MemoryRouter>
+      </QueryClientProvider>,
+    );
+
+    act(() => {
+      markEngineAssetReady('maia-model');
+      markEngineAssetReady('stockfish-wasm');
+      markEngineAssetReady('ort-runtime');
+    });
+    // D-18: readiness alone closes the analysis gate — no click, no button.
+    expect(screen.queryByTestId('engine-ready-gate')).toBeNull();
+
+    // Baseline after the auto-close — only what follows counts, and
+    // EngineReadyGate (the confounding independent subscriber) is gone for
+    // good.
+    renderCount = 0;
+
+    // A byte-only progress report on an already-ready asset: status stays
+    // 'ready' throughout (the `!== 'ready'` guard in
+    // reportEngineAssetProgress never flips it back to 'downloading').
+    act(() => {
+      reportEngineAssetProgress('maia-model', MAIA_MODEL_BYTES_FALLBACK, MAIA_MODEL_BYTES_FALLBACK);
+    });
+    expect(renderCount).toBe(0);
+
+    // resetEngineAssetForRefetch ALWAYS notifies (unconditional, per Task 1)
+    // but never touches `status` — the store-level notification fires, and
+    // Analysis() still must not re-render.
+    act(() => {
+      resetEngineAssetForRefetch('maia-model');
+    });
+    expect(renderCount).toBe(0);
+
+    // A real status transition — must re-render.
+    act(() => {
+      markEngineAssetsUnsupported();
+    });
+    expect(renderCount).toBeGreaterThan(0);
   });
 });
 

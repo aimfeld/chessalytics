@@ -1,19 +1,18 @@
 ---
 gsd_state_version: 1.0
 milestone: v2.13
-current_phase: 212
-current_phase_name: Benchmark Full-Game Analysis Lane
-status: executing
-stopped_at: Phase 212 wave 9 — code shipped to main; 212-10 Task 2 (classical tranche) in flight, Task 3 blocked until it ends
-last_updated: "2026-08-26T17:45:03.370Z"
-last_activity: 2026-08-26
-last_activity_desc: Phase 212 code squash-merged to main; classical tranche running at 0.2%
-state_head: 6737194d3cc84b500c33ae19e1e64f7deffd52de
+current_phase: 213
+status: completed
+stopped_at: Phase 213 complete — all phases complete
+last_updated: "2026-08-29T11:29:50.811Z"
+last_activity: 2026-08-29
+last_activity_desc: Phase 213 complete
+state_head: c515765c531b62e92ef1a633f3b13aa3a2ad6b53
 progress:
-  total_phases: 1
-  completed_phases: 0
-  total_plans: 11
-  completed_plans: 8
+  total_phases: 2
+  completed_phases: 1
+  total_plans: 23
+  completed_plans: 21
 milestone_name: Ways In & Honest Answers
 ---
 
@@ -21,9 +20,21 @@ milestone_name: Ways In & Honest Answers
 
 ## Current Position
 
-Phase: 212 (Benchmark Full-Game Analysis Lane) — **CODE SHIPPED, TRANCHE IN FLIGHT**
-Plans: 9 of 10 complete
-Status: not complete — BENCHLANE-06 needs a run, and the run is ~3.4 days long
+Phase: 213
+Plans: 12 of 12 complete (05 original + 07 gap-closure: 213-06..213-12)
+Status: All phases complete
+
+**Phase 213 is COMPLETE as of 2026-08-29** (12/12 plans, UAT 34 passed / 0 issues,
+verification 39/39). The cold-start UX shipped through five UAT-driven gap-closure
+rounds: unified always-both-assets download (213-06, G-213-19b), the analysis board
+gated behind the same non-dismissible EngineReadyGate as Bots (213-07, G-213-34
+reversal), single shared Stockfish fetch (213-08), main-thread ORT runtime ownership
+(213-09), progress-notify coalescing + narrowed Analysis subscription (213-10),
+DataCloneError fix (213-11, G-213-36), and the D-20 CacheStorage single
+byte-ownership layer for all three engine assets (213-12, G-213-37) with the
+CR-01 truncation guard. Final test-35 re-verification passed 2026-08-29.
+Phase branch `gsd/phase-213-first-run-engine-cold-start-ux` NOT yet squash-merged
+to `main` — pre-merge gate still required before integration.
 
 All phase-212 code is squash-merged to `main` (`4cf72842d`, 26 files / ~5,300 insertions)
 and the phase branch `gsd/phase-212-benchmark-full-game-analysis-lane` is deleted after
@@ -33,12 +44,44 @@ the merge (worker target logging, `EVAL_FALLBACK_OPERATOR_TOKEN` /
 `bin/run_benchmark_backend.sh`). Full pre-merge gate was green: backend 4437 passed /
 19 skipped, frontend 3563 passed, ruff/ty/eslint clean.
 
-**What is left is not code.** 212-10 Task 1 was authorized 2026-08-23 (`start`, second
-presentation) after the blocker from the first presentation was fixed; Task 2 — the
-classical tranche itself — is running now at **0.2%** (46 / 27,020 lichess-arm,
-62 / 23,717 engine-arm). Task 3 (record, vacuum, three invariant proofs) cannot run until
-the drain completes or is stopped at the classical TC boundary. `212-VERIFICATION.md`
-correctly still reads `gaps_found`.
+**Phase 212 is COMPLETE as of 2026-08-29** (10/10 plans). The classical tranche ran
+2026-08-23 → 2026-08-29 and **completed** — it was not stopped at the TC boundary, so
+this is SC6's completion branch and nothing is labelled partial. Lichess arm
+**27,020 / 27,020** on every axis (full evals, PV, best moves, blobs); never-analyzed arm
+**23,662 / 23,717**, where all 55 remaining games have **zero movetext** (forfeit/no-show
+tournament games, so zero `game_positions` and nothing any lane can evaluate). Against
+the analyzable denominator of 50,682 the tranche is 100% done.
+
+212-10 Task 3 ran 2026-08-29: `reports/benchmark-lane/benchmark-lane-classical-2026-08-29.md`
+records the tranche and downstream counts (3,266,036 `best_move` cells, 520,613 `pv`,
+309,213 `game_flaws`, 384,885 `game_best_moves`), and `VACUUM (ANALYZE)` on the four
+churned tables took dead tuples to 0. The on-disk size moved +96 KB, which is the
+expected result for plain `VACUUM` (free space map, not the filesystem) and is explained
+in the report rather than dressed up as a reclaim.
+
+**All three invariants proved.** The gate held across the full multi-day fleet run:
+`stamped_but_unselected` **1,805,063 against a 1,805,063 baseline, delta zero**. The
+homogenized overwrite happened and D-04 held: 1,736,689 of 1,924,579 snapshot plies
+(90.2%) now differ from their preserved lichess value across all 27,020 games, while
+**27,020 / 27,020** still carry `lichess_evals_at`, so the paired same-position
+comparison works. TC ordering intact — `benchmark_selection` holds classical only.
+
+`212-VERIFICATION.md` now reads **verified, 7/7**; its three 2026-08-22 gaps are marked
+resolved with a re-verification section, and the runbook's record-of-what-was-done
+section is filled in for this run.
+
+**The rapid tranche is RUNNING** as of 2026-08-29 04:48 UTC (post-phase operational
+work, not part of the closed Phase 212). Selection 95,623 games (34,777 lichess arm /
+60,846 never-analyzed) — nearly double classical — snapshotted at coverage gap 0, and
+the leak baseline is **re-based to 1,735,048** (it dropped from 1,805,063 because 70,015
+already-stamped rapid games moved into the selection; a leak is an increase). Blitz and
+bullet remain unselected, so the program still sits at a clean boundary after rapid. Two operational notes
+for whoever runs it: the fleet's Stockfish binary is `~/.local/stockfish/sf` (so
+`pgrep stockfish` reads as a dead fleet when it is at full tilt), and the `/dev/shm` fix in
+`docker-compose.benchmark.yml` is **already live** — the container was recreated
+2026-08-25 and carries 256 MB `/dev/shm`, with the compose config hash matching the
+container label, so no recreate is pending and `SET max_parallel_workers_per_gather = 0`
+is no longer needed on analytic queries.
 
 The blocker that forced the first checkpoint to defer: 212-08's finding that the tier-3
 branch (b) lane stamped a game complete after ONE analyzed ply. Root-caused and fixed in
@@ -74,7 +117,7 @@ Cloudflare nameservers, `maia3_simplified.onnx` and `stockfish-18-lite-single.wa
 return `cf-cache-status: HIT` while still carrying the origin's `max-age=2592000`, and
 `maia-worker.js` still returns `cache-control: no-cache`.
 
-Last activity: 2026-08-26 — Completed quick task 260826-qdl: Import tab "Import Single Game (PGN/FEN)" button reusing the analysis-board paste modal
+Last activity: 2026-08-29 — Phase 213 complete
 `games.initial_fen` added and backfilled in-migration, the opening-transition sample
 representative filtered to standard-start games, four unguarded `chess.move()` replay sites
 contained, and `/analysis` game mode seeded from the game's real root. Every production
@@ -95,9 +138,9 @@ Both deployed to production via releases #295 and #296; `main` and `origin/produ
 
 ## Project Reference
 
-See: .planning/PROJECT.md (updated 2026-08-05 after v2.12 milestone)
+See: .planning/PROJECT.md (updated 2026-08-29 after Phase 213)
 Core value: Position-precise WDL across openings + endgames + time pressure on top of users' actual chess.com / lichess games, with personalized LLM commentary and an auto-generated opening-strengths/weaknesses report.
-Current focus: **v2.12 shipped 2026-08-05 (tagged, deployed via #295/#296). Awaiting next milestone — run `/gsd-new-milestone`.** v2.12 closed Train's two silent-failure surfaces: push reminders that fail to arrive now recover themselves (device re-sync without spending the one-shot permission, local-day-bounded TTL, VAPID mismatch repair on gesture, claim released on a no-delivery fan-out — Phase 204, SEED-135), and a Train puzzle can no longer contradict itself (free-play root ply graded from the mount search's own ranks, plus a dead band excluding items whose top-two margin sits inside browser-search noise at a measured 34.80% pool cost — Phase 205, SEED-137). Still open and carried forward: SEED-136 (verify the iOS push path on real hardware — no iPhone available, BrowserStack unused), SEED-138 (push-prune log noise + Sentry scope bleed), SEED-130 (uncleared browser Stockfish TT, the reason the dead band is 0.05 wide).
+Current focus: **Milestone v2.13 (Ways In & Honest Answers) 100% complete 2026-08-29 — Phases 212 and 213 both done. Next: squash-merge `gsd/phase-213-*` to `main` (full pre-merge gate), then close the milestone.** Previously: v2.12 closed Train's two silent-failure surfaces: push reminders that fail to arrive now recover themselves (device re-sync without spending the one-shot permission, local-day-bounded TTL, VAPID mismatch repair on gesture, claim released on a no-delivery fan-out — Phase 204, SEED-135), and a Train puzzle can no longer contradict itself (free-play root ply graded from the mount search's own ranks, plus a dead band excluding items whose top-two margin sits inside browser-search noise at a measured 34.80% pool cost — Phase 205, SEED-137). Still open and carried forward: SEED-136 (verify the iOS push path on real hardware — no iPhone available, BrowserStack unused), SEED-138 (push-prune log noise + Sentry scope bleed), SEED-130 (uncleared browser Stockfish TT, the reason the dead band is 0.05 wide).
 
 ### Superseded: focus after the v2.11 close
 
@@ -204,6 +247,8 @@ v1.29 Live-Engine Analysis Page shipped 2026-06-29 — 5 phases (136–140), 14 
 ## Accumulated Context
 
 ### Roadmap Evolution
+
+- Phase 213 added 2026-08-28 (explicit user request via `/gsd-phase @SEED-155`): **First-Run Engine Cold Start — Asset-Check Gate & Download Progress UI** (SEED-155, planted 2026-08-27 from a real first-time user report — guest account on an Android phone, bot took very long to play its first move, persona avatars loaded slowly; decision revised 2026-08-28). Appended to the neutral `## Active Phases (unassigned milestone)` section. Core decision: every engine consumer asset-checks first and downloads behind a progress UI; bot play additionally gates the clock on per-persona readiness via the existing `confirmLive()` seam (a fresh game must never run a clock against an engine that does not exist — generalizes Phase 170's "nobody pays for the engine cold-start" from resumes to all games); warmup is conditional (<~1s) with the opening book covering first moves otherwise; owned streaming model fetch is required (progress needs it), prefetch demoted to optimization; mandatory terminal failure path for dead/no-WASM-SIMD workers; avatars resized to ~128px + lazy (keep 512px sources). Out of scope: INT8 shrink (invalidates persona calibration), bullet TC constraints (recorded in the seed as separate scope), server-side option.
 
 - Phase 212 added 2026-08-22 (explicit user request via `/gsd-phase @SEED-152`): **Benchmark Full-Game Analysis Lane** (SEED-152, planted the same day from `/gsd-explore` — "should we run our full game analysis on benchmark games that have no lichess analysis, to support a series of chess data stories?", then revised the same day when the originally-planned topology was rejected). Appended to the neutral `## Active Phases (unassigned milestone)` section; naming the next milestone stays deferred to `/gsd-new-milestone`. **The gap is total**: all 641,855 benchmark games marked analyzed carry lichess `%eval` only — 50,338,518 positions have `eval_cp` while `best_move` and `pv` are NULL for every single one and `game_best_moves` is empty — so best moves, PV, flaw blobs, tactic tags and gem/great tiers are unavailable on the whole population, which rules out gem/great stories entirely and forced the two-pawns-up report's §6 selection-bias check out of the population onto ~98 borrowed prod accounts. **The blocker was assumed to be compute; measured, it isn't** — at the observed fleet peak of ~16k games/day the capped program is 24.8 days for all four TCs. **Locked in the seed and not to be re-opened**: equal-footing population only (`abs(white_rating - black_rating) <= 100`); **cap 100 games per user per TC** (the cap IS the plan — uncapped bullet alone costs 44.6 days vs 24.8 for the entire capped four-TC program, and bullet is the cell the benchmarks care least about); **random selection within a user, never `ORDER BY played_at DESC`** (every benchmark metric buckets on rating-at-game-time, so a recency-biased cap would systematically shift users toward their peak rating and away from the `median_elo` their cell was selected on); TC order classical → rapid → blitz → bullet with each completing before the next, so the program is stoppable at any boundary; both arms run. **Build shape is four small pieces, none prod-side**: a `benchmark_selection` table materialized per tranche (the table IS the reproducibility record a story cites, not a seed+query that must replay), one config-gated `WHERE EXISTS` on the tier-3 candidate query (without it the global lottery sees all 2.1M eq-footing games as pending), a dual-URL fallback in `scripts/remote_eval_worker.py` giving strict per-claim prod priority (a leased benchmark game just finishes, ~60s — no requeue logic), and a second `uvicorn` on port 8001 against the benchmark DB on 5433. **The sibling-DB-on-prod topology was explored and rejected** — the queue service is bound to the single app DB via `async_session_maker`, so a sibling-DB claim lane means dual-DB routing through every worker-facing path (claim, atomic submit, flaw classify, best-move write, lease expiry), the riskiest place in the codebase, plus slice-out/slice-back merge scripts and prod MVCC exposure; the "remote workers can't reach Adrian's box" objection that motivated it evaporated once the worker machines turned out to be on the same LAN. Do not re-litigate it. **Two code facts that change the cost model**: lichess-eval games are NOT cheaper but slightly *more* expensive (Phase 174-06 retired the targets filter, so `eval_drain.py:951` gives them the same full-ply MultiPV-2 pass and `:968` sets `dedup_hashes = []`, making them the only games that cannot use the opening dedup cache — and half of classical, 63,411 / 127,586, is in that arm); and **the seed's Maia claim needs correcting before the local backend is sized** — it reads `eval_queue_service.py:34` as making all of tier-4b backend work, but that docstring is half-stale: Phase 177 BACK-02/03 added `/bestmove-lease` + `/bestmove-submit` and the worker computes the runner-up **Stockfish** evals (`remote_eval_worker.py:1058-1150`), leaving only Maia inference (`app/services/maia_engine.py`) in the backend process on submit. Also verified at add-phase time: `BEST_MOVE_BACKFILL_ENABLED` is checked *together with* `EVAL_AUTO_DRAIN_ENABLED` (`app/core/config.py:83-98`), so the local instance must set both. **The decision the classical tranche cannot outrun**: eval-source homogeneity — as designed the analyzed arm keeps lichess `%eval` and classifies flaws from it while the never-analyzed arm gets ours, so the very §6 analyzed-vs-unanalyzed comparison this phase exists to enable would confound selection bias with eval source; the MultiPV-2 pass computes our evals for that arm anyway and discards them, and this is a research DB, so fixing it is cheap — decide before classical runs. **Storage**: ~15 KB/game net (≈ 6 GB for cap-100), but these are `UPDATE`s so each touched position leaves a dead row version (~13 KB/game) — budget ~2× local disk headroom and plan a vacuum pass; prod disk is untouched. One open question carried to `/gsd-discuss-phase`: whether to re-analyze the lichess arm at all in the first tranche (deferring halves classical to ~27k games / 1.7 days but leaves gem tiers unavailable on exactly the games that already have evals). **Adjacent finding, explicitly not in scope**: `benchmark_selected_users` holds 9,450 distinct users but only 4,760 exist in `users` — recovering the other half costs an *import*, not Stockfish, and CI width scales with account count, so it may be the cheaper statistical-power purchase; check it before spending fleet weeks. Written by hand as 212 rather than via `phase.add`, which computes Phase 1 past the archived `<details>` history (the same known mature-ROADMAP behavior as Phases 164/172/177/180/186/204/205/206/207). Next: `/gsd-plan-phase 212`.
 - Phase 208 added 2026-08-08 (explicit user request via `/gsd-phase 208 @SEED-144`): **Paste a FEN or PGN on /analysis** (SEED-144, planted the same day from `/gsd-explore` "implement PGN and FEN import"). Opens the missing door into `/analysis`, which today can only be reached with a position someone else constructed (`?line=`, `?fen=`, `?game_id=`). One button, one modal, one textarea whose format is **sniffed rather than toggled** — a bare FEN handed to chess.js `loadPgn()` throws a distinguishable parse error, which is what makes the single box safe. Ten locked decisions (D-01..D-10) arrive with the seed; three shape the phase most: **paste-and-look persists nothing** (D-03/D-04 — only an explicit "Analyze full game" writes a row), **`platform='pgn'` is unconditionally excluded from analytics** via the existing `DEFAULT_EXCLUDED_PLATFORMS` seam (D-05, accepted consequence: a pasted game of your own does not count toward your own WDL), and **`/analysis` finally gets a nav item** (D-09/D-10) — appended to `NAV_ITEMS` **only**, not `BOTTOM_NAV_ITEMS`, which makes those two byte-identical arrays diverge for the first time and therefore needs a comment on both (WR-07 records this codebase already shipping a bug from nav surfaces silently disagreeing). Almost all of the machinery exists: `loadMainLine`, `parseAnalysisFenParam`, `normalize_flawchess_game()` (minus its `[%clk]` gate), `_flush_batch` Stage 5, and `POST /imports/eval/tier1` — the work is wiring, not building, with **no migration and no new eval infrastructure**. The expensive half of the original ask, **bulk multi-game PGN upload on the Import page, was explored and rejected** in the seed on subject-player identification against a `NOT NULL user_color` (getting it wrong silently *inverts* W/D/L; one sample file spelled a single player twelve ways, and 0 of 2,869 sample games carried `[%clk]`) — do not re-litigate it. Two open questions carried to `/gsd-discuss-phase`: whether pasted games appear in the Library list (a product call — `library_service.py:868` is a one-token change) and exactly how `platform_game_id` is synthesized so re-pasting is idempotent.
@@ -858,13 +903,11 @@ Items acknowledged and deferred at **v1.29 milestone close on 2026-06-29** (user
 
 ## Session Continuity
 
-**Stopped at:** Phase 212 context gathered
+**Stopped at:** Phase 213 complete — all phases of milestone v2.13 complete, ready to close milestone
 
-**Last session:** 2026-08-22T12:48:00.376Z
+**Last session:** 2026-08-29
 
-**Resume file:**
-
-.planning/phases/212-benchmark-full-game-analysis-lane/212-CONTEXT.md
+**Resume file:** None
 
 ## Performance Metrics
 
@@ -1106,6 +1149,7 @@ Items acknowledged and deferred at v2.8 milestone close on 2026-07-24 (override 
 | backlog | 19 quick tasks, 5 dormant seeds, 3 todos | deferred | Pre-existing cross-milestone backlog, not v2.8 scope; carried forward. |
 | phase closed | Phase 198 closed at wave 5 of 8 — measured, not shipped | closed_measured_not_shipped | 2026-07-31. Waves 1–4 complete (instrumentation, pre-declared accept rule, both re-baseline TSVs, ceiling model, `build` verdict at 34.84% bot / 28.61% analysis, operator disposition recorded). Wave 5's design doc **failed two independent reviews** (NOT SOUND both times); waves 6–8 cancelled, zero lines of `frontend/` touched. Blocking finding captured as SEED-130: the shipped engine is not bit-deterministic in the browser (uncleared Stockfish hash, 97% grade divergence measured in Phase 195's Stage A) and DISPATCH-08's parity gate is structurally blind to it. Closed by operator **risk judgement** (the measurement cleared the build line — this is NOT the accept rule's exit branch): confused determinism target (SEED-130), twice-failed design review, and the win's contingency on WASM-speed Maia (a WebGPU policy drops the model below the build line). Decision record: `reports/continuous-dispatch/report.md` §8. DISPATCH-01/02 Complete, DISPATCH-03..11 Rejected. SEED-130 stays open; SEED-127 closed. |
 | gate override | Phase 198 decision-coverage gate | proceeded_on_manual_check | 2026-07-31, `/gsd-plan-phase 198 --chain`. `check.decision-coverage-plan` returned `passed:false, reason:could-not-parse` (parsed 3 of 15 bullets, `uncovered: []`) — its parser expects single-line `- **D-NN: … — …**` bullets and 198-CONTEXT.md's decisions span multiple lines each. Verified manually instead: all 15 D-NN decisions and all 5 U-NN premise updates are referenced across the 8 plans. Not a coverage gap; re-surface at verify-phase if the parser is fixed. |
+| gate override | Phase 213 decision-coverage gate | proceeded_on_manual_check | 2026-08-28, `/gsd-plan-phase 213`. `check.decision-coverage-plan` returned `passed:false, reason:could-not-parse` (parsed 14 of 18 bullets, `covered:0`, `uncovered: []`) — the same multi-line `- **D-NN: …**` bullet limitation recorded for Phase 198; 213-CONTEXT.md's D-02, D-11, D-15 and D-18 each wrap their bold title across lines. Verified manually instead: gsd-plan-checker produced a per-decision table showing all 18 (D-01..D-18) covered across the 5 plans, each grounded in source. Not a coverage gap. CONTEXT.md was left unedited rather than reformatted to appease the parser; re-surface at verify-phase if the parser is fixed.
 
 ## Operator Next Steps
 

@@ -80,6 +80,76 @@ requires the **Asyncify** build (`ort-wasm-simd-threaded.asyncify.{mjs,wasm}`) i
 pair is used by other bundles (`ort.min.js`, `ort.all.min.js`), not this one. The asyncify pair is
 vendored here; the JSEP pair was never added (unused by this worker's chosen bundle).
 
+## Runtime binary ownership (Phase 213-09, G-213-35 second half)
+
+As of Phase 213-09 the two `ort-wasm-simd-threaded*.wasm` binaries above are no
+longer fetched by onnxruntime-web itself inside `InferenceSession.create()`.
+The MAIN THREAD (`frontend/src/lib/engine/ortRuntimeSource.ts`) now probes the
+WebGPU adapter's `shader-f16` feature BEFORE any Worker exists, chooses
+exactly ONE of the two builds, streams that build's `.wasm` bytes with a
+progress-reporting reader, and hands the resulting buffer to the worker at
+spawn (`maiaWorkerHost.ts`) via `ort.env.wasm.wasmBinary`. The two `.mjs`
+loaders and the two API bundles (`ort.wasm.min.js`, `ort.webgpu.min.js`)
+remain worker-loaded via `importScripts()` exactly as before — only the large
+`.wasm` binary moved.
+
+**Bundle-to-binary pairing (verified by grepping each vendored bundle for the
+literal filename it requests, per this file's "Filename correction" note
+above):**
+
+| API bundle | `.wasm` filename it requests | Size |
+|---|---|---|
+| `ort.wasm.min.js` (WASM-CPU-only) | `ort-wasm-simd-threaded.wasm` | 13,479,978 bytes |
+| `ort.webgpu.min.js` (WebGPU-preferred) | `ort-wasm-simd-threaded.asyncify.wasm` | 24,254,953 bytes |
+
+**Empirical `wasmBinary` suppression gate (213-09-PLAN.md Task 1 — verified
+headlessly in Node, not by reading docs):** both vendored `.mjs` loaders
+(`ort-wasm-simd-threaded.mjs` and `ort-wasm-simd-threaded.asyncify.mjs`) were
+copied into an isolated directory alongside the real vendored `.wasm` files,
+driven directly under plain `node` with `fs.readFileSync` instrumented to
+record every path read. Result for BOTH builds:
+
+- **Without `wasmBinary` set:** exactly ONE read of the real `.wasm` file
+  (baseline — confirms the loader does fetch/read the runtime binary when not
+  given one).
+- **With `wasmBinary` set to the real bytes:** ZERO reads of the `.wasm` file
+  for either build.
+
+This matches the source-level mechanism directly: both `.mjs` files assign
+`Module.wasmBinary` into a closure variable (`q` in the wasm-only build, `sa`
+in the asyncify build) the moment the factory runs, and BOTH the sync
+binary-getter (`if(!q) ... await ha(a)`) and the streaming-instantiate path
+(`if(!q && !isDataUri && !isNode) fetch(...)`) gate their read/fetch behind
+that same variable being falsy. Setting `wasmBinary` therefore suppresses the
+runtime binary fetch identically on the wasm-only AND the asyncify build —
+there is no divergence between the two builds that would require keeping the
+WebGPU path on `wasmPaths` resolution.
+
+The `.mjs` loader itself (24-47 KB) is still resolved by onnxruntime-web via
+`ort.env.wasm.wasmPaths` inside the worker — expected and negligible, not a
+defect this change needs to prevent.
+
+## Engine-asset CacheStorage layer (Phase 213-12, D-20)
+
+As of Phase 213-12 all three engine assets — this model, the ORT runtime
+binaries above, and the Stockfish `.wasm` (`public/engine/`) — resolve
+through ONE byte-ownership layer backed by the browser's Cache API
+(`frontend/src/lib/engine/engineAssetCache.ts`). The main thread reaches it
+via `getEngineAsset()`; this worker (`maia-worker.js`, which cannot `import`
+a TS module) reaches the SAME versioned cache by name, passed to it in the
+`init` message's `assetCacheName` field rather than duplicated as a literal.
+
+**Because none of these files are content-hashed, the cache-name version
+constant IS the invalidation path.** Replacing any of the three engine asset
+files (this model, either `ort-wasm-simd-threaded*.wasm` binary, or the
+Stockfish `.wasm`) without bumping `ENGINE_ASSET_CACHE_VERSION` in
+`engineAssetCache.ts` would leave every visiting browser reading the STALE
+bytes out of CacheStorage indefinitely — worse than the HTTP cache below,
+which self-heals after its 30-day `max-age`. **Bump
+`ENGINE_ASSET_CACHE_VERSION` in the same commit as replacing any of these
+files.** The next page load's cache-open sweeps every differently-versioned
+`flawchess-engine-assets-*` cache away automatically.
+
 ## Cache headers
 
 `deploy/Caddyfile` caches this directory's binaries (the `.onnx` model, `ort.wasm.min.js`,

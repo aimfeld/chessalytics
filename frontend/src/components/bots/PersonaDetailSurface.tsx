@@ -210,7 +210,7 @@ export function PersonaDetailSurface({
               style={{ backgroundColor: avatar.tint }}
             >
               {avatarSrc !== undefined ? (
-                <img src={avatarSrc} alt="" className="h-full w-full object-cover" />
+                <img src={avatarSrc} alt="" loading="lazy" className="h-full w-full object-cover" />
               ) : (
                 avatar.emoji
               )}

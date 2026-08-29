@@ -24,6 +24,34 @@ import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { renderHook, act } from '@testing-library/react';
 import { useStockfishGradingEngine } from '../useStockfishGradingEngine';
 
+// ─── stockfishWorkerSource mock (Phase 213-08, G-213-35) ───────────────────
+//
+// The worker-lifecycle effect now constructs through the shared source
+// module, via `ensureStockfishWorkerUrl().then(setupWorker)`. This file's
+// job is the hook's own state machine, not the shared-fetch mechanics
+// (covered by `stockfishWorkerSource.test.ts`) — resolve via a synchronous
+// "thenable" (a `.then` that invokes its callback in the SAME synchronous
+// call, not a real deferred microtask) so every pre-existing test that reads
+// `mockWorker` right after `renderHook()` — no await in between — keeps
+// working completely unchanged.
+function syncThenable<T>(value: T): PromiseLike<T> {
+  return {
+    then<TResult1 = T>(onfulfilled?: ((value: T) => TResult1 | PromiseLike<TResult1>) | null): PromiseLike<TResult1> {
+      const result = onfulfilled ? onfulfilled(value) : (value as unknown as TResult1);
+      return Promise.resolve(result);
+    },
+  };
+}
+vi.mock('@/lib/engine/stockfishWorkerSource', () => ({
+  ensureStockfishWorkerUrl: vi.fn(() => syncThenable<string | null>(null)),
+  createStockfishWorker: vi.fn((sharedUrl: string | null) => {
+    const WorkerCtor = globalThis.Worker as unknown as new (url: string) => Worker;
+    return sharedUrl === null
+      ? new WorkerCtor('/engine/stockfish-18-lite-single.js')
+      : new WorkerCtor(`/engine/stockfish-18-lite-single.js#${encodeURIComponent(sharedUrl)}`);
+  }),
+}));
+
 // ─── Mock Worker ─────────────────────────────────────────────────────────────
 
 class MockWorker {

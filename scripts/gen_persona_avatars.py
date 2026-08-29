@@ -2,13 +2,16 @@
 
 Reads `frontend/src/data/personaAvatarPrompts.md` — the single generation
 source (D-15) — and, for every persona that has no existing
-`frontend/src/assets/personas/{persona-id}.webp`, generates a portrait with
-Google's Gemini image model (via pydantic-ai's `NativeTool(ImageGenerationTool)`
-capability), chroma-keys the flat background to transparency (the Gemini API
-cannot produce alpha itself), downscales it to 512x512, and writes it as a
-webp. Deleting a
-curated webp and rerunning is the curation loop: this script only targets
-personas that are still missing a file.
+`frontend/src/assets/personas-source/{persona-id}.webp` master, generates a
+portrait with Google's Gemini image model (via pydantic-ai's
+`NativeTool(ImageGenerationTool)` capability), chroma-keys the flat background
+to transparency (the Gemini API cannot produce alpha itself), downscales it to
+`AVATAR_SIZE_PX` (512x512), and writes it as a webp into `_SOURCE_DIR`. It then
+derives a `BUNDLE_AVATAR_SIZE_PX` (128x128) variant of that same master into
+`_BUNDLE_DIR` — the only directory Vite's `personaAvatars.ts` glob scans
+(213-02, D-18). Deleting a curated MASTER webp (in `_SOURCE_DIR`) and rerunning
+is the curation loop: this script only targets personas that are still missing
+a master.
 
 Doc <-> parser contract: this script parses ONLY `personaAvatarPrompts.md`
 (never `personaRegistry.ts`) — the doc's per-persona descriptor bullets
@@ -24,7 +27,7 @@ Usage:
     # No API key required, no network call.
     uv run python scripts/gen_persona_avatars.py --dry-run
 
-    # Generate every persona missing a webp (needs GOOGLE_API_KEY in .env):
+    # Generate every persona missing a master webp (needs GOOGLE_API_KEY in .env):
     uv run python scripts/gen_persona_avatars.py
 
     # Generate at most 3 this run (useful for a smoke check / spot curation):
@@ -34,8 +37,13 @@ Usage:
     uv run python scripts/gen_persona_avatars.py --logo-ref
 
     # Curation loop: tune a persona's descriptor line in the doc, then:
-    rm frontend/src/assets/personas/attacker-800.webp
+    rm frontend/src/assets/personas-source/attacker-800.webp
     uv run python scripts/gen_persona_avatars.py --limit 1
+
+    # Rebuild every bundle (128px) variant from the kept masters, offline —
+    # no GOOGLE_API_KEY needed, no network call. Use after changing
+    # BUNDLE_AVATAR_SIZE_PX or after a fresh checkout of the masters:
+    uv run python scripts/gen_persona_avatars.py --rebuild-variants
 """
 
 from __future__ import annotations
@@ -55,7 +63,14 @@ from PIL import Image, ImageChops, ImageDraw
 
 _REPO_ROOT = Path(__file__).resolve().parent.parent
 _PROMPTS_DOC = _REPO_ROOT / "frontend" / "src" / "data" / "personaAvatarPrompts.md"
-_ASSETS_DIR = _REPO_ROOT / "frontend" / "src" / "assets" / "personas"
+# The 512x512 masters (213-02, D-18) — curation artifacts, git-tracked, but
+# deliberately OUTSIDE the `frontend/src/assets/personas/*.webp` glob
+# `personaAvatars.ts` uses to build the bundle, so they never ship to the
+# client.
+_SOURCE_DIR = _REPO_ROOT / "frontend" / "src" / "assets" / "personas-source"
+# The 128x128 shipped variants (213-02, D-18) — the ONLY directory
+# `personaAvatars.ts`'s `import.meta.glob` scans.
+_BUNDLE_DIR = _REPO_ROOT / "frontend" / "src" / "assets" / "personas"
 _LOGO_REF_PATH = _REPO_ROOT / "frontend" / "public" / "icons" / "logo-256.png"
 
 # The 4 style names the doc's demeanor bullets and persona ids both key off —
@@ -67,9 +82,17 @@ STYLES = ("Attacker", "Trickster", "Grinder", "Wall")
 # master style prompt blockquote where the per-persona demeanor gets spliced in.
 _DEMEANOR_PLACEHOLDER = "[insert per-persona demeanor/accessory\nnotes below]."
 
-# Final avatar dimensions (square) — the model returns a 1:1 image at a larger
-# size; this is a straight downscale, not a crop.
+# Master avatar dimensions (square), written to `_SOURCE_DIR` — the model
+# returns a 1:1 image at a larger size; this is a straight downscale, not a
+# crop. These are the kept generation outputs (213-02, D-18): never deleted or
+# overwritten except by the documented curation loop.
 AVATAR_SIZE_PX = 512
+
+# Shipped-bundle avatar dimensions (square), written to `_BUNDLE_DIR`
+# (213-02, D-18). The rendered avatar circle is `AVATAR_SIZE_PX = 58` CSS px
+# in `PersonaCard.tsx:39`, so 128 gives ~2.2x headroom for high-DPI displays
+# without the ~9x oversample the 512px masters shipped at before this split.
+BUNDLE_AVATAR_SIZE_PX = 128
 
 # Chroma-key tolerance (sum of per-channel RGB differences) for the flood fill
 # that turns the border-connected background transparent. The Gemini image API
@@ -229,8 +252,13 @@ def build_persona_prompts(doc_text: str) -> list[PersonaPrompt]:
 
 
 def pending_personas(prompts: list[PersonaPrompt]) -> list[PersonaPrompt]:
-    """Filters to personas with no existing webp (the delete-and-rerun loop)."""
-    return [p for p in prompts if not (_ASSETS_DIR / f"{p.persona_id}.webp").exists()]
+    """Filters to personas with no existing MASTER webp (delete-and-rerun loop).
+
+    Keys off `_SOURCE_DIR` (not `_BUNDLE_DIR`) so deleting a master is what
+    marks a persona pending — the bundle variant is always a derived artifact
+    of the master, never authoritative on its own.
+    """
+    return [p for p in prompts if not (_SOURCE_DIR / f"{p.persona_id}.webp").exists()]
 
 
 def _color_distance(a: tuple[int, ...], b: tuple[int, ...]) -> int:
@@ -288,16 +316,50 @@ def _apply_global_key(rgba: Image.Image) -> Image.Image:
 
 
 def _downscale_and_save_webp(image_bytes: bytes, persona_id: str) -> Path:
-    """Keys out the background, resizes to `AVATAR_SIZE_PX` square, saves as webp."""
-    _ASSETS_DIR.mkdir(parents=True, exist_ok=True)
+    """Keys out the background, resizes to `AVATAR_SIZE_PX` square, saves the
+    MASTER as webp into `_SOURCE_DIR`."""
+    _SOURCE_DIR.mkdir(parents=True, exist_ok=True)
     with Image.open(io.BytesIO(image_bytes)) as img:
         keyed = _remove_background(img)
         # LANCZOS on the keyed RGBA blends the hard flood-fill boundary into
         # smooth partial alpha at the outline — cheap edge anti-aliasing.
         resized = keyed.resize((AVATAR_SIZE_PX, AVATAR_SIZE_PX), Image.Resampling.LANCZOS)
-        output_path = _ASSETS_DIR / f"{persona_id}.webp"
+        output_path = _SOURCE_DIR / f"{persona_id}.webp"
         resized.save(output_path, format="WEBP")
     return output_path
+
+
+def _write_bundle_variant(source_path: Path) -> Path:
+    """Derives a `BUNDLE_AVATAR_SIZE_PX` shipped variant from a kept master.
+
+    Opens the master unchanged, resizes to the bundle size with LANCZOS, and
+    saves under the same filename into `_BUNDLE_DIR`. Never touches
+    `source_path` itself — the master is read-only input here.
+    """
+    _BUNDLE_DIR.mkdir(parents=True, exist_ok=True)
+    with Image.open(source_path) as master:
+        variant = master.resize(
+            (BUNDLE_AVATAR_SIZE_PX, BUNDLE_AVATAR_SIZE_PX), Image.Resampling.LANCZOS
+        )
+        output_path = _BUNDLE_DIR / source_path.name
+        variant.save(output_path, format="WEBP")
+    return output_path
+
+
+def rebuild_all_variants() -> None:
+    """Regenerates every `_BUNDLE_DIR` variant from `_SOURCE_DIR` masters.
+
+    Offline, no `GOOGLE_API_KEY`, no network call — this is both the one-time
+    migration path for existing masters and the ongoing "I changed the bundle
+    size" path (213-02, D-18).
+    """
+    _SOURCE_DIR.mkdir(parents=True, exist_ok=True)
+    masters = sorted(_SOURCE_DIR.glob("*.webp"))
+    _log(f"Rebuilding {len(masters)} bundle variant(s) from {_SOURCE_DIR}...")
+    for master_path in masters:
+        output_path = _write_bundle_variant(master_path)
+        _log(f"  wrote {output_path.relative_to(_REPO_ROOT)} from {master_path.name}")
+    _log("Done." if masters else "Nothing to rebuild (no masters found).")
 
 
 async def _generate_one(persona: PersonaPrompt, *, logo_ref: bool) -> Path:
@@ -376,12 +438,26 @@ def parse_args() -> argparse.Namespace:
             "Makes no API call and does not require GOOGLE_API_KEY."
         ),
     )
+    parser.add_argument(
+        "--rebuild-variants",
+        action="store_true",
+        dest="rebuild_variants",
+        help=(
+            "Regenerate every bundle (128px) variant from the kept masters in "
+            "_SOURCE_DIR. Offline: no GOOGLE_API_KEY, no network call, no agent "
+            "constructed. Exits immediately after rebuilding."
+        ),
+    )
     return parser.parse_args()
 
 
 def main() -> None:
     load_dotenv()
     args = parse_args()
+
+    if args.rebuild_variants:
+        rebuild_all_variants()
+        return
 
     doc_text = _PROMPTS_DOC.read_text(encoding="utf-8")
     all_prompts = build_persona_prompts(doc_text)

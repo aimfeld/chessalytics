@@ -46,6 +46,7 @@ import { GameControls } from '@/components/bots/GameControls';
 import { BotDrawOfferBanner } from '@/components/bots/BotDrawOfferBanner';
 import { GameResultDialog } from '@/components/bots/GameResultDialog';
 import { ResumeGate } from '@/components/bots/ResumeGate';
+import { EngineReadyGate } from '@/components/bots/EngineReadyGate';
 import { SetupScreen } from '@/components/bots/SetupScreen';
 import { PersonaGrid } from '@/components/bots/PersonaGrid';
 import { PersonaDetailSurface } from '@/components/bots/PersonaDetailSurface';
@@ -567,6 +568,10 @@ function BotsGame({
           onResume={game.confirmLive}
           onDiscard={onDiscard}
         />
+      )}
+
+      {resume === null && !game.live && (
+        <EngineReadyGate surface="bots" onStart={game.confirmLive} onRetry={game.retryEngineWarm} />
       )}
 
       {game.outcome !== null && (

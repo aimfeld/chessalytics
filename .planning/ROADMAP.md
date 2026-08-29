@@ -173,13 +173,22 @@
 | 209. Traffic-Surge Quick Wins (SEED-146, v2.13) | 4/4 | Complete    | 2026-08-15 |
 | 210. Custom-Start Games — Crash Containment & Insight Eviction (SEED-042, v2.13) | 3/3 | Complete    | 2026-08-15 |
 | 211. Vetted "Also Fine" Moves & Server-Key Grading (SEED-150, v2.13) | 3/3 | Complete    | 2026-08-16 |
-| 212. Benchmark Full-Game Analysis Lane (SEED-152, unassigned) | 9/10 | Code shipped, tranche in flight | 2026-08-23 |
+| 212. Benchmark Full-Game Analysis Lane (SEED-152, unassigned) | 10/10 | Complete | 2026-08-29 |
+| 213. First-Run Engine Cold Start — Asset-Check Gate & Download Progress UI (SEED-155, unassigned) | 12/12 | Complete    | 2026-08-29 |
 
 ## Active Phases (unassigned milestone)
 
 Phases added after the v2.13 close and not yet assigned to a milestone. `/gsd-new-milestone` folds these into the next milestone section; until then they are active work, not backlog.
 
 ### Phase 212: Benchmark Full-Game Analysis Lane
+
+**STATUS: COMPLETE 2026-08-29** (10/10 plans). The classical tranche completed (not
+stopped at the boundary): lichess arm 27,020/27,020 on every axis, never-analyzed arm
+23,662/23,717 where all 55 remaining games have zero movetext and so cannot be analyzed
+at all — 50,682/50,682 analyzable, 100%. Record report at
+`reports/benchmark-lane/benchmark-lane-classical-2026-08-29.md`; vacuum done; the gate
+held with `stamped_but_unselected` delta zero and D-04 intact on all 27,020 lichess-arm
+games. Rapid, blitz and bullet remain unselected — the program is at a clean boundary.
 
 **Goal**: The benchmark DB stops being eval-only. Today all 641,855 games marked analyzed
 carry lichess `%eval` and nothing else — 50,338,518 positions have `eval_cp` while
@@ -330,9 +339,11 @@ Blocking the close, in order:
 
 1. The tranche completes, or is deliberately stopped at the classical TC boundary
    (a first-class outcome, not a compromise).
+
 2. 212-10 Task 3 runs: `record`, targeted `VACUUM (ANALYZE)`, and the three invariant
    proofs (leak gate flat, homogenized overwrite with a surviving lichess marker,
    stop-state stated unambiguously in prose).
+
 3. 212-06 is retired with a note — its Tasks 2/3 are fully superseded by 212-08/09/10.
    It should not be run.
 
@@ -378,7 +389,190 @@ Plans:
 
 **Wave 9** *(blocked on Wave 8 completion)*
 
-- [ ] 212-10-PLAN.md — Classical tranche run: decision gate, execute, record, vacuum (wave 9) — *Task 1 authorized 2026-08-23 (`start`), Task 2 IN FLIGHT, Task 3 blocked until the drain ends*
+- [x] 212-10-PLAN.md — Classical tranche run: decision gate, execute, record, vacuum (wave 9) — *tranche COMPLETED 2026-08-29 (50,682/50,682 analyzable games); record report + vacuum done; gate delta zero*
+
+### Phase 213: First-Run Engine Cold Start — Asset-Check Gate & Download Progress UI
+
+**Goal**: A first-time visitor on a phone can start a bot game without the bot silently
+burning its clock on a 45.7 MB model download. Whenever an engine is used — Stockfish,
+Maia, or the combined FlawChess engine — the consumer first checks that the device can run
+it and that every model/asset it needs is available and, if not, downloads them behind a
+progress UI showing overall progress and which asset is currently downloading. Bot play
+additionally gates the game start on readiness: a fresh game mounts gated on the existing
+`confirmLive()` seam (`useBotGame.ts:683`) exactly as resumed games already do, so a bot
+game never runs a clock against an engine that does not yet exist. The analysis board gets
+the same progress UI but no gate (it has no clock). **No warmup inference is added** — the
+game starts as soon as the model has downloaded and the ONNX session exists. Persona
+avatars ship at ~128px with lazy loading (today 512x512, ~9x oversampled, 794 KB
+eager-globbed).
+
+**Depends on**: nothing — frontend-only; no schema change, no new backend surface, no
+calibration risk.
+
+**Source**: [SEED-155](../seeds/closed/SEED-155-first-run-engine-cold-start-ux.md) —
+planted 2026-08-27 from a real first-time user report (guest account, Android phone: bot
+took a very long time to make its first move, persona images loaded slowly). The seed
+carries the measured first-run cost table (the uncompressed 45.7 MB ONNX is ~85% of it)
+and all code-level findings.
+
+**Decisions**: [213-CONTEXT.md](phases/213-first-run-engine-cold-start-ux/213-CONTEXT.md)
+— discussed 2026-08-28. **D-02 supersedes the seed's conditional-warmup lock**; read the
+seed with that in hand. All decisions below are locked there.
+
+**Locked — do not re-open**:
+
+- Asset-check-then-download-with-progress applies to **every** engine consumer (bot play,
+  analysis board, future ones); bot play gates the game start on it.
+
+- **No warmup inference is added (D-02).** Readiness is the `{ type: 'ready' }` message
+  the worker already posts — model bytes downloaded plus session created, nothing more.
+  A pre-game warmup does not remove the first-inference cost, it relocates it from the
+  bot's clock to the user's wait; against the 3+0 minimum preset that trade is not worth
+  making. The WebGPU branch's `analyze(WARMUP_FEN, ...)` (`maia-worker.js:197`) stays
+  exactly where it is — it is a lazy-shader-compile **failure detector**, not a latency
+  optimization, and its KEEP comment stands. Do NOT hoist it to the WASM branch.
+
+- **Readiness is per-persona, not global**: ready means Maia only when `blend <= 0`,
+  Maia + Stockfish otherwise. `pool.warm()` is skipped for blend-0 personas (finding 3 is
+  a prerequisite of the gate, not a nice-to-have) — gate the *call*, not the `[]`-deps
+  effect, which is load-bearing per Phase 170 D-03. Note `pool.warm()`/`queue.warm()` are
+  spawn/asset-load triggers, not inferences; D-02 does not touch them.
+
+- **The gate is cache-miss based, no timer (D-04)**: gate iff bytes actually had to be
+  downloaded. Assets already present → go live silently, no extra tap. Accepted residual:
+  a cached-asset phone still spends ~1-3s parsing weights and auto-starts.
+
+- **The owned model loader is required, not optional**: streaming fetch + byte counter,
+  buffer handed to `InferenceSession.create()` (both WASM and WebGPU branches). Progress
+  is impossible without owning the fetch. An in-flight fetch runs to completion and
+  outlives the component (D-07) — a partial download is worthless to the HTTP cache.
+
+- **A WASM-SIMD probe runs before the fetch (D-13)**, so a device that can never run Maia
+  does not spend 45.7 MB of mobile data to find out. Nothing in the codebase detects SIMD
+  today.
+
+- **Two terminal states, not one (D-14)**: "unsupported device" (no retry affordance,
+  points at what still works) vs "engine failed to start" (retry offered). Do not reuse
+  the canonical `LoadError` copy — "try again in a moment" is wrong for a permanently
+  incapable device. A mid-fetch download failure auto-retries once, then goes manual.
+
+- **Avatars**: resize what ships to ~128px + `loading="lazy"`; **keep the 512x512
+  sources** and any larger generation outputs.
+
+- **Out of scope**: adaptive prefetch (D-08 — deferred to its own seed, to be informed by
+  this phase's wait-duration telemetry); INT8 model shrink (moves the policy distribution,
+  invalidates the 24-persona calibration); bullet time controls (the seed records why
+  bullet collides with `REVEAL_DELAY_MIN_MS` and `FLAWCHESS_BOT_MAX_NODES` — its own
+  scope, and note that under bullet the dropped warmup would have to come back); the
+  deliberately-deferred server-side option; ONNX response compression (~8.5% on fp16,
+  lowest priority).
+
+**Planning notes**:
+
+- **`maiaWorkerHost` already publishes readiness.** `whenReady(): Promise<'webgpu'|'wasm'>`
+  and a per-lease `onFatal` exist at `maiaWorkerHost.ts:61-78`. The seed's "neither
+  provider exposes readiness" is true only of `MaiaQueue` (`maiaQueue.ts:57`, publishes
+  `policy`/`warm`/`terminate`) and `WorkerPool` (`grade`/`stopAll`/`terminate`/`warm`),
+  which do not forward it. This is a **forwarding job, not a new state machine** — do not
+  rebuild a readiness mechanism.
+
+- **The opening book needs no cold-start work.** SEED-155 finding 4 (`resolveBookMove`,
+  `useBotGame.ts:457`, calls `policy()`) was only a problem under the superseded
+  conditional-warmup design. Under D-01/D-02 the engine is usable when the game starts, so
+  `policy()` just works. **Do not build a policy-free ECO book fallback.**
+
+- **No `progress` primitive exists** in `frontend/src/components/ui/` — one must be added.
+  The gate is one non-dismissible `Dialog` with two states (downloading → ready), mounted
+  as `ResumeGate`'s sibling at `Bots.tsx:563`. On the analysis board, progress goes inside
+  the existing `EngineLinesSkeleton` slots (`Analysis.tsx:3459`, `:3567`) — desktop **and**
+  the mobile mirror, per the frontend mobile-parity rule.
+
+- **The clock bug is NOT yet verified on a real device** (`useBotGame.ts:664`,
+  `live: true` on fresh mount). Confirm before treating as a bug; the arithmetic says a
+  2 Mbps link (~183s for the model) can flag the bot at 3+0 before move 1. The fix lands
+  either way, since D-05 gates the fresh path regardless.
+
+- **Telemetry (D-16/D-17)**: Umami on gate-shown, wait duration, and abandonment during
+  the wait; Sentry on terminal failures only. There is no data on real-device wait times
+  today beyond the one originating report.
+
+- **Already handled — do not re-solve**: Cloudflare CDN fronts the model and avatars
+  (`cf-cache-status: HIT` verified 2026-08-27), Caddy cache headers are tuned
+  (`deploy/Caddyfile:128`), and the ONNX is deliberately excluded from the SW precache
+  (iOS ~50 MB Cache API limit).
+
+**Plans**: 9 plans (waves 1/1/2/3/3, then gap-closure waves 4/5/6/7), tracer-first.
+
+**Gap closure (planned 2026-08-28, after UAT):** three UAT gaps carry LOCKED user
+decisions or confirmed diagnoses that REVERSE or extend parts of the list above. Where
+they conflict, the gap entry in
+[213-UAT.md](phases/213-first-run-engine-cold-start-ux/213-UAT.md) `## Gaps` wins:
+
+- **G-213-19b supersedes "Readiness is per-persona, not global" (D-03/D-06).** Both
+  `maia-model` and `stockfish-wasm` now download for every persona (53.0 MB), and the
+  blend-0 `pool.warm()` skip is removed. Accepted cost: blend-0 rungs wait ~16% longer.
+
+- **G-213-34 supersedes "the analysis board gets the same progress UI but no gate"
+  (D-12).** The analysis board now mounts the SAME non-dismissible gate as Bots, and the
+  per-card progress readouts shipped in 213-05 are removed entirely — one modal is the
+  only place download progress is shown. Accepted cost: on a cold cache the user cannot
+  browse their own game's server data until 53 MB has landed.
+
+  Still ungated and deliberately so: `TrainReveal.tsx` and `FlawChessEngineLines.tsx`
+  (the 4th and 5th skeleton mount sites) — open question, not decided.
+
+- **G-213-35 extends the download accounting the phase shipped.** The gate's 53.0 MB
+  denominator described roughly half of a real ~110-120 MB cold start: the same 7.3 MB
+  Stockfish wasm was fetched once per worker (5-8 of them on the analysis board, all in
+  one tick so the HTTP cache could not dedupe), and the 13.5/24.3 MB onnxruntime-web
+  runtime binaries were fetched by ORT itself and counted by nobody. Plans 08 and 09
+  fetch the Stockfish binary once and share it, count the ORT runtime as a third asset,
+  and skip the WebGPU runtime on adapters without `shader-f16`. Deliberately NOT
+  included: the per-chunk store-commit re-render storm in `Analysis.tsx`, which explains
+  no observed symptom and is a follow-up seed.
+
+Plans:
+**Wave 1**
+
+- [x] 213-01-PLAN.md — TRACER: blend-0 Maia cold start end to end (SIMD probe, owned streaming fetch, progress transport, gate Dialog, `confirmLive()` clock gate)
+- [x] 213-02-PLAN.md — Persona avatars: 512px masters split out, 128px WebP variants shipped, `loading="lazy"`
+
+**Wave 2** *(blocked on Wave 1 completion)*
+
+- [x] 213-03-PLAN.md — `WorkerPool.whenReady()`, vendored `progressPort` wiring, blend > 0 aggregate gating
+
+**Wave 3** *(blocked on Wave 2 completion)*
+
+- [x] 213-04-PLAN.md — Two terminal states, the one-silent-retry ladder, Umami + Sentry telemetry
+- [x] 213-05-PLAN.md — Analysis board: honest `useFlawChessEngine.isReady` and progress in all three skeleton slots + the Maia chart
+
+**Wave 4** *(gap closure — blocked on Wave 3 completion)*
+
+- [x] 213-06-PLAN.md — G-213-19b: unconditional two-asset bundle (`requiredEngineAssets()`/`engineGateRequired()` lose their blend input, blend-0 `pool.warm()` skip and `retryEngineWarm` fan-out guard removed)
+
+**Wave 5** *(gap closure — blocked on Wave 4 completion)*
+
+- [x] 213-07-PLAN.md — G-213-34: analysis board mounts the same non-dismissible gate; per-card progress readouts deleted (reverts 213-05's skeleton/chart readouts)
+
+**Wave 6** *(gap closure — blocked on Wave 5 completion)*
+
+- [x] 213-08-PLAN.md — G-213-35: fetch the Stockfish wasm ONCE and share it across all 5-8 workers via the vendored glue's hash-based wasm-path override (~29-51 MB off every desktop cold start)
+
+**Wave 7** *(gap closure — blocked on Wave 6 completion)*
+
+- [x] 213-09-PLAN.md — G-213-35: count the onnxruntime-web runtime bytes (`ort.env.wasm.wasmBinary`) and stop fetching two runtimes (`shader-f16` adapter pre-flight); closing cold-cache Chrome + Brave check that DevTools transferred == the gate's denominator
+
+**Wave 8** *(gap closure — blocked on Wave 7 completion)*
+
+- [x] 213-10-PLAN.md — G-213-35 third part: progress-notify coalescing and a narrowed Analysis subscription, so the bar tracks the transfer instead of a re-render storm
+
+**Wave 9** *(gap closure — blocked on Wave 8 completion)*
+
+- [x] 213-11-PLAN.md — G-213-36: stop detaching the cached ORT runtime buffer (retain-and-copy at the cache boundary); D-18: the analysis gate closes itself, bots keeps its Start button
+
+**Wave 10** *(gap closure — blocked on Wave 9 completion)*
+
+- [x] 213-12-PLAN.md — G-213-37 / D-20: one Cache API byte-ownership layer for all three engine assets, so a warm engine downloads nothing on the next game start; retires the ORT retained master and the G-213-8 model-buffer handoff
 
 ## Backlog
 
