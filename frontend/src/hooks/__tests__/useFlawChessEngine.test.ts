@@ -432,11 +432,83 @@ describe('useFlawChessEngine', () => {
       expect(Sentry.captureException).toHaveBeenCalledTimes(1);
       expect(Sentry.captureException).toHaveBeenCalledWith(expect.any(Error), {
         tags: { source: 'flawchess-engine' },
+        extra: { failedProviders: 'maia', reasons: 'maia: Error: worker died' },
       });
       const capturedError = vi.mocked(Sentry.captureException).mock.calls[0]?.[0] as Error;
       // Sentry grouping rule: a fixed, variable-free message string — no
       // template-literal interpolation of the rejection.
       expect(capturedError.message).not.toMatch(/[`]|\$\{/);
+      // FLAWCHESS-A1: the rejection reason must survive as `cause`, otherwise
+      // every provider failure looks identical in Sentry and a real asset
+      // failure cannot be told apart from a benign teardown rejection.
+      expect((capturedError.cause as Error | undefined)?.message).toBe('worker died');
+    });
+
+    it('unmounting before both whenReady() promises settle does NOT capture a later teardown rejection to Sentry (FLAWCHESS-A1)', async () => {
+      // Regression guard: navigating away from /analysis mid-download tears
+      // the Maia queue down, and `resetModuleState()` rejects every pending
+      // whenReady() waiter with 'Maia worker terminated'. That rejection is
+      // teardown, not a provider failure, and must never reach Sentry.
+      const { unmount } = renderHook(() =>
+        useFlawChessEngine({ fen: TEST_FEN, enabled: true, elo: 1500 }),
+      );
+
+      unmount();
+
+      await act(async () => {
+        queueWhenReadyDeferred.reject(new Error('Maia worker terminated'));
+        poolWhenReadyDeferred.resolve();
+        await Promise.resolve();
+        await Promise.resolve();
+        await Promise.resolve();
+      });
+
+      expect(Sentry.captureException).not.toHaveBeenCalled();
+    });
+
+    it('disabling before both whenReady() promises settle does NOT capture the teardown rejection and does NOT flip isReady (FLAWCHESS-A1)', async () => {
+      // Mounted variant of the guard above — `isReady` stays observable here,
+      // so this also proves the cancelled early-return covers BOTH the
+      // capture and the setIsReady it precedes.
+      const { result, rerender } = renderHook(
+        ({ enabled }: { enabled: boolean }) =>
+          useFlawChessEngine({ fen: TEST_FEN, enabled, elo: 1500 }),
+        { initialProps: { enabled: true } },
+      );
+
+      rerender({ enabled: false });
+
+      await act(async () => {
+        queueWhenReadyDeferred.reject(new Error('Maia worker terminated'));
+        poolWhenReadyDeferred.resolve();
+        await Promise.resolve();
+        await Promise.resolve();
+        await Promise.resolve();
+      });
+
+      expect(Sentry.captureException).not.toHaveBeenCalled();
+      expect(result.current.isReady).toBe(false);
+    });
+
+    it('BOTH providers rejecting captures once, naming both in extra', async () => {
+      renderHook(() => useFlawChessEngine({ fen: TEST_FEN, enabled: true, elo: 1500 }));
+
+      await act(async () => {
+        queueWhenReadyDeferred.reject(new Error('maia dead'));
+        poolWhenReadyDeferred.reject(new Error('pool dead'));
+        await Promise.resolve();
+        await Promise.resolve();
+        await Promise.resolve();
+      });
+
+      expect(Sentry.captureException).toHaveBeenCalledTimes(1);
+      expect(Sentry.captureException).toHaveBeenCalledWith(expect.any(Error), {
+        tags: { source: 'flawchess-engine' },
+        extra: {
+          failedProviders: 'maia,stockfish',
+          reasons: 'maia: Error: maia dead | stockfish: Error: pool dead',
+        },
+      });
     });
 
     it('re-enabling after a disable restarts the readiness cycle from isReady === false', async () => {

@@ -196,21 +196,47 @@ export function useFlawChessEngine({
     // FEN on this same render pass and would have spawned them immediately
     // anyway.
     let cancelled = false;
-    void Promise.all([queue.whenReady(), pool.whenReady()])
-      .then(() => {
-        if (!cancelled) setIsReady(true);
-      })
-      .catch(() => {
-        // A dead worker (whenReady() rejects) must not leave the card behind
-        // a permanent loading skeleton — capture once, then fall through to
-        // the card's normal empty rendering by still flipping isReady true.
-        // Fixed, variable-free message string (Sentry grouping rule).
+    void Promise.allSettled([queue.whenReady(), pool.whenReady()]).then(([maia, stockfish]) => {
+      // Bug fix (FLAWCHESS-A1): the old `.catch()` captured to Sentry
+      // UNCONDITIONALLY, without the `cancelled` guard the `setIsReady` calls
+      // already had. Navigating away from /analysis before Maia's model
+      // finished downloading (slow mobile connections — the model is ~226 MB
+      // of heap) tears the queue down via `terminate()` -> `lease.release()`
+      // -> `resetModuleState()`, which REJECTS every pending `whenReady()`
+      // waiter with 'Maia worker terminated'. That teardown rejection then
+      // landed in Sentry as a provider failure even though nothing was
+      // broken (the reported event's `url` was the page the user had already
+      // navigated TO). `WorkerPool.terminate()` deliberately RESOLVES its
+      // waiters instead, so only the Maia side produced these; the guard
+      // below covers both, whichever teardown path settles first.
+      if (cancelled) return;
+
+      // A dead worker (whenReady() rejects) must not leave the card behind a
+      // permanent loading skeleton — capture once, then fall through to the
+      // card's normal empty rendering by still flipping isReady true.
+      const failures: { name: string; reason: unknown }[] = [];
+      if (maia.status === 'rejected') failures.push({ name: 'maia', reason: maia.reason });
+      if (stockfish.status === 'rejected')
+        failures.push({ name: 'stockfish', reason: stockfish.reason });
+      const first = failures[0];
+      if (first) {
+        // Fixed, variable-free message string (Sentry grouping rule); which
+        // provider died and why goes in `cause` + `extra`, not the message —
+        // without it a genuine asset failure was indistinguishable from the
+        // benign teardown above.
         Sentry.captureException(
-          new Error('FlawChess engine: a provider failed to become ready'),
-          { tags: { source: 'flawchess-engine' } },
+          new Error('FlawChess engine: a provider failed to become ready', { cause: first.reason }),
+          {
+            tags: { source: 'flawchess-engine' },
+            extra: {
+              failedProviders: failures.map((f) => f.name).join(','),
+              reasons: failures.map((f) => `${f.name}: ${String(f.reason)}`).join(' | '),
+            },
+          },
         );
-        if (!cancelled) setIsReady(true);
-      });
+      }
+      setIsReady(true);
+    });
 
     return () => {
       cancelled = true;
