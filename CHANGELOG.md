@@ -20,6 +20,8 @@ in `YYYY-MM-DD` (Europe/Zurich).
 
 - If your device cannot run the engine, or a download fails, you now get a clear message and a Retry button instead of a board that never moves. (Phase 213)
 
+- If the engine cannot start because your device is out of memory, you now get a message telling you to free up memory instead of being told the download broke.
+
 ### Changed
 
 - Persona avatars now ship at 128px WebP and load lazily, cutting what the Bots page pulls down on first paint. (Phase 213)
