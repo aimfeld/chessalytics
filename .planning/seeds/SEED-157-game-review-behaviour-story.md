@@ -154,6 +154,26 @@ arm, so classification error is differential by outcome. Run the §6-style thres
 sweep (200→300cp) at report time; a one-ply offset rarely flips a ≥200cp class.
 Per-ELO cuts computed pooled but not yet paired. Bullet not probed.
 
+## Locked decisions (2026-08-29 follow-up explore session)
+
+- **Metric basis is FINAL: phase-boundary snapshots only** (MG + EG entry). The
+  sustained-peak-swing full metric is dropped as a story dependency, not merely
+  deferred: the SEED-152 full-eval arm is classical-only (rapid/blitz/bullet remain
+  unselected), so it cannot carry the TC-gradient story spine ("in blitz you relive
+  your hero games, in classical you study your defeats"). At most it returns later as
+  a classical-only robustness footnote.
+- **EDA scope**: core paired MH-weighted contrasts at both boundaries, the 200→300cp
+  threshold sweep, cluster-bootstrap CIs, PLUS all four supporting sections: bullet
+  extension of the TC gradient (unprobed; would make it a 4-point monotone arc),
+  per-ELO paired cuts, metadata-tier sections (termination type, miniatures vs
+  grinds, upsets), and the draw-class null as a possible "dog that didn't bark" note.
+- **Locations** (analysis/README.md three-directory split): EDA notebook at
+  `analysis/game_review_study/game_review_study.py`; report-generation code later in
+  `scripts/game_review_study/`; story at `stories/game-review/` (final slug TBD).
+- **Workflow: no GSD phase.** Data stories are exempt from GSD planning
+  (stories/CLAUDE.md "Workflow (no GSD)"); all work happens on the
+  `study/game-review-study` branch, squash-merged to `main` when the story ships.
+
 ## Related
 
 - `stories/two-pawns-up/two-pawns-up-report-latest.md` §6 — the prod seed findings
