@@ -1,6 +1,12 @@
 import { ChevronDown } from 'lucide-react';
 import { MoveQualityIcon } from '@/components/icons/MoveQualityIcon';
-import { EVAL_BAR_BLACK, EVAL_BAR_WHITE, ACTIVE_FILTER_RING_CLASS } from '@/lib/theme';
+import {
+  EVAL_BAR_BLACK,
+  EVAL_BAR_WHITE,
+  SIDE_SWATCH_BLACK,
+  SIDE_SWATCH_WHITE,
+  ACTIVE_FILTER_RING_CLASS,
+} from '@/lib/theme';
 import {
   severityCountsBySide,
   tierCountsBySide,
@@ -176,7 +182,7 @@ export function MoveStats({
             'mr-1.5 inline-block h-2.5 w-2.5 rounded-[2px] border',
             side === 'white' ? 'border-black/60' : 'border-white/40',
           )}
-          style={{ backgroundColor: side === 'white' ? EVAL_BAR_WHITE : EVAL_BAR_BLACK }}
+          style={{ backgroundColor: side === 'white' ? SIDE_SWATCH_WHITE : SIDE_SWATCH_BLACK }}
         />
         {value === null ? (
           <span className={side === 'white' ? 'text-black/50' : 'text-white/60'}>—</span>

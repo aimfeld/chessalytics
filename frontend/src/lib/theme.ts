@@ -89,6 +89,13 @@ export const EVAL_CHART_AREA_BLACK_AHEAD = 'oklch(0.32 0 0)';
 export const EVAL_BAR_WHITE = EVAL_CHART_AREA_WHITE_AHEAD;
 export const EVAL_BAR_BLACK = EVAL_CHART_AREA_BLACK_AHEAD;
 
+// Side-identity swatches in the MoveStats accuracy pills. Matched to how the
+// game-card header glyphs read (■ in near-white foreground text, □ showing the
+// dark charcoal band through its outline) — deliberately stronger than the
+// softer eval-bar greys so the swatch pops on the same-colored pill.
+export const SIDE_SWATCH_WHITE = 'oklch(0.985 0 0)';
+export const SIDE_SWATCH_BLACK = 'var(--charcoal)';
+
 // Analysis eval-bar source accents (Phase 151.1 UAT). The two bars flanking the
 // analysis board are color-coded by their source so the pair is legible at a
 // glance: Stockfish (blue) on the right, Maia human-model (red) on the left. The
