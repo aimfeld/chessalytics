@@ -166,11 +166,18 @@ export function MoveStats({
         )}
         style={{ backgroundColor: side === 'white' ? EVAL_BAR_WHITE : EVAL_BAR_BLACK }}
       >
-        {/* Glyph shape follows the game-card header convention (■ White, □ Black
-            in LibraryGameCard) so the pill links to the player names there. */}
-        <span aria-hidden="true" className="mr-1">
-          {side === 'white' ? '■' : '□'}
-        </span>
+        {/* Color-literal side swatch: a small square filled with the side's
+            actual board color, bordered in the opposing tone so it stays
+            visible on the same-colored pill background. Replaces the ■/□ text
+            glyphs, which inverted their meaning on the white pill (black ink). */}
+        <span
+          aria-hidden="true"
+          className={cn(
+            'mr-1.5 inline-block h-2.5 w-2.5 rounded-[2px] border',
+            side === 'white' ? 'border-black/60' : 'border-white/40',
+          )}
+          style={{ backgroundColor: side === 'white' ? EVAL_BAR_WHITE : EVAL_BAR_BLACK }}
+        />
         {value === null ? (
           <span className={side === 'white' ? 'text-black/50' : 'text-white/60'}>—</span>
         ) : (
