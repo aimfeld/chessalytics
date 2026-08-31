@@ -1,6 +1,5 @@
 import { ChevronDown } from 'lucide-react';
 import { MoveQualityIcon } from '@/components/icons/MoveQualityIcon';
-import { Card } from '@/components/ui/card';
 import { EVAL_BAR_BLACK, EVAL_BAR_WHITE, ACTIVE_FILTER_RING_CLASS } from '@/lib/theme';
 import {
   severityCountsBySide,
@@ -156,7 +155,7 @@ export function MoveStats({
       <div
         data-testid={tid(`move-stats-accuracy-${side}`, gameId)}
         className={cn(
-          'flex items-center justify-center px-2 py-1.5 text-sm font-bold',
+          'flex items-center justify-center rounded-md px-2 py-1.5 text-sm font-bold',
           side === 'white' ? 'text-black' : 'text-white',
         )}
         style={{ backgroundColor: side === 'white' ? EVAL_BAR_WHITE : EVAL_BAR_BLACK }}
@@ -172,24 +171,21 @@ export function MoveStats({
 
   return (
     <div data-testid={tid('move-stats', gameId)} className={cn('flex flex-col gap-2', className)}>
-      {/* Accuracies card: single row — player accuracy, "Accuracies" label,
-          opponent accuracy — so the card costs one line instead of a banded
-          header stacked over the two player-color-coded cells. The label sits
-          BETWEEN the cells (index 1), keeping the strip's first child the
-          player-first cell. */}
-      <Card data-testid={tid('move-stats-accuracies-card', gameId)}>
-        <div
-          className="grid grid-cols-[1fr_auto_1fr] items-stretch"
-          data-testid={tid('move-stats-accuracy-strip', gameId)}
-        >
-          {renderAccuracyCell(playerSide)}
-          {/* bg-black/20 matches the CardHeader band darkening (ui/card.tsx). */}
-          <h4 className="flex items-center justify-center bg-black/20 px-5 py-1.5 text-sm font-semibold">
-            Accuracies
-          </h4>
-          {renderAccuracyCell(opponentSide)}
-        </div>
-      </Card>
+      {/* Accuracies strip: single row — player accuracy, "Accuracies" label,
+          opponent accuracy. No Card wrapper: the label sits transparently on
+          the page background so only the two color-coded accuracy pills read
+          as surfaces. The label sits BETWEEN the cells (index 1), keeping the
+          strip's first child the player-first cell. */}
+      <div
+        className="grid grid-cols-[1fr_auto_1fr] items-stretch"
+        data-testid={tid('move-stats-accuracy-strip', gameId)}
+      >
+        {renderAccuracyCell(playerSide)}
+        <h4 className="flex items-center justify-center px-5 py-1.5 text-sm font-semibold text-muted-foreground">
+          Accuracies
+        </h4>
+        {renderAccuracyCell(opponentSide)}
+      </div>
 
       {/* Mobile compact summary row (UAT 179): 8 columns spanning the card width
           — one `count + icon` cell per category (user-side counts) plus a
