@@ -4,10 +4,10 @@ milestone: v2.13
 current_phase: 213
 status: completed
 stopped_at: Phase 213 complete — all phases complete
-last_updated: "2026-08-31T19:16:49.388Z"
+last_updated: "2026-08-31T20:49:23.446Z"
 last_activity: 2026-08-31
 last_activity_desc: "Quick task 260831-s4y complete: fast-forward button on the analysis board (UAT approved)"
-state_head: 0b3c314213f9ff7ee8e70040db1e97c23401790a
+state_head: eddf9195b97f9a09935fc1ca423cec097b0a0f15
 progress:
   total_phases: 2
   completed_phases: 1
@@ -857,6 +857,7 @@ None active.
 | 73 | Bots page: Human-like Opponents intro card + InfoPopover on the persona grid | 2026-08-26 | 6737194d3 | — |
 | 260831-s4y | Fast-forward button on the /analysis board controls: `useFastForward` hook replays the main line at 150ms/ply (move sound on every step) until the next blunder/mistake/gem/great on either side (inaccuracies and best/good skipped), animated run-out to the final position when none remain, cancel on any other navigation via commanded-node comparison. Opt-in `BoardControls` props keep Openings/Bots/Train at four buttons; wired to desktop card + mobile footer through the shared `boardControls()` helper. Human-verified (UAT approved) | 2026-08-31 | 8a70b8d15 | [260831-s4y-add-a-fast-forward-next-button-to-the-an](./quick/260831-s4y-add-a-fast-forward-next-button-to-the-an/) |
 | 77 | Rearrange MoveStats Accuracies card into one line (player \| Accuracies \| opponent) | 2026-08-31 | 0b3c31421 | — |
+| 78 | Game card headers show the player's side first (Library, Opening, Endgame) | 2026-08-31 | eddf9195b | — |
 
 ## Deferred Items
 
