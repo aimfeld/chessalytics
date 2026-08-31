@@ -103,6 +103,7 @@ describe('MoveStats — D-01/D-02 accuracy strip', () => {
     render(<MoveStats game={makeGame({ white_accuracy: 87.4, black_accuracy: null })} />);
     const white = screen.getByTestId('move-stats-accuracy-white');
     const black = screen.getByTestId('move-stats-accuracy-black');
+    // Pills carry a leading color swatch span (aria-hidden, no text content).
     expect(white.textContent).toBe('87%');
     expect(black.textContent).toBe('—');
   });
@@ -157,14 +158,15 @@ describe('MoveStats — player-first column order', () => {
   it('flips column order with game.user_color while cell background stays literal-color', () => {
     const whiteUserGame = makeGame({ user_color: 'white' });
     const { container: c1 } = render(<MoveStats game={whiteUserGame} />);
+    // children[0] is the "Accuracies" label; the player pill comes right after.
     const strip1 = c1.querySelector('[data-testid="move-stats-accuracy-strip"]');
-    expect(strip1?.children[0]?.getAttribute('data-testid')).toBe('move-stats-accuracy-white');
+    expect(strip1?.children[1]?.getAttribute('data-testid')).toBe('move-stats-accuracy-white');
     cleanup();
 
     const blackUserGame = makeGame({ user_color: 'black' });
     const { container: c2 } = render(<MoveStats game={blackUserGame} />);
     const strip2 = c2.querySelector('[data-testid="move-stats-accuracy-strip"]');
-    expect(strip2?.children[0]?.getAttribute('data-testid')).toBe('move-stats-accuracy-black');
+    expect(strip2?.children[1]?.getAttribute('data-testid')).toBe('move-stats-accuracy-black');
 
     // Literal color background is unchanged regardless of column order.
     const whiteCell = screen.getByTestId('move-stats-accuracy-white');
