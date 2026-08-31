@@ -54,6 +54,14 @@ export function GameCard({ game, analyzePly }: GameCardProps) {
   const whiteRating = game.white_rating !== null ? `(${game.white_rating})` : '';
   const blackRating = game.black_rating !== null ? `(${game.black_rating})` : '';
 
+  // The header always leads with the user's own side (the card is about their game),
+  // so the ■/□ glyph travels with the side rather than with the header position.
+  const whiteSide = { glyph: '■', name: whiteName, rating: whiteRating };
+  const blackSide = { glyph: '□', name: blackName, rating: blackRating };
+  const userIsBlack = game.user_color === 'black';
+  const firstSide = userIsBlack ? blackSide : whiteSide;
+  const secondSide = userIsBlack ? whiteSide : blackSide;
+
   // Result indicator: small colored chip with +/=/− icon — sits next to the
   // termination text on both layouts to convey W/D/L without a separate badge.
   const ResultIcon = RESULT_ICONS[game.user_result];
@@ -95,23 +103,23 @@ export function GameCard({ game, analyzePly }: GameCardProps) {
   );
 
   // HEADER — banded title bar via the shared CardHeader (compact size). Carries the
-  // player info and the platform link. Desktop: single line "■ White (rating) vs □
-  // Black (rating)"; mobile: two stacked lines, no "vs". The CardHeader is always
+  // player info and the platform link. Desktop: single line "■ Player (rating) vs □
+  // Opponent (rating)"; mobile: two stacked lines, no "vs". The CardHeader is always
   // flex, so the responsive switch lives on the two inner blocks. No W/D/L badge —
   // the termination row carries the result chip.
   const header = (
     <CardHeader as="h4" size="compact">
       <span className="hidden sm:block truncate text-foreground min-w-0">
-        ■ {whiteName} {whiteRating}
-        <span className="mx-1.5 text-muted-foreground font-normal">vs</span>□ {blackName}{' '}
-        {blackRating}
+        {firstSide.glyph} {firstSide.name} {firstSide.rating}
+        <span className="mx-1.5 text-muted-foreground font-normal">vs</span>
+        {secondSide.glyph} {secondSide.name} {secondSide.rating}
       </span>
       <div className="flex sm:hidden min-w-0 flex-1 flex-col text-foreground">
         <span className="truncate">
-          ■ {whiteName} {whiteRating}
+          {firstSide.glyph} {firstSide.name} {firstSide.rating}
         </span>
         <span className="truncate">
-          □ {blackName} {blackRating}
+          {secondSide.glyph} {secondSide.name} {secondSide.rating}
         </span>
       </div>
       {platformIconAndLink}

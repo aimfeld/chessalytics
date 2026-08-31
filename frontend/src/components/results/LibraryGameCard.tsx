@@ -782,6 +782,14 @@ export function LibraryGameCard({
   const whiteRating = game.white_rating !== null ? `(${game.white_rating})` : '';
   const blackRating = game.black_rating !== null ? `(${game.black_rating})` : '';
 
+  // The header always leads with the user's own side (the card is about their game),
+  // so the ■/□ glyph travels with the side rather than with the header position.
+  const whiteSide = { glyph: '■', name: whiteName, rating: whiteRating };
+  const blackSide = { glyph: '□', name: blackName, rating: blackRating };
+  const userIsBlack = game.user_color === 'black';
+  const firstSide = userIsBlack ? blackSide : whiteSide;
+  const secondSide = userIsBlack ? whiteSide : blackSide;
+
   // Result indicator: small colored chip with +/=/− icon.
   const ResultIcon = RESULT_ICONS[game.user_result];
   const resultIndicator = (
@@ -859,21 +867,25 @@ export function LibraryGameCard({
 
   // HEADER — banded title bar via the shared CardHeader (compact size). rounded-t-md
   // so the band's top corners match the card's outer border radius.
-  // Desktop: single line "■ White (rating) vs □ Black (rating)"; mobile: two stacked
+  // Desktop: single line "■ Player (rating) vs □ Opponent (rating)"; mobile: two stacked
   // lines, no "vs". The CardHeader is always flex, so the responsive switch lives on
   // the two inner blocks rather than on the header element.
   const header = (
     <CardHeader as="h4" size="compact" className="rounded-t-md">
       <span className="hidden lg:flex lg:items-center lg:gap-0 lg:min-w-0 lg:flex-1 text-foreground">
         <span className="truncate min-w-0">
-          ■ {whiteName} {whiteRating}
-          <span className="mx-1.5 text-muted-foreground font-normal">vs</span>□ {blackName}{' '}
-          {blackRating}
+          {firstSide.glyph} {firstSide.name} {firstSide.rating}
+          <span className="mx-1.5 text-muted-foreground font-normal">vs</span>
+          {secondSide.glyph} {secondSide.name} {secondSide.rating}
         </span>
       </span>
       <div className="flex lg:hidden min-w-0 flex-1 flex-col text-foreground">
-        <span className="truncate">■ {whiteName} {whiteRating}</span>
-        <span className="truncate">□ {blackName} {blackRating}</span>
+        <span className="truncate">
+          {firstSide.glyph} {firstSide.name} {firstSide.rating}
+        </span>
+        <span className="truncate">
+          {secondSide.glyph} {secondSide.name} {secondSide.rating}
+        </span>
       </div>
       {platformIconAndLink}
     </CardHeader>
