@@ -1,6 +1,6 @@
 import { ChevronDown } from 'lucide-react';
 import { MoveQualityIcon } from '@/components/icons/MoveQualityIcon';
-import { Card, CardHeader } from '@/components/ui/card';
+import { Card } from '@/components/ui/card';
 import { EVAL_BAR_BLACK, EVAL_BAR_WHITE, ACTIVE_FILTER_RING_CLASS } from '@/lib/theme';
 import {
   severityCountsBySide,
@@ -17,9 +17,9 @@ import type { GameFlawCard, FlawSeverity } from '@/types/library';
  * implementations in `LibraryGameCard.tsx` and `AnalysisTagsPanel.tsx`
  * (Plan 03 wires this component into both call sites).
  *
- * Renders (a) an accuracy strip — one cell per player, player-first per
- * `game.user_color`, cell background the LITERAL board color (white bg =
- * white, dark bg = black) — and (b) a fixed 7-row category table (Gem, Great,
+ * Renders (a) a single-line accuracy strip — player accuracy, "Accuracies"
+ * label, opponent accuracy — where each cell's background is the LITERAL board
+ * color (white bg = white, dark bg = black) — and (b) a fixed 7-row category table (Gem, Great,
  * Best, Good, Inaccuracy, Mistake, Blunder), each row a per-side count cell.
  * ALL 7 rows always render, even when every count is 0 (D-03) — do NOT port
  * the old `bestMoveBadges` count>0 filter here.
@@ -142,43 +142,51 @@ export function MoveStats({
   // cycling to the user's moves (matches the former collapsed I/M/B badges).
   const userSide: MoveStatSide = game.user_color === 'black' ? 'black' : 'white';
 
+  const playerSide: MoveStatSide = userSide;
+  const opponentSide: MoveStatSide = userSide === 'white' ? 'black' : 'white';
+
   function countFor(category: MoveStatCategory, side: MoveStatSide): number {
     if (isSeverityCategory(category)) return severityCounts[side][category];
     return tierCounts[side][category];
   }
 
+  function renderAccuracyCell(side: MoveStatSide) {
+    const value = side === 'white' ? game.white_accuracy : game.black_accuracy;
+    return (
+      <div
+        data-testid={tid(`move-stats-accuracy-${side}`, gameId)}
+        className={cn(
+          'flex items-center justify-center px-2 py-1.5 text-sm font-bold',
+          side === 'white' ? 'text-black' : 'text-white',
+        )}
+        style={{ backgroundColor: side === 'white' ? EVAL_BAR_WHITE : EVAL_BAR_BLACK }}
+      >
+        {value === null ? (
+          <span className={side === 'white' ? 'text-black/50' : 'text-white/60'}>—</span>
+        ) : (
+          formatAccuracy(value)
+        )}
+      </div>
+    );
+  }
+
   return (
     <div data-testid={tid('move-stats', gameId)} className={cn('flex flex-col gap-2', className)}>
-      {/* Accuracies card (UAT 179): banded "Accuracies" header over the two
-          player-color-coded accuracy cells. */}
+      {/* Accuracies card: single row — player accuracy, "Accuracies" label,
+          opponent accuracy — so the card costs one line instead of a banded
+          header stacked over the two player-color-coded cells. The label sits
+          BETWEEN the cells (index 1), keeping the strip's first child the
+          player-first cell. */}
       <Card data-testid={tid('move-stats-accuracies-card', gameId)}>
-        <CardHeader as="h4" size="compact">
-          Accuracies
-        </CardHeader>
         <div
-          className="grid grid-cols-2"
+          className="grid grid-cols-3 items-stretch"
           data-testid={tid('move-stats-accuracy-strip', gameId)}
         >
-          {sides.map((side) => {
-            const value = side === 'white' ? game.white_accuracy : game.black_accuracy;
-            return (
-              <div
-                key={side}
-                data-testid={tid(`move-stats-accuracy-${side}`, gameId)}
-                className={cn(
-                  'flex items-center justify-center px-2 py-1.5 text-sm font-bold',
-                  side === 'white' ? 'text-black' : 'text-white',
-                )}
-                style={{ backgroundColor: side === 'white' ? EVAL_BAR_WHITE : EVAL_BAR_BLACK }}
-              >
-                {value === null ? (
-                  <span className={side === 'white' ? 'text-black/50' : 'text-white/60'}>—</span>
-                ) : (
-                  formatAccuracy(value)
-                )}
-              </div>
-            );
-          })}
+          {renderAccuracyCell(playerSide)}
+          <h4 className="flex items-center justify-center px-2 py-1.5 text-sm font-semibold">
+            Accuracies
+          </h4>
+          {renderAccuracyCell(opponentSide)}
         </div>
       </Card>
 
