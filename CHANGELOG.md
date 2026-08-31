@@ -28,6 +28,8 @@ in `YYYY-MM-DD` (Europe/Zurich).
 
 ### Changed
 
+- Game card headers now list your own side first, so the player you are reading about is always on the left regardless of which colour you had.
+
 - Persona avatars now ship at 128px WebP and load lazily, cutting what the Bots page pulls down on first paint. (Phase 213)
 
 - The Bots page now opens with a short intro card explaining what the opponents are: personas that play like human players of a given rating, powered by the FlawChess Engine. The rating line moved into that card, and the persona tiles are now charcoal.
