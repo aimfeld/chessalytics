@@ -99,6 +99,13 @@ export function useFastForward(options: UseFastForwardOptions): UseFastForwardRe
     setIsRunning(false);
   }, []);
 
+  // tickRef holds the latest tick closure so the self-rescheduling
+  // setTimeout below can call it by ref rather than by name — referencing a
+  // useCallback result inside its own body trips
+  // react-hooks/immutability (the const isn't assigned yet at the point the
+  // closure captures it, even though it resolves fine by call time).
+  const tickRef = useRef<() => void>(() => {});
+
   const tick = useCallback((): void => {
     const plan = planRef.current;
     if (plan === null) return;
@@ -121,8 +128,12 @@ export function useFastForward(options: UseFastForwardOptions): UseFastForwardRe
       stop();
       return;
     }
-    timerRef.current = setTimeout(tick, FAST_FORWARD_STEP_MS);
+    timerRef.current = setTimeout(() => tickRef.current(), FAST_FORWARD_STEP_MS);
   }, [goToNode, stop]);
+
+  useEffect(() => {
+    tickRef.current = tick;
+  });
 
   const start = useCallback((): void => {
     // Guard on runningRef (not the isRunning state) so a double click inside
