@@ -103,8 +103,9 @@ describe('MoveStats — D-01/D-02 accuracy strip', () => {
     render(<MoveStats game={makeGame({ white_accuracy: 87.4, black_accuracy: null })} />);
     const white = screen.getByTestId('move-stats-accuracy-white');
     const black = screen.getByTestId('move-stats-accuracy-black');
-    expect(white.textContent).toBe('87%');
-    expect(black.textContent).toBe('—');
+    // Pills carry a leading side glyph (■ White / □ Black, header convention).
+    expect(white.textContent).toBe('■87%');
+    expect(black.textContent).toBe('□—');
   });
 
   it('never renders an ACPL value or literal "_imported" text', () => {

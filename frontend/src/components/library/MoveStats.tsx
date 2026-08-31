@@ -166,6 +166,11 @@ export function MoveStats({
         )}
         style={{ backgroundColor: side === 'white' ? EVAL_BAR_WHITE : EVAL_BAR_BLACK }}
       >
+        {/* Glyph shape follows the game-card header convention (■ White, □ Black
+            in LibraryGameCard) so the pill links to the player names there. */}
+        <span aria-hidden="true" className="mr-1">
+          {side === 'white' ? '■' : '□'}
+        </span>
         {value === null ? (
           <span className={side === 'white' ? 'text-black/50' : 'text-white/60'}>—</span>
         ) : (
@@ -303,20 +308,26 @@ export function MoveStats({
         data-testid={tid('move-stats-table-card', gameId)}
       >
         <div className={SIDE_ALIGNED_GRID_CLASS} data-testid={tid('move-stats-table', gameId)}>
-          {CATEGORY_ORDER.map((category) => (
-            <div
-              key={category}
-              className="contents"
-              data-testid={tid(`move-stats-row-${category}`, gameId)}
-            >
-              <div className="flex items-center gap-2 py-0.5">
-                <MoveQualityIcon quality={category} className="h-5 w-5" />
-                <span className="text-sm">{CATEGORY_LABELS[category]}</span>
+          {CATEGORY_ORDER.map((category) => {
+            // Rows where neither side has a count are kept (D-03) but dimmed,
+            // so the table reads as only the rows that actually occurred.
+            const bothZero =
+              countFor(category, 'white') === 0 && countFor(category, 'black') === 0;
+            return (
+              <div
+                key={category}
+                className="contents"
+                data-testid={tid(`move-stats-row-${category}`, gameId)}
+              >
+                <div className={cn('flex items-center gap-2 py-0.5', bothZero && 'opacity-40')}>
+                  <MoveQualityIcon quality={category} className="h-5 w-5" />
+                  <span className="text-sm">{CATEGORY_LABELS[category]}</span>
+                </div>
+                {renderCountCell(category, playerSide)}
+                {renderCountCell(category, opponentSide)}
               </div>
-              {renderCountCell(category, playerSide)}
-              {renderCountCell(category, opponentSide)}
-            </div>
-          ))}
+            );
+          })}
         </div>
       </div>
     </div>
