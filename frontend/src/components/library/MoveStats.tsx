@@ -179,12 +179,12 @@ export function MoveStats({
           player-first cell. */}
       <Card data-testid={tid('move-stats-accuracies-card', gameId)}>
         <div
-          className="grid grid-cols-3 items-stretch"
+          className="grid grid-cols-[1fr_auto_1fr] items-stretch"
           data-testid={tid('move-stats-accuracy-strip', gameId)}
         >
           {renderAccuracyCell(playerSide)}
           {/* bg-black/20 matches the CardHeader band darkening (ui/card.tsx). */}
-          <h4 className="flex items-center justify-center bg-black/20 px-2 py-1.5 text-sm font-semibold">
+          <h4 className="flex items-center justify-center bg-black/20 px-5 py-1.5 text-sm font-semibold">
             Accuracies
           </h4>
           {renderAccuracyCell(opponentSide)}
