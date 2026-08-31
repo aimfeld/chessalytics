@@ -163,9 +163,13 @@ function render(){
 
   const convPct=CONV.converted/CONV.sessions;
   $("#conv-big").textContent=(convPct*100).toFixed(1)+"%";
+  // Bug fix: read the payload's snake_case keys. This block used camelCase
+  // (avgDaysConv/avgDaysGuest), which fetch_conversion never emits, so the line
+  // rendered "NaN x" and "undefined active days against undefined". The payload
+  // type is Record<string, number|string>, too loose for TS to catch it.
   $("#conv-exp").innerHTML=`<b>${CONV.converted}</b> of <b>${CONV.sessions}</b> guest sessions have since become
-    registered accounts. Converters stay active <b>${(CONV.avgDaysConv/CONV.avgDaysGuest).toFixed(1)}&times;</b> longer
-    than guests who never sign up &mdash; ${CONV.avgDaysConv} active days against ${CONV.avgDaysGuest}.`;
+    registered accounts. Converters stay active <b>${(CONV.avg_days_converted/CONV.avg_days_guest).toFixed(1)}&times;</b> longer
+    than guests who never sign up &mdash; ${CONV.avg_days_converted} active days against ${CONV.avg_days_guest}.`;
   legend("#conv-legend",[{name:"Converted to an account",color:c.s2},{name:"Stayed a guest",color:c.s5}]);
   gbar($("#c-conv"),{labels:CONVCMP.map(r=>r[0]),h:240,max:1,
     yFmt:v=>Math.round(v*100)+"%", fmt:v=>Math.round(v*100)+"%",
