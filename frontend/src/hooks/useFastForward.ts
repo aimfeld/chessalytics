@@ -23,7 +23,7 @@ import type { NodeId } from '@/hooks/useAnalysisBoard';
  * Per-ply replay cadence in milliseconds — the ONE knob controlling how fast
  * the fast-forward replay steps through intervening moves (D-01).
  */
-export const FAST_FORWARD_STEP_MS = 200;
+export const FAST_FORWARD_STEP_MS = 150;
 
 export interface UseFastForwardOptions {
   enabled: boolean;
@@ -32,7 +32,14 @@ export interface UseFastForwardOptions {
   /** The board's current main-line ply, or null at the root (one ply before ply 0). */
   currentPly: number | null;
   stopPlies: ReadonlySet<number>;
-  goToNode: (id: NodeId, opts?: { silent?: boolean }) => void;
+  /**
+   * The real useAnalysisBoard.goToNode accepts an optional `{ silent?:
+   * boolean }` second argument; this hook never passes it — every replayed
+   * ply plays the normal move sound, arrival included — so the narrower
+   * single-argument shape is what's declared here (a function accepting
+   * fewer parameters than the caller's is structurally assignable).
+   */
+  goToNode: (id: NodeId) => void;
 }
 
 export interface UseFastForwardReturn {
@@ -120,10 +127,10 @@ export function useFastForward(options: UseFastForwardOptions): UseFastForwardRe
     }
     expectedNodeIdRef.current = nodeId;
     const landed = plan.cursor >= plan.target;
-    // Intermediate steps stay silent — the same machine-gun-sound guard
-    // handleEvalChartPlyChange documents for a per-ply scrub. The landing
-    // step is a single deliberate arrival and sounds.
-    goToNode(nodeId, landed ? undefined : { silent: true });
+    // Every step — intermediate and landing — plays the normal move sound
+    // (per checkpoint feedback: the replay should sound like actually
+    // playing through the moves, not just the arrival).
+    goToNode(nodeId);
     if (landed) {
       stop();
       return;

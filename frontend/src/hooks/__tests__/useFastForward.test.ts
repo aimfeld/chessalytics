@@ -82,17 +82,17 @@ describe('useFastForward', () => {
     act(() => {
       vi.advanceTimersByTime(FAST_FORWARD_STEP_MS);
     });
-    expect(goToNode).toHaveBeenNthCalledWith(1, 11, { silent: true });
+    expect(goToNode).toHaveBeenNthCalledWith(1, 11);
 
     act(() => {
       vi.advanceTimersByTime(FAST_FORWARD_STEP_MS);
     });
-    expect(goToNode).toHaveBeenNthCalledWith(2, 12, { silent: true });
+    expect(goToNode).toHaveBeenNthCalledWith(2, 12);
 
     act(() => {
       vi.advanceTimersByTime(FAST_FORWARD_STEP_MS);
     });
-    expect(goToNode).toHaveBeenNthCalledWith(3, 13, undefined);
+    expect(goToNode).toHaveBeenNthCalledWith(3, 13);
     expect(goToNode).toHaveBeenCalledTimes(3);
     expect(result.current.isRunning).toBe(false);
   });
@@ -116,7 +116,7 @@ describe('useFastForward', () => {
     act(() => {
       vi.advanceTimersByTime(FAST_FORWARD_STEP_MS);
     });
-    expect(goToNode).toHaveBeenCalledTimes(1); // landed on 11 (silent)
+    expect(goToNode).toHaveBeenCalledTimes(1); // stepped onto 11
 
     // A committed node the hook never commanded (e.g. the user clicked Back).
     rerender(baseOptions({ mainLine, currentPly: 0, currentNodeId: 999, stopPlies: new Set([3]), goToNode }));
@@ -147,7 +147,7 @@ describe('useFastForward', () => {
     act(() => {
       vi.advanceTimersByTime(FAST_FORWARD_STEP_MS);
     });
-    expect(goToNode).toHaveBeenNthCalledWith(1, 11, { silent: true });
+    expect(goToNode).toHaveBeenNthCalledWith(1, 11);
 
     // Simulate the consumer committing the node the hook itself just commanded.
     rerender(baseOptions({ mainLine, currentPly: 1, currentNodeId: 11, stopPlies: new Set([3]), goToNode }));
@@ -156,12 +156,12 @@ describe('useFastForward', () => {
     act(() => {
       vi.advanceTimersByTime(FAST_FORWARD_STEP_MS);
     });
-    expect(goToNode).toHaveBeenNthCalledWith(2, 12, { silent: true });
+    expect(goToNode).toHaveBeenNthCalledWith(2, 12);
 
     act(() => {
       vi.advanceTimersByTime(FAST_FORWARD_STEP_MS);
     });
-    expect(goToNode).toHaveBeenNthCalledWith(3, 13, undefined);
+    expect(goToNode).toHaveBeenNthCalledWith(3, 13);
     expect(result.current.isRunning).toBe(false);
   });
 
@@ -187,15 +187,15 @@ describe('useFastForward', () => {
         vi.advanceTimersByTime(FAST_FORWARD_STEP_MS);
       });
     }
-    expect(goToNode).toHaveBeenNthCalledWith(1, 101, { silent: true });
-    expect(goToNode).toHaveBeenNthCalledWith(2, 102, { silent: true });
-    expect(goToNode).toHaveBeenNthCalledWith(3, 103, { silent: true });
+    expect(goToNode).toHaveBeenNthCalledWith(1, 101);
+    expect(goToNode).toHaveBeenNthCalledWith(2, 102);
+    expect(goToNode).toHaveBeenNthCalledWith(3, 103);
     expect(result.current.isRunning).toBe(true); // not yet landed
 
     act(() => {
       vi.advanceTimersByTime(FAST_FORWARD_STEP_MS);
     });
-    expect(goToNode).toHaveBeenNthCalledWith(4, 104, undefined);
+    expect(goToNode).toHaveBeenNthCalledWith(4, 104);
     expect(goToNode).toHaveBeenCalledTimes(4);
     expect(result.current.isRunning).toBe(false);
   });
