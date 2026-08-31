@@ -1,9 +1,9 @@
-import { useEffect, useRef } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { useQuery } from '@tanstack/react-query';
 
 import { apiClient } from '@/api/client';
 import { LoadError } from '@/components/ui/load-error';
-import type { ActivityStatsPayload } from '@/types/activity';
+import type { ActivityRangeKey, ActivityStatsPayload } from '@/types/activity';
 
 // Order matters and is load-bearing: charts.js publishes window.__fc, which
 // render.js binds when its mount() runs. Every rule in styles.css is scoped
@@ -37,9 +37,12 @@ const FONTS_LINK_ID = 'activity-dashboard-fonts';
 const FONTS_HREF =
   'https://fonts.googleapis.com/css2?family=Bricolage+Grotesque:opsz,wght@12..96,600;12..96,800&family=Source+Sans+3:ital,wght@0,400;0,600;1,400&family=IBM+Plex+Mono:wght@400;500&display=swap';
 
-async function fetchActivityStats(refresh: boolean): Promise<ActivityStatsPayload> {
+async function fetchActivityStats(
+  range: ActivityRangeKey,
+  refresh: boolean
+): Promise<ActivityStatsPayload> {
   const { data } = await apiClient.get<ActivityStatsPayload>('/admin/activity/stats', {
-    params: refresh ? { refresh: 1 } : undefined,
+    params: refresh ? { range, refresh: 1 } : { range },
   });
   return data;
 }
@@ -90,16 +93,23 @@ export default function ActivityPage() {
   const forceRefreshRef = useRef(false);
   const handleRef = useRef<ReturnType<NonNullable<Window['__fcApp']>['mount']> | null>(null);
 
+  // D6: range is React state and the second element of the query key (not a
+  // constant single-element array), so each range gets its own cache entry.
+  const [range, setRange] = useState<ActivityRangeKey>('all');
+
   const { data, isPending, isError, refetch, isFetching } = useQuery({
-    queryKey: ['activity-stats'],
+    queryKey: ['activity-stats', range],
     queryFn: () => {
       const refresh = forceRefreshRef.current;
       forceRefreshRef.current = false;
-      return fetchActivityStats(refresh);
+      return fetchActivityStats(range, refresh);
     },
     // Pinned explicitly (not left to queryClient's 30s default) so a future
     // change to those defaults can never reintroduce a poll on this page —
-    // data is fetched once on mount and again only on an explicit click.
+    // data is fetched once per range on first visit and again only on an
+    // explicit click. Per-key staleTime: Infinity is also what makes
+    // returning to an already-viewed range render instantly from the query
+    // cache instead of refetching.
     staleTime: Infinity,
     refetchOnWindowFocus: false,
     refetchInterval: false,
@@ -128,6 +138,10 @@ export default function ActivityPage() {
     void refetch();
   };
 
+  const handleRangeChange = (key: ActivityRangeKey) => () => {
+    setRange(key);
+  };
+
   const setAudience = (aud: 'all' | 'reg' | 'guest') => () => {
     // Intentionally a no-op handler: render.js's mount() binds its own click
     // listener on these buttons and owns their aria-pressed state. React must
@@ -138,7 +152,16 @@ export default function ActivityPage() {
   };
 
   return (
-    <main data-testid="activity-page" className="activity-dash">
+    <main
+      data-testid="activity-page"
+      className="activity-dash"
+      // Switching to a not-yet-fetched range leaves `data` on the PREVIOUS
+      // range until the new payload lands, so without this the old charts
+      // would sit on screen looking current. styles.css dims .tiles/.card
+      // while this is set; `undefined` (not `false`) so the attribute is
+      // absent rather than literally "false" once the fetch settles.
+      data-loading={isFetching ? 'true' : undefined}
+    >
       <header className="mast">
         <div className="mast-inner">
           <div>
@@ -185,6 +208,48 @@ export default function ActivityPage() {
             <LoadError resource="activity stats" />
           </div>
         )}
+
+        <div className="controls">
+          <div className="seg" role="group" aria-label="Time range filter">
+            <button
+              type="button"
+              aria-pressed={range === 'all'}
+              data-testid="filter-range-all"
+              onClick={handleRangeChange('all')}
+              disabled={isFetching}
+            >
+              All time
+            </button>
+            <button
+              type="button"
+              aria-pressed={range === 'd90'}
+              data-testid="filter-range-d90"
+              onClick={handleRangeChange('d90')}
+              disabled={isFetching}
+            >
+              90 days
+            </button>
+            <button
+              type="button"
+              aria-pressed={range === 'd30'}
+              data-testid="filter-range-d30"
+              onClick={handleRangeChange('d30')}
+              disabled={isFetching}
+            >
+              30 days
+            </button>
+            <button
+              type="button"
+              aria-pressed={range === 'd7'}
+              data-testid="filter-range-d7"
+              onClick={handleRangeChange('d7')}
+              disabled={isFetching}
+            >
+              7 days
+            </button>
+          </div>
+          <span className="hint">Applies to every card on the page.</span>
+        </div>
 
         <div className="controls">
           <div className="seg" role="group" aria-label="Audience filter">

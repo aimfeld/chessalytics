@@ -12,6 +12,8 @@ in `YYYY-MM-DD` (Europe/Zurich).
 
 - Admins can now open the Activity Pulse dashboard at `/activity` from the main nav, instead of running it locally over an SSH tunnel. Data loads on open and refreshes only when asked.
 
+- The Activity Pulse dashboard now has a time-range filter (All time, last 90, 30 or 7 days) that applies to every card at once. Signup funnels, retention and conversion follow the accounts created inside the window rather than the activity that happened in it, so a 30-day view answers "how is the funnel doing lately" instead of mixing populations. Where a short window makes a data point undefined, the chart stops early rather than drawing a zero.
+
 - You can now paste a single FEN or PGN directly from the Import tab, not just from the analysis board — it opens the same paste dialog and lands you on the analysis board with the position or game already loaded.
 
 - Starting your first bot game or opening the analysis board on a new device now shows exactly what is downloading and how far along it is. The engine needs about 66 MB of assets (the persona model, the ONNX runtime, and Stockfish); previously they came down silently, so a bot could burn most of its clock before playing its first move. Bot games now wait for the engine to be ready before the clock starts, and the analysis board dismisses the dialog on its own as soon as the engine is live. (Phase 213)

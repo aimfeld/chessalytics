@@ -62,6 +62,10 @@
 
 /* ---- controls ---- */
 .activity-dash .controls{display:flex; flex-wrap:wrap; gap:12px; align-items:center; margin:28px 0 8px}
+/* The range filter row sits directly above the audience row; collapsing the
+   second row's top margin makes the pair read as one control block instead
+   of two separately-spaced rows. */
+.activity-dash .controls + .controls{margin-top:0}
 .activity-dash .seg{display:inline-flex; background:var(--surface-2); border:1px solid var(--rule); border-radius:999px; padding:3px; gap:2px}
 .activity-dash .seg button{
   font:inherit; font-size:.9375rem; font-weight:600; color:var(--ink-2); background:none; border:0;
@@ -70,6 +74,20 @@
 .activity-dash .seg button[aria-pressed="true"]{background:var(--surface); color:var(--ink); box-shadow:var(--shadow)}
 .activity-dash .seg button:focus-visible{outline:2px solid var(--brand); outline-offset:2px}
 .activity-dash .controls .hint{color:var(--ink-3); font-size:.9375rem}
+/* The range group has four options where the audience group has three, and
+   .seg is a single inline-flex pill that cannot break internally — only the
+   .controls row around it wraps. At default padding the four buttons run to
+   roughly 480px and overflow every phone viewport, so tighten the horizontal
+   padding on narrow screens. .875rem is the frontend floor (text-sm); do not
+   go below it. */
+@media (max-width:560px){
+  .activity-dash .seg button{padding:7px 9px; font-size:.875rem}
+}
+/* 320px (iPhone SE) is the narrowest width check-activity-layout.mjs asserts
+   against, and the four range buttons still overflow it at 9px padding. */
+@media (max-width:380px){
+  .activity-dash .seg button{padding:7px 6px}
+}
 
 /* ---- tiles ---- */
 .activity-dash .tiles{display:grid; grid-template-columns:repeat(3,1fr); gap:14px; margin:22px 0 8px}
@@ -108,6 +126,13 @@
   .activity-dash .live{justify-content:flex-start}
   .activity-dash section{margin-top:36px}
 }
+/* Dim the numbers while a not-yet-fetched range is loading, so the PREVIOUS
+   range's charts don't sit on screen looking current. Deliberately NOT on
+   .wrap — the range/audience/refresh controls live inside it and must stay
+   reachable, so only the two things whose data is actually stale are dimmed. */
+.activity-dash[data-loading="true"] .tiles,
+.activity-dash[data-loading="true"] .card{opacity:.5; transition:opacity .15s}
+
 .activity-dash .chart{width:100%; overflow-x:auto}
 .activity-dash .legend{display:flex; flex-wrap:wrap; gap:6px 18px; margin:2px 0 12px; font-size:.9375rem; color:var(--ink-2)}
 .activity-dash .legend span{display:inline-flex; align-items:center; gap:7px}

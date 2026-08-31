@@ -54,51 +54,84 @@ def build_readonly_engine(url: str, application_name: str) -> AsyncEngine:
     )
 
 
-async def build_payload(engine: AsyncEngine) -> queries.Payload:
-    """Run every dashboard query in one read-only connection."""
+async def build_payload(
+    engine: AsyncEngine, range_key: queries.RangeKey, now_utc: datetime.datetime
+) -> queries.Payload:
+    """Run every dashboard query, for `range_key` alone, in one read-only connection.
+
+    `now_utc` comes from the caller (ultimately `Depends(dev_now_utc)`), never
+    an inline clock read, so the resolved window is reproducible under the
+    dev-clock override.
+    """
     async with engine.connect() as conn:
-        first_day, days, last_complete = await queries.fetch_day_range(conn)
+        window = await queries.fetch_window(conn, range_key, now_utc)
         return queries.Payload(
-            generated_at=datetime.datetime.now(datetime.timezone.utc).isoformat(),
+            generated_at=now_utc.isoformat(),
             promoted_since=PROMOTED_AT_SINCE,
-            days=days,
-            last_complete_index=last_complete,
-            activity=await queries.fetch_activity(conn, first_day),
-            signups=await queries.fetch_signups(conn, first_day),
-            bot=await queries.fetch_bot_games(conn),
-            train=await queries.fetch_train(conn),
-            solves=await queries.fetch_solves(conn),
-            imports=await queries.fetch_imports(conn, first_day),
-            persona=await queries.fetch_persona(conn),
-            bot_players=await queries.fetch_bot_players(conn),
-            elo=await queries.fetch_elo(conn),
-            funnel=await queries.fetch_funnel(conn, first_day),
-            tti=await queries.fetch_time_to_import(conn, first_day),
-            stick=await queries.fetch_stickiness(conn, first_day),
-            conversion=await queries.fetch_conversion(conn, first_day),
-            conversion_compare=await queries.fetch_conversion_compare(conn, first_day),
+            range=window.range_key,
+            data_start=window.data_start.isoformat(),
+            days=window.days,
+            window_start_index=window.window_start_index,
+            last_complete_index=window.last_complete_index,
+            activity=await queries.fetch_activity(conn, window.lead_in_start, window.window_start),
+            signups=await queries.fetch_signups(conn, window.window_start),
+            bot=await queries.fetch_bot_games(conn, window.window_start),
+            train=await queries.fetch_train(conn, window.window_start),
+            solves=await queries.fetch_solves(conn, window.lead_in_start),
+            imports=await queries.fetch_imports(conn, window.window_start),
+            persona=await queries.fetch_persona(conn, window.window_start),
+            bot_players=await queries.fetch_bot_players(conn, window.window_start),
+            elo=await queries.fetch_elo(conn, window.window_start),
+            funnel=await queries.fetch_funnel(conn, window.window_start),
+            tti=await queries.fetch_time_to_import(conn, window.window_start),
+            stick=await queries.fetch_stickiness(conn, window.window_start),
+            conversion=await queries.fetch_conversion(conn, window.window_start),
+            conversion_compare=await queries.fetch_conversion_compare(conn, window.window_start),
         )
 
 
 class StatsCache:
-    """Serves one payload to every caller, refreshing at most once per TTL."""
+    """Serves one payload PER RANGE KEY, refreshing each key at most once per TTL.
+
+    A SINGLE `asyncio.Lock` guards every key, not one lock per key. The
+    read-only engine (`build_readonly_engine`) is opened with `pool_size=1` and
+    `max_overflow=0`, so if two range keys were allowed to build concurrently
+    under separate locks, two cold misses on different keys could each try to
+    check out the one available connection at once. Serialising every build —
+    including builds for DIFFERENT keys — behind one lock is what prevents
+    that contention; it costs throughput only when two different windows are
+    both requested cold at the same instant, which this manual-refresh,
+    superuser-only page essentially never does.
+    """
 
     def __init__(self, engine: AsyncEngine, ttl_seconds: int) -> None:
         self._engine = engine
         self._ttl = ttl_seconds
         self._lock = asyncio.Lock()
-        self._payload: queries.Payload | None = None
-        self._fetched_at: float = 0.0
+        # One (payload, fetched_at) entry per range key, so each key ages on
+        # its own TTL independently of the other three.
+        self._entries: dict[queries.RangeKey, tuple[queries.Payload, float]] = {}
 
-    async def get(self, *, force: bool = False) -> queries.Payload:
+    async def get(
+        self,
+        range_key: queries.RangeKey,
+        *,
+        now_utc: datetime.datetime,
+        force: bool = False,
+    ) -> queries.Payload:
         loop = asyncio.get_running_loop()
         async with self._lock:
-            fresh = self._payload is not None and loop.time() - self._fetched_at < self._ttl
+            entry = self._entries.get(range_key)
+            fresh = entry is not None and loop.time() - entry[1] < self._ttl
             if fresh and not force:
-                assert self._payload is not None
-                return self._payload
-            payload = await build_payload(self._engine)
-            self._payload, self._fetched_at = payload, loop.time()
+                assert entry is not None
+                return entry[0]
+            # `force` (from `?refresh=1`) rebuilds ONLY `range_key`'s entry.
+            # Dropping all four would force three future cold 16-query
+            # rebuilds for a refresh the operator only asked for on the one
+            # window in front of them.
+            payload = await build_payload(self._engine, range_key, now_utc)
+            self._entries[range_key] = (payload, loop.time())
             return payload
 
     async def dispose(self) -> None:
