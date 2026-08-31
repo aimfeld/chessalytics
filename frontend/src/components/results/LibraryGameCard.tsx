@@ -1249,10 +1249,12 @@ export function LibraryGameCard({
                   </div>
                 )}
               </div>
-              {/* MoveStats column: accuracies card + charcoal category table, ~224px
-                  fixed width beside the miniboard. Marked as flaw-controls for the
-                  outside-pointer highlight guard. */}
-              <div className="shrink-0 w-56" data-testid={`flaw-controls-${game.game_id}`}>
+              {/* MoveStats column: accuracies card + charcoal category table, ~256px
+                  fixed width beside the miniboard — wide enough that the strip's
+                  "Accuracies" label + two pills never squeeze the shared grid, so the
+                  table's count columns stay aligned under the pills. Marked as
+                  flaw-controls for the outside-pointer highlight guard. */}
+              <div className="shrink-0 w-64" data-testid={`flaw-controls-${game.game_id}`}>
                 <MoveStats
                   game={game}
                   gameId={game.game_id}
