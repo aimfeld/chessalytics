@@ -87,6 +87,8 @@ import { InfoPopover } from '@/components/ui/info-popover';
 import { VariationTree } from '@/components/analysis/VariationTree';
 import type { FlawMarkerEntry } from '@/components/analysis/VariationTree';
 import type { FlawSeverity } from '@/types/library';
+import { isRareMoveTier } from '@/types/library';
+import { useFastForward } from '@/hooks/useFastForward';
 import { tacticOrientationAtPly } from '@/lib/tacticOrientation';
 import { EvalChart } from '@/components/library/EvalChart';
 import { AnalysisPendingPill } from '@/components/library/AnalysisPendingPill';
@@ -1742,6 +1744,39 @@ export default function Analysis() {
     return map;
   }, [isGameMode, gameData, mainLine]);
 
+  // Fast-forward stop set (Quick 260831-s4y, D-02): main-line plies whose
+  // FlawMarker.severity is blunder/mistake, plus plies whose
+  // EvalPoint.best_move_tier is gem/great. Deliberately BOTH-SIDES — no
+  // is_user / user_color filter — matching the analysis board's existing
+  // both-sides gem display (D-02). Derived from eval_series directly rather
+  // than reusing the nearby storedTierByPly map: that map additionally
+  // requires maia_prob != null, a TypeScript-narrowing artifact of its own
+  // purpose that could silently drop a legitimate fast-forward stop here.
+  const fastForwardStopPlies = useMemo<Set<number>>(() => {
+    const stops = new Set<number>();
+    if (!isGameMode) return stops;
+    for (const fm of gameData?.flaw_markers ?? []) {
+      if (fm.severity === 'blunder' || fm.severity === 'mistake') stops.add(fm.ply);
+    }
+    for (const point of gameData?.eval_series ?? []) {
+      if (isRareMoveTier(point.best_move_tier)) stops.add(point.ply);
+    }
+    return stops;
+  }, [isGameMode, gameData?.flaw_markers, gameData?.eval_series]);
+
+  // evalChartPly (not a raw currentPly) is deliberate: from a sideline it
+  // resolves to the fork point, so a fast-forward started from a sideline
+  // resumes along the main line and leaves the sideline in the tree one
+  // click away — the same behavior the eval-chart scrub already has.
+  const fastForward = useFastForward({
+    enabled: isGameMode,
+    mainLine,
+    currentNodeId,
+    currentPly: evalChartPly,
+    stopPlies: fastForwardStopPlies,
+    goToNode,
+  });
+
   // Multi-active chip highlight (Quick 260703-kyb): every currently OPEN or
   // pending-open chip's key, so multiple tactic chips can read "on" simultaneously
   // (flat siblings) instead of a single activePvNodeId/activePvOrientation match.
@@ -3238,6 +3273,8 @@ export default function Analysis() {
       canGoBack={currentNodeId !== null}
       canReset={canReset}
       canGoForward={canGoForward}
+      onFastForward={isGameMode ? fastForward.start : undefined}
+      canFastForward={fastForward.canFastForward}
       flat={flat}
       size={size}
     />

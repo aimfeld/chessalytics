@@ -1,4 +1,4 @@
-import { SkipBack, ChevronLeft, ChevronRight, Repeat2 } from 'lucide-react';
+import { SkipBack, ChevronLeft, ChevronRight, Repeat2, FastForward } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Tooltip } from '@/components/ui/tooltip';
 
@@ -11,6 +11,14 @@ interface BoardControlsProps {
   /** Enable state for the Reset button. Defaults to `canGoBack` when omitted. */
   canReset?: boolean;
   canGoForward: boolean;
+  /**
+   * Fast-forward handler (Quick 260831-s4y). The button renders ONLY when this
+   * is supplied — Openings, Bots, Train and the App.tsx mobile board bar all
+   * render BoardControls without it and deliberately keep four buttons (D-07).
+   */
+  onFastForward?: () => void;
+  /** Enable state for the fast-forward button. Ignored when onFastForward is omitted. */
+  canFastForward?: boolean;
   /** Optional slot for an info icon rendered at the end of the bar */
   infoSlot?: React.ReactNode;
   /** Render buttons in a vertical column (used on mobile beside the board) */
@@ -44,6 +52,8 @@ export function BoardControls({
   canGoBack,
   canReset,
   canGoForward,
+  onFastForward,
+  canFastForward,
   infoSlot,
   vertical = false,
   size,
@@ -104,6 +114,21 @@ export function BoardControls({
           <ChevronRight className={iconSize} />
         </Button>
       </Tooltip>
+      {onFastForward && (
+        <Tooltip content="Fast forward to next key moment">
+          <Button
+            variant="ghost"
+            size="icon"
+            className={`${buttonSizeClass} hover:bg-accent`}
+            onClick={onFastForward}
+            disabled={!canFastForward}
+            aria-label="Fast forward to next key moment"
+            data-testid="board-btn-fast-forward"
+          >
+            <FastForward className={iconSize} />
+          </Button>
+        </Tooltip>
+      )}
       <Tooltip content="Flip board">
         <Button
           variant="ghost"
