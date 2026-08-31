@@ -16,8 +16,8 @@ import type { GameFlawCard, FlawSeverity } from '@/types/library';
  * implementations in `LibraryGameCard.tsx` and `AnalysisTagsPanel.tsx`
  * (Plan 03 wires this component into both call sites).
  *
- * Renders (a) a single-line accuracy strip — player accuracy, "Accuracies"
- * label, opponent accuracy — where each cell's background is the LITERAL board
+ * Renders (a) a single-line accuracy strip — "Accuracies" label, player
+ * accuracy, opponent accuracy — where each cell's background is the LITERAL board
  * color (white bg = white, dark bg = black) — and (b) a fixed 7-row category table (Gem, Great,
  * Best, Good, Inaccuracy, Mistake, Blunder), each row a per-side count cell.
  * ALL 7 rows always render, even when every count is 0 (D-03) — do NOT port
@@ -58,6 +58,14 @@ const CATEGORY_LABELS: Record<MoveStatCategory, string> = {
 };
 
 const SEVERITY_CATEGORIES: readonly FlawSeverity[] = ['inaccuracy', 'mistake', 'blunder'];
+
+/**
+ * Shared 3-column grid template for the accuracy strip and the category
+ * table: flexible label column on the left, then one fixed-width column per
+ * side, so the table's count columns sit exactly under the strip's accuracy
+ * pills. 3.5rem fits "100%" in a bold text-sm pill.
+ */
+const SIDE_ALIGNED_GRID_CLASS = 'grid grid-cols-[1fr_3.5rem_3.5rem] gap-x-2 items-center';
 
 function isSeverityCategory(category: MoveStatCategory): category is FlawSeverity {
   return (SEVERITY_CATEGORIES as readonly string[]).includes(category);
@@ -133,12 +141,10 @@ export function MoveStats({
   const severityCounts = severityCountsBySide(game.flaw_markers ?? []);
   const tierCounts = tierCountsBySide(game.eval_series ?? []);
 
-  // Player-first column order (SEED-112 pt.2): reorders by game.user_color,
-  // but each column's background stays the LITERAL board color below — do not
-  // conflate column order (user-relative) with side identity (color-absolute).
-  const sides: readonly MoveStatSide[] = game.user_color === 'black' ? ['black', 'white'] : ['white', 'black'];
   // The user's own board color, scoping the mobile compact row's counts and
   // cycling to the user's moves (matches the former collapsed I/M/B badges).
+  // Column order is player-first (SEED-112 pt.2) via playerSide/opponentSide,
+  // but side identity stays color-absolute — do not conflate the two.
   const userSide: MoveStatSide = game.user_color === 'black' ? 'black' : 'white';
 
   const playerSide: MoveStatSide = userSide;
@@ -155,7 +161,7 @@ export function MoveStats({
       <div
         data-testid={tid(`move-stats-accuracy-${side}`, gameId)}
         className={cn(
-          'flex items-center justify-center rounded-md px-2 py-1.5 text-sm font-bold',
+          'flex items-center justify-center rounded-md py-1.5 text-sm font-bold',
           side === 'white' ? 'text-black' : 'text-white',
         )}
         style={{ backgroundColor: side === 'white' ? EVAL_BAR_WHITE : EVAL_BAR_BLACK }}
@@ -169,21 +175,58 @@ export function MoveStats({
     );
   }
 
+  function renderCountCell(category: MoveStatCategory, side: MoveStatSide) {
+    const count = countFor(category, side);
+    const ref: MoveStatsCellRef = { kind: 'category', category, side };
+    const testId = tid(`move-stats-cell-${category}-${side}`, gameId);
+
+    if (count === 0) {
+      return (
+        <div
+          data-testid={testId}
+          className="py-0.5 text-center text-sm text-muted-foreground"
+        >
+          0
+        </div>
+      );
+    }
+
+    return (
+      <div className="py-0.5 text-center">
+        <button
+          type="button"
+          data-testid={testId}
+          aria-label={`${count} ${CATEGORY_LABELS[category]} for ${side}`}
+          className={cn(
+            'cursor-pointer rounded px-1 text-sm font-bold',
+            sameCellRef(activeRef, ref) && 'underline',
+            sameCellRef(outlinedRef, ref) && ACTIVE_FILTER_RING_CLASS,
+          )}
+          onClick={() => onCellActivate?.(ref)}
+          onMouseEnter={() => onCellHover?.(ref)}
+          onMouseLeave={() => onCellHover?.(null)}
+          onFocus={() => onCellHover?.(ref)}
+          onBlur={() => onCellHover?.(null)}
+        >
+          {count}
+        </button>
+      </div>
+    );
+  }
+
   return (
     <div data-testid={tid('move-stats', gameId)} className={cn('flex flex-col gap-2', className)}>
-      {/* Accuracies strip: single row — player accuracy, "Accuracies" label,
-          opponent accuracy. No Card wrapper: the label sits transparently on
-          the page background so only the two color-coded accuracy pills read
-          as surfaces. The label sits BETWEEN the cells (index 1), keeping the
-          strip's first child the player-first cell. */}
+      {/* Accuracies strip: single row — "Accuracies" label on the left, then
+          player accuracy, opponent accuracy. No Card wrapper: the label sits
+          transparently on the page background so only the two color-coded
+          accuracy pills read as surfaces. px-2 matches the table card's p-2
+          below so the pill columns line up with the count columns. */}
       <div
-        className="grid grid-cols-[1fr_auto_1fr] items-stretch"
+        className={cn(SIDE_ALIGNED_GRID_CLASS, 'px-2')}
         data-testid={tid('move-stats-accuracy-strip', gameId)}
       >
+        <h4 className="py-1.5 text-sm font-semibold text-muted-foreground">Accuracies</h4>
         {renderAccuracyCell(playerSide)}
-        <h4 className="flex items-center justify-center px-5 py-1.5 text-sm font-semibold text-muted-foreground">
-          Accuracies
-        </h4>
         {renderAccuracyCell(opponentSide)}
       </div>
 
@@ -251,62 +294,30 @@ export function MoveStats({
 
       {/* Full two-sided category table, in a charcoal card (UAT 179). Hidden via
           the native attribute (not unmounted) so the mobile toggle preserves
-          hover/active state. */}
+          hover/active state. Shares the strip's grid template so each side's
+          count column sits centered under its accuracy pill. Rows use
+          `contents` so all rows participate in the one shared grid. */}
       <div
         className="charcoal-texture rounded-md p-2"
         hidden={collapsed}
         data-testid={tid('move-stats-table-card', gameId)}
       >
-        <table className="w-full" data-testid={tid('move-stats-table', gameId)}>
-          <tbody>
-            {CATEGORY_ORDER.map((category) => (
-              <tr key={category} data-testid={tid(`move-stats-row-${category}`, gameId)}>
-                <td className="w-6 py-0.5">
-                  <MoveQualityIcon quality={category} className="h-5 w-5" />
-                </td>
-                <td className="pr-2 text-sm">{CATEGORY_LABELS[category]}</td>
-                {sides.map((side) => {
-                  const count = countFor(category, side);
-                  const ref: MoveStatsCellRef = { kind: 'category', category, side };
-                  const testId = tid(`move-stats-cell-${category}-${side}`, gameId);
-
-                  if (count === 0) {
-                    return (
-                      <td key={side} data-testid={testId} className="text-center text-sm text-muted-foreground">
-                        0
-                      </td>
-                    );
-                  }
-
-                  const isActive = sameCellRef(activeRef, ref);
-                  const isOutlined = sameCellRef(outlinedRef, ref);
-
-                  return (
-                    <td key={side} className="text-center">
-                      <button
-                        type="button"
-                        data-testid={testId}
-                        aria-label={`${count} ${CATEGORY_LABELS[category]} for ${side}`}
-                        className={cn(
-                          'cursor-pointer rounded px-1 text-sm font-bold',
-                          isActive && 'underline',
-                          isOutlined && ACTIVE_FILTER_RING_CLASS,
-                        )}
-                        onClick={() => onCellActivate?.(ref)}
-                        onMouseEnter={() => onCellHover?.(ref)}
-                        onMouseLeave={() => onCellHover?.(null)}
-                        onFocus={() => onCellHover?.(ref)}
-                        onBlur={() => onCellHover?.(null)}
-                      >
-                        {count}
-                      </button>
-                    </td>
-                  );
-                })}
-              </tr>
-            ))}
-          </tbody>
-        </table>
+        <div className={SIDE_ALIGNED_GRID_CLASS} data-testid={tid('move-stats-table', gameId)}>
+          {CATEGORY_ORDER.map((category) => (
+            <div
+              key={category}
+              className="contents"
+              data-testid={tid(`move-stats-row-${category}`, gameId)}
+            >
+              <div className="flex items-center gap-2 py-0.5">
+                <MoveQualityIcon quality={category} className="h-5 w-5" />
+                <span className="text-sm">{CATEGORY_LABELS[category]}</span>
+              </div>
+              {renderCountCell(category, playerSide)}
+              {renderCountCell(category, opponentSide)}
+            </div>
+          ))}
+        </div>
       </div>
     </div>
   );
