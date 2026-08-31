@@ -4,10 +4,10 @@ milestone: v2.13
 current_phase: 213
 status: completed
 stopped_at: Phase 213 complete — all phases complete
-last_updated: "2026-08-31T18:45:00.000Z"
+last_updated: "2026-08-31T19:16:49.388Z"
 last_activity: 2026-08-31
 last_activity_desc: "Quick task 260831-s4y complete: fast-forward button on the analysis board (UAT approved)"
-state_head: c515765c531b62e92ef1a633f3b13aa3a2ad6b53
+state_head: 0b3c314213f9ff7ee8e70040db1e97c23401790a
 progress:
   total_phases: 2
   completed_phases: 1
@@ -856,6 +856,7 @@ None active.
 | SEED-153 | Engine disagreement study, complete. On the 19,737-position tail where Stockfish and Maia back opposite winners, FlawChess ties Stockfish at both phases (+0.00145 z=+1.70 MG, +0.00218 z=+1.51 EG, recalibrated), beats Maia decisively, and beats the 50/50 blend of its own inputs. The null is decisive rather than underpowered: MDE 0.00301/0.00490 sits below the 0.00690/0.00829 pilot effects the targets were sized for. Found and fixed an eval-alignment defect worth +0.0234/+0.0291 Brier to Stockfish — `game_positions.eval_cp` carries TWO populations with opposite ply conventions (lichess post-move, entry-lane aligned), so a blanket shift would have corrupted SEED-145's 72% entry-lane frame; both studies repaired provenance-aware. Also established that the rating gradient favouring FlawChess at low ELO is a calibration artifact, not information. No public data story (reasons in the report). reports/engine-disagreement-study/engine-disagreement-study.md | 2026-08-25 | 03df1dd35 | [SEED-153](./seeds/closed/SEED-153-disagreement-hunt-fc-vs-sf.md) |
 | 73 | Bots page: Human-like Opponents intro card + InfoPopover on the persona grid | 2026-08-26 | 6737194d3 | — |
 | 260831-s4y | Fast-forward button on the /analysis board controls: `useFastForward` hook replays the main line at 150ms/ply (move sound on every step) until the next blunder/mistake/gem/great on either side (inaccuracies and best/good skipped), animated run-out to the final position when none remain, cancel on any other navigation via commanded-node comparison. Opt-in `BoardControls` props keep Openings/Bots/Train at four buttons; wired to desktop card + mobile footer through the shared `boardControls()` helper. Human-verified (UAT approved) | 2026-08-31 | 8a70b8d15 | [260831-s4y-add-a-fast-forward-next-button-to-the-an](./quick/260831-s4y-add-a-fast-forward-next-button-to-the-an/) |
+| 77 | Rearrange MoveStats Accuracies card into one line (player \| Accuracies \| opponent) | 2026-08-31 | 0b3c31421 | — |
 
 ## Deferred Items
 
