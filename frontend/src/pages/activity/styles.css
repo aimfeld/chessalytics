@@ -74,6 +74,20 @@
 .activity-dash .seg button[aria-pressed="true"]{background:var(--surface); color:var(--ink); box-shadow:var(--shadow)}
 .activity-dash .seg button:focus-visible{outline:2px solid var(--brand); outline-offset:2px}
 .activity-dash .controls .hint{color:var(--ink-3); font-size:.9375rem}
+/* The range group has four options where the audience group has three, and
+   .seg is a single inline-flex pill that cannot break internally — only the
+   .controls row around it wraps. At default padding the four buttons run to
+   roughly 480px and overflow every phone viewport, so tighten the horizontal
+   padding on narrow screens. .875rem is the frontend floor (text-sm); do not
+   go below it. */
+@media (max-width:560px){
+  .activity-dash .seg button{padding:7px 9px; font-size:.875rem}
+}
+/* 320px (iPhone SE) is the narrowest width check-activity-layout.mjs asserts
+   against, and the four range buttons still overflow it at 9px padding. */
+@media (max-width:380px){
+  .activity-dash .seg button{padding:7px 6px}
+}
 
 /* ---- tiles ---- */
 .activity-dash .tiles{display:grid; grid-template-columns:repeat(3,1fr); gap:14px; margin:22px 0 8px}

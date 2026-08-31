@@ -227,7 +227,7 @@ export default function ActivityPage() {
               onClick={handleRangeChange('d90')}
               disabled={isFetching}
             >
-              Last 90 days
+              90 days
             </button>
             <button
               type="button"
@@ -236,7 +236,7 @@ export default function ActivityPage() {
               onClick={handleRangeChange('d30')}
               disabled={isFetching}
             >
-              Last 30 days
+              30 days
             </button>
             <button
               type="button"
@@ -245,7 +245,7 @@ export default function ActivityPage() {
               onClick={handleRangeChange('d7')}
               disabled={isFetching}
             >
-              Last 7 days
+              7 days
             </button>
           </div>
           <span className="hint">Applies to every card on the page.</span>
