@@ -11,6 +11,8 @@ sharing a helpers module that has to serve every caller's slightly different
 needs.
 """
 
+import datetime
+import typing
 import uuid
 from collections.abc import AsyncGenerator
 from contextlib import asynccontextmanager
@@ -85,7 +87,7 @@ async def touch_user_activity(client: httpx.AsyncClient, token: str) -> None:
     """Trigger one authenticated request so LastActivityMiddleware writes a
     user_activity row for `token`'s owner.
 
-    activity_queries.fetch_day_range runs `SELECT min(activity_date)` /
+    activity_queries.fetch_window runs `SELECT min(activity_date)` /
     `max(activity_date)` through `_scalar_date`, which asserts the result is a
     `datetime.date` — on a fresh test DB with zero user_activity rows that
     assert fails (min() of an empty set is NULL), so the 200-path tests below
@@ -93,6 +95,34 @@ async def touch_user_activity(client: httpx.AsyncClient, token: str) -> None:
     """
     resp = await client.get("/api/users/me/profile", headers={"Authorization": f"Bearer {token}"})
     assert resp.status_code == 200, f"{resp.status_code} {resp.text}"
+
+
+def fake_payload(range_key: queries.RangeKey = "all") -> queries.Payload:
+    """A minimal, schema-complete Payload for tests that monkeypatch build_payload
+    and only care about call counts / the echoed range key, not real query data."""
+    return queries.Payload(
+        generated_at="2026-01-01T00:00:00+00:00",
+        promoted_since="2026-08-23",
+        range=range_key,
+        data_start="2026-01-01",
+        days=["2026-01-01"],
+        window_start_index=0,
+        last_complete_index=0,
+        activity=[],
+        signups=[],
+        bot=[],
+        train=[],
+        solves=[],
+        imports=[],
+        persona=[],
+        bot_players=0,
+        elo=[],
+        funnel=[],
+        tti=[],
+        stick=[],
+        conversion={},
+        conversion_compare=[],
+    )
 
 
 @asynccontextmanager
@@ -200,31 +230,12 @@ async def test_stats_rejects_impersonation_token(test_engine):
 async def test_stats_cached_for_ttl_then_refresh_forces_rebuild(test_engine, monkeypatch):
     """Two successive GETs inside the TTL build the payload once; ?refresh=1 rebuilds (D-5)."""
     build_calls = 0
-    fake_payload = queries.Payload(
-        generated_at="2026-01-01T00:00:00+00:00",
-        promoted_since="2026-08-23",
-        days=["2026-01-01"],
-        last_complete_index=0,
-        activity=[],
-        signups=[],
-        bot=[],
-        train=[],
-        solves=[],
-        imports=[],
-        persona=[],
-        bot_players=0,
-        elo=[],
-        funnel=[],
-        tti=[],
-        stick=[],
-        conversion={},
-        conversion_compare=[],
-    )
+    payload = fake_payload()
 
-    async def fake_build_payload(_engine):
+    async def fake_build_payload(_engine, _range_key, _now_utc):
         nonlocal build_calls
         build_calls += 1
-        return fake_payload
+        return payload
 
     # StatsCache.get() calls the module-level `build_payload` name inside
     # app/services/activity_stats.py, so patching that module attribute (not the imported
@@ -258,6 +269,162 @@ async def test_stats_cached_for_ttl_then_refresh_forces_rebuild(test_engine, mon
             assert build_calls == 2, "?refresh=1 must bypass the cache and rebuild"
 
 
+# ---------------------------------------------------------------------------
+# Range parameter (Quick 260831-p7x, Task 1)
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_stats_range_param_echoed_in_body(test_engine):
+    """?range=d30 returns 200 and echoes range == "d30" in the body (D1, D4)."""
+    async with httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=app), base_url="http://test"
+    ) as client:
+        _, admin_token = await make_superuser(client, test_engine)
+        await touch_user_activity(client, admin_token)
+
+        cache = StatsCache(test_engine, ttl_seconds=300)
+        async with cache_override(cache):
+            resp = await client.get(
+                "/api/admin/activity/stats",
+                params={"range": "d30"},
+                headers={"Authorization": f"Bearer {admin_token}"},
+            )
+
+    assert resp.status_code == 200, f"{resp.status_code} {resp.text}"
+    assert resp.json()["range"] == "d30"
+
+
+@pytest.mark.asyncio
+async def test_stats_rejects_unknown_range_with_422_not_5xx(test_engine):
+    """An unrecognised range value is a 422 validation failure, never a captured 5xx."""
+    async with httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=app), base_url="http://test"
+    ) as client:
+        _, admin_token = await make_superuser(client, test_engine)
+
+        resp = await client.get(
+            "/api/admin/activity/stats",
+            params={"range": "nonsense"},
+            headers={"Authorization": f"Bearer {admin_token}"},
+        )
+
+    assert resp.status_code == 422
+
+
+@pytest.mark.asyncio
+async def test_stats_omitting_range_behaves_as_all(test_engine):
+    """Omitting `range` entirely defaults to the all-time key (D1, D4)."""
+    async with httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=app), base_url="http://test"
+    ) as client:
+        _, admin_token = await make_superuser(client, test_engine)
+        await touch_user_activity(client, admin_token)
+
+        cache = StatsCache(test_engine, ttl_seconds=300)
+        async with cache_override(cache):
+            resp = await client.get(
+                "/api/admin/activity/stats",
+                headers={"Authorization": f"Bearer {admin_token}"},
+            )
+
+    assert resp.status_code == 200, f"{resp.status_code} {resp.text}"
+    assert resp.json()["range"] == "all"
+
+
+@pytest.mark.asyncio
+async def test_stats_cache_keys_range_independently(test_engine, monkeypatch):
+    """Two GETs for d30 inside the TTL build once; a d7 GET builds again; a third
+    d30 GET still reads the (separate) d30 cache entry (D4)."""
+    build_calls: dict[str, int] = {}
+
+    async def fake_build_payload(_engine, range_key, _now_utc):
+        build_calls[range_key] = build_calls.get(range_key, 0) + 1
+        return fake_payload(range_key)
+
+    monkeypatch.setattr("app.services.activity_stats.build_payload", fake_build_payload)
+
+    cache = StatsCache(test_engine, ttl_seconds=300)
+
+    async with httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=app), base_url="http://test"
+    ) as client:
+        _, admin_token = await make_superuser(client, test_engine)
+        headers = {"Authorization": f"Bearer {admin_token}"}
+
+        async with cache_override(cache):
+            r1 = await client.get(
+                "/api/admin/activity/stats", params={"range": "d30"}, headers=headers
+            )
+            r2 = await client.get(
+                "/api/admin/activity/stats", params={"range": "d30"}, headers=headers
+            )
+            assert r1.status_code == 200 and r2.status_code == 200
+            assert build_calls == {"d30": 1}, "two GETs for d30 inside the TTL must build once"
+
+            r3 = await client.get(
+                "/api/admin/activity/stats", params={"range": "d7"}, headers=headers
+            )
+            assert r3.status_code == 200
+            assert build_calls == {"d30": 1, "d7": 1}, "a different range key must build again"
+
+            r4 = await client.get(
+                "/api/admin/activity/stats", params={"range": "d30"}, headers=headers
+            )
+            assert r4.status_code == 200
+            assert build_calls == {"d30": 1, "d7": 1}, "d30 must still read its own cache entry"
+
+
+@pytest.mark.asyncio
+async def test_stats_refresh_invalidates_only_its_own_range(test_engine, monkeypatch):
+    """?range=d30&refresh=1 rebuilds only the d30 entry; the d7 entry survives (D4)."""
+    build_calls: dict[str, int] = {}
+
+    async def fake_build_payload(_engine, range_key, _now_utc):
+        build_calls[range_key] = build_calls.get(range_key, 0) + 1
+        return fake_payload(range_key)
+
+    monkeypatch.setattr("app.services.activity_stats.build_payload", fake_build_payload)
+
+    cache = StatsCache(test_engine, ttl_seconds=300)
+
+    async with httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=app), base_url="http://test"
+    ) as client:
+        _, admin_token = await make_superuser(client, test_engine)
+        headers = {"Authorization": f"Bearer {admin_token}"}
+
+        async with cache_override(cache):
+            await client.get("/api/admin/activity/stats", params={"range": "d30"}, headers=headers)
+            await client.get("/api/admin/activity/stats", params={"range": "d7"}, headers=headers)
+            assert build_calls == {"d30": 1, "d7": 1}
+
+            refreshed = await client.get(
+                "/api/admin/activity/stats",
+                params={"range": "d30", "refresh": "1"},
+                headers=headers,
+            )
+            assert refreshed.status_code == 200
+            assert build_calls == {"d30": 2, "d7": 1}, "refresh must rebuild only d30"
+
+            plain_d30 = await client.get(
+                "/api/admin/activity/stats", params={"range": "d30"}, headers=headers
+            )
+            assert plain_d30.status_code == 200
+            assert build_calls == {"d30": 2, "d7": 1}, (
+                "d30 must read the refreshed entry, not rebuild"
+            )
+
+            plain_d7 = await client.get(
+                "/api/admin/activity/stats", params={"range": "d7"}, headers=headers
+            )
+            assert plain_d7.status_code == 200
+            assert build_calls == {
+                "d30": 2,
+                "d7": 1,
+            }, "d7's cache must survive a refresh scoped to d30"
+
+
 @pytest.mark.asyncio
 async def test_readonly_engine_refuses_writes(test_engine):
     """build_readonly_engine's connect_args enforce a genuinely read-only session (D-4).
@@ -278,3 +445,114 @@ async def test_readonly_engine_refuses_writes(test_engine):
                 )
     finally:
         await engine.dispose()
+
+
+# ---------------------------------------------------------------------------
+# resolve_window (pure function, no DB) — Quick 260831-p7x, Task 1
+# ---------------------------------------------------------------------------
+
+
+def test_resolve_window_all_time_covers_full_dataset():
+    """`all` spans the whole dataset: no lead-in, no clamp, index 0 (D1)."""
+    data_start = datetime.date(2025, 1, 1)
+    data_end = data_start + datetime.timedelta(days=399)
+    now_utc = datetime.datetime.combine(
+        data_end, datetime.time(12, 0), tzinfo=datetime.timezone.utc
+    )
+
+    window = queries.resolve_window("all", now_utc, data_start, data_end)
+
+    assert window.window_start == data_start
+    assert window.lead_in_start == data_start
+    assert window.window_start_index == 0
+    assert len(window.days) == 400
+    assert window.days[-1] == data_end.isoformat()
+
+
+def test_resolve_window_d7_ends_today_with_lead_in():
+    """`d7` over an ample dataset ends on `today` and carries the full lead-in."""
+    data_start = datetime.date(2025, 1, 1)
+    data_end = data_start + datetime.timedelta(days=399)
+    today = data_end
+    now_utc = datetime.datetime.combine(today, datetime.time(12, 0), tzinfo=datetime.timezone.utc)
+
+    window = queries.resolve_window("d7", now_utc, data_start, data_end)
+
+    assert window.window_start == today - datetime.timedelta(days=6)
+    assert window.lead_in_start == window.window_start - datetime.timedelta(
+        days=queries.ROLLING_LEAD_IN_DAYS
+    )
+    assert window.window_start_index == queries.ROLLING_LEAD_IN_DAYS
+    assert window.days[window.window_start_index] == window.window_start.isoformat()
+
+
+@pytest.mark.parametrize("range_key,span", [("d30", 30), ("d90", 90)])
+def test_resolve_window_d30_d90_end_today_inclusive(range_key, span):
+    """A `d30`/`d90` window spans exactly `span` calendar days, today inclusive."""
+    data_start = datetime.date(2025, 1, 1)
+    data_end = data_start + datetime.timedelta(days=399)
+    today = data_end
+    now_utc = datetime.datetime.combine(today, datetime.time(12, 0), tzinfo=datetime.timezone.utc)
+
+    window = queries.resolve_window(range_key, now_utc, data_start, data_end)
+
+    assert window.window_start == today - datetime.timedelta(days=span - 1)
+    assert window.lead_in_start == window.window_start - datetime.timedelta(
+        days=queries.ROLLING_LEAD_IN_DAYS
+    )
+    assert window.window_start_index == queries.ROLLING_LEAD_IN_DAYS
+
+
+def test_resolve_window_clamps_up_to_data_start_on_short_dataset():
+    """A d90 window never starts before the data does (short-dataset clamp)."""
+    data_start = datetime.date(2026, 8, 1)
+    data_end = data_start + datetime.timedelta(days=9)  # a 10-day-old dataset
+    now_utc = datetime.datetime.combine(
+        data_end, datetime.time(12, 0), tzinfo=datetime.timezone.utc
+    )
+
+    window = queries.resolve_window("d90", now_utc, data_start, data_end)
+
+    assert window.window_start == data_start
+    assert window.lead_in_start == data_start
+    assert window.window_start_index == 0
+
+
+def test_resolve_window_clamps_down_to_data_end_on_stale_dataset():
+    """A d7 window on data that stopped 60 days ago degrades to the last data
+    day rather than pointing an index past the end of `days` (stale-dataset clamp)."""
+    data_start = datetime.date(2026, 1, 1)
+    data_end = data_start + datetime.timedelta(days=99)
+    now_utc = datetime.datetime.combine(
+        data_end + datetime.timedelta(days=60), datetime.time(12, 0), tzinfo=datetime.timezone.utc
+    )
+
+    window = queries.resolve_window("d7", now_utc, data_start, data_end)
+
+    assert window.window_start == data_end
+    assert 0 <= window.window_start_index <= len(window.days) - 1
+
+
+@pytest.mark.parametrize("range_key", typing.get_args(queries.RangeKey))
+def test_resolve_window_last_complete_index_keeps_current_meaning(range_key):
+    """last_complete_index == len(days) - 2 when data_end is today-or-later and
+    len(days) > 1, else len(days) - 1 — unchanged by the windowing feature."""
+    data_start = datetime.date(2026, 1, 1)
+    data_end = data_start + datetime.timedelta(days=199)
+    now_today = datetime.datetime.combine(
+        data_end, datetime.time(12, 0), tzinfo=datetime.timezone.utc
+    )
+
+    window_today = queries.resolve_window(range_key, now_today, data_start, data_end)
+    assert window_today.last_complete_index == len(window_today.days) - 2
+
+    # Once data_end is safely in the past (not "today"), the tail is complete.
+    now_stale = now_today + datetime.timedelta(days=5)
+    window_stale = queries.resolve_window(range_key, now_stale, data_start, data_end)
+    assert window_stale.last_complete_index == len(window_stale.days) - 1
+
+
+def test_resolve_window_range_mapping_covers_every_literal_value():
+    """Every RangeKey value has an entry in RANGE_WINDOW_DAYS."""
+    for range_key in typing.get_args(queries.RangeKey):
+        assert range_key in queries.RANGE_WINDOW_DAYS
