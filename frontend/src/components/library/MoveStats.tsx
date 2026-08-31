@@ -22,7 +22,7 @@ import type { GameFlawCard, FlawSeverity } from '@/types/library';
  * implementations in `LibraryGameCard.tsx` and `AnalysisTagsPanel.tsx`
  * (Plan 03 wires this component into both call sites).
  *
- * Renders (a) a single-line accuracy strip — "Accuracies" label, player
+ * Renders (a) a single-line accuracy strip — "Accuracy" label, player
  * accuracy, opponent accuracy — where each cell's background is the LITERAL board
  * color (white bg = white, dark bg = black) — and (b) a fixed 7-row category table (Gem, Great,
  * Best, Good, Inaccuracy, Mistake, Blunder), each row a per-side count cell.
@@ -124,6 +124,13 @@ export interface MoveStatsProps {
   showCompactRow?: boolean;
   /** Chevron handler for the compact row (mobile expand/collapse). */
   onToggleCollapse?: () => void;
+  /**
+   * Render the accuracy strip as the first row INSIDE the charcoal table card
+   * instead of above it on the page background. Used on /analysis, where the
+   * stats column reads as one card; the Library game card keeps the strip
+   * outside (default).
+   */
+  accuracyInsideCard?: boolean;
   className?: string;
 }
 
@@ -142,6 +149,7 @@ export function MoveStats({
   collapsed = false,
   showCompactRow = false,
   onToggleCollapse,
+  accuracyInsideCard = false,
   className,
 }: MoveStatsProps) {
   const severityCounts = severityCountsBySide(game.flaw_markers ?? []);
@@ -232,21 +240,35 @@ export function MoveStats({
     );
   }
 
+  // Accuracy strip: single row — bullseye + "Accuracy" label on the left, then
+  // player accuracy, opponent accuracy. By default it sits above the table card
+  // on the page background (px-2 matches the card's p-2 so the pill columns
+  // line up with the count columns); with `accuracyInsideCard` it becomes the
+  // first row inside the charcoal card instead.
+  const accuracyStrip = (
+    <div
+      className={cn(SIDE_ALIGNED_GRID_CLASS, !accuracyInsideCard && 'px-2')}
+      data-testid={tid('move-stats-accuracy-strip', gameId)}
+    >
+      <h4 className="flex items-center gap-2 py-1.5 text-sm font-semibold text-muted-foreground">
+        {/* Sized like the MoveQualityIcon (h-5 w-5) in the table rows below,
+            so the label column reads as one aligned icon+text list. */}
+        <span
+          aria-hidden="true"
+          className="flex h-5 w-5 items-center justify-center text-base leading-none"
+        >
+          🎯
+        </span>
+        Accuracy
+      </h4>
+      {renderAccuracyCell(playerSide)}
+      {renderAccuracyCell(opponentSide)}
+    </div>
+  );
+
   return (
     <div data-testid={tid('move-stats', gameId)} className={cn('flex flex-col gap-2', className)}>
-      {/* Accuracies strip: single row — "Accuracies" label on the left, then
-          player accuracy, opponent accuracy. No Card wrapper: the label sits
-          transparently on the page background so only the two color-coded
-          accuracy pills read as surfaces. px-2 matches the table card's p-2
-          below so the pill columns line up with the count columns. */}
-      <div
-        className={cn(SIDE_ALIGNED_GRID_CLASS, 'px-2')}
-        data-testid={tid('move-stats-accuracy-strip', gameId)}
-      >
-        <h4 className="py-1.5 text-sm font-semibold text-muted-foreground">Accuracies</h4>
-        {renderAccuracyCell(playerSide)}
-        {renderAccuracyCell(opponentSide)}
-      </div>
+      {!accuracyInsideCard && accuracyStrip}
 
       {/* Mobile compact summary row (UAT 179): 8 columns spanning the card width
           — one `count + icon` cell per category (user-side counts) plus a
@@ -316,10 +338,11 @@ export function MoveStats({
           count column sits centered under its accuracy pill. Rows use
           `contents` so all rows participate in the one shared grid. */}
       <div
-        className="charcoal-texture rounded-md p-2"
+        className="charcoal-texture flex flex-col gap-2 rounded-md p-2"
         hidden={collapsed}
         data-testid={tid('move-stats-table-card', gameId)}
       >
+        {accuracyInsideCard && accuracyStrip}
         <div className={SIDE_ALIGNED_GRID_CLASS} data-testid={tid('move-stats-table', gameId)}>
           {CATEGORY_ORDER.map((category) => {
             // Rows where neither side has a count are kept (D-03) but dimmed,
