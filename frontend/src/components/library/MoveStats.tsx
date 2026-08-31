@@ -183,7 +183,8 @@ export function MoveStats({
           data-testid={tid('move-stats-accuracy-strip', gameId)}
         >
           {renderAccuracyCell(playerSide)}
-          <h4 className="flex items-center justify-center px-2 py-1.5 text-sm font-semibold">
+          {/* bg-black/20 matches the CardHeader band darkening (ui/card.tsx). */}
+          <h4 className="flex items-center justify-center bg-black/20 px-2 py-1.5 text-sm font-semibold">
             Accuracies
           </h4>
           {renderAccuracyCell(opponentSide)}
