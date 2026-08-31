@@ -151,25 +151,39 @@ const tipRows=(title,rows)=>`<div class="th">${title}</div>`+rows.map(r=>
 function lineChart(host,{labels,series,h=280,fmt=num,every=7,yMax=null,pctAxis=false,xfmt=null,xcap=null}){
   const c=C(), {svg,w,narrow}=frame(host,h);
   const x0=narrow?AXIS_LEFT_NARROW:AXIS_LEFT, x1=w-(narrow?AXIS_RIGHT_NARROW:AXIS_RIGHT), yTop=18,yBot=h-30;
-  const max=yMax!=null?yMax:niceMax(Math.max(1,...series.flatMap(s=>s.values)));
+  // Only finite values feed the auto max — a series shorter than the label
+  // axis (e.g. the entry-windowed retention tail) contributes nothing past
+  // its own last point rather than poisoning the scale with NaN/undefined.
+  const finiteValues=series.flatMap(s=>s.values.filter(Number.isFinite));
+  const max=yMax!=null?yMax:niceMax(Math.max(1,...finiteValues));
   const X=i=>x0+(labels.length>1?(x1-x0)*i/(labels.length-1):0);
   const Y=v=>yBot-(yBot-yTop)*(v/max);
   yAxis(svg,x0,x1,yTop,yBot,max,pctAxis?(v=>Math.round(v*100)+"%"):axisNum,c);
   xAxis(svg,labels,X,yBot,c,every,xfmt);
   if(xcap){const t=el('text',{x:x1,y:14,'text-anchor':'end',fill:c.ink3,'font-size':12.5});t.textContent=xcap;svg.appendChild(t);}
   series.forEach(s=>{
+    // Build the path/area/end-dot from only this series' finite points, so a
+    // series shorter than the label axis simply ends early instead of
+    // emitting a NaN path segment out to the axis's end.
+    const pts=s.values.map((v,i)=>[i,v]).filter(([,v])=>Number.isFinite(v));
+    if(!pts.length) return;
     if(s.area){
-      const d="M"+X(0)+","+yBot+" "+s.values.map((v,i)=>"L"+X(i)+","+Y(v)).join(" ")+" L"+X(labels.length-1)+","+yBot+"Z";
+      const d="M"+X(pts[0][0])+","+yBot+" "+pts.map(([i,v])=>"L"+X(i)+","+Y(v)).join(" ")+" L"+X(pts[pts.length-1][0])+","+yBot+"Z";
       svg.appendChild(el("path",{d,fill:s.color,opacity:.12}));
     }
-    svg.appendChild(el("path",{d:"M"+s.values.map((v,i)=>X(i)+","+Y(v)).join(" L"),fill:"none",stroke:s.color,
+    svg.appendChild(el("path",{d:"M"+pts.map(([i,v])=>X(i)+","+Y(v)).join(" L"),fill:"none",stroke:s.color,
       "stroke-width":2,"stroke-linejoin":"round","stroke-linecap":"round"}));
-    const li=s.values.length-1;
-    svg.appendChild(el("circle",{cx:X(li),cy:Y(s.values[li]),r:4,fill:s.color,stroke:c.surface,"stroke-width":2}));
+    const [li,lv]=pts[pts.length-1];
+    svg.appendChild(el("circle",{cx:X(li),cy:Y(lv),r:4,fill:s.color,stroke:c.surface,"stroke-width":2}));
   });
   hover(svg,x0,x1,yTop,yBot,labels.length,X,(i,dots,px)=>{
-    series.forEach(s=>dots.appendChild(el("circle",{cx:px,cy:Y(s.values[i]),r:4.5,fill:s.color,stroke:c.surface,"stroke-width":2})));
-    return tipRows(xfmt?xfmt(labels[i],i):long(labels[i]),series.map(s=>({c:s.color,k:s.name,v:fmt(s.values[i])})));
+    // A series with no value at the hovered index (past its own end) skips
+    // its dot and reports the em-dash placeholder instead of undefined/NaN.
+    series.forEach(s=>{
+      if(Number.isFinite(s.values[i])) dots.appendChild(el("circle",{cx:px,cy:Y(s.values[i]),r:4.5,fill:s.color,stroke:c.surface,"stroke-width":2}));
+    });
+    return tipRows(xfmt?xfmt(labels[i],i):long(labels[i]),
+      series.map(s=>({c:s.color,k:s.name,v:Number.isFinite(s.values[i])?fmt(s.values[i]):DASH})));
   },c);
 }
 /* ---------- stacked / plain bars ---------- */
@@ -246,7 +260,9 @@ function funnel(host,{rows,color,unit}){
   const indexW=narrow?FUNNEL_INDEX_W_NARROW:FUNNEL_INDEX_W;
   const labelPx=narrow?FUNNEL_LABEL_PX_NARROW:FUNNEL_LABEL_PX;
   rows.forEach((r,i)=>{
-    const y=i*58+6, share=r.value/top;
+    // Guarded: a funnel whose first stage is 0 (empty window) renders 0%
+    // bars instead of NaN geometry and "NaN%" text.
+    const y=i*58+6, share=top?r.value/top:0;
     const n=el("text",{x:x0,y:y+13,fill:c.ink3,"font-size":12.5,"font-family":"IBM Plex Mono, monospace"});
     n.textContent=String(i+1).padStart(2,"0"); svg.appendChild(n);
     const lb=el("text",{x:x0+indexW,y:y+13,fill:c.ink,"font-size":labelPx,"font-weight":600}); lb.textContent=r.label;

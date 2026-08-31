@@ -7,10 +7,21 @@
  * `string | number | null` rather than a named interface per row — the same
  * shape pages/activity/render.js destructures positionally.
  */
+
+/**
+ * The four presets the global time-range filter offers (Quick 260831-p7x,
+ * D1). Mirrors `app.services.activity_queries.RangeKey`. No custom range, no
+ * "Today", no fifth preset — exactly these four, ever.
+ */
+export type ActivityRangeKey = 'all' | 'd90' | 'd30' | 'd7';
+
 export interface ActivityStatsPayload {
   generated_at: string;
   promoted_since: string;
+  range: ActivityRangeKey;
+  data_start: string;
   days: string[];
+  window_start_index: number;
   last_complete_index: number;
   activity: number[][];
   signups: (string | number | null)[][];
