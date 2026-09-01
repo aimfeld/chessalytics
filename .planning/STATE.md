@@ -117,7 +117,7 @@ Cloudflare nameservers, `maia3_simplified.onnx` and `stockfish-18-lite-single.wa
 return `cf-cache-status: HIT` while still carrying the origin's `max-age=2592000`, and
 `maia-worker.js` still returns `cache-control: no-cache`.
 
-Last activity: 2026-08-31 - Completed quick task 260831-s4y: fast-forward Next button on the analysis board (150ms replay to next key moment, UAT approved)
+Last activity: 2026-09-01 - Completed quick task 260901-oxh: fast-forward stutter fix (200ms cadence with derived board animation, synchronous first step, live-engine + gem-sweep suppression, left eval bar freeze). HUMAN-UAT pending
 
 Prior: Phase 213 complete
 `games.initial_fen` added and backfilled in-migration, the opening-transition sample
@@ -858,6 +858,7 @@ None active.
 | 260831-s4y | Fast-forward button on the /analysis board controls: `useFastForward` hook replays the main line at 150ms/ply (move sound on every step) until the next blunder/mistake/gem/great on either side (inaccuracies and best/good skipped), animated run-out to the final position when none remain, cancel on any other navigation via commanded-node comparison. Opt-in `BoardControls` props keep Openings/Bots/Train at four buttons; wired to desktop card + mobile footer through the shared `boardControls()` helper. Human-verified (UAT approved) | 2026-08-31 | 8a70b8d15 | [260831-s4y-add-a-fast-forward-next-button-to-the-an](./quick/260831-s4y-add-a-fast-forward-next-button-to-the-an/) |
 | 77 | Rearrange MoveStats Accuracies card into one line (player \| Accuracies \| opponent) | 2026-08-31 | 0b3c31421 | — |
 | 78 | Game card headers show the player's side first (Library, Opening, Endgame) | 2026-08-31 | eddf9195b | — |
+| 260901-oxh | Fast-forward stutter fix — three independent causes. (1) The 150ms cadence was half react-chessboard v5's 300ms default `animationDurationInMs`, so its `[position]`-keyed effect snapped to the pending `waitingForAnimationPosition` and restarted, aborting every slide at ~half travel (the "skipped moves"); cadence now 200ms with `FAST_FORWARD_ANIMATION_MS` DERIVED from the step constant and threaded through a new optional `ChessBoard` prop, run-scoped only so normal navigation keeps 300ms. (2) `start()` opened with a full step of dead time — first step now fires synchronously. (3) All four live engines (Stockfish free-run, Maia, FlawChess, Stockfish grading) carry a 150ms `RAPID_STEP_DEBOUNCE_MS` with a `sinceLast > window` fire-immediately branch; `setTimeout` is never early, so at 200ms that branch won on EVERY ply, deterministically — the per-ply engine storm delayed the replay's own timers and caused the uneven sound rhythm. Suppressed via `fen: null` ONLY, never `enabled` (which owns Worker lifecycle AND is the UI switch state). Gem sweep yields via `liveBusy`, not `enabled`, for the same lifecycle reason. Left eval bar holds its last live fraction through a run instead of dropping to the sigmoid midpoint (midpoint reads as "equal position", i.e. wrong information), with `terminalWhiteFraction` still first in the precedence chain. HUMAN-UAT pending: needs a browser | 2026-09-01 | 86a0dbea0 | [260901-oxh-fast-forward-cadence-animation-and-engin](./quick/260901-oxh-fast-forward-cadence-animation-and-engin/) |
 
 ## Deferred Items
 
