@@ -120,6 +120,28 @@ const WEBGPU_RUNTIME_PATH = '/maia/ort.webgpu.min.js';
 /** Prefix onnxruntime-web appends its build-specific .wasm/.mjs filename to. */
 const WASM_ASSET_PREFIX = '/maia/';
 
+/**
+ * onnxruntime-web log threshold, applied BOTH globally (`ort.env.logLevel`,
+ * which must be set before the backend initialises) and per session
+ * (`logSeverityLevel`, where 4 === fatal — the session logger is what actually
+ * emits the noisy lines).
+ *
+ * Why: ORT's C++ logger writes through Emscripten's `printErr`, i.e. straight
+ * to `console.warn`/`console.error` with a full wasm stack trace, for things
+ * that are entirely expected here:
+ *   - `VerifyEachNodeIsAssignedToAnEp` (2 warnings on EVERY WebGPU init — ORT
+ *     deliberately keeps shape ops on CPU),
+ *   - `ExecuteKernel ... Program Cast requires f16 but the device does not
+ *     support it` — the warmup failure this worker CATCHES on purpose to
+ *     trigger the host's wasm respawn (initSession, below).
+ * None of it is actionable in the console: a real failure still throws, its
+ * message is forwarded to the main thread as `webgpu-unavailable`, and
+ * maiaWorkerHost.ts records it as a Sentry breadcrumb. The fallback itself is
+ * announced with a single `console.info` line instead.
+ */
+const ORT_LOG_LEVEL = 'fatal';
+const ORT_LOG_SEVERITY_FATAL = 4;
+
 // ─── Board encoding constants (mirrors maiaEncoding.ts — see file header) ─────────────────
 
 const NUM_SQUARES_PER_SIDE = 8;
@@ -350,11 +372,15 @@ async function initWasmOnlySession(onProgress, runtimeBuffer, assetCacheName) {
   importScripts(WASM_ONLY_RUNTIME_PATH);
   ort.env.wasm.numThreads = 1; // NEVER > 1 — no cross-origin isolation (Phase 136 D-3)
   ort.env.wasm.wasmPaths = WASM_ASSET_PREFIX;
+  ort.env.logLevel = ORT_LOG_LEVEL;
   if (runtimeBuffer) {
     ort.env.wasm.wasmBinary = new Uint8Array(runtimeBuffer);
   }
   const modelBuffer = await fetchModelBuffer(onProgress, assetCacheName);
-  session = await ort.InferenceSession.create(modelBuffer, { executionProviders: ['wasm'] });
+  session = await ort.InferenceSession.create(modelBuffer, {
+    executionProviders: ['wasm'],
+    logSeverityLevel: ORT_LOG_SEVERITY_FATAL,
+  });
   if (runtimeBuffer) {
     ort.env.wasm.wasmBinary = undefined;
   }
@@ -398,6 +424,7 @@ async function initSession(chosenBackend, onProgress, runtimeBuffer, assetCacheN
   importScripts(WEBGPU_RUNTIME_PATH);
   ort.env.wasm.numThreads = 1;
   ort.env.wasm.wasmPaths = WASM_ASSET_PREFIX;
+  ort.env.logLevel = ORT_LOG_LEVEL;
   if (runtimeBuffer) {
     ort.env.wasm.wasmBinary = new Uint8Array(runtimeBuffer);
   }
@@ -409,7 +436,10 @@ async function initSession(chosenBackend, onProgress, runtimeBuffer, assetCacheN
   // triggering a respawn that re-runs the same doomed download from scratch.
   const modelBuffer = await fetchModelBuffer(onProgress, assetCacheName);
   try {
-    session = await ort.InferenceSession.create(modelBuffer, { executionProviders: ['webgpu'] });
+    session = await ort.InferenceSession.create(modelBuffer, {
+      executionProviders: ['webgpu'],
+      logSeverityLevel: ORT_LOG_SEVERITY_FATAL,
+    });
     if (runtimeBuffer) {
       // Phase 213-09: see initWasmOnlySession's doc comment — the raw bytes
       // are only needed at create() time.
@@ -442,12 +472,19 @@ async function initSession(chosenBackend, onProgress, runtimeBuffer, assetCacheN
       // releasable at all — swallow and proceed to report the outcome.
     }
     session = null;
+    const message = err && err.message ? err.message : String(err);
+    // Expected on any device whose WebGPU device lacks a feature the model
+    // needs (e.g. shader-f16) or whose driver rejects a lazily-compiled
+    // shader: the host respawns pinned to wasm and Maia works normally, so
+    // this is INFO, not an error. ORT's own error/warning spam for the same
+    // event is silenced via ORT_LOG_LEVEL — this line replaces it.
+    console.info('[maia] WebGPU unavailable, falling back to WASM:', message);
     // Phase 213-12 (D-20): no longer hands the downloaded model bytes to the
     // replacement (G-213-8 retired) — the replacement's own
     // `fetchModelBuffer` call reads the model from CacheStorage instead,
     // which costs zero network on a cache hit without a second transferable
     // in the init message (the exact shape that produced `G-213-36`).
-    return { ok: false, message: err && err.message ? err.message : String(err) };
+    return { ok: false, message };
   }
 }
 
