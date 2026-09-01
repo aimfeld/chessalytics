@@ -88,7 +88,7 @@ import { VariationTree } from '@/components/analysis/VariationTree';
 import type { FlawMarkerEntry } from '@/components/analysis/VariationTree';
 import type { FlawSeverity } from '@/types/library';
 import { isRareMoveTier } from '@/types/library';
-import { useFastForward } from '@/hooks/useFastForward';
+import { useFastForward, FAST_FORWARD_ANIMATION_MS } from '@/hooks/useFastForward';
 import { tacticOrientationAtPly } from '@/lib/tacticOrientation';
 import { EvalChart } from '@/components/library/EvalChart';
 import { AnalysisPendingPill } from '@/components/library/AnalysisPendingPill';
@@ -609,6 +609,18 @@ export default function Analysis() {
   // real-device mobile-memory UAT per 155-RESEARCH.md D-02).
   const [maiaEnabled, setMaiaEnabled] = useState(true);
   const [flawChessEnabled, setFlawChessEnabled] = useState(true);
+  // Quick 260901-oxh: the fast-forward run state, LIFTED up here rather than read
+  // off `fastForward.isRunning`. The useFastForward call sits ~1,000 lines below
+  // (it needs `evalChartPly`), but the consumers that must react to a run are the
+  // engine hooks declared just below this line — and hooks cannot be reordered
+  // around that. So the hook pushes its run state upward through
+  // `onRunningChange` instead of the page pulling it downward.
+  //
+  // This is NOT a circular dependency: the setter flows down into useFastForward,
+  // the value flows up, and useFastForward reads none of the engines. It is also
+  // NOT a render loop: each transition is a one-shot true/false write from an
+  // event handler or a timer callback, never from render.
+  const [fastForwardRunning, setFastForwardRunning] = useState(false);
   const [boardFlipped, setBoardFlipped] = useState(false);
   // Once we have auto-oriented the board to the player's color, manual flips win.
   const hasAutoFlipped = useRef(false);
@@ -1775,6 +1787,7 @@ export default function Analysis() {
     currentPly: evalChartPly,
     stopPlies: fastForwardStopPlies,
     goToNode,
+    onRunningChange: setFastForwardRunning,
   });
 
   // Multi-active chip highlight (Quick 260703-kyb): every currently OPEN or
@@ -3130,6 +3143,20 @@ export default function Analysis() {
       squareMarkers={boardSquareMarkers}
       maxWidth={BOARD_MAX_WIDTH}
       heightRef={heightRef}
+      // Quick 260901-oxh: shorten the piece slide ONLY while a fast-forward run
+      // is in flight. The `undefined` branch is load-bearing — normal
+      // single-step navigation (back/forward, move-list click, eval-chart
+      // scrub) must keep react-chessboard's 300ms default; only the 200ms
+      // replay cadence needs a slide that finishes before the next commit.
+      //
+      // Accepted cost: the LANDING move animates at 300ms, not
+      // FAST_FORWARD_ANIMATION_MS. useFastForward's stop() runs in the same
+      // tick as the final goToNode, so React commits the arrival position and
+      // `fastForwardRunning: false` together and this prop is already back to
+      // `undefined` when the library's position effect reads it. A fuller
+      // arrival slide is the desirable behaviour, so this is deliberate rather
+      // than an oversight.
+      animationDurationInMs={fastForwardRunning ? FAST_FORWARD_ANIMATION_MS : undefined}
     />
   );
 

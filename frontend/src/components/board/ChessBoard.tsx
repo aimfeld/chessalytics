@@ -94,6 +94,23 @@ interface ChessBoardProps {
    * budget resolves to Infinity, so no other caller's behavior changes.
    */
   heightRef?: RefObject<HTMLElement | null>;
+  /**
+   * Piece-slide duration in ms, forwarded verbatim to react-chessboard's option
+   * of the same name so the passthrough is obvious at both ends.
+   *
+   * Omitted (the default) keeps the library's own 300ms fallback: it applies
+   * that as a destructuring default in ChessboardProvider, which fires on
+   * `undefined`, and these props reach it via a plain `...options` spread — so
+   * passing `undefined` is the intended "unchanged" path, not a bug.
+   *
+   * It exists so the analysis board can SHORTEN the slide for the duration of a
+   * fast-forward run (quick 260901-oxh), where a 300ms animation would outlast
+   * the replay's 200ms per-ply cadence and be aborted at half travel.
+   *
+   * Pairs with `showAnimations` below: on touch devices animations are off
+   * entirely, so this duration is inert there.
+   */
+  animationDurationInMs?: number;
 }
 
 // Coordinate labels use the opposite square's color for contrast
@@ -256,7 +273,7 @@ function ArrowOverlay({
   );
 }
 
-export function ChessBoard({ position, onPieceDrop, flipped = false, lastMove, lastMoveColor, arrows = [], squareMarkers = [], id, maxWidth = 400, heightRef }: ChessBoardProps) {
+export function ChessBoard({ position, onPieceDrop, flipped = false, lastMove, lastMoveColor, arrows = [], squareMarkers = [], id, maxWidth = 400, heightRef, animationDurationInMs }: ChessBoardProps) {
   const containerRef = useRef<HTMLDivElement>(null);
   // Start at 0 so we don't mount react-chessboard until the container has measured.
   // Mounting with a non-zero width inside a display:none parent (e.g. the hidden
@@ -409,6 +426,8 @@ export function ChessBoard({ position, onPieceDrop, flipped = false, lastMove, l
       // react-chessboard v5 animation state machine causes black screen on mobile
       // when position prop updates — disable animations on touch devices only
       showAnimations,
+      // Undefined here = the library's own 300ms default (see the prop doc).
+      animationDurationInMs,
       // Disable library's built-in arrow drawing — we use our own ArrowOverlay
       // which avoids NaN path errors from the library's same-square division-by-zero bug
       allowDrawingArrows: false,
@@ -417,7 +436,7 @@ export function ChessBoard({ position, onPieceDrop, flipped = false, lastMove, l
       onSquareClick: handleSquareClick,
       onPieceDrop: handlePieceDrop,
     }),
-    [position, flipped, boardStyle, showAnimations, squareStyles, squareRenderer, handleSquareClick, handlePieceDrop, id],
+    [position, flipped, boardStyle, showAnimations, animationDurationInMs, squareStyles, squareRenderer, handleSquareClick, handlePieceDrop, id],
   );
 
   return (
