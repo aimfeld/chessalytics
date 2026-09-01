@@ -36,6 +36,12 @@ in `YYYY-MM-DD` (Europe/Zurich).
 
 - Train no longer serves the same puzzle forever: a puzzle you keep missing is now set aside after 6 total misses, even if you solved it correctly somewhere in between. Previously only a puzzle you had never once solved could be parked, so a puzzle you alternately solved and missed stayed in the rotation indefinitely.
 
+- Pieces now slide between squares on every device. Board animation had been switched off for anyone whose browser reported touch support, which quietly included most touchscreen laptops as well as phones and tablets.
+
+### Fixed
+
+- Fast-forward on the analysis board no longer skips moves. The replay used to jump pieces straight to their destination and play its move sounds on an uneven beat; it now steps at a steady pace with each piece visibly arriving before the next move starts. It also moves the first piece the moment you press it, instead of pausing first.
+
 ## [v2.13] Ways In & Honest Answers — 2026-08-22
 
 ### Added

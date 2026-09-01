@@ -413,7 +413,7 @@ export function ChessBoard({ position, onPieceDrop, flipped = false, lastMove, l
   );
 
   /**
-   * Piece animation is currently enabled EVERYWHERE, mobile included.
+   * Piece animation is enabled EVERYWHERE, mobile included.
    *
    * History (quick 260901-oxh). Phase 19 (2026-03-21) disabled animation on
    * touch devices via `!('ontouchstart' in window)`, because react-chessboard
@@ -426,16 +426,18 @@ export function ChessBoard({ position, onPieceDrop, flipped = false, lastMove, l
    *      animation on every navigation — and FAST_FORWARD_ANIMATION_MS was
    *      dead code for them, since the library early-returns
    *      `setCurrentPosition(newPosition)` when showAnimations is false.
-   *   2. The premise is now UNVERIFIED. The guard was written against
+   *   2. The premise no longer holds. The guard was written against
    *      react-chessboard 5.10.0 and 5.10.0 is still what we ship, so the
-   *      library cannot have fixed it — but no release from 5.11.0 to 5.12.1
-   *      touches the animation path either, and our OWN board code has since
-   *      been rewritten around it (squareRenderer, ArrowOverlay, JS board
-   *      sizing). A misdiagnosed root cause we have incidentally fixed is the
-   *      plausible reading, so the guard is being retired on a trial basis.
+   *      library cannot have fixed it, and no release from 5.11.0 to 5.12.1
+   *      touches the animation path either. But our OWN board code has been
+   *      rewritten around that path since March (squareRenderer, ArrowOverlay,
+   *      JS board sizing), so the original diagnosis was most likely wrong
+   *      about the cause. Retiring the guard was VERIFIED on a real phone
+   *      (2026-09-01): stepping through moves on /analysis animates normally
+   *      and the black screen could not be reproduced.
    *
-   * REVERT PATH — if the black screen reappears on a real phone, restore the
-   * narrow (not the original broad) guard, which was verified green:
+   * REVERT PATH — if the black screen ever resurfaces on some device, restore
+   * the narrow (not the original broad) guard, which was also verified green:
    *
    *   const showAnimations = useMemo(
    *     () =>
