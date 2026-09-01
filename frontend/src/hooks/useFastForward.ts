@@ -29,10 +29,18 @@ import type { NodeId } from '@/hooks/useAnalysisBoard';
  * mid-slide snapped `currentPosition` to the still-pending
  * `waitingForAnimationPosition` and restarted the animation — every
  * intermediate piece slide was aborted at roughly half travel, which is the
- * "moves get visually skipped" symptom. The cadence is now 200ms and the board
+ * "moves get visually skipped" symptom. The cadence is now 250ms and the board
  * animation is DERIVED from it (below) so the two can never drift apart again.
+ *
+ * 250ms (raised from the 200ms this fix first shipped with) is a watchability
+ * choice, not a correctness one: it gives the eye a beat of stillness on each
+ * position. Any value works as long as the derived animation stays below it.
+ * Run-length context for retuning — the measured gap between consecutive
+ * notable plies is p50=3, p75=7, p90=16, p99=43 plies, so the cost of a slower
+ * cadence is paid almost entirely in the tail (at 250ms: ~750ms median run,
+ * ~4s at p90).
  */
-export const FAST_FORWARD_STEP_MS = 200;
+export const FAST_FORWARD_STEP_MS = 250;
 
 /**
  * Margin between the end of a piece slide and the next position commit. Its

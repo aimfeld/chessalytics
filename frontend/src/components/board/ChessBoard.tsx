@@ -105,7 +105,8 @@ interface ChessBoardProps {
    *
    * It exists so the analysis board can SHORTEN the slide for the duration of a
    * fast-forward run (quick 260901-oxh), where a 300ms animation would outlast
-   * the replay's 200ms per-ply cadence and be aborted at half travel.
+   * the replay's per-ply cadence (FAST_FORWARD_STEP_MS) and be aborted partway
+   * through the slide.
    *
    * Pairs with `showAnimations` below: on touch devices animations are off
    * entirely, so this duration is inert there.

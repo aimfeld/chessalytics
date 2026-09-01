@@ -716,7 +716,8 @@ export default function Analysis() {
   // `sinceLast > RAPID_STEP_DEBOUNCE_MS` fire-immediately branch
   // (useStockfishEngine.ts:41/:277-286, useMaiaEngine.ts:45,
   // useFlawChessEngine.ts:33, useStockfishGradingEngine.ts:60/:334). setTimeout is
-  // never early, so at the replay's 200ms cadence `sinceLast` ALWAYS exceeds the
+  // never early, so at any FAST_FORWARD_STEP_MS above that 150ms window (the
+  // cadence is 250ms) `sinceLast` ALWAYS exceeds the
   // window and the immediate branch wins on every replayed ply, deterministically
   // — four fresh searches per ply. That per-ply engine load is what delays the
   // replay's own timer callbacks and makes the move sounds arrive unevenly, so
@@ -3294,8 +3295,8 @@ export default function Analysis() {
       // Quick 260901-oxh: shorten the piece slide ONLY while a fast-forward run
       // is in flight. The `undefined` branch is load-bearing — normal
       // single-step navigation (back/forward, move-list click, eval-chart
-      // scrub) must keep react-chessboard's 300ms default; only the 200ms
-      // replay cadence needs a slide that finishes before the next commit.
+      // scrub) must keep react-chessboard's 300ms default; only the replay
+      // cadence needs a slide that finishes before the next commit.
       //
       // Accepted cost: the LANDING move animates at 300ms, not
       // FAST_FORWARD_ANIMATION_MS. useFastForward's stop() runs in the same
