@@ -413,39 +413,51 @@ export function ChessBoard({ position, onPieceDrop, flipped = false, lastMove, l
   );
 
   /**
-   * Animations are disabled on TOUCH-PRIMARY devices only, because
-   * react-chessboard v5's animation state machine black-screens there on a
-   * position-prop update.
+   * Piece animation is currently enabled EVERYWHERE, mobile included.
    *
-   * Bug fix (quick 260901-oxh): this used to test `!('ontouchstart' in window)`,
-   * which is far too broad — Chrome defines `ontouchstart` on any DESKTOP that
-   * merely reports touch capability (a touchscreen laptop, a convertible, a
-   * machine with a touch monitor). Those users silently lost piece animation on
-   * every navigation, not just fast-forward, and the whole
-   * FAST_FORWARD_ANIMATION_MS mechanism was dead code for them (the library
-   * early-returns `setCurrentPosition(newPosition)` when showAnimations is
-   * false). `(pointer: coarse)` asks the question actually intended — "is the
-   * PRIMARY input a finger?" — which is true on phones/tablets (bug avoided)
-   * and false on a touchscreen laptop with a trackpad (animation restored).
+   * History (quick 260901-oxh). Phase 19 (2026-03-21) disabled animation on
+   * touch devices via `!('ontouchstart' in window)`, because react-chessboard
+   * v5's animation state machine was observed black-screening on mobile when
+   * the position prop updates. Two separate problems with that:
    *
-   * `matchMedia` is evaluated once on mount, matching the previous behaviour:
-   * a device does not change its primary input class mid-session, and making
-   * this reactive would rebuild the `options` memo for no benefit.
+   *   1. The TEST was far too broad. Chrome defines `ontouchstart` on any
+   *      DESKTOP merely reporting touch capability (touchscreen laptop,
+   *      convertible, touch monitor), so those users silently lost piece
+   *      animation on every navigation — and FAST_FORWARD_ANIMATION_MS was
+   *      dead code for them, since the library early-returns
+   *      `setCurrentPosition(newPosition)` when showAnimations is false.
+   *   2. The premise is now UNVERIFIED. The guard was written against
+   *      react-chessboard 5.10.0 and 5.10.0 is still what we ship, so the
+   *      library cannot have fixed it — but no release from 5.11.0 to 5.12.1
+   *      touches the animation path either, and our OWN board code has since
+   *      been rewritten around it (squareRenderer, ArrowOverlay, JS board
+   *      sizing). A misdiagnosed root cause we have incidentally fixed is the
+   *      plausible reading, so the guard is being retired on a trial basis.
    *
-   * The `typeof` guard follows the same idiom as `useIsDesktop.ts:22` and
-   * `useInstallPrompt.ts:177` — jsdom ships no `matchMedia` and this repo has
-   * no global stub for it, so an unguarded call would throw in every test that
-   * renders a board. Absent `matchMedia` we assume a pointer device and keep
-   * animations ON, which is what the old `'ontouchstart' in window` test also
-   * evaluated to under jsdom.
+   * REVERT PATH — if the black screen reappears on a real phone, restore the
+   * narrow (not the original broad) guard, which was verified green:
+   *
+   *   const showAnimations = useMemo(
+   *     () =>
+   *       typeof window === 'undefined' || typeof window.matchMedia !== 'function'
+   *         ? true
+   *         : !window.matchMedia('(pointer: coarse)').matches,
+   *     [],
+   *   );
+   *
+   * That form needs the `(pointer: coarse)` answers in Analysis.test.tsx's
+   * matchMedia shims to stay TRUE; those shims are left in place precisely so
+   * this revert stays a one-line change.
+   *
+   * The `MODE !== 'test'` term is NOT a device concern — it is jsdom's. jsdom
+   * performs no layout, so every square measures 0 and react-chessboard's
+   * animation effect throws "Square width not found"
+   * (dist/index.esm.js:5317) on any position change. The animation path is
+   * therefore unreachable under vitest no matter what we pass, and asserting
+   * otherwise would only be asserting against a stub. Real browsers (including
+   * every mobile one) take the `true` branch.
    */
-  const showAnimations = useMemo(
-    () =>
-      typeof window === 'undefined' || typeof window.matchMedia !== 'function'
-        ? true
-        : !window.matchMedia('(pointer: coarse)').matches,
-    [],
-  );
+  const showAnimations = import.meta.env.MODE !== 'test';
 
   const options = useMemo(
     () => ({
