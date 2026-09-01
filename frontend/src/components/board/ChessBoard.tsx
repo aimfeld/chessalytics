@@ -412,7 +412,40 @@ export function ChessBoard({ position, onPieceDrop, flipped = false, lastMove, l
     [squareStyles, handleSquareClick],
   );
 
-  const showAnimations = useMemo(() => !('ontouchstart' in window), []);
+  /**
+   * Animations are disabled on TOUCH-PRIMARY devices only, because
+   * react-chessboard v5's animation state machine black-screens there on a
+   * position-prop update.
+   *
+   * Bug fix (quick 260901-oxh): this used to test `!('ontouchstart' in window)`,
+   * which is far too broad — Chrome defines `ontouchstart` on any DESKTOP that
+   * merely reports touch capability (a touchscreen laptop, a convertible, a
+   * machine with a touch monitor). Those users silently lost piece animation on
+   * every navigation, not just fast-forward, and the whole
+   * FAST_FORWARD_ANIMATION_MS mechanism was dead code for them (the library
+   * early-returns `setCurrentPosition(newPosition)` when showAnimations is
+   * false). `(pointer: coarse)` asks the question actually intended — "is the
+   * PRIMARY input a finger?" — which is true on phones/tablets (bug avoided)
+   * and false on a touchscreen laptop with a trackpad (animation restored).
+   *
+   * `matchMedia` is evaluated once on mount, matching the previous behaviour:
+   * a device does not change its primary input class mid-session, and making
+   * this reactive would rebuild the `options` memo for no benefit.
+   *
+   * The `typeof` guard follows the same idiom as `useIsDesktop.ts:22` and
+   * `useInstallPrompt.ts:177` — jsdom ships no `matchMedia` and this repo has
+   * no global stub for it, so an unguarded call would throw in every test that
+   * renders a board. Absent `matchMedia` we assume a pointer device and keep
+   * animations ON, which is what the old `'ontouchstart' in window` test also
+   * evaluated to under jsdom.
+   */
+  const showAnimations = useMemo(
+    () =>
+      typeof window === 'undefined' || typeof window.matchMedia !== 'function'
+        ? true
+        : !window.matchMedia('(pointer: coarse)').matches,
+    [],
+  );
 
   const options = useMemo(
     () => ({
@@ -425,7 +458,9 @@ export function ChessBoard({ position, onPieceDrop, flipped = false, lastMove, l
       lightSquareNotationStyle: LIGHT_SQUARE_NOTATION,
       id: id ?? 'chessboard',
       // react-chessboard v5 animation state machine causes black screen on mobile
-      // when position prop updates — disable animations on touch devices only
+      // when position prop updates — disabled on touch-PRIMARY devices only
+      // (see the showAnimations derivation above for why the test is
+      // `(pointer: coarse)` and not `'ontouchstart' in window`)
       showAnimations,
       // Undefined here = the library's own 300ms default (see the prop doc).
       animationDurationInMs,
