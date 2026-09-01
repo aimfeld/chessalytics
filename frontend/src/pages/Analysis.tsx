@@ -3298,13 +3298,13 @@ export default function Analysis() {
       // scrub) must keep react-chessboard's 300ms default; only the replay
       // cadence needs a slide that finishes before the next commit.
       //
-      // Accepted cost: the LANDING move animates at 300ms, not
-      // FAST_FORWARD_ANIMATION_MS. useFastForward's stop() runs in the same
-      // tick as the final goToNode, so React commits the arrival position and
-      // `fastForwardRunning: false` together and this prop is already back to
-      // `undefined` when the library's position effect reads it. A fuller
-      // arrival slide is the desirable behaviour, so this is deliberate rather
-      // than an oversight.
+      // The LANDING move animates at FAST_FORWARD_ANIMATION_MS too, like every
+      // ply before it. That is not automatic: useFastForward defers its
+      // `running: false` report by FAST_FORWARD_SETTLE_MS precisely so this
+      // prop (and the engine suppression below it) survives the arrival slide.
+      // Before that deferral the arrival commit flipped this back to the
+      // library's 300ms default AND released four engines in the same frame,
+      // which is what made the last move of an otherwise smooth run hitch.
       animationDurationInMs={fastForwardRunning ? FAST_FORWARD_ANIMATION_MS : undefined}
     />
   );
