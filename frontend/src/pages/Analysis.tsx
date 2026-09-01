@@ -717,7 +717,7 @@ export default function Analysis() {
   // (useStockfishEngine.ts:41/:277-286, useMaiaEngine.ts:45,
   // useFlawChessEngine.ts:33, useStockfishGradingEngine.ts:60/:334). setTimeout is
   // never early, so at any FAST_FORWARD_STEP_MS above that 150ms window (the
-  // cadence is 250ms) `sinceLast` ALWAYS exceeds the
+  // cadence is 200ms) `sinceLast` ALWAYS exceeds the
   // window and the immediate branch wins on every replayed ply, deterministically
   // — four fresh searches per ply. That per-ply engine load is what delays the
   // replay's own timer callbacks and makes the move sounds arrive unevenly, so
