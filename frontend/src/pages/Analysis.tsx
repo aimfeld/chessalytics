@@ -2206,27 +2206,32 @@ export default function Analysis() {
   // fast-forward stop set, so a run there travels all the way to the terminal
   // ply with the sweep live — that is the case this guard exists for.
   //
-  // `enabled` (not `fen`) is the right lever HERE, unlike the four live engines
-  // above: this hook owns its OWN dedicated Maia + Stockfish instances and has
-  // no position input of its own to null — its dispatch is driven internally
-  // from `enabled` via `effectiveEnabled && hasWork`. Turning it off does
-  // recycle those two dedicated workers, but that is already this hook's normal
-  // steady-state behaviour (`hasWork` tears them down the moment the last
-  // candidate resolves), it touches none of the live engines, and it is the only
-  // gate that also halts a candidate already in flight. `liveBusy` alone would
-  // block the NEXT dispatch but let the in-flight one keep running through the
-  // replay.
+  // The lever is `liveBusy`, NOT `enabled` — and that distinction is the same
+  // DEV-1 reasoning applied to this hook. `enabled` here is a WORKER-LIFECYCLE
+  // gate, not merely a dispatch gate: it flows `enabled -> effectiveEnabled ->
+  // engineEnabled`, which is the `enabled` argument of this hook's own
+  // dedicated `useMaiaEngine` (useGemSweep.ts:269) and
+  // `useStockfishGradingEngine` (:290). Gating it on `!fastForwardRunning`
+  // would therefore tear down a Maia ONNX worker and a Stockfish WASM worker at
+  // run start and respawn them on landing — a model reload arriving exactly
+  // when the user has just landed on the position they wanted to look at, on
+  // every single press. That is the very cost DEV-1 avoids for the four live
+  // engines above, and there is no reason to pay it here.
+  //
+  // `liveBusy` blocks dispatch at useGemSweep.ts:428 (`!liveBusyRef.current &&
+  // effectiveEnabledRef.current`) while leaving both workers warm, and "the
+  // live path is busy" is semantically exactly what a fast-forward run IS —
+  // this is the hook's designed yield, the same one it already performs on
+  // every ordinary navigation while the live engines analyze. The one thing
+  // `enabled` would additionally do is halt a candidate ALREADY in flight;
+  // that is bounded to a single Maia inference (plus at most one grading
+  // search) and is precisely the overlap `liveBusy` is built to tolerate.
   const sweep = useGemSweep({
-    enabled:
-      sweepArmedForGame &&
-      evalChartReady &&
-      gradingEnabled &&
-      !gameHasStoredBestMoveData &&
-      !fastForwardRunning,
+    enabled: sweepArmedForGame && evalChartReady && gradingEnabled && !gameHasStoredBestMoveData,
     sweepKey: gameId,
     candidates: sweepCandidates,
     pinnedEloForPly,
-    liveBusy: liveEnginesBusy,
+    liveBusy: liveEnginesBusy || fastForwardRunning,
     userColor: sweepUserColor,
   });
 
