@@ -61,6 +61,36 @@ const FAST_FORWARD_ANIMATION_HEADROOM_MS = 30;
  */
 export const FAST_FORWARD_ANIMATION_MS = FAST_FORWARD_STEP_MS - FAST_FORWARD_ANIMATION_HEADROOM_MS;
 
+/**
+ * Settle delay between LANDING on the target ply and reporting the run as
+ * finished, in milliseconds.
+ *
+ * Bug fix (quick 260901-oxh follow-up): the replay was smooth for every
+ * intermediate ply but visibly hitched on the last one. `stop()` used to run in
+ * the same tick as the landing `goToNode`, so React committed the arrival
+ * position and `running: false` together — meaning the exact frame that starts
+ * the final piece slide is also the frame that
+ *   - un-suppresses FOUR live engines (Stockfish, Maia, FlawChess, grading:
+ *     each `fen` prop flips from `null` to the new position at once), and
+ *   - releases the gem sweep's `liveBusy` lever,
+ * so worker startup, WASM search dispatch and the resulting render cascade all
+ * pile onto the landing animation. It also flipped the board's
+ * `animationDurationInMs` back to the library's 300ms default for that one
+ * move, making the arrival slide a different speed from every ply before it.
+ *
+ * Holding the run open for one more step's worth of time fixes both: the
+ * landing ply gets exactly the same slot as every intermediate ply, and the
+ * engines resume at the moment the NEXT tick would have fired — i.e. after the
+ * slide is done rather than during it. Equal to FAST_FORWARD_STEP_MS by
+ * definition, not by coincidence, which is also why it is derived rather than
+ * written as a third literal.
+ *
+ * Only a LANDING settles. Cancellation by foreign navigation releases
+ * immediately: the user is driving the board again and should get engines back
+ * without delay.
+ */
+export const FAST_FORWARD_SETTLE_MS = FAST_FORWARD_STEP_MS;
+
 export interface UseFastForwardOptions {
   enabled: boolean;
   mainLine: readonly NodeId[];
@@ -79,7 +109,10 @@ export interface UseFastForwardOptions {
   /**
    * Ordering escape hatch: fired with `true` when a run begins and `false`
    * exactly once when it ends (by landing, by foreign-navigation
-   * cancellation, or by an explicit stop). It exists because a consumer may
+   * cancellation, or by an explicit stop). On a landing the `false` is
+   * deferred by FAST_FORWARD_SETTLE_MS so the arrival slide finishes before
+   * consumers un-suppress whatever they suppressed; see that constant. It
+   * exists because a consumer may
    * need the run state ABOVE the line where this hook is called — on the
    * analysis page the hook sits ~1,000 lines below the engine hooks that must
    * read it, and hooks cannot be reordered around that. Pushing the state
@@ -155,20 +188,55 @@ export function useFastForward(options: UseFastForwardOptions): UseFastForwardRe
   const canFastForward =
     enabled && mainLine.length > 0 && (currentPly ?? -1) < mainLine.length - 1;
 
-  const stop = useCallback((): void => {
-    if (timerRef.current !== null) {
-      clearTimeout(timerRef.current);
-      timerRef.current = null;
+  // Pending deferred onRunningChange(false) after a landing. Held separately
+  // from timerRef because it outlives the run itself: `runningRef` is already
+  // false while this is armed, which is deliberate — a user who presses
+  // fast-forward again during the settle window must be able to start a new run
+  // immediately rather than wait out the tail of the previous one.
+  const settleTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  const clearSettleTimer = useCallback((): void => {
+    if (settleTimerRef.current !== null) {
+      clearTimeout(settleTimerRef.current);
+      settleTimerRef.current = null;
     }
-    // Reading runningRef BEFORE clearing it is what makes onRunningChange(false)
-    // fire exactly once per run regardless of which exit path got here
-    // (landing, cancellation, or a snapshot that shrank under the cursor).
-    const wasRunning = runningRef.current;
-    runningRef.current = false;
-    planRef.current = null;
-    setIsRunning(false);
-    if (wasRunning) onRunningChangeRef.current?.(false);
   }, []);
+
+  /**
+   * Ends a run. `settle` defers only the onRunningChange(false) report by
+   * FAST_FORWARD_SETTLE_MS (see that constant) — every other piece of run state
+   * is torn down synchronously either way, so `start` is immediately available
+   * again. Defaults to false so the cancellation paths, which pass no argument,
+   * keep releasing instantly.
+   */
+  const stop = useCallback(
+    (settle: boolean = false): void => {
+      if (timerRef.current !== null) {
+        clearTimeout(timerRef.current);
+        timerRef.current = null;
+      }
+      // Reading runningRef BEFORE clearing it is what makes onRunningChange(false)
+      // fire exactly once per run regardless of which exit path got here
+      // (landing, cancellation, or a snapshot that shrank under the cursor).
+      const wasRunning = runningRef.current;
+      runningRef.current = false;
+      planRef.current = null;
+      setIsRunning(false);
+      if (!wasRunning) return;
+      // A previous settle can still be armed if this run started inside another
+      // run's settle window; the exactly-once contract is per run, so drop it.
+      clearSettleTimer();
+      if (!settle) {
+        onRunningChangeRef.current?.(false);
+        return;
+      }
+      settleTimerRef.current = setTimeout(() => {
+        settleTimerRef.current = null;
+        onRunningChangeRef.current?.(false);
+      }, FAST_FORWARD_SETTLE_MS);
+    },
+    [clearSettleTimer],
+  );
 
   // tickRef holds the latest tick closure so the self-rescheduling
   // setTimeout below can call it by ref rather than by name — referencing a
@@ -196,7 +264,11 @@ export function useFastForward(options: UseFastForwardOptions): UseFastForwardRe
     // playing through the moves, not just the arrival).
     goToNode(nodeId);
     if (landed) {
-      stop();
+      // `true`: the arrival slide starts on the commit this goToNode triggers,
+      // so the run must stay REPORTED as running until it finishes — otherwise
+      // the engines and the gem sweep resume on top of it. See
+      // FAST_FORWARD_SETTLE_MS.
+      stop(true);
       return;
     }
     timerRef.current = setTimeout(() => tickRef.current(), FAST_FORWARD_STEP_MS);
@@ -236,13 +308,19 @@ export function useFastForward(options: UseFastForwardOptions): UseFastForwardRe
     //    target now happens inside start() itself (start's `true` and stop's
     //    `false` then batch to a net no-op, which is correct — such a run is
     //    behaviourally identical to pressing Forward once).
+    // Pressing fast-forward again inside the previous run's settle window is
+    // legal (see settleTimerRef); disarming its pending `false` here is what
+    // stops it from landing in the middle of THIS run. The consumer is still
+    // holding `true` from that run, so the report below is a no-op re-set
+    // rather than a flicker.
+    clearSettleTimer();
     runningRef.current = true;
     setIsRunning(true);
     onRunningChangeRef.current?.(true);
     expectedNodeIdRef.current = currentNodeId;
     planRef.current = { mainLine, target, cursor };
     tick();
-  }, [enabled, mainLine, currentPly, stopPlies, currentNodeId, tick]);
+  }, [enabled, mainLine, currentPly, stopPlies, currentNodeId, tick, clearSettleTimer]);
 
   // Cancellation (D-05): fires on every committed navigation. A run in
   // flight stops the instant the committed node differs from the node the
@@ -257,10 +335,13 @@ export function useFastForward(options: UseFastForwardOptions): UseFastForwardRe
   }, [currentNodeId, stop]);
 
   // Mount-scoped cleanup: kill any pending timer on unmount so no navigation
-  // fires after the component using this hook is gone.
+  // fires after the component using this hook is gone. The settle timer is
+  // dropped rather than flushed — its only job is to report to a consumer that
+  // no longer exists.
   useEffect(() => {
     return () => {
       if (timerRef.current !== null) clearTimeout(timerRef.current);
+      if (settleTimerRef.current !== null) clearTimeout(settleTimerRef.current);
     };
   }, []);
 

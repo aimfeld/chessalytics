@@ -15,6 +15,7 @@ import {
   nextStopPly,
   FAST_FORWARD_STEP_MS,
   FAST_FORWARD_ANIMATION_MS,
+  FAST_FORWARD_SETTLE_MS,
   type UseFastForwardOptions,
 } from '../useFastForward';
 import type { NodeId } from '@/hooks/useAnalysisBoard';
@@ -61,6 +62,13 @@ describe('fast-forward timing constants', () => {
   it('the run-scoped board animation is strictly shorter than the step, so a slide always completes', () => {
     expect(FAST_FORWARD_ANIMATION_MS).toBeLessThan(FAST_FORWARD_STEP_MS);
     expect(FAST_FORWARD_ANIMATION_MS).toBeGreaterThan(0);
+  });
+
+  // The settle exists to cover the LANDING slide. If it were ever shorter than
+  // the animation it would release the engines (and the shortened animation
+  // duration) mid-slide, which is exactly the hitch it was added to remove.
+  it('the settle is at least as long as the run-scoped board animation', () => {
+    expect(FAST_FORWARD_SETTLE_MS).toBeGreaterThanOrEqual(FAST_FORWARD_ANIMATION_MS);
   });
 });
 
@@ -146,16 +154,69 @@ describe('useFastForward', () => {
     });
     expect(onRunningChange.mock.calls).toEqual([[true]]);
 
+    // Landing itself does NOT report false: the arrival slide is still running,
+    // and the whole point of the settle is that consumers keep suppressing
+    // through it. Ply 1 steps synchronously in start(), so the target (ply 3)
+    // lands on the second advance.
     act(() => {
       vi.advanceTimersByTime(FAST_FORWARD_STEP_MS * 2);
     });
+    expect(goToNode).toHaveBeenCalledTimes(3);
+    expect(result.current.isRunning).toBe(false);
+    expect(onRunningChange.mock.calls).toEqual([[true]]);
+
+    // The report arrives one settle window later.
+    act(() => {
+      vi.advanceTimersByTime(FAST_FORWARD_SETTLE_MS);
+    });
     expect(onRunningChange.mock.calls).toEqual([[true], [false]]);
 
-    // Further advances after landing must not re-report.
+    // Further advances after the settle must not re-report.
     act(() => {
       vi.advanceTimersByTime(FAST_FORWARD_STEP_MS * 5);
     });
     expect(onRunningChange.mock.calls).toEqual([[true], [false]]);
+  });
+
+  it('a new run started inside the previous landing settle disarms the pending false report', () => {
+    const goToNode = vi.fn();
+    const onRunningChange = vi.fn();
+    const mainLine: NodeId[] = [10, 11, 12, 13, 14];
+    const props = (currentPly: number, currentNodeId: NodeId): UseFastForwardOptions =>
+      baseOptions({
+        mainLine,
+        currentPly,
+        currentNodeId,
+        stopPlies: new Set([1, 3]),
+        goToNode,
+        onRunningChange,
+      });
+    const { result, rerender } = renderHook(
+      (p: UseFastForwardOptions) => useFastForward(p),
+      { initialProps: props(0, 10) },
+    );
+
+    // First run: a one-ply hop to the stop at ply 1, which lands synchronously
+    // inside start() and arms the settle.
+    act(() => {
+      result.current.start();
+    });
+    expect(goToNode).toHaveBeenLastCalledWith(11);
+    rerender(props(1, 11));
+
+    // Second press well inside the settle window.
+    act(() => {
+      vi.advanceTimersByTime(FAST_FORWARD_SETTLE_MS / 2);
+      result.current.start();
+    });
+
+    // The first run's pending `false` must never fire — the consumer stays
+    // suppressed continuously across the two runs instead of flickering.
+    act(() => {
+      vi.advanceTimersByTime(FAST_FORWARD_STEP_MS * 2 + FAST_FORWARD_SETTLE_MS);
+    });
+    expect(goToNode).toHaveBeenLastCalledWith(13);
+    expect(onRunningChange.mock.calls).toEqual([[true], [true], [false]]);
   });
 
   it('onRunningChange reports false exactly once when a run is cancelled by foreign navigation', () => {
