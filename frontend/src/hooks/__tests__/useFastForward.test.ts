@@ -14,6 +14,7 @@ import {
   useFastForward,
   nextStopPly,
   FAST_FORWARD_STEP_MS,
+  FAST_FORWARD_ANIMATION_MS,
   type UseFastForwardOptions,
 } from '../useFastForward';
 import type { NodeId } from '@/hooks/useAnalysisBoard';
@@ -52,6 +53,17 @@ describe('nextStopPly', () => {
   });
 });
 
+describe('fast-forward timing constants', () => {
+  // Asserts the RELATION, not the literals: FAST_FORWARD_ANIMATION_MS is derived
+  // from FAST_FORWARD_STEP_MS precisely so a future cadence change cannot leave
+  // the board animation running past the next position commit (the abort-at-half-
+  // travel bug this quick task fixes). Pinning literals here would defeat that.
+  it('the run-scoped board animation is strictly shorter than the step, so a slide always completes', () => {
+    expect(FAST_FORWARD_ANIMATION_MS).toBeLessThan(FAST_FORWARD_STEP_MS);
+    expect(FAST_FORWARD_ANIMATION_MS).toBeGreaterThan(0);
+  });
+});
+
 describe('useFastForward', () => {
   beforeEach(() => {
     vi.useFakeTimers();
@@ -61,7 +73,28 @@ describe('useFastForward', () => {
     vi.useRealTimers();
   });
 
-  it('start() replays ascending main-line nodes, one per FAST_FORWARD_STEP_MS tick, and never past the target', () => {
+  it('start() steps the first ply SYNCHRONOUSLY, before any timer runs', () => {
+    const goToNode = vi.fn();
+    const mainLine: NodeId[] = [10, 11, 12, 13, 14];
+    const { result } = renderHook((props: UseFastForwardOptions) => useFastForward(props), {
+      initialProps: baseOptions({
+        mainLine,
+        currentPly: 0,
+        currentNodeId: 10,
+        stopPlies: new Set([3]),
+        goToNode,
+      }),
+    });
+
+    act(() => {
+      result.current.start();
+    });
+    // No advanceTimersByTime between start() and this assertion — that is the point.
+    expect(goToNode).toHaveBeenNthCalledWith(1, 11);
+    expect(goToNode).toHaveBeenCalledTimes(1);
+  });
+
+  it('start() replays ascending main-line nodes, one per FAST_FORWARD_STEP_MS advance after the synchronous first step, and never past the target', () => {
     const goToNode = vi.fn();
     const mainLine: NodeId[] = [10, 11, 12, 13, 14];
     const { result } = renderHook((props: UseFastForwardOptions) => useFastForward(props), {
@@ -78,10 +111,6 @@ describe('useFastForward', () => {
       result.current.start();
     });
     expect(result.current.isRunning).toBe(true);
-
-    act(() => {
-      vi.advanceTimersByTime(FAST_FORWARD_STEP_MS);
-    });
     expect(goToNode).toHaveBeenNthCalledWith(1, 11);
 
     act(() => {
@@ -95,6 +124,76 @@ describe('useFastForward', () => {
     expect(goToNode).toHaveBeenNthCalledWith(3, 13);
     expect(goToNode).toHaveBeenCalledTimes(3);
     expect(result.current.isRunning).toBe(false);
+  });
+
+  it('onRunningChange reports true at start and false exactly once when the run lands', () => {
+    const goToNode = vi.fn();
+    const onRunningChange = vi.fn();
+    const mainLine: NodeId[] = [10, 11, 12, 13, 14];
+    const { result } = renderHook((props: UseFastForwardOptions) => useFastForward(props), {
+      initialProps: baseOptions({
+        mainLine,
+        currentPly: 0,
+        currentNodeId: 10,
+        stopPlies: new Set([3]),
+        goToNode,
+        onRunningChange,
+      }),
+    });
+
+    act(() => {
+      result.current.start();
+    });
+    expect(onRunningChange.mock.calls).toEqual([[true]]);
+
+    act(() => {
+      vi.advanceTimersByTime(FAST_FORWARD_STEP_MS * 2);
+    });
+    expect(onRunningChange.mock.calls).toEqual([[true], [false]]);
+
+    // Further advances after landing must not re-report.
+    act(() => {
+      vi.advanceTimersByTime(FAST_FORWARD_STEP_MS * 5);
+    });
+    expect(onRunningChange.mock.calls).toEqual([[true], [false]]);
+  });
+
+  it('onRunningChange reports false exactly once when a run is cancelled by foreign navigation', () => {
+    const goToNode = vi.fn();
+    const onRunningChange = vi.fn();
+    const mainLine: NodeId[] = [10, 11, 12, 13, 14];
+    const { result, rerender } = renderHook((props: UseFastForwardOptions) => useFastForward(props), {
+      initialProps: baseOptions({
+        mainLine,
+        currentPly: 0,
+        currentNodeId: 10,
+        stopPlies: new Set([3]),
+        goToNode,
+        onRunningChange,
+      }),
+    });
+
+    act(() => {
+      result.current.start();
+    });
+    expect(onRunningChange.mock.calls).toEqual([[true]]);
+
+    rerender(
+      baseOptions({
+        mainLine,
+        currentPly: 0,
+        currentNodeId: 999,
+        stopPlies: new Set([3]),
+        goToNode,
+        onRunningChange,
+      }),
+    );
+    expect(onRunningChange.mock.calls).toEqual([[true], [false]]);
+
+    act(() => {
+      vi.advanceTimersByTime(FAST_FORWARD_STEP_MS * 5);
+    });
+    expect(onRunningChange.mock.calls).toEqual([[true], [false]]);
   });
 
   it('foreign navigation cancels an in-flight run: further timer advances fire no additional goToNode and isRunning goes false', () => {
@@ -113,10 +212,7 @@ describe('useFastForward', () => {
     act(() => {
       result.current.start();
     });
-    act(() => {
-      vi.advanceTimersByTime(FAST_FORWARD_STEP_MS);
-    });
-    expect(goToNode).toHaveBeenCalledTimes(1); // stepped onto 11
+    expect(goToNode).toHaveBeenCalledTimes(1); // stepped onto 11 synchronously
 
     // A committed node the hook never commanded (e.g. the user clicked Back).
     rerender(baseOptions({ mainLine, currentPly: 0, currentNodeId: 999, stopPlies: new Set([3]), goToNode }));
@@ -143,9 +239,6 @@ describe('useFastForward', () => {
 
     act(() => {
       result.current.start();
-    });
-    act(() => {
-      vi.advanceTimersByTime(FAST_FORWARD_STEP_MS);
     });
     expect(goToNode).toHaveBeenNthCalledWith(1, 11);
 
@@ -182,7 +275,9 @@ describe('useFastForward', () => {
       result.current.start();
     });
 
-    for (let i = 0; i < 3; i++) {
+    // One fewer advance than before the synchronous-first-step change: call 1
+    // (ply 101) already happened inside start().
+    for (let i = 0; i < 2; i++) {
       act(() => {
         vi.advanceTimersByTime(FAST_FORWARD_STEP_MS);
       });
@@ -224,6 +319,10 @@ describe('useFastForward', () => {
     act(() => {
       result.current.start();
     });
+    // Inert immediately too — the first step is synchronous, so a regression here
+    // would show up without advancing any timer.
+    expect(goToNode).not.toHaveBeenCalled();
+
     act(() => {
       vi.advanceTimersByTime(FAST_FORWARD_STEP_MS * 3);
     });
@@ -246,9 +345,6 @@ describe('useFastForward', () => {
 
     act(() => {
       result.current.start();
-    });
-    act(() => {
-      vi.advanceTimersByTime(FAST_FORWARD_STEP_MS);
     });
     expect(goToNode).toHaveBeenCalledTimes(1);
 
@@ -277,11 +373,14 @@ describe('useFastForward', () => {
       result.current.start();
       result.current.start(); // re-entrant call within the same commit — must be a no-op
     });
+    // With the synchronous first step, a second chain would show up immediately
+    // as a second goToNode inside the very same commit.
+    expect(goToNode).toHaveBeenCalledTimes(1);
 
     act(() => {
       vi.advanceTimersByTime(FAST_FORWARD_STEP_MS);
     });
-    // A second timer chain would double the calls per tick.
-    expect(goToNode).toHaveBeenCalledTimes(1);
+    // A second timer chain would also double the calls per advance.
+    expect(goToNode).toHaveBeenCalledTimes(2);
   });
 });
