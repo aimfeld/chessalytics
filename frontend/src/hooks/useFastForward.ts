@@ -22,8 +22,44 @@ import type { NodeId } from '@/hooks/useAnalysisBoard';
 /**
  * Per-ply replay cadence in milliseconds — the ONE knob controlling how fast
  * the fast-forward replay steps through intervening moves (D-01).
+ *
+ * Bug fix (quick 260901-oxh): this was 150ms, which is exactly HALF
+ * react-chessboard v5's 300ms default `animationDurationInMs`. The library's
+ * position effect is keyed on `[position]` only, so a new position arriving
+ * mid-slide snapped `currentPosition` to the still-pending
+ * `waitingForAnimationPosition` and restarted the animation — every
+ * intermediate piece slide was aborted at roughly half travel, which is the
+ * "moves get visually skipped" symptom. The cadence is now 200ms and the board
+ * animation is DERIVED from it (below) so the two can never drift apart again.
+ *
+ * The exact value is a watchability choice, not a correctness one — any value
+ * works as long as the derived animation stays below it. 250ms was tried and
+ * judged too slow; 200ms is the settled cadence. Run-length context for any
+ * future retune: the measured gap between consecutive notable plies is p50=3,
+ * p75=7, p90=16, p99=43 plies, so a slower cadence is paid for almost entirely
+ * in the tail (at 200ms: ~600ms median run, ~3.2s at p90).
  */
-export const FAST_FORWARD_STEP_MS = 150;
+export const FAST_FORWARD_STEP_MS = 200;
+
+/**
+ * Margin between the end of a piece slide and the next position commit. Its
+ * only job is to keep FAST_FORWARD_ANIMATION_MS strictly BELOW the step so a
+ * slide always finishes before the next position lands.
+ */
+const FAST_FORWARD_ANIMATION_HEADROOM_MS = 30;
+
+/**
+ * Board animation duration to use FOR THE DURATION OF A RUN, in milliseconds.
+ *
+ * DERIVED from FAST_FORWARD_STEP_MS on purpose — writing it as a second
+ * literal is precisely the drift that caused the skipped-move bug documented
+ * on FAST_FORWARD_STEP_MS above. The invariant this expression encodes is
+ * "animation < step", so retuning the cadence can never silently re-break the
+ * animation. Consumers pass it to ChessBoard's `animationDurationInMs` only
+ * while a run is in flight; normal navigation keeps the library's 300ms
+ * default.
+ */
+export const FAST_FORWARD_ANIMATION_MS = FAST_FORWARD_STEP_MS - FAST_FORWARD_ANIMATION_HEADROOM_MS;
 
 export interface UseFastForwardOptions {
   enabled: boolean;
@@ -40,10 +76,22 @@ export interface UseFastForwardOptions {
    * fewer parameters than the caller's is structurally assignable).
    */
   goToNode: (id: NodeId) => void;
+  /**
+   * Ordering escape hatch: fired with `true` when a run begins and `false`
+   * exactly once when it ends (by landing, by foreign-navigation
+   * cancellation, or by an explicit stop). It exists because a consumer may
+   * need the run state ABOVE the line where this hook is called — on the
+   * analysis page the hook sits ~1,000 lines below the engine hooks that must
+   * read it, and hooks cannot be reordered around that. Pushing the state
+   * upward through this callback is the alternative to pulling `isRunning`
+   * downward.
+   */
+  onRunningChange?: (running: boolean) => void;
 }
 
 export interface UseFastForwardReturn {
   start: () => void;
+  /** The hook's own copy of the value `onRunningChange` reports. */
   isRunning: boolean;
   canFastForward: boolean;
 }
@@ -79,7 +127,8 @@ interface RunPlan {
 }
 
 export function useFastForward(options: UseFastForwardOptions): UseFastForwardReturn {
-  const { enabled, mainLine, currentNodeId, currentPly, stopPlies, goToNode } = options;
+  const { enabled, mainLine, currentNodeId, currentPly, stopPlies, goToNode, onRunningChange } =
+    options;
 
   const [isRunning, setIsRunning] = useState(false);
   const runningRef = useRef(false);
@@ -89,6 +138,16 @@ export function useFastForward(options: UseFastForwardOptions): UseFastForwardRe
   // the sole cancellation signal (D-05). Seeded at start() and updated on
   // every tick, BEFORE goToNode is called.
   const expectedNodeIdRef = useRef<NodeId | null>(null);
+
+  // onRunningChange is held in a ref (refreshed by the bare useEffect below,
+  // mirroring the tickRef precedent further down) so an unstable caller-supplied
+  // callback identity cannot change `stop`'s identity — `stop` feeds `tick`'s
+  // deps AND the cancellation effect's deps, so churn there would re-arm the
+  // cancellation effect on every render.
+  const onRunningChangeRef = useRef<((running: boolean) => void) | undefined>(undefined);
+  useEffect(() => {
+    onRunningChangeRef.current = onRunningChange;
+  });
 
   // currentPly is null at the root, which is one ply BEFORE ply 0 — the ?? -1
   // is load-bearing so the root can still fast-forward (D-04: disabled only
@@ -101,9 +160,14 @@ export function useFastForward(options: UseFastForwardOptions): UseFastForwardRe
       clearTimeout(timerRef.current);
       timerRef.current = null;
     }
+    // Reading runningRef BEFORE clearing it is what makes onRunningChange(false)
+    // fire exactly once per run regardless of which exit path got here
+    // (landing, cancellation, or a snapshot that shrank under the cursor).
+    const wasRunning = runningRef.current;
     runningRef.current = false;
     planRef.current = null;
     setIsRunning(false);
+    if (wasRunning) onRunningChangeRef.current?.(false);
   }, []);
 
   // tickRef holds the latest tick closure so the self-rescheduling
@@ -153,11 +217,31 @@ export function useFastForward(options: UseFastForwardOptions): UseFastForwardRe
     const target = nextStopPly(cursor, stopPlies, lastPly);
     if (target === null) return;
 
+    // Bug fix (quick 260901-oxh): the run used to OPEN with a full
+    // FAST_FORWARD_STEP_MS of dead time because the first step was scheduled
+    // rather than taken. The first ply is now stepped synchronously and
+    // `tick`'s own self-rescheduling tail drives every later step, so pressing
+    // fast-forward moves a piece immediately.
+    //
+    // Every pre-existing invariant survives the reordering, and each one
+    // depends on an assignment made BELOW-but-before the tick() call:
+    //  - `runningRef.current = true` is set before tick() runs, so a second
+    //    start() in the same commit still hits the guard at the top of this
+    //    function (no second timer chain).
+    //  - `expectedNodeIdRef` is seeded here and rewritten by tick immediately
+    //    BEFORE each goToNode — it remains the sole cancellation signal (D-05).
+    //  - `planRef` is assigned before tick() reads it, so the snapshot
+    //    semantics documented on RunPlan are unchanged.
+    //  - tick's `landed` check still stops on arrival, which for a one-ply
+    //    target now happens inside start() itself (start's `true` and stop's
+    //    `false` then batch to a net no-op, which is correct — such a run is
+    //    behaviourally identical to pressing Forward once).
     runningRef.current = true;
     setIsRunning(true);
+    onRunningChangeRef.current?.(true);
     expectedNodeIdRef.current = currentNodeId;
     planRef.current = { mainLine, target, cursor };
-    timerRef.current = setTimeout(tick, FAST_FORWARD_STEP_MS);
+    tick();
   }, [enabled, mainLine, currentPly, stopPlies, currentNodeId, tick]);
 
   // Cancellation (D-05): fires on every committed navigation. A run in

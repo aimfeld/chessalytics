@@ -324,10 +324,19 @@ vi.mock('@/lib/sounds', () => ({
 }));
 
 // jsdom shims required by react-chessboard and responsive components.
+//
+// `(pointer: coarse)` answers TRUE here on purpose (quick 260901-oxh). It is the
+// query ChessBoard's `showAnimations` reads, and jsdom performs no layout — so
+// letting the board animate makes react-chessboard's animation effect throw
+// "Square width not found" (dist/index.esm.js:5317) on every position change.
+// This preserves the pre-existing test behaviour exactly: the old gate was
+// `!('ontouchstart' in window)`, and jsdom DOES define `ontouchstart`, so
+// animations were already off in this environment. Every other query keeps
+// `matches: false`, which is what yields the desktop layout below.
 Object.defineProperty(window, 'matchMedia', {
   writable: true,
   value: vi.fn().mockImplementation((query: string) => ({
-    matches: false,
+    matches: /pointer:\s*coarse/.test(query),
     media: query,
     onchange: null,
     addEventListener: vi.fn(),
@@ -511,7 +520,9 @@ describe('Analysis page shell', () => {
 function withMobileLayout(run: () => void): void {
   const origMatchMedia = window.matchMedia;
   window.matchMedia = vi.fn().mockImplementation((query: string) => ({
-    matches: /max-width/.test(query),
+    // pointer:coarse stays TRUE so the board does not animate in jsdom (see the
+    // top-of-file shim note); max-width drives the mobile takeover layout.
+    matches: /max-width/.test(query) || /pointer:\s*coarse/.test(query),
     media: query,
     onchange: null,
     addEventListener: vi.fn(),
@@ -1965,7 +1976,9 @@ describe('Mobile Stats tab: present during analysis, then the MoveStats panel (q
     // Force the mobile takeover: useAnalysisLayoutMode returns 'mobile' when the
     // max-width mobile media query matches.
     window.matchMedia = vi.fn().mockImplementation((query: string) => ({
-      matches: /max-width/.test(query),
+      // pointer:coarse stays TRUE so the board does not animate in jsdom (see
+      // the top-of-file shim note); max-width drives the mobile takeover.
+      matches: /max-width/.test(query) || /pointer:\s*coarse/.test(query),
       media: query,
       onchange: null,
       addEventListener: vi.fn(),

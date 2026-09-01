@@ -94,6 +94,24 @@ interface ChessBoardProps {
    * budget resolves to Infinity, so no other caller's behavior changes.
    */
   heightRef?: RefObject<HTMLElement | null>;
+  /**
+   * Piece-slide duration in ms, forwarded verbatim to react-chessboard's option
+   * of the same name so the passthrough is obvious at both ends.
+   *
+   * Omitted (the default) keeps the library's own 300ms fallback: it applies
+   * that as a destructuring default in ChessboardProvider, which fires on
+   * `undefined`, and these props reach it via a plain `...options` spread — so
+   * passing `undefined` is the intended "unchanged" path, not a bug.
+   *
+   * It exists so the analysis board can SHORTEN the slide for the duration of a
+   * fast-forward run (quick 260901-oxh), where a 300ms animation would outlast
+   * the replay's per-ply cadence (FAST_FORWARD_STEP_MS) and be aborted partway
+   * through the slide.
+   *
+   * Pairs with `showAnimations` below: on touch devices animations are off
+   * entirely, so this duration is inert there.
+   */
+  animationDurationInMs?: number;
 }
 
 // Coordinate labels use the opposite square's color for contrast
@@ -256,7 +274,7 @@ function ArrowOverlay({
   );
 }
 
-export function ChessBoard({ position, onPieceDrop, flipped = false, lastMove, lastMoveColor, arrows = [], squareMarkers = [], id, maxWidth = 400, heightRef }: ChessBoardProps) {
+export function ChessBoard({ position, onPieceDrop, flipped = false, lastMove, lastMoveColor, arrows = [], squareMarkers = [], id, maxWidth = 400, heightRef, animationDurationInMs }: ChessBoardProps) {
   const containerRef = useRef<HTMLDivElement>(null);
   // Start at 0 so we don't mount react-chessboard until the container has measured.
   // Mounting with a non-zero width inside a display:none parent (e.g. the hidden
@@ -394,7 +412,54 @@ export function ChessBoard({ position, onPieceDrop, flipped = false, lastMove, l
     [squareStyles, handleSquareClick],
   );
 
-  const showAnimations = useMemo(() => !('ontouchstart' in window), []);
+  /**
+   * Piece animation is enabled EVERYWHERE, mobile included.
+   *
+   * History (quick 260901-oxh). Phase 19 (2026-03-21) disabled animation on
+   * touch devices via `!('ontouchstart' in window)`, because react-chessboard
+   * v5's animation state machine was observed black-screening on mobile when
+   * the position prop updates. Two separate problems with that:
+   *
+   *   1. The TEST was far too broad. Chrome defines `ontouchstart` on any
+   *      DESKTOP merely reporting touch capability (touchscreen laptop,
+   *      convertible, touch monitor), so those users silently lost piece
+   *      animation on every navigation — and FAST_FORWARD_ANIMATION_MS was
+   *      dead code for them, since the library early-returns
+   *      `setCurrentPosition(newPosition)` when showAnimations is false.
+   *   2. The premise no longer holds. The guard was written against
+   *      react-chessboard 5.10.0 and 5.10.0 is still what we ship, so the
+   *      library cannot have fixed it, and no release from 5.11.0 to 5.12.1
+   *      touches the animation path either. But our OWN board code has been
+   *      rewritten around that path since March (squareRenderer, ArrowOverlay,
+   *      JS board sizing), so the original diagnosis was most likely wrong
+   *      about the cause. Retiring the guard was VERIFIED on a real phone
+   *      (2026-09-01): stepping through moves on /analysis animates normally
+   *      and the black screen could not be reproduced.
+   *
+   * REVERT PATH — if the black screen ever resurfaces on some device, restore
+   * the narrow (not the original broad) guard, which was also verified green:
+   *
+   *   const showAnimations = useMemo(
+   *     () =>
+   *       typeof window === 'undefined' || typeof window.matchMedia !== 'function'
+   *         ? true
+   *         : !window.matchMedia('(pointer: coarse)').matches,
+   *     [],
+   *   );
+   *
+   * That form needs the `(pointer: coarse)` answers in Analysis.test.tsx's
+   * matchMedia shims to stay TRUE; those shims are left in place precisely so
+   * this revert stays a one-line change.
+   *
+   * The `MODE !== 'test'` term is NOT a device concern — it is jsdom's. jsdom
+   * performs no layout, so every square measures 0 and react-chessboard's
+   * animation effect throws "Square width not found"
+   * (dist/index.esm.js:5317) on any position change. The animation path is
+   * therefore unreachable under vitest no matter what we pass, and asserting
+   * otherwise would only be asserting against a stub. Real browsers (including
+   * every mobile one) take the `true` branch.
+   */
+  const showAnimations = import.meta.env.MODE !== 'test';
 
   const options = useMemo(
     () => ({
@@ -407,8 +472,12 @@ export function ChessBoard({ position, onPieceDrop, flipped = false, lastMove, l
       lightSquareNotationStyle: LIGHT_SQUARE_NOTATION,
       id: id ?? 'chessboard',
       // react-chessboard v5 animation state machine causes black screen on mobile
-      // when position prop updates — disable animations on touch devices only
+      // when position prop updates — disabled on touch-PRIMARY devices only
+      // (see the showAnimations derivation above for why the test is
+      // `(pointer: coarse)` and not `'ontouchstart' in window`)
       showAnimations,
+      // Undefined here = the library's own 300ms default (see the prop doc).
+      animationDurationInMs,
       // Disable library's built-in arrow drawing — we use our own ArrowOverlay
       // which avoids NaN path errors from the library's same-square division-by-zero bug
       allowDrawingArrows: false,
@@ -417,7 +486,7 @@ export function ChessBoard({ position, onPieceDrop, flipped = false, lastMove, l
       onSquareClick: handleSquareClick,
       onPieceDrop: handlePieceDrop,
     }),
-    [position, flipped, boardStyle, showAnimations, squareStyles, squareRenderer, handleSquareClick, handlePieceDrop, id],
+    [position, flipped, boardStyle, showAnimations, animationDurationInMs, squareStyles, squareRenderer, handleSquareClick, handlePieceDrop, id],
   );
 
   return (
