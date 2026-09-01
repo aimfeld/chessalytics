@@ -156,6 +156,13 @@ const NO_GAME_PLY = -1;
  *  mate-display gate (depth >= 8) so a decisive terminal eval fills the bar (Quick 260709-j3k). */
 const TERMINAL_EVAL_DEPTH = 99;
 
+/** Eval-bar fill for "dead equal" / "no data at all" — the midpoint of EvalBar's
+ *  white-fraction scale, matching what its own cp sigmoid returns for 0. Named
+ *  because it is the last resort of the left bar's precedence chain and the draw
+ *  case of a terminal position, and a bare 0.5 repeated across those expressions
+ *  is exactly the magic number the root CLAUDE.md forbids. */
+const EVAL_BAR_NEUTRAL_FRACTION = 0.5;
+
 /** Below this width the page renders its mobile takeover layout. Set to Tailwind's `md`
  *  (768px) — MUST stay in sync with the shell's height-lock unlock band in ProtectedLayout
  *  (App.tsx uses `md:max-desk3col:` so [0,768) stays locked for the takeover's footer chain,
@@ -700,8 +707,35 @@ export default function Analysis() {
   // engine's objective root eval and blanked the Stockfish card). Cost: two
   // concurrent Stockfish searches (this standalone WASM + the engine's 2-4
   // worker pool); mobile memory stays the deferred SC4 follow-up, not a blocker.
+  //
+  // FAST-FORWARD SUPPRESSION (quick 260901-oxh) — the shared explanation for all
+  // four live engine hooks on this page (this one, `maia`, `flawChessEngine` and
+  // `grading`); the other three cross-reference this block.
+  //
+  // Each of those hooks carries a 150ms RAPID_STEP_DEBOUNCE_MS with a
+  // `sinceLast > RAPID_STEP_DEBOUNCE_MS` fire-immediately branch
+  // (useStockfishEngine.ts:41/:277-286, useMaiaEngine.ts:45,
+  // useFlawChessEngine.ts:33, useStockfishGradingEngine.ts:60/:334). setTimeout is
+  // never early, so at the replay's 200ms cadence `sinceLast` ALWAYS exceeds the
+  // window and the immediate branch wins on every replayed ply, deterministically
+  // — four fresh searches per ply. That per-ply engine load is what delays the
+  // replay's own timer callbacks and makes the move sounds arrive unevenly, so
+  // suppressing it is load-bearing for the fix, not an optimisation.
+  //
+  // The lever is the `fen` INPUT, never the `enabled` flag (DEV-1). `enabled` owns
+  // Worker/provider lifecycle — its cleanup terminates the Stockfish workers, tears
+  // down the whole FlawChess MCTS provider + pool, and releases Maia's shared-worker
+  // lease — so flipping it per run would re-initialise three engines on every press,
+  // strictly MORE main-thread work than the searches being suppressed. `enabled` is
+  // also the user-facing switch state the card headers and their "engine off"
+  // placeholders read, so reassigning it would visibly flip the switches mid-replay.
+  // Every one of these hooks documents `fen: null` as "keeps the engine idle (no
+  // analyze/go sent)" while leaving the Worker warm — that is exactly what is wanted.
+  //
+  // RAPID_STEP_DEBOUNCE_MS itself is deliberately NOT retuned: the fix is
+  // suppression for the duration of a run, not a different debounce.
   const engine = useStockfishEngine({
-    fen: engineEnabled ? position : null,
+    fen: engineEnabled && !fastForwardRunning ? position : null,
     enabled: engineEnabled,
   });
 
@@ -903,7 +937,15 @@ export default function Analysis() {
   // separate lease/cache/single-in-flight discipline) — turning this switch
   // off releases only this lease and must not starve the FlawChess Engine's
   // own `priority: false` policy source (UI-SPEC Component Inventory §3).
-  const maia = useMaiaEngine({ fen: position, enabled: maiaEnabled, selectedElo });
+  // `fen: fastForwardRunning ? null : position` — this hook gates only via
+  // `enabled` and otherwise passes the position unconditionally, so the run
+  // suppression is the sole condition here. See the FAST-FORWARD SUPPRESSION
+  // block at the `useStockfishEngine` call above for why the lever is `fen`.
+  const maia = useMaiaEngine({
+    fen: fastForwardRunning ? null : position,
+    enabled: maiaEnabled,
+    selectedElo,
+  });
 
   // Phase 159 D-08 (Thread A): session-only policy-temperature state, plain
   // useState mirroring the ELO slider's no-persistence behavior (no
@@ -926,8 +968,11 @@ export default function Analysis() {
   // (D-07/Open Question 2, 155-02). `temperature` (Phase 159 D-06/D-07) reshapes
   // the root-mover's-own-side Maia policy before search and composes with the
   // findability ranking automatically (buildRankedLines reads child.prior).
+  // `&& !fastForwardRunning`: see the FAST-FORWARD SUPPRESSION block at the
+  // `useStockfishEngine` call above. `enabled` is untouched on purpose — it owns
+  // the MCTS provider + worker pool lifecycle ("created once per enabled-lifetime").
   const flawChessEngine = useFlawChessEngine({
-    fen: flawChessEnabled ? position : null,
+    fen: flawChessEnabled && !fastForwardRunning ? position : null,
     enabled: flawChessEnabled,
     elo: selectedElo,
     policyTemperature: temperature,
@@ -1344,8 +1389,15 @@ export default function Analysis() {
   // flawChessEnabled` (gradingEnabled) — replacing the prior Maia-switch-only
   // gating. It never touches the `engine` (useStockfishEngine) instance or
   // its consumers.
+  // `&& !fastForwardRunning` (DEV-2): the grading run is a FOURTH live engine and
+  // carries the identical 150ms fire-immediately branch, so it resonates with the
+  // replay cadence exactly like the three named in the FAST-FORWARD SUPPRESSION
+  // block at the `useStockfishEngine` call above. Leaving it out would leave the
+  // uneven-move-sound cause partly unfixed. `enabled` stays paired with
+  // `gradingEnabled` alone, so the worker is never alive-but-positionless in any
+  // state that outlives a run.
   const grading = useStockfishGradingEngine({
-    fen: gradingEnabled ? position : null,
+    fen: gradingEnabled && !fastForwardRunning ? position : null,
     candidateSans: unionSans,
     enabled: gradingEnabled,
   });
@@ -2142,8 +2194,35 @@ export default function Analysis() {
   // mainline going forward — its dedicated-worker machinery is retained
   // (D-01: demoted, not deleted) as the documented free-play/no-stored-data
   // fallback (see useGemSweep.ts's file header).
+  //
+  // Quick 260901-oxh: `&& !fastForwardRunning` closes a trap the engine
+  // suppression above would otherwise spring. Nulling the four live engines'
+  // `fen` drives `liveEnginesBusy` to FALSE, and that is precisely the signal
+  // this sweep treats as permission to run — so the suppression alone would
+  // unleash the background sweep during the replay, exactly when the main
+  // thread must stay quiet. The sweep is structurally inert for an ANALYZED
+  // game (Phase 175 demoted it to a fallback-only path via
+  // `!gameHasStoredBestMoveData`), but an UNANALYZED game has an empty
+  // fast-forward stop set, so a run there travels all the way to the terminal
+  // ply with the sweep live — that is the case this guard exists for.
+  //
+  // `enabled` (not `fen`) is the right lever HERE, unlike the four live engines
+  // above: this hook owns its OWN dedicated Maia + Stockfish instances and has
+  // no position input of its own to null — its dispatch is driven internally
+  // from `enabled` via `effectiveEnabled && hasWork`. Turning it off does
+  // recycle those two dedicated workers, but that is already this hook's normal
+  // steady-state behaviour (`hasWork` tears them down the moment the last
+  // candidate resolves), it touches none of the live engines, and it is the only
+  // gate that also halts a candidate already in flight. `liveBusy` alone would
+  // block the NEXT dispatch but let the in-flight one keep running through the
+  // replay.
   const sweep = useGemSweep({
-    enabled: sweepArmedForGame && evalChartReady && gradingEnabled && !gameHasStoredBestMoveData,
+    enabled:
+      sweepArmedForGame &&
+      evalChartReady &&
+      gradingEnabled &&
+      !gameHasStoredBestMoveData &&
+      !fastForwardRunning,
     sweepKey: gameId,
     candidates: sweepCandidates,
     pinnedEloForPly,
@@ -2823,10 +2902,14 @@ export default function Analysis() {
 
   // Maia expected score is the side-to-MOVE's expected score (WDL is emitted from the
   // mover's POV). Convert to a WHITE-relative fraction for the eval bar so it agrees
-  // with the Stockfish (white-POV) bar and the board orientation. 0.5 while unresolved.
-  const maiaWhiteFraction =
+  // with the Stockfish (white-POV) bar and the board orientation.
+  //
+  // Quick 260901-oxh: this now returns NULL rather than the neutral fraction when
+  // Maia has no result. "No live data" and "dead equal" are different facts, and
+  // the left-bar chain below has to tell them apart to hold a value through a run.
+  const maiaWhiteFraction: number | null =
     maia.expectedScoreAtSelectedElo === null
-      ? 0.5
+      ? null
       : sideToMoveFromFen(position) === 'white'
         ? maia.expectedScoreAtSelectedElo
         : 1 - maia.expectedScoreAtSelectedElo;
@@ -2840,16 +2923,16 @@ export default function Analysis() {
   // noUncheckedIndexedAccess: topLine is RankedLine | undefined, narrowed via
   // the `topLine ? ... : ...` ternaries below rather than a non-null assertion.
   const topLine = flawChessEngine.rankedLines[0];
-  const fcWhiteFraction = topLine
+  const fcWhiteFraction: number | null = topLine
     ? sideToMoveFromFen(position) === 'white'
       ? topLine.practicalScore
       : 1 - topLine.practicalScore
-    : 0.5;
+    : null;
   // A terminal position pins the left bar to the deterministic result too: neither the
   // FlawChess nor the Maia engine emits a ranked line for a checkmate (no legal move),
-  // so their fraction fell back to 0.5 while the Stockfish bar already read decisive
-  // (Quick 260709-j3k follow-up). mate > 0 = White wins (full white), < 0 = Black wins
-  // (full black), draw = midpoint.
+  // so their fraction fell back to the midpoint while the Stockfish bar already read
+  // decisive (Quick 260709-j3k follow-up). mate > 0 = White wins (full white), < 0 =
+  // Black wins (full black), draw = midpoint.
   const terminalWhiteFraction =
     terminalEval == null
       ? null
@@ -2857,9 +2940,65 @@ export default function Analysis() {
         ? terminalEval.mate > 0
           ? 1
           : 0
-        : 0.5;
+        : EVAL_BAR_NEUTRAL_FRACTION;
+
+  // The left bar's live source, or null when neither engine has produced one.
+  const liveLeftWhiteFraction: number | null = flawChessEnabled
+    ? fcWhiteFraction
+    : maiaWhiteFraction;
+
+  // ── Left eval bar freeze during a fast-forward run (quick 260901-oxh) ──────
+  //
+  // Task 3 suppresses the FlawChess and Maia searches for the duration of a run,
+  // so both source fractions go null — and the old `?? 0.5` fallback would drop
+  // the bar to the midpoint on every press. The midpoint does not read as "no
+  // data", it reads as "equal position", i.e. actively wrong information inside
+  // the very feature being fixed for looking glitchy. So the bar HOLDS instead.
+  //
+  // The held value is the last LIVE fraction, updated continuously, NOT a
+  // snapshot taken on the rising edge of a run. Three reasons:
+  //   1. A rising-edge snapshot would depend on render/effect ordering between
+  //      the capture and the engine hooks clearing their own state — those hooks
+  //      are declared ~2,000 lines above this block and would clear first in a
+  //      later commit. A continuous hold has no such ordering coupling.
+  //   2. If a run starts while the engine had not yet resolved the current
+  //      position, a snapshot would freeze the placeholder — the exact value
+  //      being avoided. A continuous hold keeps the last genuinely-known value.
+  //   3. Nothing has to "release" the hold on landing: it is only ever READ
+  //      while `fastForwardRunning` is true, so landing releases it by
+  //      construction.
+  //
+  // The whole mechanism is kept here rather than up beside `fastForwardRunning`
+  // because all three of its inputs are local to this block; splitting it across
+  // 2,000 lines would cost more than it buys.
+  //
+  // State, not a ref, even though the held value never needs to drive a render on
+  // its own: it IS read during render (it feeds the bar), and the
+  // `react-hooks/refs` lint rule rejects reading `ref.current` during render
+  // outright. The extra render this costs is bounded — the setter runs only when
+  // the live fraction actually changes (React bails out on an Object.is-equal
+  // write), i.e. a handful of times per position, and never at all during a run,
+  // when the engines feeding it are suppressed.
+  const [heldLeftWhiteFraction, setHeldLeftWhiteFraction] = useState<number | null>(null);
+  useEffect(() => {
+    // Written in an effect, not during render, so a StrictMode/concurrent
+    // double-render cannot make the hold path order-dependent.
+    if (!fastForwardRunning && liveLeftWhiteFraction !== null) {
+      setHeldLeftWhiteFraction(liveLeftWhiteFraction);
+    }
+  }, [fastForwardRunning, liveLeftWhiteFraction]);
+
+  // Precedence chain — DO NOT REORDER. `terminalWhiteFraction` must keep winning
+  // over the held value so landing a run on a checkmate or draw fills the bar to
+  // the real result instead of showing a stale hold. It is safe at the head of
+  // the chain because `terminalEval` is `terminalPositionEval(position)`, a pure
+  // function of the FEN and therefore engine-independent — it stays live
+  // throughout a run even while every engine is suppressed.
   const leftEvalBarWhiteFraction =
-    terminalWhiteFraction ?? (flawChessEnabled ? fcWhiteFraction : maiaWhiteFraction);
+    terminalWhiteFraction ??
+    (fastForwardRunning ? heldLeftWhiteFraction : null) ??
+    liveLeftWhiteFraction ??
+    EVAL_BAR_NEUTRAL_FRACTION;
   const leftEvalBarAccent = flawChessEnabled ? FLAWCHESS_ENGINE_ACCENT : MAIA_ACCENT;
   const leftEvalBarTestId = flawChessEnabled ? 'analysis-flawchess-eval-bar' : 'analysis-maia-eval-bar';
   // The right bar is labeled "SF" (Stockfish): the real standalone Stockfish eval
@@ -2969,7 +3108,11 @@ export default function Analysis() {
 
   // Left eval bar — FlawChess Engine (brown) when enabled (D-04 precedence), else Maia
   // (violet, D-01/D-05, SURF-04). Single expected-score fill: both sources bypass the cp
-  // sigmoid entirely via whiteFraction. 0.5 fallback while neither source has a result yet.
+  // sigmoid entirely via whiteFraction — see the precedence chain building
+  // leftEvalBarWhiteFraction above (terminal, then the fast-forward hold, then live,
+  // then EVAL_BAR_NEUTRAL_FRACTION). evalCp/evalMate/depth are hard-nulled here, so the
+  // fraction is this bar's ONLY live input: freezing it during a run freezes the bar
+  // completely, with no companion depth or eval readout left to go stale underneath it.
   // Bug fix (151.1 UAT): Maia's WDL is from the side-to-MOVE's perspective (the board is
   // mirrored to the mover's POV when Black is to move — see maiaEncoding.encodeBoard), so
   // expectedScore is the mover's expected score. The bar's whiteFraction must be
