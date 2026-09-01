@@ -69,9 +69,12 @@ const SEVERITY_CATEGORIES: readonly FlawSeverity[] = ['inaccuracy', 'mistake', '
  * Shared 3-column grid template for the accuracy strip and the category
  * table: flexible label column on the left, then one fixed-width column per
  * side, so the table's count columns sit exactly under the strip's accuracy
- * pills. 3.5rem fits "100%" in a bold text-sm pill.
+ * pills. 4.5rem fits "100%" in a bold text-sm pill with breathing room on
+ * both sides; the pill fills the column, so widening the column IS the pill's
+ * horizontal padding. Counts stay centered because they share the column and
+ * are center-aligned.
  */
-const SIDE_ALIGNED_GRID_CLASS = 'grid grid-cols-[1fr_3.5rem_3.5rem] gap-x-2 items-center';
+const SIDE_ALIGNED_GRID_CLASS = 'grid grid-cols-[1fr_4.5rem_4.5rem] gap-x-2 items-center';
 
 function isSeverityCategory(category: MoveStatCategory): category is FlawSeverity {
   return (SEVERITY_CATEGORIES as readonly string[]).includes(category);
