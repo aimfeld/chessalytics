@@ -55,14 +55,17 @@ Blockers and how to resolve:
 - **Nothing to deploy** (`origin/production..origin/main` is empty) — tell the user, stop. Don't open an empty PR.
 - **`.prod.env` missing locally** — you cannot detect this at preflight (see above); `bin/deploy.sh` surfaces it at the `scp` step. When it does, tell the user to fetch the file (`bin/download_1password.sh`) and re-run the deploy.
 
-Then run the pre-PR gates locally so CI doesn't have to bounce them back:
+Then run the pre-PR gates locally so CI doesn't have to bounce them back. Run **all five**, exactly as written:
 
 ```bash
-uv run ruff format app/ tests/ scripts/
+uv run ruff format app/ tests/ scripts/ analysis/
 uv run ruff check . --fix
 uv run ty check app/ tests/ scripts/
+uv run --project analysis --with ty ty check analysis/
 npm --prefix frontend run lint
 ```
+
+**`analysis/` is not optional, and the pre-push hook does NOT cover it.** The hook runs ruff format, ruff check and ty over `app/ tests/ scripts/` only, so a clean "✓ pre-push gates passed" says nothing about `analysis/` — while CI gates it in two separate steps ("Format check (ruff)" over `analysis/`, and "Type check (ty, analysis project)" in `analysis/`'s own venv). Treating the hook as a substitute for this block cost two full CI round-trips on 2026-09-02: first a ruff format drift in `analysis/game_review_study/`, then a `not-iterable` ty error on an unguarded `fetchone()` in `analysis/tilt_study/`. Note the analysis ty check uses `--project analysis` because that directory has its own venv; running plain `ty check analysis/` from the root venv gives phantom unresolved-import errors.
 
 Use `npm --prefix frontend ...` for every frontend command in this skill, never `cd frontend && ...`. The Bash tool's working directory persists across calls, so a bare `cd frontend` leaks into the next step (it once landed `bin/deploy.sh` in `frontend/` → "no such file or directory"). `--prefix` runs the npm script against `frontend/` without ever changing directory, so cwd can't leak even if the line is run on its own. If you ever do need a `cd`, wrap it in a subshell — `( cd frontend && ... )` — so the change is scoped to that one command.
 
@@ -164,6 +167,11 @@ If `bin/deploy.sh` exits non-zero:
 - **Dispatched run is on wrong branch / SHA** — abort and investigate. Do NOT bypass the assertion.
 - **CI failure during deploy** — check `gh run view <run-id> --log-failed`. If it's a transient flake, `gh run rerun <run-id> --failed` then re-run `bin/deploy.sh`. If it's a real failure, halt and report — fixing this is one of the few situations that needs the user to decide between forward-fix-via-main and hotfix-to-production.
 - **Server SHA mismatch at the end** — server didn't converge. Check `ssh flawchess "cd /opt/flawchess && docker compose ps"` and the deploy logs. Don't claim success.
+- **`Deploy via SSH` fails with `could not read Username for 'https://github.com'`** — the server's `git fetch` cannot authenticate. Fixed durably on 2026-09-02 by giving the box a read-only deploy key (`~/.ssh/id_ed25519_github`, `~/.ssh/config` entry for github.com, remote switched to `git@github.com:flawchess/flawchess.git`), so this should not recur. If it does, verify the key is still on the repo (`gh repo deploy-key list`) rather than re-diagnosing from scratch.
+
+  **Diagnose by reading the 401's body first** (`GIT_TRACE_CURL=1 git ls-remote origin <branch>` on the server, then look at the `Recv data:` line). On 2026-09-02 two plausible-sounding theories — GitHub IP throttling, then a git protocol-v2 POST bug — both survived several probes and were both wrong, costing ~15 minutes. The decisive test is one command: run an anonymous `git ls-remote` against an unrelated public repo (`https://github.com/git/git.git`) from BOTH the server and the local machine. If both fail while an authenticated fetch succeeds, the cause is GitHub refusing anonymous fetches, not anything about this server. Also beware that `git ls-remote` under `protocol.version=0` succeeds where a real `fetch` still fails: ls-remote v0 only issues the `GET /info/refs` that GitHub still serves, while a fetch needs the `POST /git-upload-pack` that it refuses — so a green ls-remote is NOT evidence that the deploy will work.
+
+- **Forward-port step reports `SKIPPED: need a clean working tree on main`** — `bin/deploy.sh` treats **untracked** files as dirty, not just modified ones, so stray reports or another session's new planning docs are enough to skip it. Don't leave it skipped: per `docs/git-workflow.md` the next release then conflicts on PR #2. Run the merge manually (`git merge -s ours origin/production && git push origin main`). If `main` carries commits from a concurrently running session, that push publishes them too — surface this and let the user decide before pushing, and never `git reset` main to tidy it, which would destroy the other session's work in progress.
 
 ## Step 7: Post-deploy verification
 
