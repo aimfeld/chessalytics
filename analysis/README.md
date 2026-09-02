@@ -110,3 +110,4 @@ runs after an edit.
 | Notebook | What it explores |
 |---|---|
 | `engine_disagreement_study/` | SEED-145: Stockfish vs Maia vs FlawChess at middlegame and endgame entry — Brier, paired ΔBrier z-tests, reliability diagrams, Murphy calibration/resolution decomposition. |
+| `tilt_study/` | Tilt data story: streak → next-game residual (calibrated expected score), break test (state vs form), quit-on-loss, revenge rematches, loss anatomy, warm-up/fatigue, split-half tilt trait. Findings in `tilt_study/FINDINGS.md`. |
