@@ -1,184 +1,108 @@
 # Coding Conventions
 
-**Analysis Date:** 2026-05-30
-
-This codebase has two stacks: a Python 3.13 / FastAPI backend in `app/` and a React 19 / TypeScript / Vite frontend in `frontend/`. Conventions below are the *observed* patterns in code, cross-referenced with the project rules in `CLAUDE.md`. Where the two diverge, that is called out explicitly.
+**Analysis Date:** 2026-09-02
 
 ## Naming Patterns
 
-### Backend (Python)
+**Backend files (`app/`):**
+- `snake_case.py` throughout: `app/services/flaw_delta_zones.py`, `app/repositories/query_utils.py`.
+- Layer suffix in the name: `*_service.py` (`admin_service.py`, `endgame_service.py`), `*_repository.py` (`app/repositories/endgame_repository.py`), routers named after the resource (`app/routers/imports.py`, `app/routers/insights.py`) — no `_router.py` suffix.
+- Tests mirror the source file: `tests/services/test_canonical_slice_sql.py` for `app/services/canonical_slice_sql.py`, `tests/routers/test_push.py` for `app/routers/push.py`.
 
-**Files:**
-- `snake_case.py` for all modules: `import_service.py`, `query_utils.py`, `stats_service.py`.
-- Routers are named after their resource, **pluralized**, with no `_router` suffix: `app/routers/openings.py`, `stats.py`, `endgames.py`, `insights.py`, `imports.py`, `games.py`, `position_bookmarks.py`, `admin.py`, `auth.py`, `users.py`.
-- Repositories use the `<domain>_repository.py` suffix: `app/repositories/stats_repository.py`, `game_repository.py`, `endgame_repository.py`, `openings_repository.py`. The shared filter module is `query_utils.py`.
-- Schema modules mirror their domain: `app/schemas/stats.py`, `openings.py`, `endgames.py`, `insights.py`, `normalization.py`, `imports.py`.
+**Frontend files (`frontend/src/`):**
+- Components: `PascalCase.tsx` (`EndgamesProcessingState.tsx`, `EvalCoverageHeader.tsx`).
+- Hooks: `camelCase.ts`/`.tsx` prefixed `use` (`useTrainSession.ts`, `useFlawChessEngine.test.tsx`), living in `frontend/src/hooks/` with a co-located `__tests__/` subfolder for hook tests (`frontend/src/hooks/__tests__/useTrainSession.test.ts`), while non-hook lib tests are co-located next to their source (`frontend/src/lib/materialDiff.test.ts` beside `materialDiff.ts`).
+- Directories under `components/` are feature-scoped, not type-scoped: `admin/`, `analysis/`, `auth/`, `board/`, `bots/`, `charts/`, `feedback/`, `filters/`.
 
-**Functions:**
-- `snake_case` throughout: `get_position_stats`, `apply_game_filters`, `get_rating_history`.
-- Module-private helpers are prefixed with a single underscore: `_rows_to_wdl_categories`, `_call_llm`, `_create_test_users`. Pipeline orchestrators split into `_fetch` / `_classify` / `_attribute` style stage functions per `CLAUDE.md`.
+**Functions:** `snake_case` in Python (`load_cohort_cells`, `_run_alembic_upgrade`), `camelCase` in TypeScript (`computeMaterialDiff`). Private/internal Python helpers use a leading underscore (`_alembic_head`, `_ensure_template_fresh`, `_maint_dsn`).
 
-**Variables:**
-- `snake_case` locals; `user_id`, `session` / `db_session`, `filters` are the canonical names threaded through service/repository signatures.
-
-**Module-level constants:**
-- `UPPER_SNAKE_CASE`, underscore-prefixed when module-private: `_BATCH_SIZE`, `_HASH_MB` (`app/services/import_service.py`), `ENDGAME_PLY_THRESHOLD` (`app/repositories/endgame_repository.py`), `MIN_GAMES_FOR_CLOCK_STATS`. **No magic numbers** — thresholds, limits, and batch sizes are always extracted to a named constant (enforced by `CLAUDE.md`).
+**Variables:** `snake_case` in Python, `camelCase` in TS. Module-level constants are `UPPER_SNAKE_CASE` with an explicit type annotation in both languages when it's a typed constant, e.g. `_TEMPLATE_ADVISORY_LOCK_KEY: int = 7_777_777_777` (`tests/conftest.py`), `MIN_GAMES_FOR_CLOCK_STATS` (referenced in `tests/seed_fixtures.py`), `FLAW_DELTA_ZONES: Mapping[str, FlawDeltaZoneSpec]` (`app/services/flaw_delta_zones.py`).
 
 **Types:**
-- Pydantic models use `PascalCase`: `GameFilters`, `PositionStatsRequest`, `PositionStatsResponse`, `EndgameInsightsReport` (`app/schemas/*`).
-- `Literal` type aliases are `PascalCase` and defined at module top. **Never `str` for a fixed value set** — use `Literal[...]` in schemas, function signatures, service/repository params, and return types (enforced by `CLAUDE.md`). See `app/schemas/stats.py` for time-control / platform / color literal aliases.
-
-### Frontend (TypeScript)
-
-**Files:**
-- React components: `PascalCase.tsx` — `EndgameTypeCard.tsx`, `RatingChart.tsx`, `GameCard.tsx`, `FilterPanel.tsx`.
-- Hooks: `camelCase.ts` with `use` prefix — `useOpenings.ts`, `useStats.ts`, `useEndgames.ts`, `useReadiness.ts`, `useFilterStore.ts`, `useDebounce.ts`.
-- Pure utility / lib modules: `camelCase.ts` in `src/lib/` — `zobrist.ts`, `clockFormat.ts`, `recency.ts`, `signedBandGradient.ts`, `pgn.ts`, `sanToSquares.ts`, `queryClient.ts`, `theme.ts`, `utils.ts`.
-- The HTTP client is a single module: `src/api/client.ts` (there is **no per-resource `src/api/*.ts`** — resource fetching lives in the `use*` hooks, which call `client.ts`).
-- shadcn/ui primitives are lowercase: `src/components/ui/button.tsx`, `card.tsx`, `select.tsx`.
-- Page-local sub-hooks/helpers are co-located: `src/pages/openings/useOpeningsHandlers.ts`, `useSidebarState.ts`, `useDeepLinkHighlight.ts`.
-
-**Functions / hooks:**
-- `camelCase`. Hooks always `use` + `PascalCase`.
-
-**Components & props:**
-- Components are `PascalCase` **named** exports (not default exports): `export function EndgameTypeCard(...)`.
-- Props interfaces are `<Component>Props`.
-
-**Types:**
-- Domain types live in `src/types/` with **plural / snake-ish** filenames: `endgames.ts`, `stats.ts`, `users.ts`, `insights.ts`, `position_bookmarks.ts`, `charts.ts`, `admin.ts`, `api.ts`. `PascalCase` type names (`EndgameCategoryStats`).
-- Theme/semantic constants exported `as const` for literal narrowing in `src/lib/theme.ts` (`WDL_COLORS`, gauge zone colors, glass overlays).
+- Python: `PascalCase` dataclasses/Pydantic models (`FlawDeltaZoneSpec`), `Literal[...]` for fixed value sets rather than bare `str` (CLAUDE.md rule — see Type Safety below).
+- TypeScript: `PascalCase` for types/interfaces (`TrainPuzzle`, `SolveResponse`), imported with `import type { ... }` when type-only (seen throughout `frontend/src/hooks/__tests__/*.test.ts`).
 
 ## Code Style
 
-### Backend
+**Formatting:**
+- Backend: `ruff format` (line length 100, set in `pyproject.toml` `[tool.ruff]`). No Black.
+- Frontend: **no Prettier** — ESLint is the only formatter/linter (`frontend/eslint.config.js`); do not run `prettier --write` (it will mass-reformat and there is no config to match).
 
-**Formatting / Linting:** `ruff` (config in `pyproject.toml`).
-- `line-length = 100`. No explicit `[tool.ruff.lint]` rule selection — ruff's **default** rule set is in effect (E/F/W + isort `I` via the formatter). Per-file ignores: `app/models/*.py = ["F821"]` (SQLAlchemy forward-ref strings in `relationship()`), `alembic/versions/*.py = ["F401"]` (auto-imported `sa`/`op`).
-- Imports are auto-sorted. Run `uv run ruff format .` then `uv run ruff check . --fix`.
+**Linting:**
+- Backend: `ruff check .` — per-file ignores for SQLAlchemy forward-ref strings (`app/models/*.py` → `F821`) and Alembic's auto-injected `sa`/`op` imports (`alembic/versions/*.py` → `F401`), both declared in `pyproject.toml` `[tool.ruff.lint.per-file-ignores]`.
+- Frontend: flat ESLint config (`frontend/eslint.config.js`) built on `@eslint/js` recommended, `typescript-eslint` recommended, `eslint-plugin-react-hooks` flat recommended, and `eslint-plugin-react-refresh` (Vite). Notable overrides, each with an inline rationale comment in the config:
+  - `react-hooks/set-state-in-effect` is globally disabled — codebase intentionally derives state from server data / filters in effects.
+  - `react-refresh/only-export-components` is disabled for `src/components/ui/**` (shadcn/ui pattern — components + variant exports), `src/components/filters/**` (filter components co-export `FilterState`, `DEFAULT_FILTERS`, etc.), and `src/components/analysis/**` (overlay exports non-component arrow builders alongside the component).
+- Dead-code check: `npm run knip` runs in CI and fails on unused exports/dependencies — when removing a feature, remove its exports too.
 
-**Type checking:** `ty` (config `[tool.ty.rules]`: `unused-ignore-comment = "warn"` so stale ignores don't accumulate).
-- All backend code MUST pass `uv run ty check app/ tests/` with **zero errors** (CI gate between ruff and pytest).
-- Explicit return type annotations on all functions: `async def get_position_stats(...) -> PositionStatsResponse:`.
-- Use `Sequence[str]` (covariant) not `list[str]` for params that accept `list[Literal[...]]` — `list` is invariant. Import `from collections.abc import Sequence`.
-- Suppress unfixable errors with `# ty: ignore[rule-name]` (never bare `# type: ignore`), always with the rule name and a brief reason (SQLAlchemy forward refs, FastAPI-Users generics).
+## Type Safety (CLAUDE.md rule, verified)
 
-### Frontend
-
-**Linting:** ESLint flat config (`frontend/eslint.config.js`).
-- Extends `js.configs.recommended`, `tseslint.configs.recommended`, `reactHooks.configs.flat.recommended`, `reactRefresh.configs.vite`. Global-ignores `dist`, `dev-dist`.
-- `react-refresh/only-export-components` is turned **off** for `src/components/ui/**` (shadcn primitives export variants alongside components). Run `npm run lint` (`eslint .`).
-
-**Dead-code detection:** `knip` (`npm run knip`, config `frontend/knip.json`) runs in CI and fails on unused exports/deps. Remove exports when removing a feature; ensure new exports are imported somewhere.
-
-**Type checking:** `tsc -b` as part of `npm run build`. Strict TS via `frontend/tsconfig.app.json`:
-- `strict: true`, `noUnusedLocals`, `noUnusedParameters`, `noFallthroughCasesInSwitch`, `noUncheckedSideEffectImports`, `erasableSyntaxOnly`.
-- **`noUncheckedIndexedAccess: true`** — every array/Record index access returns `T | undefined`. Narrow before use (`const v = arr[i]; if (v) {...}`), `!` only when provably in bounds, or `?? fallback` for Records. Never `// @ts-ignore`.
-- **`verbatimModuleSyntax: true`** → type-only imports MUST use `import type { ... }` (e.g. `import type { EndgameCategoryStats } from '@/types/endgames'`).
-
-**No Prettier config file** — style is enforced by ESLint defaults. Observed: 2-space indent, single quotes, **semicolons present** in `.ts`/`.tsx` (see `src/lib/queryClient.ts`).
+- **`ty` must be zero-error** on `app/ tests/ scripts/` (separately, `analysis/` is checked against its own venv: `uv run --project analysis --with ty ty check analysis/`). Enforced in CI (`.github/workflows/ci.yml`, steps "Type check (ty)" and "Type check (ty, analysis project)").
+- `unused-ignore-comment = "warn"` is set in `[tool.ty.rules]` (`pyproject.toml`) so stale `# ty: ignore[...]` comments surface.
+- `Sequence[str]` preferred over `list[str]` for parameters accepting `list[Literal[...]]` (list is invariant); see the pattern documented at `app/schemas/normalization.py` and `app/services/stats_service.py` per CLAUDE.md — Pydantic models are reserved for external API boundaries, TypedDicts for internal structured accumulators.
+- Frontend `tsconfig` enables `noUncheckedIndexedAccess` — every array/Record index access is `T | undefined`; narrow with a local + `if`, a provably-safe `!`, or `?? fallback`. Never `// @ts-ignore` (per `frontend/CLAUDE.md`).
+- `npm run build` (`tsc -b && vite build`) is the real type-check gate for frontend — `npm run lint`/`npm test` do not type-check because esbuild strips types. Run `npm run build` explicitly after changing shared types or property access.
 
 ## Import Organization
 
-### Backend
-Ruff `I` enforces three groups (stdlib → third-party → first-party `app.`):
+**Backend (`app/`):** standard-library imports first, blank line, third-party (`fastapi`, `sqlalchemy`, `httpx`, `pytest`), blank line, `app.*` internal imports last — e.g. `tests/routers/test_push.py`:
 ```python
-from fastapi import APIRouter, Depends, HTTPException
-from sqlalchemy.ext.asyncio import AsyncSession
+from __future__ import annotations
 
-from app.core.database import get_async_session
-from app.services import stats_service
+import base64
+import os
+from typing import Any
+from unittest.mock import AsyncMock, MagicMock, patch
+
+import httpx
+import pytest
+from cryptography.hazmat.primitives.asymmetric import ec
+...
+from app.core.config import settings as config_settings
+from app.main import app
+from app.services import train_reminder_service
 ```
-Services are imported **as modules** and called as `stats_service.get_position_stats(...)` (observed in routers). Pure functions are sometimes imported by name in tests (`from app.services.stats_service import _rows_to_wdl_categories`).
+`from __future__ import annotations` appears at the top of files using modern generic syntax under older-compatible runtime checks (e.g. `app/repositories/*.py`, several `tests/*.py`).
 
-### Frontend
-**Path alias `@/` → `src/`** (declared in `tsconfig.app.json` `paths` and `vite.config.ts` `resolve.alias`). Use `@/lib/theme`, `@/types/endgames`, `@/hooks/useStats` — not deep relative paths. Co-located imports stay relative (`../EndgameTypeCard`).
-
-Observed order: third-party (`react`, `@tanstack/react-query`, `radix-ui`, `recharts`, `vitest`/`@testing-library` in tests) → `@/` aliased internal → relative.
+**Frontend:** vitest/testing-library imports, then third-party (`react`, `@tanstack/react-query`, `react-router`), then `@/` aliased internal imports, then relative/type-only imports last — see `frontend/src/hooks/__tests__/useTrainSession.test.ts`. Path alias `@` → `frontend/src` is defined in `frontend/vite.config.ts` (`resolve.alias`).
 
 ## Error Handling
 
-### Backend
-- **Routers** translate expected `ValueError` (user-input validation) into `HTTPException` with `from e` chaining:
-  ```python
-  except ValueError as e:
-      raise HTTPException(status_code=400, detail=str(e)) from e
-  ```
-- **Sentry capture is mandatory** in every non-trivial `except` in `app/services/` and `app/routers/`:
-  ```python
-  sentry_sdk.set_context("import", {"job_id": str(job_id), "user_id": user_id})
-  sentry_sdk.capture_exception(e)
-  ```
-- **Never embed variables in exception messages** (fragments Sentry grouping) — pass them via `set_context` / `set_tag`. Use `set_tag("source", ...)` for filterable dimensions (`import`, `api`, `auth`).
-- **Skip trivial/expected exceptions**: `ValueError` from parsing user input, `UserAlreadyExists` from FastAPI-Users. In retry loops, capture only on the final attempt — let transient failures propagate.
-- Sentry initialized in `app/main.py` (`sentry-sdk[fastapi]`).
+**Backend — Sentry is mandatory in service/router `except` blocks** (CLAUDE.md, verified in `app/routers/imports.py:138,160`, `app/routers/admin_activity.py:86`): every non-trivial `except` in `app/services/` and `app/routers/` calls `sentry_sdk.capture_exception()` (or `sentry_sdk.capture_exception(exc)` when the exception object is bound). Trivial/expected exceptions (`ValueError` from user-input parsing, `UserAlreadyExists`) are intentionally NOT captured.
+- Never interpolate variable data into the exception message (fragments Sentry grouping) — use `sentry_sdk.set_context()` / `set_tag()` instead. See CLAUDE.md example under "Error Handling & Sentry".
+- Retry loops (chess.com/lichess fetch retries) capture only on the final failed attempt, not every transient one.
+- `HTTPException(status_code=..., detail="...")` is the standard way routers surface client-facing errors — plain string details, no leaked internals: `raise HTTPException(status_code=404, detail="Game not found")` (`app/routers/imports.py:406`).
 
-### Frontend
-- **API layer** (`src/api/client.ts`): the shared fetch wrapper throws on non-OK responses; callers handle via TanStack Query.
-- **Global TanStack Query/Mutation errors** are captured once in `src/lib/queryClient.ts` (exact, verified):
-  - `QueryCache.onError` → `Sentry.captureException(error, { tags: { source: 'tanstack-query' }, extra: { queryKey: query.queryKey } })`.
-  - `MutationCache.onError` → `Sentry.captureException(error, { tags: { source: 'tanstack-mutation' }, extra: { mutationKey: mutation.options.mutationKey } })`.
-  - **Do NOT** add duplicate `Sentry.captureException` in components using `useQuery`/`useMutation`.
-- Query defaults: `retry: 1`, `staleTime: 30_000`.
-- **Manual fetch/axios in catch blocks** (outside TanStack Query — auth forms, direct calls) MUST capture explicitly with a source tag: `Sentry.captureException(error, { tags: { source: 'auth' } })`. Sentry is initialized in `src/instrument.ts`.
-- **Every data-loading ternary chain MUST include an `isError` branch** showing "Failed to load [X]. Something went wrong. Please try again in a moment." Never let an API error fall through to an empty-state ("No games imported yet") message.
-
-## Logging
-
-**Backend:** stdlib `logging`, one logger per module: `logger = logging.getLogger(__name__)`. Use `logger.info(...)` for pipeline progress. Logging is *not* a substitute for Sentry — errors must be explicitly captured.
-
-**Frontend:** No console logging convention; errors go to Sentry. Avoid stray `console.log` in committed code.
+**Frontend:**
+- Global TanStack Query errors are captured once, centrally, in `frontend/src/lib/queryClient.ts` via `QueryCache.onError` / `MutationCache.onError`. Do NOT add a duplicate `Sentry.captureException()` inside a component using `useQuery`/`useMutation`.
+- Manual `fetch`/`axios` calls outside TanStack Query (auth forms, direct API calls) must call `Sentry.captureException(error, { tags: { source: '...' } })` in their `catch`.
+- Every `useQuery` result rendered through a loading/data/empty ternary chain must include an explicit `isError` branch — never let a fetch failure silently fall through to an empty-state message.
 
 ## Comments
 
-- **Comment bug fixes** — add a comment at the fix site explaining what broke and why (per `CLAUDE.md`). Future readers shouldn't need git blame. Observed extensively in `tests/conftest.py` and `frontend/vite.config.ts` (explaining non-obvious workarounds).
-- **Docstrings** (backend): triple-quoted docstrings on public service/router functions and Pydantic models describe behavior. Test modules carry header docstrings describing coverage intent (`tests/test_stats_service.py`, `tests/seed_fixtures.py`). Frontend component test files often have a top docblock describing what is covered.
-- Avoid em-dashes in prose, commit messages, PR descriptions, and user-facing UI copy (style rule in `CLAUDE.md`); a single em-dash per paragraph is the max. Code comments are exempt.
+- Long, dated rationale comments are the norm for anything non-obvious, especially test infra and hard-won bug fixes — see the extensive header comments in `tests/conftest.py` explaining per-run DB cloning, or the phase/decision references sprinkled through service and test docstrings (`Phase 94.2`, `D-04`, `T-100-01`).
+- **Bug-fix comments are required** (CLAUDE.md): a comment at the fix site explains what broke and why, e.g. the `SENTRY_DSN=""` / `SECRET_KEY` overrides at the top of `tests/conftest.py`, or `frontend/src/hooks/useTrainSession.ts`'s cross-device score fix referenced in `useTrainSession.test.ts` ("BUGFIX-TRAIN-SCORE-CROSSDEVICE").
+- Module/file docstrings commonly cite the originating GSD phase and decision IDs (`Phase 61`, `D-07`, `CR-01`) so future readers can trace design rationale back to planning docs.
 
-## Function Design
+## Function/Module Design (CLAUDE.md, enforced by convention not by a linter rule)
 
-Limits apply to **both** stacks (`CLAUDE.md`):
-- **Nesting depth:** soft 3, hard 4 inside any function body (the firm rule).
-- **Logic LOC:** soft 100, hard 200 — measuring *logic* lines, excluding returned JSX trees, large literal config objects (Recharts axis/gradient configs), docstrings, and blanks.
-- **Cognitive complexity:** aim ≤ 15 per function.
-
-Common splits when exceeded:
-- **Pipeline orchestrators** (import, insights, normalization): one function per stage; the top-level reads as a list of `_fetch` / `_classify` / `_attribute` / `_dedupe` / `_rank` calls.
-- **React components mixing data + JSX:** extract data shaping into a `useXyz` hook (the Openings page does this via `src/pages/openings/use*.ts`); split desktop/mobile renderers when each branch exceeds ~40 LOC of logic.
-- **Routers doing more than HTTP:** keep thin — validate, call service, shape response. Push branching/caching/aggregation into the service layer.
-- **Don't invent context dataclasses just to fit a signature.** A bag-of-state with < 3 fields, one writer, one reader is over-engineering — pass args directly. Context types earn their keep when threaded through 3+ stages or carrying ≥ 4 fields.
-
-**Refactor bloated code on sight** when editing a file (within GSD phase scope; flag unscoped refactors, prefer a follow-up note for `/gsd-quick` / `/gsd-fast`).
+- **Nesting depth**: soft 3, hard 4 inside a function body — the firm rule.
+- **Logic LOC**: soft 100, hard 200, excluding JSX returns, large config literals, docstrings, blanks.
+- **Cognitive complexity**: aim ≤15 per function.
+- Common extraction seams observed in the codebase: pipeline stages split into `_fetch`/`_classify`/`_rank`-style private helpers (e.g. `tests/conftest.py`'s `_ensure_template_fresh` / `_create_run_db` / `_drop_run_db` / `_run_alembic_upgrade`); React data shaping pulled into `useXyzData` hooks; routers stay thin (see `app/routers/imports.py`, `app/routers/insights.py` — branching lives in `app/services/`).
+- No magic numbers: named constants throughout, e.g. `_EXPECTED_BREAKPOINTS: int = 99` (`app/repositories/...`), `_TEMPLATE_ADVISORY_LOCK_KEY: int = 7_777_777_777` (`tests/conftest.py`), `_BASE_TIME_SECONDS: dict[str, int]` (`tests/seed_fixtures.py`).
+- **Refactor bloated code on sight** when editing a file that already breaches the size/nesting limits, rather than adding to it (CLAUDE.md) — not verified structurally here, but stated as house rule; flag rather than doing an unscoped refactor outside a GSD phase.
 
 ## Module Design
 
-### Backend layered architecture (strict)
-```
-routers/       # HTTP only — validation, service call, response shaping. No business logic.
-services/      # Business logic. No raw SQL.
-repositories/  # DB access. No SQL anywhere else.
-```
-- **Router prefix convention:** `APIRouter(prefix="/resource", tags=["resource"])` with relative paths in decorators (`@router.post("/positions")`). Never embed the resource prefix in individual route paths.
-- **Shared query filters:** `app/repositories/query_utils.py::apply_game_filters()` is the single source for time-control / platform / rated / opponent-type / recency / color filtering. All repositories import it; never duplicate filter logic.
-- **Pydantic models at system boundaries** (external API I/O, request/response); `TypedDict` for internal structured data (filter params, accumulators) — see `app/schemas/normalization.py`, `app/services/stats_service.py`.
+**Backend:** three-layer split enforced by convention, not framework: `app/routers/` (HTTP only, no business logic), `app/services/` (business logic), `app/repositories/` (DB access, no SQL in services). Shared query-filter logic lives in one place only — `app/repositories/query_utils.py`'s `apply_game_filters()` — never duplicated per-repository (CLAUDE.md, structural rule).
 
-### Frontend
-- **Named exports**, no default exports for components/utilities.
-- **No barrel `index.ts` re-export files** — import directly from the module.
-- **shadcn/ui pattern** for primitives: `cva` (class-variance-authority) variant definitions + `cn()` merge helper (`clsx` + `tailwind-merge`) from `@/lib/utils` (`src/components/ui/button.tsx`).
-- **Variant semantics** (`CLAUDE.md`): primary CTA = `variant="default"`; secondary action = `variant="brand-outline"`; `variant="secondary"` is reserved for neutral gray chips only.
-- **API/hook layering:** `src/api/client.ts` (shared fetch wrapper) ← `src/hooks/use*.ts` (TanStack Query wrappers that own `queryKey` arrays and `enabled` flags) ← components.
+**Frontend:** components own their exports; shadcn/ui `components/ui/**` and feature `components/filters/**`/`components/analysis/**` intentionally co-export non-component values (types, constants, builder functions) alongside the component, with ESLint's `react-refresh/only-export-components` explicitly disabled for those directories (see Code Style above).
 
-## Frontend-Specific Conventions
+## Data-Story Sub-Project (`stories/`)
 
-- **Theme constants in `src/lib/theme.ts`** — all semantic colors (WDL win/draw/loss, gauge zones, glass overlays, opacity) live here and are imported. Never hard-code semantic color values in components.
-- **Minimum font size `text-sm`** — never `text-xs` or smaller in new code (readability floor), *except* hover/tap info tooltips (Radix popover bodies with the HelpCircle trigger: `MetricStatPopover`, `WdlConfidenceTooltip`, `EvalConfidenceTooltip`, `AchievableScorePopover`) which may use `text-xs`.
-- **`data-testid` on every interactive element** — buttons, links, inputs, select triggers, toggles, collapsible triggers — kebab-case, component-prefixed: `btn-{action}`, `nav-{page}`, `filter-{name}`, `board-btn-{action}`, `{component}-{element}-{id}` (e.g. `endgame-type-card-rook`). Major layout containers, section headings, and modals also get `data-testid` (`dashboard-page`, `import-modal`). These IDs double as the primary handle for component tests (`screen.getByTestId`).
-- **Semantic HTML** — `<button>` for clickable non-links, `<a>`/`<nav>` for navigation, `<main>`, `<form>`. Never `<div onClick>` / `<span onClick>`.
-- **ARIA labels on icon-only buttons** — `aria-label` required when there is no visible text.
-- **Chess board** — container has `data-testid="chessboard"` + `id="chessboard"`; supports both drag-drop and click-to-click moves.
-- **Mobile parity** — when a component has separate desktop and mobile sections, apply every change (styling, added/removed elements, behavior) to both unless desktop-specific by nature.
+`stories/` (public data stories, `stories/CLAUDE.md`) follows different conventions from the app — self-contained HTML pages, inline CSS/JS, no CDNs (except Google Fonts + Umami), and is exempt from GSD phase planning (work happens directly on `study/<slug>` branches, squash-merged to `main`). Not part of `frontend/` or `app/` conventions above.
 
 ---
 
-*Convention analysis: 2026-05-30*
+*Convention analysis: 2026-09-02*
