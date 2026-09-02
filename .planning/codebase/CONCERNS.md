@@ -4,11 +4,10 @@
 
 ## Tech Debt
 
-**Backend `except Exception` blocks without Sentry capture:**
-- Issue: `app/services/*.py` and `app/routers/*.py` contain 171 `except` clauses but only 85 `capture_exception(...)` calls project-wide, and 67 of those exceptions are the broad `except Exception` form. Per `CLAUDE.md`, every non-trivial `except` in `app/services/` and `app/routers/` must call `sentry_sdk.capture_exception()` — logging alone does not reach Sentry.
-- Files: `app/services/*.py`, `app/routers/*.py` (broad, not a single hotspot)
-- Impact: production failures inside those blocks are silently swallowed or only logged, with no Sentry issue created — matches the known pattern in project memory ("only WARNING+ from `app/` reaches docker logs, so 'no log line' ≠ 'didn't run'"), meaning some failures leave no trace at all outside Sentry.
-- Fix approach: audit each `except Exception` block against the CLAUDE.md rule (skip only genuinely expected exceptions — `ValueError` from user input parsing, `UserAlreadyExists`, etc.) and add `capture_exception` where missing; for retry loops, confirm capture happens only on the final attempt per the documented convention.
+**Backend `except Exception` blocks without Sentry capture (RESOLVED 2026-09-02, quick task 260902-rmn):**
+- Audit: 136 `except` clauses in `app/services/` + `app/routers/`; 69 had no capture in the block body. 62 are expected conditions under the CLAUDE.md rule (input-parse fallbacks, `CancelledError` re-raise, retry loops that capture on the last attempt, per-item loops with one aggregate post-loop capture, deliberately swallowed best-effort syscalls, optional-dependency `ImportError`, stale bearer-token decode). The raw clause/capture ratio in the original entry overstated the problem.
+- Fixed (commit 7fc994cf7): 7 sites that swallowed genuine failures silently — Stockfish respawn failure and engine crash in `app/services/engine.py`; `read_game` raising on a stored PGN in `app/services/eval_apply.py` (2 sites), `app/services/eval_entry.py`, `app/routers/eval_remote.py`; `board.san` on the mainline in `eval_apply.py`. Guarded by `tests/services/test_sentry_capture_gaps.py` and `tests/services/test_engine_nodes.py`.
+- Remaining: none known. Details in `.planning/quick/260902-rmn-implement-missing-sentry-captures-in-app/260902-rmn-SUMMARY.md`.
 
 **`gen_benchmarks.py` incomplete migration to modular chapters:**
 - Issue: `scripts/gen_benchmarks.py:179-190` contains an explicit "TODO stub" fallback — `return {"status": "TODO", "section": todo, "tables": [], "values": {}}` — for report sections not yet ported to the newer per-chapter compute functions.
