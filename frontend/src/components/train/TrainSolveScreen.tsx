@@ -1193,6 +1193,7 @@ export function TrainSolveScreen({
           playedMoveQuality={playedMoveQuality}
           gameMoveQuality={gameMoveQuality}
           onGameMoveUciChange={setGameMoveUci}
+          onAnalyzeClick={handleAnalyzeClick}
           onGameMoveLineChange={setGameMoveLine}
           onLineStep={setLineStep}
           solutionNonce={solutionNonce}

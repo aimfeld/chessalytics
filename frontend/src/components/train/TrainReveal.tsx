@@ -35,7 +35,8 @@ import { useEffect, useRef, useState } from 'react';
 import type { MouseEvent, ReactElement } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import { Chess } from 'chess.js';
-import { Loader2, X } from 'lucide-react';
+import { Loader2, Search, X } from 'lucide-react';
+import { Link } from 'react-router';
 import { trainApi } from '@/api/client';
 import { useLibraryGame } from '@/hooks/useLibrary';
 import { useIsDesktop } from '@/hooks/useIsDesktop';
@@ -58,6 +59,7 @@ import {
   formatScore,
 } from '@/components/analysis/EngineLines';
 import { DARK_GREEN } from '@/lib/arrowColor';
+import { buildGameAnalysisUrl } from '@/lib/analysisUrl';
 import { BEST_MOVE_ARROW, TRAIN_VERDICT_CORRECT, TRAIN_VERDICT_INCORRECT } from '@/lib/theme';
 import { toDisplayQuality, trainGlyphColor } from '@/lib/trainArrows';
 import type { TrainFineMove, TrainMoveQuality } from '@/lib/trainArrows';
@@ -571,6 +573,15 @@ export interface TrainRevealProps {
    */
   onGameMoveUciChange?: (uci: string | null) => void;
   /**
+   * Fired by the game footer's open-on-the-analysis-board link, immediately
+   * before it navigates. Wired to the SAME `handleAnalyzeClick` as the
+   * board's Analyze button: that handler writes the reveal cache, which is
+   * what lets a Back from /analysis restore this reveal instead of dropping
+   * the user on a fresh puzzle. A footer link that navigated without it
+   * would look identical and silently lose the reveal on Back.
+   */
+  onAnalyzeClick?: () => void;
+  /**
    * 190.1 UAT: reports the reveal-time search's resolved game-move line to
    * the board owner, which derives the game move's QUALITY from it (for the
    * quality badge on the game-move arrow's target square). Called with `null`
@@ -697,6 +708,7 @@ export function TrainReveal({
   playedMoveQuality = null,
   gameMoveQuality = null,
   onGameMoveUciChange,
+  onAnalyzeClick,
   onGameMoveLineChange,
   onLineStep,
   solutionNonce = 0,
@@ -1317,6 +1329,33 @@ export function TrainReveal({
               vs {opponentName}
               {opponentRating !== null && ` (${opponentRating})`}
               {game.played_at !== null && ` · ${formatDateWithYear(game.played_at)}`}
+              {/* Opens the source game on the analysis board at the puzzle's
+                  own position. `puzzle.ply` is the ply of the move the user
+                  had to FIND, so the board wants the ply BEFORE it — the same
+                  `ply - 1` the board's Analyze button uses. Kept in sync with
+                  it deliberately: two controls pointing at one position must
+                  not drift. `puzzle.game_id` is non-null here because the
+                  whole footer sits behind `verdict.source === 'sr_item'`, and
+                  an SR item always has a live source game (an orphaned one
+                  reveals as not_found). */}
+              {puzzle.game_id !== null && (
+                <>
+                  {' '}
+                  <Link
+                    to={buildGameAnalysisUrl(
+                      puzzle.game_id,
+                      puzzle.ply > 0 ? puzzle.ply - 1 : null,
+                    )}
+                    data-testid="train-reveal-footer-analyze"
+                    aria-label="Open this position on the analysis board"
+                    title="Open this position on the analysis board"
+                    onClick={onAnalyzeClick}
+                    className="inline-flex align-middle text-brand-brown-light hover:text-brand-brown-highlight"
+                  >
+                    <Search className="h-4 w-4" />
+                  </Link>
+                </>
+              )}
             </p>
           )}
         </>

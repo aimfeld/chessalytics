@@ -40,6 +40,8 @@ in `YYYY-MM-DD` (Europe/Zurich).
 
 - On the Train reveal, when a puzzle comes from one of your own games, the move you actually played is now shown on the board right away — a thin white arrow with its move-quality icon — instead of only appearing when you hover or tap its card.
 
+- The Train reveal's game line now ends with a magnifying-glass link that opens that game on the analysis board, at the exact position the puzzle came from.
+
 ### Fixed
 
 - The Train reveal no longer labels a stranger's move as the one you played. Warm-up puzzles are drawn from a shared pool, so most of them come from another player's game; the reveal was still showing that player's move under "Played in game". It now appears only when the puzzle really does come from one of your own games.
