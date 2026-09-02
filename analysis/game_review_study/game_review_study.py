@@ -107,7 +107,9 @@ def _(mo):
         value="200",
         label="Decisive-lead threshold (cp)",
     )
-    bootstrap_reps = mo.ui.slider(0, 2000, value=0, step=250, label="Bootstrap reps (0 = point estimates only)")
+    bootstrap_reps = mo.ui.slider(
+        0, 2000, value=0, step=250, label="Bootstrap reps (0 = point estimates only)"
+    )
     mo.hstack([threshold_cp, bootstrap_reps])
     return bootstrap_reps, threshold_cp
 
@@ -286,10 +288,12 @@ def _(
                 _rows.append(_row)
 
     contrast_table = pl.DataFrame(_rows)
-    mo.vstack([
-        mo.md("## Paired MH-weighted contrasts (analysis-rate difference, pp)"),
-        contrast_table,
-    ])
+    mo.vstack(
+        [
+            mo.md("## Paired MH-weighted contrasts (analysis-rate difference, pp)"),
+            contrast_table,
+        ]
+    )
     return
 
 
@@ -393,14 +397,16 @@ def _(
         height=440,
         margin=dict(t=90),
     )
-    mo.vstack([
-        mo.md(
-            "## Δ analysis rate by ELO × TC (paired within-user)\n"
-            f"Cells with fewer than {MIN_USERS_PER_CELL} paired users are dropped. "
-            "Enable bootstrap reps above for 95% cluster-bootstrap error bars."
-        ),
-        fig_elo_tc,
-    ])
+    mo.vstack(
+        [
+            mo.md(
+                "## Δ analysis rate by ELO × TC (paired within-user)\n"
+                f"Cells with fewer than {MIN_USERS_PER_CELL} paired users are dropped. "
+                "Enable bootstrap reps above for 95% cluster-bootstrap error bars."
+            ),
+            fig_elo_tc,
+        ]
+    )
     return
 
 
