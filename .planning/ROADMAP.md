@@ -620,8 +620,8 @@ every later split is measured, not eyeballed:
 - **Cyclomatic complexity + size via ruff (built in, zero deps, CI-ready)**: enable
   `C901` (mccabe, `max-complexity = 15`), `PLR0912` (`max-branches = 12`) and `PLR0915`
   (`max-statements = 100`, the logic-LOC proxy) in `pyproject.toml` `[tool.ruff.lint]`.
-  Baseline today: 12 `C901` breaches app-wide (7 in the six files), 12 `PLR0912`, 2
-  `PLR0915`. Baseline the pre-existing breaches with `per-file-ignores` (or `# noqa`
+  Baseline today (re-measure at merge time): 12 `C901` breaches app-wide (7 in the six
+  files), 21 `PLR0912`, 2 `PLR0915`. Baseline the pre-existing breaches with `per-file-ignores` (or `# noqa`
   with the rule name) so CI is green from day one; each file's plan then DELETES its
   own ignores as it fixes them, so the ignore list only shrinks.
 - **Cognitive complexity via `complexipy`** (Rust CLI, Sonar's cognitive-complexity
@@ -631,11 +631,13 @@ every later split is measured, not eyeballed:
   (`_aggregate_endgame_stats`, `_aggregate_endgame_stats_by_tc`). Dev-tool report first;
   the phase records the app-wide count before/after. Whether it gates CI is a decision
   for the plan (recommend: not yet — too many pre-existing breaches outside scope).
-- **Nesting depth via ruff `PLR1702`** (too-many-nested-blocks, preview rule in ruff
-  0.15.15, `lint.pylint.max-nested-blocks = 4`; 14 breaches app-wide today). Covers
-  CLAUDE.md's "hard nesting 4" rule, so NO custom AST script is needed. Enable it as a
-  single preview rule (`lint.explicit-preview-rules = true` + select) rather than
-  turning on all of preview. Document all three tools in `docs/dev-tooling.md` and
+- **Nesting depth + logic LOC script** `scripts/check_function_size.py` (stdlib AST;
+  prints per-function logic LOC excluding docstrings/blanks and max nesting depth;
+  `--fail-over-depth 4 --fail-over-loc 200` exit code for the verifier). Ruff's
+  `PLR1702` was measured and REJECTED for now: it is preview-only, and `preview = true`
+  in ruff 0.15.15 swaps the default rule set (59 -> 407 rules; pinning `select`
+  restores 60 but preview still changes stable-rule behavior: 8 new F401 hits). Revisit
+  when PLR1702 stabilizes. Document all three tools in `docs/dev-tooling.md` and
   reference them from CLAUDE.md's function-size rule.
 
 **Gates per plan** (each file is one plan, one squash-merge unit):
@@ -651,7 +653,7 @@ every later split is measured, not eyeballed:
   extracted helper and confirm an existing test fails (per the mutation-test rule).
 
 **Success criteria**:
-0. `uv run ruff check .` passes with `C901`/`PLR0912`/`PLR0915`/`PLR1702` enabled; the six
+0. `uv run ruff check .` passes with `C901`/`PLR0912`/`PLR0915` enabled; the six
    in-scope files have NO remaining per-file-ignores for those rules; `complexipy`
    before/after counts recorded in VERIFICATION.
 1. No function in the six files exceeds 200 logic LOC or nesting depth 4; a listing
