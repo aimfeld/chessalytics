@@ -1,7 +1,19 @@
 ---
 id: SEED-157
-status: active
+status: closed
 planted: 2026-08-29
+closed: 2026-09-02
+closed_during: story-candidate review against the published two-pawns-up piece. Closed
+  as a flagship story, not as a finding. Rationale: (1) outside classical the paired
+  effects are a null (rapid +0.4pp, blitz -1.6pp), so the honest finding is one number,
+  "classical players review their losses more", and the "hero games vs defeats" arc
+  oversells the fast-TC side; (2) it is a story about a Lichess button, not about chess.
+  chess.com readers cannot relate, the requester is unknowable, and the symmetry
+  cancellation makes the effect size hard to explain honestly to a lay audience; (3) it
+  gives the reader no takeaway for their own play, which is the property that made
+  two-pawns-up work. The probe result stays valid and may return as a sidebar or short
+  note inside another story. Successor candidates:
+  .planning/notes/2026-09-02-data-story-candidates.md.
 planted_during: /gsd-explore — "player behaviour when it comes to reviewing their games;
   brainstorm what we could analyze for a chess data story"
 trigger_when: story capacity opens for the next Chess Data Story, or the SEED-152 rapid

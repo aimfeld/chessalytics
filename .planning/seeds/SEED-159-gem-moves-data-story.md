@@ -74,6 +74,32 @@ blunders is what actually wins games.
    counterfactual cliff showing where the eval would have gone after the
    second-best move.
 
+## Caution (added 2026-09-02, story-candidate review)
+
+Kept open, but deprioritized behind the candidates in
+`.planning/notes/2026-09-02-data-story-candidates.md`. Reasons, in weight order:
+
+1. **The central null is confounded by construction.** Only-moves arise mostly when
+   the mover is already in trouble (defensive resources), so gem games skew toward
+   worse positions. A paired per-user design controls for *who*, not for *what kind
+   of position*; a null (or a negative) would need a position-quality control, e.g.
+   conditioning on eval at the gem ply, and the story would spend its length
+   explaining why the null does not mean what it looks like.
+2. **Frequency by ELO is near-tautological.** Maia difficulty is rating-relative
+   (prob at the mover's own pinned ELO), so a flat gems-per-game curve across buckets
+   is what the definition predicts, not a finding. State this up front if the curve
+   is shown, and do not headline it.
+3. **It is a product-introduction piece.** stories/CLAUDE.md warns that feature
+   promotion undermines credibility. No external benchmark exists for our gem
+   definition, so there is no comparison hook beyond the chess.com Brilliant
+   contrast, which is definitional, not empirical.
+4. **The missing spine is conversion rate** (found/offered), which is not computable
+   from stored data (locked decision 2). Without it the story cannot say "players at
+   1600 find X% of the gems available to them", which is the one number a reader
+   would actually want. Revisit when a sampled MultiPV-2 + Maia re-analysis makes
+   conversion measurable; until then the strongest honest version is a short piece
+   built around the worked examples and the eval-misconception beat (decision 6).
+
 ## Story ingredients
 
 - **1–2 worked examples**, flagship: the difficult defensive queen sacrifice to
