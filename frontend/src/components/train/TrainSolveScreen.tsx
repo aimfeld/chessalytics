@@ -712,22 +712,29 @@ export function TrainSolveScreen({
   }, [verdict, vettedMoves, gradeResult, lastPlayedUci, playedMoveQuality, gameMoveUci, gameMoveQuality]);
 
   /**
-   * Phase 200 UAT: the moves the PRISTINE (un-spotlit) reveal board draws —
-   * only "Your move" and "Best move". The played-in-game arrow and the "Also
-   * fine" alternatives are hover/tap-only: they surface (alone) while their
-   * own legend card is spotlit, and are otherwise off the board entirely.
+   * 260902-qf7 (reverses Phase 200 UAT): the moves the PRISTINE (un-spotlit)
+   * reveal board draws — "Your move", "Best move", AND the played-in-game
+   * move. A puzzle mined from the user's own game exists to contrast their
+   * guess against what they actually played there, so that contrast must not
+   * be hidden behind a hover/tap; only the server-vetted "Also fine"
+   * alternatives remain hover/tap-only, surfacing (alone) while their own
+   * legend card is spotlit and otherwise staying off the board.
    *
    * Expressed as a DEFAULT active set for `applyTrainSpotlight` rather than a
    * second drawing rule, so the un-spotlit board and a spotlit one go through
    * exactly the same filter. A verdict cannot land without a `gradeResult` and
    * a played move (both live and restored paths set them together), so this is
    * non-empty whenever the overlay itself is non-empty — the empty case would
-   * hit `applyTrainSpotlight`'s no-op and simply show everything.
+   * hit `applyTrainSpotlight`'s no-op and simply show everything. `gameMoveUci`
+   * is `null` for filler puzzles (and any puzzle not mined from a user's own
+   * game), so `.filter` drops it there and the pristine set is unchanged.
    */
   const pristineOverlayUcis = useMemo(
     () =>
-      [lastPlayedUci, gradeResult?.bestMoveUci ?? null].filter((uci): uci is string => uci !== null),
-    [lastPlayedUci, gradeResult],
+      [lastPlayedUci, gradeResult?.bestMoveUci ?? null, gameMoveUci].filter(
+        (uci): uci is string => uci !== null,
+      ),
+    [lastPlayedUci, gradeResult, gameMoveUci],
   );
 
   // Phase 200 (LEGEND-02): the reveal overlay filtered down to the spotlit
@@ -1186,6 +1193,7 @@ export function TrainSolveScreen({
           playedMoveQuality={playedMoveQuality}
           gameMoveQuality={gameMoveQuality}
           onGameMoveUciChange={setGameMoveUci}
+          onAnalyzeClick={handleAnalyzeClick}
           onGameMoveLineChange={setGameMoveLine}
           onLineStep={setLineStep}
           solutionNonce={solutionNonce}

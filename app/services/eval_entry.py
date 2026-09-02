@@ -133,14 +133,18 @@ def _snapshot_boards(pgn_text: str, target_plies: set[int]) -> dict[int, chess.B
     """Parse PGN once and return board snapshots keyed by ply (0-indexed, pre-push).
 
     Plies not reached before the mainline ends are silently omitted — no
-    Sentry (parse errors and short games are rare and not urgent).
-    Unparseable PGNs return an empty dict.
+    Sentry (short games are expected). A PGN that *raises* on parse is
+    captured (stored PGN, already parsed at import, so a raise is a bug) and
+    returns an empty dict.
     """
     if not target_plies:
         return {}
     try:
         game = chess.pgn.read_game(io.StringIO(pgn_text))
-    except Exception:
+    except Exception as exc:
+        sentry_sdk.set_tag("source", "eval_entry")
+        sentry_sdk.set_context("eval_entry", {"stage": "pgn_parse"})
+        sentry_sdk.capture_exception(exc)
         return {}
     if game is None:
         return {}

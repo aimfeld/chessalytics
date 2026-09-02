@@ -2878,24 +2878,27 @@ async def reveal_for_puzzle(
         else None
     )
 
-    # D-06 (T-192-02 mitigation): the position lookup resolves the SOURCE
-    # GAME'S OWNER (`game.user_id`), not the solving `user_id` — a red
-    # herring can be drawn from another user's game, and the pre-D-06 filter
-    # returned None (silently degrading `played_in_game_san`) for every
-    # cross-user herring even though the game row was perfectly alive. The
-    # owner id is resolved server-side from the outer-joined `Game` row,
-    # never from request input, so no IDOR seam is opened — and the select
-    # list stays exactly `GamePosition.move_san`, never the whole entity or
-    # any other column, which is what makes this widening safe rather than a
-    # cross-user data leak (a security control, not an optimization). Skipped
-    # entirely when `game is None` (only reachable for a herring at this
-    # point) — `played_in_game_san` degrades to None per D-08.
+    # Bug fix (quick 260902-qf7): REVERSES D-06's widening to the source
+    # game's owner. `herring_pool` is a globally shared, identity-blind pool
+    # (D-10), so a RED_HERRING row's `game_id` routinely points at ANOTHER
+    # user's game — 453 of 499 served herrings in prod. D-06 read the
+    # resulting None as "silently degrading" a live game row and widened the
+    # lookup to `game.user_id`; that was backwards. The solving user never
+    # played that move, so labelling it "Played in game" in their reveal
+    # states something false (observed: a herring from another user's game
+    # rendered the reveal card "Best move / Played in game: a3"). A move is
+    # only "played in game" when the solving user owns the source game, so
+    # the ownership test is an explicit gate here rather than an implicit
+    # empty-result from the row filter — the intent has to survive the next
+    # reader. Own-game herrings and every SR_ITEM keep the label. Skipped
+    # entirely when `game is None` (only reachable for a herring or a sharp
+    # filler at this point) — `played_in_game_san` degrades to None per D-08.
     played_in_game_san: str | None = None
-    if game is not None:
+    if game is not None and game.user_id == user_id:
         position_row = (
             await session.execute(
                 select(GamePosition.move_san).where(
-                    GamePosition.user_id == game.user_id,
+                    GamePosition.user_id == user_id,
                     GamePosition.game_id == game.id,
                     GamePosition.ply == solve.ply,
                 )

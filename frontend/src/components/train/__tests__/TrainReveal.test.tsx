@@ -17,6 +17,7 @@ import { TrainReveal } from '@/components/train/TrainReveal';
 import { TooltipProvider } from '@/components/ui/tooltip';
 import { formatScore } from '@/components/analysis/EngineLines';
 import { formatDateWithYear } from '@/lib/utils';
+import { buildGameAnalysisUrl } from '@/lib/analysisUrl';
 import { guessFeedbackProse } from '@/lib/trainGuessLabels';
 import type { GradeResult, TrainEngineLine, TrainGradingEngine } from '@/hooks/useTrainGradingEngine';
 import type { TrainFreePlayState } from '@/hooks/useTrainFreePlay';
@@ -883,6 +884,35 @@ describe('TrainReveal', () => {
     renderReveal();
     await waitFor(() => expect(screen.getByTestId('train-reveal-footer')).not.toBeNull());
     expect(screen.getByTestId('train-reveal-footer').textContent).toContain('vs alice (1480)');
+  });
+
+  it('the footer analyze link opens the source game at the puzzle ply and fires onAnalyzeClick', async () => {
+    getGame.mockResolvedValue(makeGame({ user_color: 'white' }));
+    const onAnalyzeClick = vi.fn();
+    renderReveal({ puzzle: makePuzzle({ game_id: 100, ply: 20 }), onAnalyzeClick });
+
+    await waitFor(() => expect(screen.getByTestId('train-reveal-footer')).not.toBeNull());
+    const link = screen.getByTestId('train-reveal-footer-analyze');
+    // ply - 1: the board wants the position BEFORE the move the user had to
+    // find. Asserted against buildGameAnalysisUrl rather than a literal so
+    // this cannot drift from the board's own Analyze button.
+    expect(link.getAttribute('href')).toBe(buildGameAnalysisUrl(100, 19));
+
+    // The cache-save handler must fire, or a Back from /analysis drops the
+    // reveal. A link that navigated correctly but skipped this would look
+    // identical in every other assertion.
+    fireEvent.click(link);
+    expect(onAnalyzeClick).toHaveBeenCalledTimes(1);
+  });
+
+  it('the footer analyze link omits the ply for a ply-0 puzzle rather than emitting ply=-1', async () => {
+    getGame.mockResolvedValue(makeGame({ user_color: 'white' }));
+    renderReveal({ puzzle: makePuzzle({ game_id: 100, ply: 0 }) });
+
+    await waitFor(() => expect(screen.getByTestId('train-reveal-footer')).not.toBeNull());
+    expect(screen.getByTestId('train-reveal-footer-analyze').getAttribute('href')).toBe(
+      buildGameAnalysisUrl(100, null),
+    );
   });
 
   it('the game fetch failing renders train-gamecard-error while the rest of the reveal still renders', async () => {

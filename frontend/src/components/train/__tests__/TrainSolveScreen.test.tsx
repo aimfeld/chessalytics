@@ -891,9 +891,11 @@ describe('TrainSolveScreen — progress, last move, grading state, engine failur
     );
   });
 
-  it('the pristine board draws ONLY the your-move and best-move arrows — the played-in-game arrow appears only while its own box is hovered (Phase 200 UAT)', async () => {
+  it('the pristine board draws three arrows and three badges — your-move, best-move, AND played-in-game — with no hover; hovering the game-move box still narrows to one arrow and leaving restores three (260902-qf7 reverses Phase 200 UAT)', async () => {
     // A game move distinct from BOTH the user's played move (d2d4) and the
-    // engine's best move (e2e4), so it gets its own standalone box.
+    // engine's best move (e2e4), so it gets its own standalone box and lands
+    // on its own square (f3), keeping all three arrows/badges pairwise
+    // distinguishable (d4/e4/f3).
     revealPuzzle.mockResolvedValueOnce({
       game_id: 100,
       ply: 20,
@@ -913,17 +915,43 @@ describe('TrainSolveScreen — progress, last move, grading state, engine failur
     // The game box exists (so its arrow IS available to spotlight)...
     const gameBox = await waitFor(() => screen.getByTestId('train-line-box-game-move'));
 
-    // ...but the pristine board carries exactly the two your/best arrows and
-    // their two badges — never the third, thin white game-move arrow.
+    // 260902-qf7 reverses the Phase 200 UAT call: the pristine board now
+    // carries all THREE arrows with no hover — the played-in-game arrow is
+    // no longer hover/tap-only, only the "Also fine" alternatives are. The
+    // marker count is asserted separately (and inside its own `waitFor`)
+    // because the game move's own quality badge depends on the reveal-time
+    // engine search resolving (`gameMoveLine`), an async gap that lands
+    // strictly after the arrow itself is drawn.
     const board = () => screen.getByTestId('chessboard');
-    await waitFor(() => expect(board().getAttribute('data-arrows-count')).toBe('2'));
-    expect(board().getAttribute('data-markers-count')).toBe('2');
+    await waitFor(() => expect(board().getAttribute('data-arrows-count')).toBe('3'));
+    await waitFor(() => expect(board().getAttribute('data-markers-count')).toBe('3'));
 
+    // The legend card still narrows the board to its own single arrow on
+    // hover/tap, and pointer-leave restores the full three-arrow set.
     fireEvent.pointerEnter(gameBox);
     await waitFor(() => expect(board().getAttribute('data-arrows-count')).toBe('1'));
 
     fireEvent.pointerLeave(gameBox);
+    await waitFor(() => expect(board().getAttribute('data-arrows-count')).toBe('3'));
+  });
+
+  it('a puzzle with no played-in-game move draws only the your-move and best-move arrows on the pristine board (filler puzzles are unaffected by 260902-qf7)', async () => {
+    // Uses the module-level `revealPuzzle` default fixture
+    // (`played_in_game_move_uci: null`) — no game-move legend box is ever
+    // rendered, so the pristine set stays the your/best pair the Phase 200
+    // UAT default already established; this guards that the reversal above
+    // is scoped to puzzles that actually carry a game move.
+    await renderScreen(makePuzzle());
+    fireEvent.click(screen.getByTestId('btn-train-guess-critical'));
+    await act(async () => {
+      fireEvent.click(screen.getByTestId('drop-d2d4')); // non-exact -> your != best
+    });
+    await waitFor(() => expect(screen.getByTestId('train-verdict-guess')).not.toBeNull());
+    expect(screen.queryByTestId('train-line-box-game-move')).toBeNull();
+
+    const board = () => screen.getByTestId('chessboard');
     await waitFor(() => expect(board().getAttribute('data-arrows-count')).toBe('2'));
+    expect(board().getAttribute('data-markers-count')).toBe('2');
   });
 
   // ─── Phase 200 (LEGEND-04): the "Also fine" row, end to end ───────────────

@@ -480,13 +480,13 @@ export function buildTrainRevealOverlay(
  * membership — see the `markerOwners` field docs and WR-02.
  *
  * Returns `overlay` itself (no-op, same reference) when `activeUcis` is null
- * or empty. Note (Phase 200 UAT) that this is NOT how the un-spotlit board is
- * drawn: `TrainSolveScreen` passes a DEFAULT active set (the your-move and
- * best-move UCIs) when nothing is spotlit, so the game move and the "Also
- * fine" alternatives stay off the board until their own legend card is
- * hovered/tapped. The no-op branch is only the degenerate fallback for an
- * overlay with no such moves at all. A malformed UCI (< 4 chars)
- * contributes no match and never throws (`squaresFromUci`'s existing
+ * or empty. Note (260902-qf7, reversing Phase 200 UAT) that this is NOT how
+ * the un-spotlit board is drawn: `TrainSolveScreen` passes a DEFAULT active
+ * set (the your-move, best-move, AND played-in-game UCIs) when nothing is
+ * spotlit, so only the server-vetted "Also fine" alternatives stay off the
+ * board until their own legend card is hovered/tapped. The no-op branch is
+ * only the degenerate fallback for an overlay with no such moves at all. A
+ * malformed UCI (< 4 chars) contributes no match and never throws (`squaresFromUci`'s existing
  * contract). Uses `Array.prototype.filter` throughout, so the source
  * overlay's draw order is preserved verbatim — a surviving on-top arrow
  * still paints over a surviving colored arrow underneath it.

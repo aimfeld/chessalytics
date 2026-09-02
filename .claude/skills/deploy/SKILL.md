@@ -36,8 +36,14 @@ git rev-parse --abbrev-ref HEAD               # should be main
 git fetch origin main production --quiet      # sync refs
 git rev-list --left-right --count main...origin/main  # local-ahead<TAB>origin-ahead — MUST be 0<TAB>0
 git log --oneline origin/production..origin/main  # what's about to ship
-ls -la .prod.env                              # required by bin/deploy.sh (scp'd to server)
 ```
+
+**Do NOT try to check `.prod.env` from Bash.** The old preflight ran `ls -la .prod.env`; that silently killed the deploy on 2026-09-01 and 2026-09-02. The file is covered by `permissions.deny` rules in `.claude/settings.json` and `~/.claude/settings.json`, and the block is path-based rather than limited to the listed `cat`/`head`/`grep` forms — `ls -la .prod.env` is refused outright, and indirect probes (`ls -1a | grep '\.prod\.env'`) are refused by the auto-mode classifier as well. That is the protection working as intended; do not route around it.
+
+Two consequences for this step:
+
+- **Never chain preflight checks with `&&`.** Permission is evaluated over the whole command string, so one denied element aborts every check in the chain and makes a single blocked test look like a blanket deploy failure. Run the git checks as one call and anything else separately.
+- **Treat `.prod.env` presence as unverifiable here and let the deploy script be the gate.** `bin/deploy.sh` fails fast and loudly at its `scp` step if the file is missing, before anything is dispatched to the server. If it does, tell the user to run `bin/download_1password.sh` and re-run. Do not halt the release preemptively on a check you cannot perform.
 
 Blockers and how to resolve:
 
@@ -47,7 +53,7 @@ Blockers and how to resolve:
 - **`main` behind `origin/main`** — `git pull --ff-only origin main` (resolve autonomously).
 - **`main` and `origin/main` diverged** (non-fast-forward) — see `references/ci-fixes.md` § *Git: divergence and merge conflicts*. Resolve autonomously when the fix is mechanical (rebase clean, conflict only in lockfiles or CHANGELOG); stop and report otherwise.
 - **Nothing to deploy** (`origin/production..origin/main` is empty) — tell the user, stop. Don't open an empty PR.
-- **`.prod.env` missing locally** — stop and tell the user to fetch it (`bin/download_1password.sh`). The deploy script `scp`s it to the server; without it, the deploy will fail with a confusing error mid-pipeline.
+- **`.prod.env` missing locally** — you cannot detect this at preflight (see above); `bin/deploy.sh` surfaces it at the `scp` step. When it does, tell the user to fetch the file (`bin/download_1password.sh`) and re-run the deploy.
 
 Then run the pre-PR gates locally so CI doesn't have to bounce them back:
 
@@ -179,7 +185,7 @@ This skill is set-and-forget. The default is: keep going, stream status, recover
 - Dirty working tree at preflight (could be in-progress work — don't stash, don't commit on the user's behalf).
 - `main` and `origin/main` diverged with conflicts outside lockfiles / CHANGELOG / generated files (anything in `app/` or `frontend/src/` that requires semantic judgment).
 - `origin/production..origin/main` is empty (nothing to deploy — don't open an empty PR).
-- `.prod.env` missing locally (deploy script will fail mid-pipeline with a confusing error).
+- `bin/deploy.sh` fails at the `scp` step because `.prod.env` is missing locally (it cannot be detected earlier — see Step 1).
 - Same CI check has failed 3 times after distinct fix attempts — you're churning, escalate.
 - `bin/deploy.sh` reports server SHA mismatch at the end — deploy did not converge, do NOT claim success.
 - Deploy script aborts with "dispatched run is on wrong branch / SHA" — this is the 2026-05-16 incident's safety net firing; investigate, don't bypass.

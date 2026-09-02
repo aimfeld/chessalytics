@@ -372,7 +372,12 @@ def _build_lease_positions(
     # eval target position. The terminal position is the board AFTER the last push.
     try:
         game = chess.pgn.read_game(io.StringIO(pgn_text))
-    except Exception:
+    except Exception as exc:
+        # Stored PGN, already parsed at import: a raise is a bug, and None
+        # silently skips the lease for this game on every remote pickup.
+        sentry_sdk.set_tag("source", "remote_eval_worker")
+        sentry_sdk.set_context("remote_eval", {"game_id": game_id, "stage": "pgn_parse"})
+        sentry_sdk.capture_exception(exc)
         return None
     if game is None:
         return None

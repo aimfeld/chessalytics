@@ -1,7 +1,19 @@
 ---
 id: SEED-157
-status: active
+status: closed
 planted: 2026-08-29
+closed: 2026-09-02
+closed_during: story-candidate review against the published two-pawns-up piece. Closed
+  as a flagship story, not as a finding. Rationale: (1) outside classical the paired
+  effects are a null (rapid +0.4pp, blitz -1.6pp), so the honest finding is one number,
+  "classical players review their losses more", and the "hero games vs defeats" arc
+  oversells the fast-TC side; (2) it is a story about a Lichess button, not about chess.
+  chess.com readers cannot relate, the requester is unknowable, and the symmetry
+  cancellation makes the effect size hard to explain honestly to a lay audience; (3) it
+  gives the reader no takeaway for their own play, which is the property that made
+  two-pawns-up work. The probe result stays valid and may return as a sidebar or short
+  note inside another story. Successor candidates:
+  .planning/notes/2026-09-02-data-story-candidates.md.
 planted_during: /gsd-explore — "player behaviour when it comes to reviewing their games;
   brainstorm what we could analyze for a chess data story"
 trigger_when: story capacity opens for the next Chess Data Story, or the SEED-152 rapid
@@ -153,6 +165,26 @@ half-point *save* is, if anything, marginally the more-reviewed game).
 arm, so classification error is differential by outcome. Run the §6-style threshold
 sweep (200→300cp) at report time; a one-ply offset rarely flips a ≥200cp class.
 Per-ELO cuts computed pooled but not yet paired. Bullet not probed.
+
+## Locked decisions (2026-08-29 follow-up explore session)
+
+- **Metric basis is FINAL: phase-boundary snapshots only** (MG + EG entry). The
+  sustained-peak-swing full metric is dropped as a story dependency, not merely
+  deferred: the SEED-152 full-eval arm is classical-only (rapid/blitz/bullet remain
+  unselected), so it cannot carry the TC-gradient story spine ("in blitz you relive
+  your hero games, in classical you study your defeats"). At most it returns later as
+  a classical-only robustness footnote.
+- **EDA scope**: core paired MH-weighted contrasts at both boundaries, the 200→300cp
+  threshold sweep, cluster-bootstrap CIs, PLUS all four supporting sections: bullet
+  extension of the TC gradient (unprobed; would make it a 4-point monotone arc),
+  per-ELO paired cuts, metadata-tier sections (termination type, miniatures vs
+  grinds, upsets), and the draw-class null as a possible "dog that didn't bark" note.
+- **Locations** (analysis/README.md three-directory split): EDA notebook at
+  `analysis/game_review_study/game_review_study.py`; report-generation code later in
+  `scripts/game_review_study/`; story at `stories/game-review/` (final slug TBD).
+- **Workflow: no GSD phase.** Data stories are exempt from GSD planning
+  (stories/CLAUDE.md "Workflow (no GSD)"); all work happens on the
+  `study/game-review-study` branch, squash-merged to `main` when the story ships.
 
 ## Related
 

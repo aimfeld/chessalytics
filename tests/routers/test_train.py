@@ -2024,17 +2024,19 @@ async def test_reveal_sharp_filler_reports_sharp_filler_source(
 
 
 @pytest.mark.asyncio
-async def test_reveal_cross_user_herring_shows_game_move_and_no_owner_scope_leak(
+async def test_reveal_cross_user_herring_hides_game_move_and_no_owner_scope_leak(
     test_engine,
 ) -> None:
-    """D-06/T-192-02: a herring drawn from user B's game, solved by user A,
-    reveals with B's in-game move — the `GamePosition` lookup resolves the
-    source game's OWNER (`game.user_id`), not the solving user, so it no
-    longer silently degrades to `played_in_game_san: null` for a cross-user
-    herring even though B's game row is perfectly alive. The response key
-    set stays exactly the standing `PuzzleRevealResponse` contract — no
-    stranger's data leaks through beyond the one `move_san` field the D-06
-    widening exists to expose.
+    """Quick 260902-qf7 (REVERSES D-06/T-192-02): a herring drawn from user
+    B's game, solved by user A, reveals with NO in-game move. `herring_pool`
+    is globally shared and identity-blind (D-10), so a herring's `game_id`
+    usually points at a stranger's game; D-06 read the resulting None as a
+    silent degradation and widened the `GamePosition` lookup to the source
+    game's OWNER, which made the reveal label a move user A never played
+    "Played in game" (observed in prod as the card "Best move / Played in
+    game: a3"). Ownership is now the gate: B's move stays hidden from A.
+    The response key set stays exactly the standing `PuzzleRevealResponse`
+    contract.
     """
     email_a = f"train-herring-crossuser-a-{uuid.uuid4().hex[:8]}@example.com"
     user_a, token_a = await _register_and_login(email_a)
@@ -2065,13 +2067,12 @@ async def test_reveal_cross_user_herring_shows_game_move_and_no_owner_scope_leak
         resp = await _reveal(token_a, session_id, 0)
         assert resp.status_code == 200
         body = resp.json()
-        # B's game move is shown, not degraded to None — this is the exact
-        # D-06 bug fix: the pre-widening filter (GamePosition.user_id ==
-        # solving user) would have returned no row for a foreign game.
-        assert body["played_in_game_san"] == "e4"
-        assert body["played_in_game_move_uci"] == "e2e4"
-        # No field beyond the standing contract — the widened lookup selects
-        # exactly move_san server-side; nothing else about B's game leaks.
+        # B's game move is NOT shown: A never played it, so there is no
+        # "played in game" move to report. The seeded row exists and B's
+        # game is perfectly alive — only the ownership gate suppresses it.
+        assert body["played_in_game_san"] is None
+        assert body["played_in_game_move_uci"] is None
+        # No field beyond the standing contract — nothing about B's game leaks.
         assert set(body.keys()) == {
             "game_id",
             "ply",
@@ -2086,6 +2087,49 @@ async def test_reveal_cross_user_herring_shows_game_move_and_no_owner_scope_leak
     finally:
         await _delete_herring_pool_rows(test_engine, [pool_id])
         await _delete_games(test_engine, [game_id_b])
+
+
+@pytest.mark.asyncio
+async def test_reveal_own_game_herring_still_shows_game_move(test_engine) -> None:
+    """Quick 260902-qf7 companion to the cross-user test above: the gate is
+    OWNERSHIP, not "suppress the label for every herring". A herring drawn
+    from the solving user's OWN game is a position they really did play, so
+    the in-game move is still reported. Without this test the ownership fix
+    is indistinguishable from a blanket `source != RED_HERRING` suppression.
+    """
+    email = f"train-herring-owngame-{uuid.uuid4().hex[:8]}@example.com"
+    user_id, token = await _register_and_login(email)
+
+    game_id = await _seed_bare_game(test_engine, user_id, "owngame-herring")
+    await _seed_position_meta(test_engine, user_id, game_id, 8, best_move="e2e4", move_san="e4")
+    pool_id = await _seed_herring_pool_row(
+        test_engine,
+        user_id,
+        game_id,
+        8,
+        fen="rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1",
+        arriving_move_uci="d7d5",
+    )
+    session_id = await _seed_session(
+        test_engine,
+        user_id,
+        [(game_id, 8, int(DrillSource.RED_HERRING))],
+        herring_pool_ids={0: pool_id},
+    )
+
+    try:
+        solved = await _solve(token, session_id, 0, guess="several", move_quality="good")
+        assert solved.status_code == 200
+
+        resp = await _reveal(token, session_id, 0)
+        assert resp.status_code == 200
+        body = resp.json()
+        assert body["puzzle_type"] == "herring"
+        assert body["played_in_game_san"] == "e4"
+        assert body["played_in_game_move_uci"] == "e2e4"
+    finally:
+        await _delete_herring_pool_rows(test_engine, [pool_id])
+        await _delete_games(test_engine, [game_id])
 
 
 @pytest.mark.asyncio
