@@ -28,7 +28,13 @@ GROUP BY game_id
 """
 t0 = time.time()
 with db.connect("benchmark") as conn:
-    lo, hi = conn.execute("SELECT min(id), max(id) FROM games").fetchone()
+    # fetchone() is Optional per DB-API, so ty rejects unpacking it directly.
+    # An aggregate-only SELECT always returns exactly one row, but the bounds
+    # are NULL when games is empty — both cases mean "nothing to extract".
+    bounds = conn.execute("SELECT min(id), max(id) FROM games").fetchone()
+    if bounds is None or bounds[0] is None:
+        raise SystemExit("no games in the benchmark DB — nothing to extract")
+    lo, hi = bounds
     step = 200_000
     parts = []
     for a in range(lo, hi + 1, step):
