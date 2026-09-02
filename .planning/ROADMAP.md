@@ -175,7 +175,7 @@
 | 211. Vetted "Also Fine" Moves & Server-Key Grading (SEED-150, v2.13) | 3/3 | Complete    | 2026-08-16 |
 | 212. Benchmark Full-Game Analysis Lane (SEED-152, unassigned) | 10/10 | Complete | 2026-08-29 |
 | 213. First-Run Engine Cold Start — Asset-Check Gate & Download Progress UI (SEED-155, unassigned) | 12/12 | Complete    | 2026-08-29 |
-| 214. Backend God-File Decomposition (CONCERNS.md, unassigned) | 0/? | Not started | — |
+| 214. Backend God-File Decomposition (CONCERNS.md, unassigned) | 0/8 | Planned | — |
 
 ## Active Phases (unassigned milestone)
 
@@ -665,9 +665,33 @@ every later split is measured, not eyeballed:
    module splits; no new `# ty: ignore` lines.
 4. CONCERNS.md "Large God files" entry updated to list only the frontend files.
 
-**Plans**: TBD (planned via `/gsd-plan-phase 214`; expected one plan per file, wave
-order by test-coverage strength: tactic_detector and endgame_service first, then
-library_repository, eval_apply, train_repository, insights_llm).
+**Plans**: 8 plans (waves 1 / 2 / 3), tracer-first. Wave 1 is the tooling; wave 2 is one plan
+per file in test-oracle-strength order; wave 3 is the phase-wide closeout that measures the
+success criteria and retires the backend half of the CONCERNS.md entry. The six wave-2 plans
+touch disjoint source files but share ONE line each in `pyproject.toml`'s `per-file-ignores`
+table, so they are squash-merged one at a time (214-RESEARCH.md "Ordering and Wave Structure",
+Option A). Planner decision: no in-scope module is moved to a sibling file — four of the six
+files have tests that patch names as module attributes, and a bare-name call inside a moved
+function would resolve against the new module's globals, silently disabling those patches.
+
+Plans:
+
+**Wave 1** *(tooling — everything after it is measured, not eyeballed)*
+
+- [ ] 214-01-PLAN.md — ruff `C901`/`PLR0912`/`PLR0915` enabled with all 14 pre-existing breaches baselined so `ruff check .` is green day one; `scripts/check_function_size.py` (AST nesting depth + logic LOC, `allow-loc` pragma) plus its unit test; `complexipy` dev dependency; all three tools documented in `docs/dev-tooling.md` and CLAUDE.md; before-baselines recorded
+
+**Wave 2** *(one plan per file, blocked on Wave 1; merged sequentially)*
+
+- [ ] 214-02-PLAN.md — `tactic_detector.py`: `detect_tactic_motif` becomes a three-stage dispatcher, `detect_clearance` inside the branch limit; oracle is the 36 unit tests plus a byte-identical tactic-tagger report
+- [ ] 214-03-PLAN.md — `endgame_service.py`: `_aggregate_endgame_stats` and `_aggregate_endgame_stats_by_tc` share one normalize/accumulate/build pipeline (the phase's only 200-logic-LOC breach), plus `_compute_per_tc_metric_cards` and `_iterate_clock_rows`; 372-test oracle
+- [ ] 214-04-PLAN.md — `library_repository.py`: extract only `_build_tactic_clause`; `fetch_flaw_comparison` gets a reasoned `allow-loc` exemption rather than a damaging split
+- [ ] 214-05-PLAN.md — `eval_apply.py`: `_classify_and_fill_oracle`'s six stages and `_build_best_move_candidates`' five, with the read-before-delete ordering, the single post-move-shift site, the deliberate dedup-pv `None`, and all five Sentry sites preserved
+- [ ] 214-06-PLAN.md — `train_repository.py`: `compose_and_materialize_session` becomes a three-stage composer; mandatory two-way mutation proof because the file has zero private-helper test imports
+- [ ] 214-07-PLAN.md — `insights_llm.py`: a byte-level golden user prompt captured pre-refactor, then the lettered A2/C2-C6 filter chain plus the four other flagged render blocks; `get_insights_agent`'s monkeypatch seam kept intact
+
+**Wave 3** *(phase closeout, blocked on all six file plans)*
+
+- [ ] 214-08-PLAN.md — measure success criteria 0-3 phase-wide (ruff with an emptied ignore table over the six files, `check_function_size.py` over `app/services` + `app/repositories`, complexipy before/after, additions-only `tests/` diff, zero added `# ty: ignore`), then narrow the CONCERNS.md "Large God files" entry to the four frontend files (criterion 4)
 
 ## Backlog
 
