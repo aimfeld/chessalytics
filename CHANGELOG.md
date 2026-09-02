@@ -42,6 +42,8 @@ in `YYYY-MM-DD` (Europe/Zurich).
 
 ### Fixed
 
+- The Train reveal no longer labels a stranger's move as the one you played. Warm-up puzzles are drawn from a shared pool, so most of them come from another player's game; the reveal was still showing that player's move under "Played in game". It now appears only when the puzzle really does come from one of your own games.
+
 - Fast-forward on the analysis board no longer skips moves. The replay used to jump pieces straight to their destination and play its move sounds on an uneven beat; it now steps at a steady pace with each piece visibly arriving before the next move starts. It also moves the first piece the moment you press it, instead of pausing first.
 
 ## [v2.13] Ways In & Honest Answers — 2026-08-22
