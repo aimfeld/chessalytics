@@ -244,11 +244,13 @@ export function TrainLineStepper({
   return (
     <div className="flex flex-col gap-2" data-testid="train-line-stepper">
       <div className="flex items-center gap-2">
-        {/* Mobile: 44px tap target (Apple HIG minimum) — the 32px icon button
+        {/* Outline (not ghost): a lone icon button outside a toolbar strip has
+            no resting affordance on touch, where hover never fires. Dim = disabled.
+            Mobile: 44px tap target (Apple HIG minimum) — the 32px icon button
             sits right next to the token row and taps kept landing on a move
             instead. Desktop (lg+) keeps the compact size. */}
         <Button
-          variant="ghost"
+          variant="outline"
           size="icon"
           aria-label="Previous move"
           data-testid="btn-train-step-prev"
@@ -296,7 +298,7 @@ export function TrainLineStepper({
           })}
         </div>
         <Button
-          variant="ghost"
+          variant="outline"
           size="icon"
           aria-label="Next move"
           data-testid="btn-train-step-next"
