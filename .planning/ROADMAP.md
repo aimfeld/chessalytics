@@ -175,6 +175,7 @@
 | 211. Vetted "Also Fine" Moves & Server-Key Grading (SEED-150, v2.13) | 3/3 | Complete    | 2026-08-16 |
 | 212. Benchmark Full-Game Analysis Lane (SEED-152, unassigned) | 10/10 | Complete | 2026-08-29 |
 | 213. First-Run Engine Cold Start — Asset-Check Gate & Download Progress UI (SEED-155, unassigned) | 12/12 | Complete    | 2026-08-29 |
+| 214. Backend God-File Decomposition (CONCERNS.md, unassigned) | 0/? | Not started | — |
 
 ## Active Phases (unassigned milestone)
 
@@ -573,6 +574,98 @@ Plans:
 **Wave 10** *(gap closure — blocked on Wave 9 completion)*
 
 - [x] 213-12-PLAN.md — G-213-37 / D-20: one Cache API byte-ownership layer for all three engine assets, so a warm engine downloads nothing on the next game start; retires the ORT retained master and the G-213-8 model-buffer handoff
+
+### Phase 214: Backend God-File Decomposition
+
+**Goal**: The six largest backend modules stop breaching the CLAUDE.md function-size
+rules, with zero behavior change. Every function in the six files below fits the hard
+limits (200 logic LOC, nesting depth 4) and most fit the soft ones (100 logic LOC,
+nesting 3, cognitive complexity ~15). Splits follow the documented seams (pipeline
+orchestrator -> one function per stage; nested loops -> early `continue` or a `Counter`
+accumulator; routers stay thin) and NOT "split to fit a signature": no context dataclasses
+with fewer than three fields and one reader, no handler bundles of unrelated callbacks.
+Public signatures, return shapes, SQL emitted, and Sentry capture sites are unchanged, so
+the existing test suites are the behavior oracle and must pass untouched (tests may be
+ADDED where a split exposes an untested seam, never rewritten to fit the refactor).
+Moving cohesive groups of helpers into sibling modules (e.g. `endgame_service/` package or
+`endgame_clock.py`) is in scope when it makes each piece independently readable; renaming
+public entry points is not.
+
+**Files in scope** (raw lines at planning time; functions over 100 raw lines):
+
+| File | Lines | Functions >100 raw lines | Largest |
+|------|------:|-------------------------:|--------:|
+| `app/services/endgame_service.py` | 3,797 | 10 | 386 (`_aggregate_endgame_stats`) |
+| `app/repositories/train_repository.py` | 3,009 | 11 | 324 |
+| `app/services/eval_apply.py` | 2,808 | 8 | 346 |
+| `app/repositories/library_repository.py` | 2,519 | 7 | 286 |
+| `app/services/insights_llm.py` | 2,578 | 4 | 199 |
+| `app/services/tactic_detector.py` | 2,587 | 2 | 169 |
+
+**Out of scope**: the four frontend god files (`Analysis.tsx` 4,370, `useBotGame.ts`
+1,662, `workerPool.ts` 1,451, `Openings.tsx` 1,376) — different gates (vitest, `tsc -b`,
+visual UAT) and different reviewers; they get their own phase. Any change to what the
+code computes, including "obvious" fixes spotted during the split (capture those as
+seeds or quick tasks instead). The four frontend god files' complexity tooling
+(eslint `complexity` / `max-depth` rules) — same follow-up phase as the files.
+
+**Depends on**: nothing. Phase 213 must be squash-merged to `main` first so this
+phase branches from a clean trunk (it touches none of the same files, but the pre-merge
+gate runs once per integration).
+
+**Source**: `.planning/codebase/CONCERNS.md` "Large God files" (mapped 2026-09-02).
+
+**Complexity tooling (decided 2026-09-02, user request)** — lands as the FIRST plan so
+every later split is measured, not eyeballed:
+- **Cyclomatic complexity + size via ruff (built in, zero deps, CI-ready)**: enable
+  `C901` (mccabe, `max-complexity = 15`), `PLR0912` (`max-branches = 12`) and `PLR0915`
+  (`max-statements = 100`, the logic-LOC proxy) in `pyproject.toml` `[tool.ruff.lint]`.
+  Baseline today: 12 `C901` breaches app-wide (7 in the six files), 12 `PLR0912`, 2
+  `PLR0915`. Baseline the pre-existing breaches with `per-file-ignores` (or `# noqa`
+  with the rule name) so CI is green from day one; each file's plan then DELETES its
+  own ignores as it fixes them, so the ignore list only shrinks.
+- **Cognitive complexity via `complexipy`** (Rust CLI, Sonar's cognitive-complexity
+  metric — the ≤15 target CLAUDE.md already names). Add as a dev dependency; run as
+  `uv run complexipy app/ --max-complexity-allowed 15`. Baseline in
+  `endgame_service.py` alone: 12 functions over 15, worst 69/70
+  (`_aggregate_endgame_stats`, `_aggregate_endgame_stats_by_tc`). Dev-tool report first;
+  the phase records the app-wide count before/after. Whether it gates CI is a decision
+  for the plan (recommend: not yet — too many pre-existing breaches outside scope).
+- **Nesting depth via ruff `PLR1702`** (too-many-nested-blocks, preview rule in ruff
+  0.15.15, `lint.pylint.max-nested-blocks = 4`; 14 breaches app-wide today). Covers
+  CLAUDE.md's "hard nesting 4" rule, so NO custom AST script is needed. Enable it as a
+  single preview rule (`lint.explicit-preview-rules = true` + select) rather than
+  turning on all of preview. Document all three tools in `docs/dev-tooling.md` and
+  reference them from CLAUDE.md's function-size rule.
+
+**Gates per plan** (each file is one plan, one squash-merge unit):
+- `uv run pytest -n auto tests/<the file's test modules>` green before and after;
+  full `uv run pytest -n auto -x` at the phase's pre-merge gate.
+- `uv run ty check app/ tests/ scripts/` zero errors; `ruff format` + `ruff check --fix` clean.
+- Memory-note discipline: `eval_apply.py` splits must respect the three lease/submit
+  invariants (post-move shift, delete-then-insert oracle fill, dedup transplants carry pv);
+  `train_repository.py` splits must keep `apply_game_filters()` as the single filter path.
+- For `tactic_detector.py`: `uv run scripts/tactic_tagger_report.py --check-goals`
+  (or the skill's equivalent) is byte-identical before and after.
+- Proof the split is behavior-preserving where a test seam looks thin: mutate one
+  extracted helper and confirm an existing test fails (per the mutation-test rule).
+
+**Success criteria**:
+0. `uv run ruff check .` passes with `C901`/`PLR0912`/`PLR0915`/`PLR1702` enabled; the six
+   in-scope files have NO remaining per-file-ignores for those rules; `complexipy`
+   before/after counts recorded in VERIFICATION.
+1. No function in the six files exceeds 200 logic LOC or nesting depth 4; a listing
+   of remaining 100-200 LOC functions is recorded in the phase VERIFICATION with a
+   one-line justification each.
+2. Full backend suite, ty, and ruff pass at the pre-merge gate with no test deleted
+   or weakened (diff of `tests/` shows additions only).
+3. `git diff --stat` per plan shows net file-count growth only from deliberate
+   module splits; no new `# ty: ignore` lines.
+4. CONCERNS.md "Large God files" entry updated to list only the frontend files.
+
+**Plans**: TBD (planned via `/gsd-plan-phase 214`; expected one plan per file, wave
+order by test-coverage strength: tactic_detector and endgame_service first, then
+library_repository, eval_apply, train_repository, insights_llm).
 
 ## Backlog
 
