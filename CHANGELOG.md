@@ -38,6 +38,8 @@ in `YYYY-MM-DD` (Europe/Zurich).
 
 - Pieces now slide between squares on every device. Board animation had been switched off for anyone whose browser reported touch support, which quietly included most touchscreen laptops as well as phones and tablets.
 
+- On the Train reveal, when a puzzle comes from one of your own games, the move you actually played is now shown on the board right away — a thin white arrow with its move-quality icon — instead of only appearing when you hover or tap its card.
+
 ### Fixed
 
 - Fast-forward on the analysis board no longer skips moves. The replay used to jump pieces straight to their destination and play its move sounds on an uneven beat; it now steps at a steady pace with each piece visibly arriving before the next move starts. It also moves the first piece the moment you press it, instead of pausing first.
