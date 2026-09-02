@@ -214,9 +214,41 @@ class TestEvaluateNodesWithMock:
 
         pool._restart_worker = mock_restart  # ty: ignore[invalid-assignment]
 
-        result = await pool.evaluate_nodes(chess.Board())
+        # Quick task 260902-rmn: an engine crash must reach Sentry — the caller
+        # only ever sees None, so the restart path was the only witness.
+        with patch("app.services.engine.sentry_sdk.capture_exception") as capture:
+            result = await pool.evaluate_nodes(chess.Board())
         assert result == EXPECTED_NONE_RESULT
         assert restart_called
+        assert capture.call_count == 1
+        assert isinstance(capture.call_args.args[0], chess.engine.EngineError)
+
+    async def test_restart_worker_spawn_failure_captures_and_marks_slot_dead(self) -> None:
+        """A failed respawn returns False, nulls the slot, and reaches Sentry.
+
+        Quick task 260902-rmn: the slot stays permanently dead afterwards (every
+        pickup returns None), which used to be invisible outside a log line.
+        """
+        from app.services.engine import EnginePool
+
+        pool = EnginePool(size=1)
+        pool._started = True
+        pool._transports = [None]
+        pool._protocols = [None]
+
+        async def failing_popen(*args: object, **kwargs: object) -> object:
+            raise OSError("stockfish binary missing")
+
+        with (
+            patch("chess.engine.popen_uci", failing_popen),
+            patch("app.services.engine.sentry_sdk.capture_exception") as capture,
+        ):
+            ok = await pool._restart_worker(0)
+
+        assert ok is False
+        assert pool._protocols[0] is None
+        assert capture.call_count == 1
+        assert isinstance(capture.call_args.args[0], OSError)
 
     async def test_evaluate_nodes_null_protocol_returns_none(self) -> None:
         """evaluate_nodes() returns (None, None) if the worker's protocol is None.

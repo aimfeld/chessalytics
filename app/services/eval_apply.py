@@ -238,7 +238,12 @@ def _collect_full_ply_targets(
     """
     try:
         game = chess.pgn.read_game(io.StringIO(pgn_text))
-    except Exception:
+    except Exception as exc:
+        # The PGN was already parsed at import; a raise here is a bug or data
+        # corruption, and returning [] silently leaves a permanent eval hole.
+        sentry_sdk.set_tag("source", "full_eval")
+        sentry_sdk.set_context("full_eval", {"game_id": game_id, "stage": "pgn_parse"})
+        sentry_sdk.capture_exception(exc)
         return []
     if game is None:
         return []
@@ -263,7 +268,13 @@ def _collect_full_ply_targets(
             move_san: str | None
             try:
                 move_san = board.san(node.move)
-            except Exception:
+            except Exception as exc:
+                # Illegal moves never reach the mainline (read_game stops and
+                # records them in game.errors), so a SAN failure here is a
+                # genuine bug; None only drops the played-move badge.
+                sentry_sdk.set_tag("source", "full_eval")
+                sentry_sdk.set_context("full_eval", {"game_id": game_id, "ply": ply})
+                sentry_sdk.capture_exception(exc)
                 move_san = None
             targets.append(
                 _FullPlyEvalTarget(
@@ -1793,7 +1804,12 @@ async def _build_flaw_blob_lease_positions(
     # ── CPU phase: replay PGN to build per-ply board map ──────────────────────
     try:
         pgn_game = chess.pgn.read_game(io.StringIO(pgn_text))
-    except Exception:
+    except Exception as exc:
+        # Same reasoning as _collect_full_ply_targets: stored PGN, so a raise is
+        # a bug, and the empty result silently skips the whole tier-4 blob.
+        sentry_sdk.set_tag("source", "full_eval_drain")
+        sentry_sdk.set_context("flaw_blob", {"game_id": game_id, "stage": "pgn_parse"})
+        sentry_sdk.capture_exception(exc)
         return [], set()
     if pgn_game is None:
         return [], set()

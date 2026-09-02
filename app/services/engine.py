@@ -54,6 +54,7 @@ import sys
 from typing import Any
 
 import chess
+import sentry_sdk
 import chess.engine
 
 from app.services.zobrist import EVAL_CP_MAX_ABS, EVAL_MATE_MAX_ABS
@@ -487,7 +488,14 @@ class EnginePool:
                 _STOCKFISH_PATH, **_engine_popen_kwargs()
             )
             await protocol.configure({"Hash": _HASH_MB, "Threads": _THREADS})
-        except Exception:
+        except Exception as exc:
+            # A failed respawn leaves this slot permanently dead (every later
+            # pickup returns None). That used to be invisible outside a log
+            # line — capture so a broken Stockfish binary / OOM host shows up.
+            logger.warning("Stockfish worker %d failed to restart", idx, exc_info=True)
+            sentry_sdk.set_tag("source", "engine")
+            sentry_sdk.set_context("engine_pool", {"worker": idx, "event": "restart_failed"})
+            sentry_sdk.capture_exception(exc)
             self._transports[idx] = None
             self._protocols[idx] = None
             return False
@@ -551,11 +559,16 @@ class EnginePool:
                 # real binary by test_protocol_reusable_after_cancelled_analyse — do
                 # not "restore" the restart without re-running it).
                 return None
-            except (chess.engine.EngineError, chess.engine.EngineTerminatedError):
+            except (chess.engine.EngineError, chess.engine.EngineTerminatedError) as exc:
                 # A genuine engine failure. Restart the failed worker; its slot
                 # returns to the queue regardless of restart success — a
                 # permanently-failed worker returns None on its next pickup but does
-                # not block sibling workers.
+                # not block sibling workers. Capture before restarting: the caller
+                # only sees None (an eval hole), so without this the crash itself
+                # never reached Sentry.
+                sentry_sdk.set_tag("source", "engine")
+                sentry_sdk.set_context("engine_pool", {"worker": idx, "event": "engine_crash"})
+                sentry_sdk.capture_exception(exc)
                 await self._restart_worker(idx)
                 return None
             return result
