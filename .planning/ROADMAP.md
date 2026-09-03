@@ -176,7 +176,7 @@
 | 212. Benchmark Full-Game Analysis Lane (SEED-152, unassigned) | 10/10 | Complete | 2026-08-29 |
 | 213. First-Run Engine Cold Start — Asset-Check Gate & Download Progress UI (SEED-155, unassigned) | 12/12 | Complete    | 2026-08-29 |
 | 214. Backend God-File Decomposition (CONCERNS.md, unassigned) | 8/8 | Complete    | 2026-09-03 |
-| 215. Frontend God-File Decomposition (CONCERNS.md, unassigned) | 0/? | Not started | — |
+| 215. Frontend God-File Decomposition (CONCERNS.md, unassigned) | 0/8 | Planned | — |
 
 ## Active Phases (unassigned milestone)
 

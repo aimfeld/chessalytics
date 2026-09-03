@@ -1,17 +1,18 @@
 ---
 gsd_state_version: 1.0
 milestone: v2.13
-current_phase: 214
+current_phase: 215
+current_phase_name: Frontend God-File Decomposition
 status: completed
 stopped_at: Phase 214 complete — all phases complete
-last_updated: "2026-09-03T16:31:18.748Z"
+last_updated: "2026-09-03T17:49:11.484Z"
 last_activity: 2026-09-03
 last_activity_desc: Phase 214 shipped — squash-merged to main
-state_head: ccf783be874c6d401ede574f8c7da8572f00ecbd
+state_head: ccf39e19872850be29c80ef1dbe055da3a8d057e
 progress:
   total_phases: 2
   completed_phases: 2
-  total_plans: 31
+  total_plans: 39
   completed_plans: 29
 milestone_name: Ways In & Honest Answers
 ---
@@ -20,9 +21,9 @@ milestone_name: Ways In & Honest Answers
 
 ## Current Position
 
-Phase: 214
-Plans: 8 of 8 complete (wave 1 tooling done: 214-01; wave 2 tactic_detector.py split done: 214-02; wave 2 endgame_service.py aggregation split done: 214-03; wave 2 library_repository.py flaw-filter split done: 214-04; wave 2 eval_apply.py transactional pipeline split done: 214-05; wave 2 train_repository.py session-composition split done: 214-06; wave 2 insights_llm.py prompt-assembler split + golden test done: 214-07; wave 2 complete; wave 3 closeout done: 214-08 — phase-wide five-criteria after-baseline measured and recorded, CONCERNS.md "Large God files" entry narrowed to the four frontend files)
-Status: Phase 214 shipped — squash-merged to main (ccf783be8)
+Phase: 215 (Frontend God-File Decomposition) — READY TO EXECUTE
+Plans: 0 of 8 complete (wave 1: 215-01 eslint gate + sonarjs; wave 2: 215-02 workerPool.ts, 215-03 useBotGame.ts, 215-04/05/06 Analysis.tsx, 215-07 Openings.tsx, merged one at a time; wave 3: 215-08 closeout)
+Status: Phase 215 planned 2026-09-03 — 8 plans in 3 waves, plan-checker passed first iteration, ready to execute
 
 **Phase 214 is COMPLETE as of 2026-09-03** (8/8 plans, verification 9/9 passed, full backend
 suite 4497 passed / 19 skipped, ruff/ty/format clean). All six in-scope backend files lost their
