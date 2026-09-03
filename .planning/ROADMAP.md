@@ -722,11 +722,11 @@ entry points (`Analysis`, `OpeningsPage`, `useBotGame`, `createWorkerPool`) is n
 |------|------:|--------------|--------------------------------|--------|
 | `frontend/src/pages/Analysis.tsx` | 4,370 | `Analysis()` (line 549) | 2,037 / 213 / **176**; 62 hooks (13 effects, 19 memos, 22 states); 5 handler arrows at cc 16-27 | `pages/__tests__/Analysis.test.tsx` (85 tests) |
 | `frontend/src/hooks/useBotGame.ts` | 1,662 | `useBotGame()` (line 506) | 544 / - / <15; one 112-line arrow at line 1367 | `hooks/__tests__/useBotGame.test.ts` (85) + `Bots.test.tsx` (33), `useStoreBotGame`, `botGameSnapshot`, `botPendingStore` tests |
-| `frontend/src/lib/engine/workerPool.ts` | 1,451 | `createWorkerPool()` (line 596) | 418 / - / <15; 18 inner closures over shared `slots`/`pending` state | **NONE** — every importer's test `vi.mock`s the module |
+| `frontend/src/lib/engine/workerPool.ts` | 1,451 | `createWorkerPool()` (line 596) | 418 / - / <15; 18 inner closures over shared `slots`/`pending` state | `lib/engine/__tests__/workerPool.test.ts` (109 tests, direct: dispatch, watchdog, grade cache, `whenReady`) — the STRONGEST oracle; every hook-level importer additionally `vi.mock`s the module |
 | `frontend/src/pages/Openings.tsx` | 1,376 | `OpeningsPage()` (line 114) | 1,088 / - / **64**; 33 hooks; 585-line JSX return with duplicated desktop sidebar + mobile drawer | `pages/__tests__/Openings.statsBoard.test.tsx` (16 tests, stats board only) |
 
 App-wide non-test baseline (to be re-measured and recorded by plan 1): `complexity > 15`:
-68 functions in ~35 files; `max-statements > 100`: 1 (`Analysis`, 213); `max-depth > 4`: 0;
+68 functions in 51 files; `max-statements > 100`: 1 (`Analysis`, 213); `max-depth > 4`: 0;
 `max-depth > 3`: 10; `max-lines-per-function > 100`: 94, `> 200`: 32. Pre-existing
 `react-hooks/exhaustive-deps` warnings: 25 (6 inside `Analysis()`), `react-hooks/refs`: 3.
 
@@ -793,12 +793,14 @@ same `eslint.config.js` override block, so they merge sequentially like 214):
   per-directory override is extended deliberately. (d) `data-testid` / `data-umami-event`
   inventory per file (`grep -o 'data-testid="[^"]*"' | sort`) is identical before and
   after, so the browser-automation contract and analytics events survive the split.
-- **Oracle strengthening where the seam is thin**: `workerPool.ts` has no direct test, so
-  its plan writes characterization tests for `createWorkerPool` (dispatch order, watchdog
-  re-arm/respawn, grade cache, pool-ready promise) BEFORE touching it, with a mandatory
-  two-way mutation proof (mutate one extracted helper, confirm a test fails; revert). The
-  `Openings.tsx` plan adds a render-level characterization test (desktop and mobile
-  layout, mocked queries, testid presence) before splitting the sidebar/drawer duplication.
+- **Oracle strengthening where the seam is thin**: `Openings.tsx` is the thin one (16
+  tests, none touching the sidebar/drawer split target), so its plan adds a render-level
+  characterization test (desktop and mobile layout, mocked queries, testid presence)
+  BEFORE splitting the duplication, with a mandatory two-way mutation proof (mutate one
+  extracted helper, confirm a test fails; revert). `workerPool.ts` already has a 109-test
+  direct suite (correction 2026-09-03: the roadmap draft wrongly said "no direct test");
+  its split must additionally keep the four partial-shape `vi.mock('@/lib/engine/workerPool')`
+  factories in the hook tests valid.
 - **Visual HUMAN-UAT** (unlike 214, this phase changes render trees): after each page
   plan, a five-minute smoke of the page on desktop and a mobile width — Analysis in
   library-game mode, paste mode, and tactic mode; Openings with sidebar and drawer open.
@@ -825,9 +827,9 @@ same `eslint.config.js` override block, so they merge sequentially like 214):
    with the gate now enforcing the limit on all new code).
 
 **Plans**: TBD — planned via `/gsd-plan-phase 215`. Expected shape, mirroring 214: wave 1
-tooling; wave 2 one plan per file in test-oracle-strength order (`useBotGame.ts`, then
-`Analysis.tsx` — likely two plans, hooks/data extraction then render/handler split — then
-`Openings.tsx`, then `workerPool.ts` with its characterization tests first); wave 3 the
+tooling; wave 2 one plan per file in test-oracle-strength order (`workerPool.ts`, then
+`useBotGame.ts`, then `Analysis.tsx` — likely two plans, hooks/data extraction then
+render/handler split — then `Openings.tsx` with its characterization test first); wave 3 the
 phase-wide closeout that measures the criteria and retires the CONCERNS.md entry.
 
 ## Backlog
