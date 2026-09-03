@@ -21,7 +21,7 @@ from dataclasses import dataclass, field
 from datetime import datetime, time, timedelta, timezone
 from datetime import date as _date
 from enum import IntEnum
-from typing import Any, Literal, cast
+from typing import Any, Literal, NamedTuple, TypedDict, cast
 
 import sentry_sdk
 from sqlalchemy.engine import Row
@@ -394,6 +394,478 @@ def _compute_span_gap(
 SCORE_GAP_TIMELINE_WINDOW = 100
 
 
+class _EndgameRow(NamedTuple):
+    """Fields the `_aggregate_endgame_stats` per-row loop consumes, post row-shape dispatch.
+
+    Produced by `_normalize_endgame_row` from a raw per-(game, endgame_class) span row
+    (SA `Row` or 6/8/9-element tuple test fixture — see that function's docstring for the
+    exact shapes). `game_id` is read by the dispatch but never consumed downstream in the
+    per-row loop or the per-class builder, so it is intentionally omitted here.
+    """
+
+    endgame_class_int: int
+    result: str
+    user_color: str
+    eval_cp: int | None
+    eval_mate: int | None
+    next_entry_eval_cp: int | None
+    next_entry_eval_mate: int | None
+    played_at: datetime | None
+
+
+def _normalize_endgame_row(row: Row[Any] | tuple[Any, ...]) -> _EndgameRow:
+    """Collapse the 6/8/9-tuple-vs-SA-`Row` shape dispatch into one typed row.
+
+    Mirrors the exact branch layout of the original inline dispatch inside
+    `_aggregate_endgame_stats` (214-RESEARCH.md "Pattern 1: Accumulate-then-build
+    pipeline"). Field ordering inside each branch is unchanged — a reordered field here
+    produces plausible-looking but wrong aggregates that no type checker catches.
+    """
+    row_played_at: datetime | None = None
+    if isinstance(row, tuple):
+        if len(row) == 6:
+            _game_id, endgame_class_int, result, user_color, eval_cp, eval_mate = row
+            next_entry_eval_cp: int | None = None
+            next_entry_eval_mate: int | None = None
+        elif len(row) == 8:
+            # 8-tuple: full Phase 87.1 row shape (no played_at).
+            (
+                _game_id,
+                endgame_class_int,
+                result,
+                user_color,
+                eval_cp,
+                eval_mate,
+                next_entry_eval_cp,
+                next_entry_eval_mate,
+            ) = row
+        else:
+            # 9-tuple: full new row shape with played_at.
+            (
+                _game_id,
+                endgame_class_int,
+                result,
+                user_color,
+                eval_cp,
+                eval_mate,
+                next_entry_eval_cp,
+                next_entry_eval_mate,
+                row_played_at,
+            ) = row
+    else:
+        # SA Row object — attribute access. The repository labels the LEAD
+        # columns next_entry_eval_cp / next_entry_eval_mate.
+        _game_id = row.game_id
+        endgame_class_int = row.endgame_class
+        result = row.result
+        user_color = row.user_color
+        eval_cp = row.eval_cp
+        eval_mate = row.eval_mate
+        next_entry_eval_cp = row.next_entry_eval_cp
+        next_entry_eval_mate = row.next_entry_eval_mate
+        row_played_at = getattr(row, "played_at", None)
+    return _EndgameRow(
+        endgame_class_int=endgame_class_int,
+        result=result,
+        user_color=user_color,
+        eval_cp=eval_cp,
+        eval_mate=eval_mate,
+        next_entry_eval_cp=next_entry_eval_cp,
+        next_entry_eval_mate=next_entry_eval_mate,
+        played_at=row_played_at,
+    )
+
+
+class _EndgameAccumulators(TypedDict):
+    """Per-endgame-class accumulator bundle built by one row-scan pass.
+
+    Matches the `FilterParams` TypedDict convention in `app/services/stats_service.py`
+    (D-02: TypedDicts for internal data structures). All 11 fields are outputs of the
+    same row-scan pass in `_accumulate_endgame_rows`; `_build_category_stats` reads them
+    to build one `EndgameCategoryStats` per class key.
+    """
+
+    wdl: dict[EndgameClass, dict[str, int]]
+    conv: dict[EndgameClass, dict[str, int]]
+    recov: dict[EndgameClass, dict[str, int]]
+    gaps_by_class: dict[EndgameClass, list[float]]
+    starts_by_class: dict[EndgameClass, list[float]]
+    ends_by_class: dict[EndgameClass, list[float]]
+    gaps_by_bucket: dict[str, list[float]]
+    eval_sum_by_class: dict[EndgameClass, float]
+    eval_sumsq_by_class: dict[EndgameClass, float]
+    eval_n_by_class: dict[EndgameClass, int]
+    last_played_at_by_class: dict[EndgameClass, datetime | None]
+
+
+def _new_endgame_accumulators() -> _EndgameAccumulators:
+    """Build the 11 empty per-class accumulator dicts `_accumulate_endgame_rows` fills."""
+    return _EndgameAccumulators(
+        # Conversion: games where user entered with eval advantage.
+        # Recovery: games where user entered with eval deficit.
+        wdl=defaultdict(lambda: {"wins": 0, "draws": 0, "losses": 0}),
+        conv=defaultdict(lambda: {"games": 0, "wins": 0, "draws": 0}),
+        recov=defaultdict(lambda: {"games": 0, "wins": 0, "draws": 0}),
+        # Phase 87.1 (SEED-016 D-07): per-class per-span gap accumulator.
+        # gap_span = exit_score - ES_entry; positive = outperformed Stockfish baseline.
+        gaps_by_class=defaultdict(list),
+        # quick-260519-ni3: per-class start (es_entry) and end (exit_score) accumulators.
+        # Appended under the exact same is-not-None gate as gaps_by_class, so the three
+        # lists always have identical length (reconciliation invariant by construction).
+        starts_by_class=defaultdict(list),
+        ends_by_class=defaultdict(list),
+        # Phase 87.2 (D-01): per-bucket ΔES accumulator. Per-span grain (not per-game):
+        # a game spanning two bucket classes contributes a span-gap to each bucket.
+        gaps_by_bucket=defaultdict(list),
+        # Quick task 260519-lu0: per-class eval cohort (user-perspective cp) for
+        # MG-entry eval aggregation via compute_eval_confidence_bucket (same helper
+        # as openings stats path). mate-excluded, NULL-excluded, |cp|>=2000 trimmed.
+        eval_sum_by_class=defaultdict(float),
+        eval_sumsq_by_class=defaultdict(float),
+        eval_n_by_class=defaultdict(int),
+        # MAX(played_at) per class for last_played_at.
+        last_played_at_by_class=defaultdict(lambda: None),
+    )
+
+
+def _capture_invalid_endgame_class(class_int: int) -> None:
+    """Surface an unexpected endgame_class integer from the DB to Sentry, then skip the row
+    rather than 500 the endpoint.
+
+    Per CLAUDE.md Sentry rules, variables go through set_context; the exception message is
+    static so Sentry groups these together instead of per-class_int.
+    """
+    sentry_sdk.set_context("invalid_endgame_class", {"class_int": class_int})
+    sentry_sdk.set_tag("source", "endgame_aggregate")
+    sentry_sdk.capture_exception(ValueError("Unknown endgame_class integer from DB"))
+
+
+def _accumulate_wdl_conv_recov(
+    accumulators: _EndgameAccumulators,
+    endgame_class: EndgameClass,
+    outcome: Literal["win", "draw", "loss"],
+    bucket: Literal["conversion", "parity", "recovery"],
+) -> None:
+    """Fold one row's W/D/L outcome into the pooled WDL and conversion/recovery accumulators."""
+    wdl_key = "wins" if outcome == "win" else "draws" if outcome == "draw" else "losses"
+    accumulators["wdl"][endgame_class][wdl_key] += 1
+
+    # Conversion: user entered with significant eval advantage (REFAC-02)
+    if bucket == "conversion":
+        accumulators["conv"][endgame_class]["games"] += 1
+        if outcome == "win":
+            accumulators["conv"][endgame_class]["wins"] += 1
+        elif outcome == "draw":
+            accumulators["conv"][endgame_class]["draws"] += 1
+
+    # Recovery: user entered with significant eval deficit (REFAC-02)
+    if bucket == "recovery":
+        accumulators["recov"][endgame_class]["games"] += 1
+        if outcome == "win":
+            accumulators["recov"][endgame_class]["wins"] += 1
+        elif outcome == "draw":
+            accumulators["recov"][endgame_class]["draws"] += 1
+
+
+def _accumulate_score_gap(
+    accumulators: _EndgameAccumulators,
+    endgame_class: EndgameClass,
+    bucket: Literal["conversion", "parity", "recovery"],
+    endgame_row: _EndgameRow,
+) -> None:
+    """Fold one row's per-span Score Gap into the per-class and per-bucket accumulators.
+
+    Phase 87.1 (SEED-016 D-03/D-05/D-07): accumulates the per-span gap for the paired
+    one-sample z-test against H0: mean = 0 (compute_paired_difference_test, same helper
+    Phase 85.1 SEC1-10 uses for the page-level Achievable Score Gap). Sign convention:
+    gap = exit_score - ES_entry, positive = user outperformed Stockfish. NULL-eval spans
+    return None from _compute_span_scores and are excluded from the cohort (D-07).
+    """
+    span_scores = _compute_span_scores(
+        entry_eval_cp=endgame_row.eval_cp,
+        entry_eval_mate=endgame_row.eval_mate,
+        next_entry_eval_cp=endgame_row.next_entry_eval_cp,
+        next_entry_eval_mate=endgame_row.next_entry_eval_mate,
+        result=endgame_row.result,
+        user_color=endgame_row.user_color,
+    )
+    if span_scores is None:
+        return
+    es_entry, exit_score = span_scores
+    gap = exit_score - es_entry
+    accumulators["gaps_by_class"][endgame_class].append(gap)
+    accumulators["starts_by_class"][endgame_class].append(es_entry)
+    accumulators["ends_by_class"][endgame_class].append(exit_score)
+    # Phase 87.2 (D-01): bucket is already computed above; append the same gap into the
+    # bucket cohort for the per-bucket paired-z test. Per-bucket path appends gap ONLY
+    # (not start/end — locked decision 4).
+    accumulators["gaps_by_bucket"][bucket].append(gap)
+
+
+def _accumulate_eval_and_played_at(
+    accumulators: _EndgameAccumulators,
+    endgame_class: EndgameClass,
+    endgame_row: _EndgameRow,
+) -> None:
+    """Fold one row's eval-mean cohort and MAX(played_at) into the per-class accumulators.
+
+    Quick task 260519-lu0: accumulates user-perspective eval cp for the per-category eval
+    mean / CI / confidence via compute_eval_confidence_bucket. Sign convention: user_cp =
+    +eval_cp for white, -eval_cp for black (mirrors _classify_endgame_bucket). Excludes
+    mate rows, NULL evals, and |cp| >= EVAL_OUTLIER_TRIM_CP (D-08 outlier trim, same as
+    openings). Only called when the caller tracks eval/played_at (see
+    `_accumulate_endgame_rows`'s `track_eval_and_played_at`).
+    """
+    if (
+        endgame_row.eval_mate is None
+        and endgame_row.eval_cp is not None
+        and abs(endgame_row.eval_cp) < EVAL_OUTLIER_TRIM_CP
+    ):
+        sign = 1 if endgame_row.user_color == "white" else -1
+        user_cp = sign * endgame_row.eval_cp
+        accumulators["eval_sum_by_class"][endgame_class] += user_cp
+        accumulators["eval_sumsq_by_class"][endgame_class] += user_cp * user_cp
+        accumulators["eval_n_by_class"][endgame_class] += 1
+
+    if endgame_row.played_at is not None:
+        last_played_at_by_class = accumulators["last_played_at_by_class"]
+        current_max = last_played_at_by_class[endgame_class]
+        if current_max is None or endgame_row.played_at > current_max:
+            last_played_at_by_class[endgame_class] = endgame_row.played_at
+
+
+def _accumulate_endgame_rows(
+    rows: Sequence[_EndgameRow],
+    *,
+    track_eval_and_played_at: bool = True,
+) -> _EndgameAccumulators:
+    """Single-pass per-row accumulation shared by `_aggregate_endgame_stats` (pooled) and
+    `_aggregate_endgame_stats_by_tc` (per-TC breakdown) — 214-RESEARCH.md "Pattern 1:
+    Accumulate-then-build pipeline".
+
+    `track_eval_and_played_at` gates the eval-mean and MAX(played_at) accumulation: the
+    per-TC breakdown never computed these (its EndgameCategoryStats always carried the
+    schema defaults for those fields), so it calls this with
+    `track_eval_and_played_at=False` to keep that behavior unchanged.
+    """
+    accumulators = _new_endgame_accumulators()
+
+    for endgame_row in rows:
+        endgame_class = _INT_TO_CLASS.get(endgame_row.endgame_class_int)
+        if endgame_class is None:
+            _capture_invalid_endgame_class(endgame_row.endgame_class_int)
+            continue
+
+        outcome = derive_user_result(endgame_row.result, endgame_row.user_color)
+        bucket = _classify_endgame_bucket(
+            endgame_row.eval_cp, endgame_row.eval_mate, endgame_row.user_color
+        )
+        _accumulate_wdl_conv_recov(accumulators, endgame_class, outcome, bucket)
+        _accumulate_score_gap(accumulators, endgame_class, bucket, endgame_row)
+
+        if track_eval_and_played_at:
+            _accumulate_eval_and_played_at(accumulators, endgame_class, endgame_row)
+
+    return accumulators
+
+
+def _build_category_stats(
+    endgame_class: EndgameClass,
+    accumulators: _EndgameAccumulators,
+) -> EndgameCategoryStats:
+    """Build one `EndgameCategoryStats` from the per-class accumulator bundle.
+
+    Shared per-class builder for `_aggregate_endgame_stats` (pooled) and
+    `_aggregate_endgame_stats_by_tc` (per-TC breakdown). When the accumulators came from
+    `_accumulate_endgame_rows(..., track_eval_and_played_at=False)`, `eval_n_by_class` and
+    `last_played_at_by_class` stay at their defaultdict defaults for every class, so the
+    eval/`last_played_at` fields below come out as the same schema defaults the per-TC
+    breakdown always produced pre-split.
+    """
+    wdl = accumulators["wdl"]
+    conv = accumulators["conv"]
+    recov = accumulators["recov"]
+    gaps_by_class = accumulators["gaps_by_class"]
+    starts_by_class = accumulators["starts_by_class"]
+    ends_by_class = accumulators["ends_by_class"]
+    eval_sum_by_class = accumulators["eval_sum_by_class"]
+    eval_sumsq_by_class = accumulators["eval_sumsq_by_class"]
+    eval_n_by_class = accumulators["eval_n_by_class"]
+    last_played_at_by_class = accumulators["last_played_at_by_class"]
+
+    c = wdl[endgame_class]
+    wins = c["wins"]
+    draws = c["draws"]
+    losses = c["losses"]
+    total = wins + draws + losses
+
+    if total > 0:
+        win_pct = round(wins / total * 100, 1)
+        draw_pct = round(draws / total * 100, 1)
+        loss_pct = round(losses / total * 100, 1)
+    else:
+        win_pct = draw_pct = loss_pct = 0.0
+
+    conv_data = conv[endgame_class]
+    recov_data = recov[endgame_class]
+
+    conversion_games = conv_data["games"]
+    conversion_wins = conv_data["wins"]
+    conversion_draws = conv_data["draws"]
+    conversion_losses = conversion_games - conversion_wins - conversion_draws
+    conversion_pct = (
+        round(conversion_wins / conversion_games * 100, 1) if conversion_games > 0 else 0.0
+    )
+
+    recovery_games = recov_data["games"]
+    recovery_wins = recov_data["wins"]
+    recovery_draws = recov_data["draws"]
+    recovery_saves = recovery_wins + recovery_draws  # derived, kept for backward compat
+    recovery_pct = round(recovery_saves / recovery_games * 100, 1) if recovery_games > 0 else 0.0
+
+    # Phase 84: per-class opponent baseline via same-game mirror identity.
+    # Conv is a win-rate, Recov is a save-rate, so the two mirror formulas
+    # are asymmetric. Reuses _MIN_OPPONENT_SAMPLE (line 233), gated on the
+    # MIRROR bucket size (not the own bucket). Phase 60 introduced the
+    # pattern for Section 2 at _compute_score_gap_material (~line 824).
+    recovery_losses = recovery_games - recovery_wins - recovery_draws
+    opponent_conversion_pct: float | None
+    if recovery_games >= _MIN_OPPONENT_SAMPLE:
+        opponent_conversion_pct = round(recovery_losses / recovery_games * 100, 1)
+    else:
+        opponent_conversion_pct = None
+    opponent_conversion_games = recovery_games
+
+    opponent_recovery_pct: float | None
+    if conversion_games >= _MIN_OPPONENT_SAMPLE:
+        opponent_recovery_pct = round(
+            (conversion_losses + conversion_draws) / conversion_games * 100, 1
+        )
+    else:
+        opponent_recovery_pct = None
+    opponent_recovery_games = conversion_games
+
+    conversion_stats = ConversionRecoveryStats(
+        conversion_pct=conversion_pct,
+        conversion_games=conversion_games,
+        conversion_wins=conversion_wins,
+        conversion_draws=conversion_draws,
+        conversion_losses=conversion_losses,
+        recovery_pct=recovery_pct,
+        recovery_games=recovery_games,
+        recovery_saves=recovery_saves,
+        recovery_wins=recovery_wins,
+        recovery_draws=recovery_draws,
+        opponent_conversion_pct=opponent_conversion_pct,
+        opponent_conversion_games=opponent_conversion_games,
+        opponent_recovery_pct=opponent_recovery_pct,
+        opponent_recovery_games=opponent_recovery_games,
+    )
+
+    # _ENDGAME_CATEGORY_LABELS is exhaustive for all EndgameClass values — direct lookup.
+    # endgame_class is always a valid EndgameClass because _INT_TO_CLASS only contains them.
+    label = _ENDGAME_CATEGORY_LABELS[endgame_class]
+
+    # Quick task 260519-lu0: Wilson score + last_played_at via _build_wdl_stats
+    # (same helper as openings stats path — no reimplemented statistics).
+    # score_p_value retains its existing gated semantics (None when total <
+    # PVALUE_RELIABILITY_MIN_N) for backward compat with EndgameTypeCard Stats subtab.
+    category_last_played_at = last_played_at_by_class[endgame_class]
+    wdl_stats = _build_wdl_stats(wins, draws, losses, total, last_played_at=category_last_played_at)
+    score_p_value: float | None = wdl_stats.p_value if total >= PVALUE_RELIABILITY_MIN_N else None
+
+    # Quick task 260519-lu0: MG-entry eval aggregation via the verbatim
+    # openings eval finalizer (same helper as openings_service.analyze).
+    # Eval is per-span at endgame-entry (user-perspective cp); mate excluded,
+    # NULL excluded, |cp| >= EVAL_OUTLIER_TRIM_CP trimmed (D-08).
+    cat_eval_n = eval_n_by_class[endgame_class]
+    cat_eval_sum = eval_sum_by_class[endgame_class]
+    cat_eval_sumsq = eval_sumsq_by_class[endgame_class]
+    cat_eval_pawns: float | None = None
+    cat_eval_ci_low_pawns: float | None = None
+    cat_eval_ci_high_pawns: float | None = None
+    cat_eval_p_value: float | None = None
+    cat_eval_confidence: Literal["low", "medium", "high"] = "low"
+    if cat_eval_n > 0:
+        conf_mg, p_value_mg, mean_cp_mg, ci_half_mg = compute_eval_confidence_bucket(
+            cat_eval_sum, cat_eval_sumsq, cat_eval_n
+        )  # H0: mean == 0 cp
+        cat_eval_pawns = mean_cp_mg / 100.0
+        if cat_eval_n >= 2:
+            cat_eval_ci_low_pawns = (mean_cp_mg - ci_half_mg) / 100.0
+            cat_eval_ci_high_pawns = (mean_cp_mg + ci_half_mg) / 100.0
+        cat_eval_p_value = p_value_mg
+        cat_eval_confidence = conf_mg
+
+    # Phase 87.1 (SEED-016 D-03/D-05/D-07): per-class mean per-span gap with
+    # paired one-sample z-test via compute_paired_difference_test. n-gates
+    # are owned by the helper:
+    #   n == 0 -> (0.0, None, None, None) — surface mean as None for wire.
+    #   n == 1 -> (mean, None, None, None) — p/CI gated.
+    #   n >= 2 -> ci_low/ci_high populated.
+    #   n >= CONFIDENCE_MIN_N (=10) -> p_value populated.
+    # Sign: exit_score - ES_entry (positive = outperformed Stockfish baseline).
+    type_gaps = gaps_by_class[endgame_class]
+    type_gap_n = len(type_gaps)
+    (
+        type_gap_mean_raw,
+        type_gap_p,
+        type_gap_ci_low,
+        type_gap_ci_high,
+    ) = compute_paired_difference_test(type_gaps)
+    # When n == 0 compute_paired_difference_test returns mean=0.0. Surface
+    # None on the wire so the frontend hides the row (D-08 n==0 gate),
+    # matching how the cohort-empty case reads.
+    type_gap_mean: float | None = type_gap_mean_raw if type_gap_n > 0 else None
+
+    # quick-260519-ni3: start/end means over the identical cohort (same n,
+    # same NULL-eval gate — lists have equal length by construction).
+    # Use sum/len to avoid a statistics import; None when n == 0 (mirroring
+    # type_gap_mean above so all three fields share the same None contract).
+    type_starts = starts_by_class[endgame_class]
+    type_ends = ends_by_class[endgame_class]
+    type_start_mean: float | None = sum(type_starts) / type_gap_n if type_gap_n > 0 else None
+    type_end_mean: float | None = sum(type_ends) / type_gap_n if type_gap_n > 0 else None
+
+    return EndgameCategoryStats(
+        endgame_class=endgame_class,
+        label=label,
+        wins=wins,
+        draws=draws,
+        losses=losses,
+        total=total,
+        win_pct=win_pct,
+        draw_pct=draw_pct,
+        loss_pct=loss_pct,
+        conversion=conversion_stats,
+        score_p_value=score_p_value,
+        # Phase 87.1 (SEED-016 D-05): per-class Score Gap fields. See
+        # _compute_span_scores + compute_paired_difference_test above.
+        type_achievable_score_gap_mean=type_gap_mean,
+        type_achievable_score_gap_n=type_gap_n,
+        type_achievable_score_gap_p_value=type_gap_p,
+        type_achievable_score_gap_ci_low=type_gap_ci_low,
+        type_achievable_score_gap_ci_high=type_gap_ci_high,
+        # quick-260519-ni3: descriptive start/end components.
+        type_achievable_score_start_mean=type_start_mean,
+        type_achievable_score_end_mean=type_end_mean,
+        # Quick task 260519-lu0: WDLStats-aligned score/eval/last_played_at.
+        score=wdl_stats.score,
+        confidence=wdl_stats.confidence,
+        p_value=wdl_stats.p_value,
+        ci_low=wdl_stats.ci_low,
+        ci_high=wdl_stats.ci_high,
+        last_played_at=category_last_played_at,
+        avg_eval_pawns=cat_eval_pawns,
+        eval_ci_low_pawns=cat_eval_ci_low_pawns,
+        eval_ci_high_pawns=cat_eval_ci_high_pawns,
+        eval_n=cat_eval_n,
+        eval_p_value=cat_eval_p_value,
+        eval_confidence=cat_eval_confidence,
+        eval_baseline_pawns=EVAL_BASELINE_PAWNS_WHITE,
+    )
+
+
 def _aggregate_endgame_stats(
     rows: Sequence[Row[Any] | tuple[Any, ...]],
 ) -> tuple[list[EndgameCategoryStats], dict[str, list[float]]]:
@@ -415,369 +887,26 @@ def _aggregate_endgame_stats(
 
     Returns (categories, gaps_by_bucket) where categories are sorted by total
     game count descending (D-05) and gaps_by_bucket is a plain dict (not defaultdict).
+
+    Pipeline: normalize each raw row (_normalize_endgame_row) -> accumulate per class
+    (_accumulate_endgame_rows) -> build one EndgameCategoryStats per class
+    (_build_category_stats) -> sort -> return (214-RESEARCH.md Pattern 1).
     """
     if not rows:
         return [], {}
 
-    # Accumulators per endgame class (per D-02: TypedDicts for internal data structures)
-    wdl: dict[EndgameClass, dict[str, int]] = defaultdict(
-        lambda: {"wins": 0, "draws": 0, "losses": 0}
-    )
-    # Conversion: games where user entered with eval advantage
-    conv: dict[EndgameClass, dict[str, int]] = defaultdict(
-        lambda: {"games": 0, "wins": 0, "draws": 0}
-    )
-    # Recovery: games where user entered with eval deficit
-    recov: dict[EndgameClass, dict[str, int]] = defaultdict(
-        lambda: {"games": 0, "wins": 0, "draws": 0}
-    )
-    # Phase 87.1 (SEED-016 D-07): per-class per-span gap accumulator.
-    # gap_span = exit_score - ES_entry; positive = outperformed Stockfish baseline.
-    # compute_paired_difference_test (from score_confidence.py, same helper as
-    # Phase 85.1 SEC1-10 for the page-level Achievable Score Gap) is invoked
-    # below in the per-class builder loop.
-    gaps_by_class: dict[EndgameClass, list[float]] = defaultdict(list)
-    # quick-260519-ni3: per-class start (es_entry) and end (exit_score) accumulators.
-    # Appended under the exact same is-not-None gate as gaps_by_class, so the
-    # three lists always have identical length (reconciliation invariant by construction).
-    starts_by_class: dict[EndgameClass, list[float]] = defaultdict(list)
-    ends_by_class: dict[EndgameClass, list[float]] = defaultdict(list)
-    # Phase 87.2 (D-01): per-bucket ΔES accumulator. Shares iteration with
-    # gaps_by_class; bucket already computed at the _classify_endgame_bucket
-    # call below for the rate-based counts. Per-span grain (not per-game):
-    # a game spanning two bucket classes contributes a span-gap to each bucket.
-    gaps_by_bucket: dict[str, list[float]] = defaultdict(list)
-    # Quick task 260519-lu0: per-class eval cohort (user-perspective cp) for
-    # MG-entry eval aggregation via compute_eval_confidence_bucket (same helper
-    # as openings stats path). mate-excluded, NULL-excluded, |cp|>=2000 trimmed.
-    eval_sum_by_class: dict[EndgameClass, float] = defaultdict(float)
-    eval_sumsq_by_class: dict[EndgameClass, float] = defaultdict(float)
-    eval_n_by_class: dict[EndgameClass, int] = defaultdict(int)
-    # MAX(played_at) per class for last_played_at.
-    last_played_at_by_class: dict[EndgameClass, datetime | None] = defaultdict(lambda: None)
+    normalized_rows = [_normalize_endgame_row(raw_row) for raw_row in rows]
+    accumulators = _accumulate_endgame_rows(normalized_rows)
 
-    for row in rows:
-        # Quick task 260519-lu0: rows are now 9-column SA Rows (added played_at).
-        # Legacy 6/8-tuple test fixtures don't carry played_at — default to None.
-        # Tuples are padded with NULL next-eval; Rows expose columns by attribute.
-        row_played_at: datetime | None = None
-        if isinstance(row, tuple):
-            if len(row) == 6:
-                _game_id, endgame_class_int, result, user_color, eval_cp, eval_mate = row
-                next_entry_eval_cp: int | None = None
-                next_entry_eval_mate: int | None = None
-            elif len(row) == 8:
-                # 8-tuple: full Phase 87.1 row shape (no played_at).
-                (
-                    _game_id,
-                    endgame_class_int,
-                    result,
-                    user_color,
-                    eval_cp,
-                    eval_mate,
-                    next_entry_eval_cp,
-                    next_entry_eval_mate,
-                ) = row
-            else:
-                # 9-tuple: full new row shape with played_at.
-                (
-                    _game_id,
-                    endgame_class_int,
-                    result,
-                    user_color,
-                    eval_cp,
-                    eval_mate,
-                    next_entry_eval_cp,
-                    next_entry_eval_mate,
-                    row_played_at,
-                ) = row
-        else:
-            # SA Row object — attribute access. The repository labels the LEAD
-            # columns next_entry_eval_cp / next_entry_eval_mate.
-            _game_id = row.game_id
-            endgame_class_int = row.endgame_class
-            result = row.result
-            user_color = row.user_color
-            eval_cp = row.eval_cp
-            eval_mate = row.eval_mate
-            next_entry_eval_cp = row.next_entry_eval_cp
-            next_entry_eval_mate = row.next_entry_eval_mate
-            row_played_at = getattr(row, "played_at", None)
-        endgame_class = _INT_TO_CLASS.get(endgame_class_int)
-        if endgame_class is None:
-            # Unexpected class integer from DB — surface to Sentry and skip the
-            # row rather than 500 the endpoint. Per CLAUDE.md Sentry rules,
-            # variables go through set_context; exception message is static so
-            # Sentry groups these together instead of per-class_int.
-            sentry_sdk.set_context(
-                "invalid_endgame_class",
-                {"class_int": endgame_class_int},
-            )
-            sentry_sdk.set_tag("source", "endgame_aggregate")
-            sentry_sdk.capture_exception(ValueError("Unknown endgame_class integer from DB"))
-            continue
-        outcome = derive_user_result(result, user_color)
-
-        # W/D/L counts
-        if outcome == "win":
-            wdl[endgame_class]["wins"] += 1
-        elif outcome == "draw":
-            wdl[endgame_class]["draws"] += 1
-        else:
-            wdl[endgame_class]["losses"] += 1
-
-        bucket = _classify_endgame_bucket(eval_cp, eval_mate, user_color)
-
-        # Conversion: user entered with significant eval advantage (REFAC-02)
-        if bucket == "conversion":
-            conv[endgame_class]["games"] += 1
-            if outcome == "win":
-                conv[endgame_class]["wins"] += 1
-            elif outcome == "draw":
-                conv[endgame_class]["draws"] += 1
-
-        # Recovery: user entered with significant eval deficit (REFAC-02)
-        if bucket == "recovery":
-            recov[endgame_class]["games"] += 1
-            if outcome == "win":
-                recov[endgame_class]["wins"] += 1
-            elif outcome == "draw":
-                recov[endgame_class]["draws"] += 1
-
-        # Phase 87.1 (SEED-016 D-03/D-05/D-07): accumulate per-span gap for the
-        # paired one-sample z-test against H0: mean = 0. compute_paired_difference_test
-        # from app/services/score_confidence.py is the same helper Phase 85.1
-        # SEC1-10 uses for the page-level Achievable Score Gap. Sign convention:
-        # gap = exit_score - ES_entry, positive = user outperformed Stockfish.
-        # NULL-eval spans return None and are excluded from the cohort (D-07).
-        # quick-260519-ni3: call _compute_span_scores once to get both components;
-        # _compute_span_gap is now a thin wrapper over it (single source of truth).
-        span_scores = _compute_span_scores(
-            entry_eval_cp=eval_cp,
-            entry_eval_mate=eval_mate,
-            next_entry_eval_cp=next_entry_eval_cp,
-            next_entry_eval_mate=next_entry_eval_mate,
-            result=result,
-            user_color=user_color,
-        )
-        if span_scores is not None:
-            es_entry, exit_score = span_scores
-            gap = exit_score - es_entry
-            gaps_by_class[endgame_class].append(gap)
-            starts_by_class[endgame_class].append(es_entry)
-            ends_by_class[endgame_class].append(exit_score)
-            # Phase 87.2 (D-01): bucket is already computed above; append the
-            # same gap into the bucket cohort for the per-bucket paired-z test.
-            # Excluded when span_scores is None (NULL-eval spans, same gate).
-            # Per-bucket path appends gap ONLY (not start/end — locked decision 4).
-            gaps_by_bucket[bucket].append(gap)
-
-        # Quick task 260519-lu0: accumulate user-perspective eval cp for the
-        # per-category eval mean / CI / confidence via compute_eval_confidence_bucket.
-        # Sign convention: user_cp = +eval_cp for white, -eval_cp for black
-        # (mirrors _classify_endgame_bucket). Exclude mate rows, NULL evals, and
-        # |cp| >= EVAL_OUTLIER_TRIM_CP (D-08 outlier trim, same as openings).
-        if eval_mate is None and eval_cp is not None and abs(eval_cp) < EVAL_OUTLIER_TRIM_CP:
-            sign = 1 if user_color == "white" else -1
-            user_cp = sign * eval_cp
-            eval_sum_by_class[endgame_class] += user_cp
-            eval_sumsq_by_class[endgame_class] += user_cp * user_cp
-            eval_n_by_class[endgame_class] += 1
-
-        # MAX(played_at) per class.
-        if row_played_at is not None:
-            current_max = last_played_at_by_class[endgame_class]
-            if current_max is None or row_played_at > current_max:
-                last_played_at_by_class[endgame_class] = row_played_at
-
-    # Build EndgameCategoryStats objects
-    categories: list[EndgameCategoryStats] = []
-    for endgame_class in wdl:
-        c = wdl[endgame_class]
-        wins = c["wins"]
-        draws = c["draws"]
-        losses = c["losses"]
-        total = wins + draws + losses
-
-        if total > 0:
-            win_pct = round(wins / total * 100, 1)
-            draw_pct = round(draws / total * 100, 1)
-            loss_pct = round(losses / total * 100, 1)
-        else:
-            win_pct = draw_pct = loss_pct = 0.0
-
-        conv_data = conv[endgame_class]
-        recov_data = recov[endgame_class]
-
-        conversion_games = conv_data["games"]
-        conversion_wins = conv_data["wins"]
-        conversion_draws = conv_data["draws"]
-        conversion_losses = conversion_games - conversion_wins - conversion_draws
-        conversion_pct = (
-            round(conversion_wins / conversion_games * 100, 1) if conversion_games > 0 else 0.0
-        )
-
-        recovery_games = recov_data["games"]
-        recovery_wins = recov_data["wins"]
-        recovery_draws = recov_data["draws"]
-        recovery_saves = recovery_wins + recovery_draws  # derived, kept for backward compat
-        recovery_pct = (
-            round(recovery_saves / recovery_games * 100, 1) if recovery_games > 0 else 0.0
-        )
-
-        # Phase 84: per-class opponent baseline via same-game mirror identity.
-        # Conv is a win-rate, Recov is a save-rate, so the two mirror formulas
-        # are asymmetric. Reuses _MIN_OPPONENT_SAMPLE (line 233), gated on the
-        # MIRROR bucket size (not the own bucket). Phase 60 introduced the
-        # pattern for Section 2 at _compute_score_gap_material (~line 824).
-        recovery_losses = recovery_games - recovery_wins - recovery_draws
-        opponent_conversion_pct: float | None
-        if recovery_games >= _MIN_OPPONENT_SAMPLE:
-            opponent_conversion_pct = round(recovery_losses / recovery_games * 100, 1)
-        else:
-            opponent_conversion_pct = None
-        opponent_conversion_games = recovery_games
-
-        opponent_recovery_pct: float | None
-        if conversion_games >= _MIN_OPPONENT_SAMPLE:
-            opponent_recovery_pct = round(
-                (conversion_losses + conversion_draws) / conversion_games * 100, 1
-            )
-        else:
-            opponent_recovery_pct = None
-        opponent_recovery_games = conversion_games
-
-        conversion_stats = ConversionRecoveryStats(
-            conversion_pct=conversion_pct,
-            conversion_games=conversion_games,
-            conversion_wins=conversion_wins,
-            conversion_draws=conversion_draws,
-            conversion_losses=conversion_losses,
-            recovery_pct=recovery_pct,
-            recovery_games=recovery_games,
-            recovery_saves=recovery_saves,
-            recovery_wins=recovery_wins,
-            recovery_draws=recovery_draws,
-            opponent_conversion_pct=opponent_conversion_pct,
-            opponent_conversion_games=opponent_conversion_games,
-            opponent_recovery_pct=opponent_recovery_pct,
-            opponent_recovery_games=opponent_recovery_games,
-        )
-
-        # _ENDGAME_CATEGORY_LABELS is exhaustive for all EndgameClass values — direct lookup.
-        # endgame_class is always a valid EndgameClass because _INT_TO_CLASS only contains them.
-        label = _ENDGAME_CATEGORY_LABELS[endgame_class]
-
-        # Quick task 260519-lu0: Wilson score + last_played_at via _build_wdl_stats
-        # (same helper as openings stats path — no reimplemented statistics).
-        # score_p_value retains its existing gated semantics (None when total <
-        # PVALUE_RELIABILITY_MIN_N) for backward compat with EndgameTypeCard Stats subtab.
-        category_last_played_at = last_played_at_by_class[endgame_class]
-        wdl_stats = _build_wdl_stats(
-            wins, draws, losses, total, last_played_at=category_last_played_at
-        )
-        score_p_value: float | None = (
-            wdl_stats.p_value if total >= PVALUE_RELIABILITY_MIN_N else None
-        )
-
-        # Quick task 260519-lu0: MG-entry eval aggregation via the verbatim
-        # openings eval finalizer (same helper as openings_service.analyze).
-        # Eval is per-span at endgame-entry (user-perspective cp); mate excluded,
-        # NULL excluded, |cp| >= EVAL_OUTLIER_TRIM_CP trimmed (D-08).
-        cat_eval_n = eval_n_by_class[endgame_class]
-        cat_eval_sum = eval_sum_by_class[endgame_class]
-        cat_eval_sumsq = eval_sumsq_by_class[endgame_class]
-        cat_eval_pawns: float | None = None
-        cat_eval_ci_low_pawns: float | None = None
-        cat_eval_ci_high_pawns: float | None = None
-        cat_eval_p_value: float | None = None
-        cat_eval_confidence: Literal["low", "medium", "high"] = "low"
-        if cat_eval_n > 0:
-            conf_mg, p_value_mg, mean_cp_mg, ci_half_mg = compute_eval_confidence_bucket(
-                cat_eval_sum, cat_eval_sumsq, cat_eval_n
-            )  # H0: mean == 0 cp
-            cat_eval_pawns = mean_cp_mg / 100.0
-            if cat_eval_n >= 2:
-                cat_eval_ci_low_pawns = (mean_cp_mg - ci_half_mg) / 100.0
-                cat_eval_ci_high_pawns = (mean_cp_mg + ci_half_mg) / 100.0
-            cat_eval_p_value = p_value_mg
-            cat_eval_confidence = conf_mg
-
-        # Phase 87.1 (SEED-016 D-03/D-05/D-07): per-class mean per-span gap with
-        # paired one-sample z-test via compute_paired_difference_test. n-gates
-        # are owned by the helper:
-        #   n == 0 -> (0.0, None, None, None) — surface mean as None for wire.
-        #   n == 1 -> (mean, None, None, None) — p/CI gated.
-        #   n >= 2 -> ci_low/ci_high populated.
-        #   n >= CONFIDENCE_MIN_N (=10) -> p_value populated.
-        # Sign: exit_score - ES_entry (positive = outperformed Stockfish baseline).
-        type_gaps = gaps_by_class[endgame_class]
-        type_gap_n = len(type_gaps)
-        (
-            type_gap_mean_raw,
-            type_gap_p,
-            type_gap_ci_low,
-            type_gap_ci_high,
-        ) = compute_paired_difference_test(type_gaps)
-        # When n == 0 compute_paired_difference_test returns mean=0.0. Surface
-        # None on the wire so the frontend hides the row (D-08 n==0 gate),
-        # matching how the cohort-empty case reads.
-        type_gap_mean: float | None = type_gap_mean_raw if type_gap_n > 0 else None
-
-        # quick-260519-ni3: start/end means over the identical cohort (same n,
-        # same NULL-eval gate — lists have equal length by construction).
-        # Use sum/len to avoid a statistics import; None when n == 0 (mirroring
-        # type_gap_mean above so all three fields share the same None contract).
-        type_starts = starts_by_class[endgame_class]
-        type_ends = ends_by_class[endgame_class]
-        type_start_mean: float | None = sum(type_starts) / type_gap_n if type_gap_n > 0 else None
-        type_end_mean: float | None = sum(type_ends) / type_gap_n if type_gap_n > 0 else None
-
-        categories.append(
-            EndgameCategoryStats(
-                endgame_class=endgame_class,
-                label=label,
-                wins=wins,
-                draws=draws,
-                losses=losses,
-                total=total,
-                win_pct=win_pct,
-                draw_pct=draw_pct,
-                loss_pct=loss_pct,
-                conversion=conversion_stats,
-                score_p_value=score_p_value,
-                # Phase 87.1 (SEED-016 D-05): per-class Score Gap fields. See
-                # _compute_span_scores + compute_paired_difference_test above.
-                type_achievable_score_gap_mean=type_gap_mean,
-                type_achievable_score_gap_n=type_gap_n,
-                type_achievable_score_gap_p_value=type_gap_p,
-                type_achievable_score_gap_ci_low=type_gap_ci_low,
-                type_achievable_score_gap_ci_high=type_gap_ci_high,
-                # quick-260519-ni3: descriptive start/end components.
-                type_achievable_score_start_mean=type_start_mean,
-                type_achievable_score_end_mean=type_end_mean,
-                # Quick task 260519-lu0: WDLStats-aligned score/eval/last_played_at.
-                score=wdl_stats.score,
-                confidence=wdl_stats.confidence,
-                p_value=wdl_stats.p_value,
-                ci_low=wdl_stats.ci_low,
-                ci_high=wdl_stats.ci_high,
-                last_played_at=category_last_played_at,
-                avg_eval_pawns=cat_eval_pawns,
-                eval_ci_low_pawns=cat_eval_ci_low_pawns,
-                eval_ci_high_pawns=cat_eval_ci_high_pawns,
-                eval_n=cat_eval_n,
-                eval_p_value=cat_eval_p_value,
-                eval_confidence=cat_eval_confidence,
-                eval_baseline_pawns=EVAL_BASELINE_PAWNS_WHITE,
-            )
-        )
+    categories: list[EndgameCategoryStats] = [
+        _build_category_stats(endgame_class, accumulators) for endgame_class in accumulators["wdl"]
+    ]
 
     # Sort by total descending (D-05) — not a fixed category order
     categories.sort(key=lambda c: c.total, reverse=True)
 
     # Convert defaultdict to plain dict to avoid downstream defaultdict surprises.
-    return categories, dict(gaps_by_bucket)
+    return categories, dict(accumulators["gaps_by_bucket"])
 
 
 def _aggregate_endgame_stats_by_tc(
@@ -807,58 +936,47 @@ def _aggregate_endgame_stats_by_tc(
     if not rows:
         return {}
 
-    # tc -> class -> accumulator dicts  (using the same accumulator structure as
-    # _aggregate_endgame_stats but keyed on (tc, class))
-    wdl: dict[str, dict[EndgameClass, dict[str, int]]] = defaultdict(
-        lambda: defaultdict(lambda: {"wins": 0, "draws": 0, "losses": 0})
-    )
-    conv: dict[str, dict[EndgameClass, dict[str, int]]] = defaultdict(
-        lambda: defaultdict(lambda: {"games": 0, "wins": 0, "draws": 0})
-    )
-    recov: dict[str, dict[EndgameClass, dict[str, int]]] = defaultdict(
-        lambda: defaultdict(lambda: {"games": 0, "wins": 0, "draws": 0})
-    )
-    # Per-(tc, class) Score Gap accumulator (same span_scores logic)
-    gaps_by_tc_class: dict[str, dict[EndgameClass, list[float]]] = defaultdict(
-        lambda: defaultdict(list)
-    )
-    starts_by_tc_class: dict[str, dict[EndgameClass, list[float]]] = defaultdict(
-        lambda: defaultdict(list)
-    )
-    ends_by_tc_class: dict[str, dict[EndgameClass, list[float]]] = defaultdict(
-        lambda: defaultdict(list)
-    )
-
+    # Phase 98 / 214-03: own row-shape dispatch (the tuple test-fixture layout embeds
+    # time_control_bucket at index 6, shifting next_entry_eval_cp/mate to 7/8 -- a
+    # different tuple shape than _normalize_endgame_row's, which has no TC column), then
+    # group into per-TC _EndgameRow lists so the shared accumulate/build pipeline
+    # (_accumulate_endgame_rows / _build_category_stats, see _aggregate_endgame_stats)
+    # can run once per TC bucket instead of duplicating the per-row loop.
+    rows_by_tc: dict[str, list[_EndgameRow]] = defaultdict(list)
     for row in rows:
         # bucket_rows: SA Row or tuple. For tuples (test fixtures) col 6 is TC.
         if isinstance(row, tuple):
             if len(row) < 7:
                 # Legacy 6-column fixture (no TC column) — skip; not per-TC data
                 continue
-            _game_id = row[0]
-            endgame_class_int = row[1]
-            result = row[2]
-            user_color = row[3]
-            eval_cp = row[4]
-            eval_mate = row[5]
             tc = row[6]
-            next_entry_eval_cp: int | None = row[7] if len(row) > 7 else None
-            next_entry_eval_mate: int | None = row[8] if len(row) > 8 else None
+            endgame_row = _EndgameRow(
+                endgame_class_int=row[1],
+                result=row[2],
+                user_color=row[3],
+                eval_cp=row[4],
+                eval_mate=row[5],
+                next_entry_eval_cp=row[7] if len(row) > 7 else None,
+                next_entry_eval_mate=row[8] if len(row) > 8 else None,
+                played_at=None,
+            )
         else:
-            _game_id = row.game_id
-            endgame_class_int = row.endgame_class
-            result = row.result
-            user_color = row.user_color
-            eval_cp = row.eval_cp
-            eval_mate = row.eval_mate
             tc = row.time_control_bucket
-            next_entry_eval_cp = row.next_entry_eval_cp
-            next_entry_eval_mate = row.next_entry_eval_mate
+            endgame_row = _EndgameRow(
+                endgame_class_int=row.endgame_class,
+                result=row.result,
+                user_color=row.user_color,
+                eval_cp=row.eval_cp,
+                eval_mate=row.eval_mate,
+                next_entry_eval_cp=row.next_entry_eval_cp,
+                next_entry_eval_mate=row.next_entry_eval_mate,
+                played_at=None,
+            )
 
         if tc not in _TIME_CONTROL_ORDER:
             continue
 
-        endgame_class = _INT_TO_CLASS.get(endgame_class_int)
+        endgame_class = _INT_TO_CLASS.get(endgame_row.endgame_class_int)
         if endgame_class is None:
             continue  # Unknown class int; already captured by _aggregate_endgame_stats
 
@@ -870,171 +988,24 @@ def _aggregate_endgame_stats_by_tc(
         if endgame_class in _TYPE_CARD_EXCLUDED_CLASSES:
             continue
 
-        outcome = derive_user_result(result, user_color)
-        if outcome == "win":
-            wdl[tc][endgame_class]["wins"] += 1
-        elif outcome == "draw":
-            wdl[tc][endgame_class]["draws"] += 1
-        else:
-            wdl[tc][endgame_class]["losses"] += 1
+        rows_by_tc[tc].append(endgame_row)
 
-        bucket = _classify_endgame_bucket(eval_cp, eval_mate, user_color)
-        if bucket == "conversion":
-            conv[tc][endgame_class]["games"] += 1
-            if outcome == "win":
-                conv[tc][endgame_class]["wins"] += 1
-            elif outcome == "draw":
-                conv[tc][endgame_class]["draws"] += 1
-        elif bucket == "recovery":
-            recov[tc][endgame_class]["games"] += 1
-            if outcome == "win":
-                recov[tc][endgame_class]["wins"] += 1
-            elif outcome == "draw":
-                recov[tc][endgame_class]["draws"] += 1
-
-        # Score Gap (same span_scores logic as _aggregate_endgame_stats)
-        span_scores = _compute_span_scores(
-            entry_eval_cp=eval_cp,
-            entry_eval_mate=eval_mate,
-            next_entry_eval_cp=next_entry_eval_cp,
-            next_entry_eval_mate=next_entry_eval_mate,
-            result=result,
-            user_color=user_color,
-        )
-        if span_scores is not None:
-            es_entry, exit_score = span_scores
-            gaps_by_tc_class[tc][endgame_class].append(exit_score - es_entry)
-            starts_by_tc_class[tc][endgame_class].append(es_entry)
-            ends_by_tc_class[tc][endgame_class].append(exit_score)
-
-    # Build per-TC lists in fixed order
+    # Build per-TC lists in fixed order. track_eval_and_played_at=False: this breakdown
+    # never aggregated eval-mean or last_played_at (its EndgameCategoryStats always
+    # carried the schema defaults for those fields; see _build_category_stats' docstring).
     result_by_tc: dict[
         Literal["bullet", "blitz", "rapid", "classical"], list[EndgameCategoryStats]
     ] = {}
     for tc in _TIME_CONTROL_ORDER:
-        tc_literal = cast(Literal["bullet", "blitz", "rapid", "classical"], tc)
-        tc_wdl = wdl.get(tc, {})
-        if not tc_wdl:
+        tc_rows = rows_by_tc.get(tc)
+        if not tc_rows:
             continue
-
-        cats: list[EndgameCategoryStats] = []
-        for endgame_class in tc_wdl:
-            c = tc_wdl[endgame_class]
-            wins = c["wins"]
-            draws = c["draws"]
-            losses = c["losses"]
-            total = wins + draws + losses
-
-            if total > 0:
-                win_pct = round(wins / total * 100, 1)
-                draw_pct = round(draws / total * 100, 1)
-                loss_pct = round(losses / total * 100, 1)
-            else:
-                win_pct = draw_pct = loss_pct = 0.0
-
-            conv_data = conv[tc][endgame_class]
-            recov_data = recov[tc][endgame_class]
-
-            conversion_games = conv_data["games"]
-            conversion_wins = conv_data["wins"]
-            conversion_draws = conv_data["draws"]
-            conversion_losses = conversion_games - conversion_wins - conversion_draws
-            conversion_pct = (
-                round(conversion_wins / conversion_games * 100, 1) if conversion_games > 0 else 0.0
-            )
-
-            recovery_games = recov_data["games"]
-            recovery_wins = recov_data["wins"]
-            recovery_draws = recov_data["draws"]
-            recovery_saves = recovery_wins + recovery_draws
-            recovery_pct = (
-                round(recovery_saves / recovery_games * 100, 1) if recovery_games > 0 else 0.0
-            )
-            recovery_losses = recovery_games - recovery_wins - recovery_draws
-
-            opponent_conversion_pct: float | None = (
-                round(recovery_losses / recovery_games * 100, 1)
-                if recovery_games >= _MIN_OPPONENT_SAMPLE
-                else None
-            )
-            opponent_recovery_pct: float | None = (
-                round((conversion_losses + conversion_draws) / conversion_games * 100, 1)
-                if conversion_games >= _MIN_OPPONENT_SAMPLE
-                else None
-            )
-
-            conversion_stats = ConversionRecoveryStats(
-                conversion_pct=conversion_pct,
-                conversion_games=conversion_games,
-                conversion_wins=conversion_wins,
-                conversion_draws=conversion_draws,
-                conversion_losses=conversion_losses,
-                recovery_pct=recovery_pct,
-                recovery_games=recovery_games,
-                recovery_saves=recovery_saves,
-                recovery_wins=recovery_wins,
-                recovery_draws=recovery_draws,
-                opponent_conversion_pct=opponent_conversion_pct,
-                opponent_conversion_games=recovery_games,
-                opponent_recovery_pct=opponent_recovery_pct,
-                opponent_recovery_games=conversion_games,
-            )
-
-            label = _ENDGAME_CATEGORY_LABELS[endgame_class]
-            wdl_stats = _build_wdl_stats(wins, draws, losses, total, last_played_at=None)
-            score_p_value: float | None = (
-                wdl_stats.p_value if total >= PVALUE_RELIABILITY_MIN_N else None
-            )
-
-            # Score Gap per (tc, class) — same paired z-test as _aggregate_endgame_stats
-            type_gaps = gaps_by_tc_class[tc][endgame_class]
-            type_gap_n = len(type_gaps)
-            (
-                type_gap_mean_raw,
-                type_gap_p,
-                type_gap_ci_low,
-                type_gap_ci_high,
-            ) = compute_paired_difference_test(type_gaps)
-            type_gap_mean: float | None = type_gap_mean_raw if type_gap_n > 0 else None
-
-            type_starts = starts_by_tc_class[tc][endgame_class]
-            type_ends = ends_by_tc_class[tc][endgame_class]
-            type_start_mean: float | None = (
-                sum(type_starts) / type_gap_n if type_gap_n > 0 else None
-            )
-            type_end_mean: float | None = sum(type_ends) / type_gap_n if type_gap_n > 0 else None
-
-            cats.append(
-                EndgameCategoryStats(
-                    endgame_class=endgame_class,
-                    label=label,
-                    wins=wins,
-                    draws=draws,
-                    losses=losses,
-                    total=total,
-                    win_pct=win_pct,
-                    draw_pct=draw_pct,
-                    loss_pct=loss_pct,
-                    conversion=conversion_stats,
-                    score_p_value=score_p_value,
-                    type_achievable_score_gap_mean=type_gap_mean,
-                    type_achievable_score_gap_n=type_gap_n,
-                    type_achievable_score_gap_p_value=type_gap_p,
-                    type_achievable_score_gap_ci_low=type_gap_ci_low,
-                    type_achievable_score_gap_ci_high=type_gap_ci_high,
-                    type_achievable_score_start_mean=type_start_mean,
-                    type_achievable_score_end_mean=type_end_mean,
-                    # No eval aggregation per (tc, class) — keeping it simple;
-                    # the tile only needs WDL + conv/recov + score_p_value + score gap.
-                    score=wdl_stats.score,
-                    confidence=wdl_stats.confidence,
-                    p_value=wdl_stats.p_value,
-                    ci_low=wdl_stats.ci_low,
-                    ci_high=wdl_stats.ci_high,
-                )
-            )
-
-        result_by_tc[tc_literal] = cats
+        tc_literal = cast(Literal["bullet", "blitz", "rapid", "classical"], tc)
+        accumulators = _accumulate_endgame_rows(tc_rows, track_eval_and_played_at=False)
+        result_by_tc[tc_literal] = [
+            _build_category_stats(endgame_class, accumulators)
+            for endgame_class in accumulators["wdl"]
+        ]
 
     return result_by_tc
 
@@ -2103,6 +2074,40 @@ def _extract_entry_clocks(
     return user_clock, opp_clock
 
 
+def _bump_timeout_counts(agg: "_ClockAggregate", outcome: Literal["win", "draw", "loss"]) -> None:
+    """Increment `agg`'s timeout win/loss counters for a timeout-terminated game.
+
+    Timeout draws (rare) contribute to neither counter — matches the pre-split behavior.
+    """
+    if outcome == "win":
+        agg.timeout_wins += 1
+    elif outcome == "loss":
+        agg.timeout_losses += 1
+
+
+def _bump_wdl_tuple(
+    wdl: tuple[int, int, int],
+    outcome: Literal["win", "draw", "loss"],
+    *,
+    invert: bool = False,
+) -> tuple[int, int, int]:
+    """Increment one (wins, draws, losses) tuple for one row's outcome.
+
+    `invert=True` flips win<->loss (used for the opponent-side quintile WDL, where a
+    user win is an opponent loss and vice versa; draws stay draws either way — see
+    `_iterate_clock_rows`'s docstring for why the two sides are tallied this way).
+    """
+    wins, draws, losses = wdl
+    if outcome == "draw":
+        return wins, draws + 1, losses
+    is_win = outcome == "win"
+    if invert:
+        is_win = not is_win
+    if is_win:
+        return wins + 1, draws, losses
+    return wins, draws, losses + 1
+
+
 def _iterate_clock_rows(
     clock_rows: Sequence[Row[Any] | tuple[Any, ...]],
 ) -> tuple[
@@ -2196,12 +2201,7 @@ def _iterate_clock_rows(
         agg = tc_clock_agg[tc]
         agg.total_games += 1
         if termination == "timeout":
-            outcome_for_timeout = derive_user_result(result, user_color)
-            if outcome_for_timeout == "win":
-                agg.timeout_wins += 1
-            elif outcome_for_timeout == "loss":
-                agg.timeout_losses += 1
-            # Timeout draws (rare) contribute to neither counter.
+            _bump_timeout_counts(agg, derive_user_result(result, user_color))
 
         user_clock, opp_clock = _extract_entry_clocks(ply_array, clock_array, user_color)
         if user_clock is None or opp_clock is None:
@@ -2237,24 +2237,16 @@ def _iterate_clock_rows(
 
         # Accumulate user-side WDL into user_quintile_wdl.
         outcome = derive_user_result(result, user_color)
-        uw, ud, ul = tc_user_quintile_wdl[(tc, user_quintile)]
-        if outcome == "win":
-            tc_user_quintile_wdl[(tc, user_quintile)] = (uw + 1, ud, ul)
-        elif outcome == "draw":
-            tc_user_quintile_wdl[(tc, user_quintile)] = (uw, ud + 1, ul)
-        else:
-            tc_user_quintile_wdl[(tc, user_quintile)] = (uw, ud, ul + 1)
+        tc_user_quintile_wdl[(tc, user_quintile)] = _bump_wdl_tuple(
+            tc_user_quintile_wdl[(tc, user_quintile)], outcome
+        )
 
         # Accumulate opp-side WDL into opp_quintile_wdl with inverted outcome
         # (user-win = opp-loss; draws stay draws). Same game, different
         # quintile index (driven by opponent's clock-pct).
-        ow, od, ol = tc_opp_quintile_wdl[(tc, opp_quintile)]
-        if outcome == "win":
-            tc_opp_quintile_wdl[(tc, opp_quintile)] = (ow, od, ol + 1)
-        elif outcome == "draw":
-            tc_opp_quintile_wdl[(tc, opp_quintile)] = (ow, od + 1, ol)
-        else:
-            tc_opp_quintile_wdl[(tc, opp_quintile)] = (ow + 1, od, ol)
+        tc_opp_quintile_wdl[(tc, opp_quintile)] = _bump_wdl_tuple(
+            tc_opp_quintile_wdl[(tc, opp_quintile)], outcome, invert=True
+        )
 
     return (
         dict(tc_total),
@@ -2593,43 +2585,60 @@ def _build_per_tc_bucket_stats(
     )
 
 
-def _compute_per_tc_metric_cards(
-    bucket_rows: Sequence[Row[Any] | tuple[Any, ...]],
-    *,
-    percentile_rows: Mapping[CdfMetricId, Mapping[TimeControlBucket, PercentileRow]] | None = None,
-) -> EndgameMetricsCardsResponse:
-    """Compute per-TC endgame metric cards from bucket_rows.
+def _bump_bucket_wdl(acc: "_MetricTcAccumulator", bucket: str, is_win: bool, is_draw: bool) -> None:
+    """Increment one row's total/win/draw tally on the accumulator's matching bucket fields.
 
-    Phase 97 (D-15 Sub-option A): mirrors _compute_time_pressure_cards structure.
-    Single pass through bucket_rows (extended with time_control_bucket at col 6
-    and LEAD next-eval columns at cols 7-8) grouping _MetricTcAccumulator by TC.
-
-    For each TC with total >= MIN_GAMES_PER_TC_CARD, builds one EndgameMetricsTcCard
-    with three PerTcBucketStats (conversion/parity/recovery). Card ordering follows
-    _TIME_CONTROL_ORDER (bullet -> blitz -> rapid -> classical).
-
-    Bucket classification reuses _classify_endgame_bucket (eval_cp, eval_mate,
-    user_color) with the existing conversion > recovery > parity priority from
-    _aggregate_bucket_counts. ΔES span gaps are computed from the LEAD next-eval
-    columns (cols 7-8) via _compute_span_gap — since bucket_rows has one row per
-    game, next_entry_eval columns are always NULL, so all spans are terminal and
-    use the game result as exit score.
-
-    Per-TC percentile lookup reads directly from
-    percentile_rows[metric][tc_bucket] (D-09, no _aggregate_per_tc_percentile
-    blending). T-97-03 mitigation: receives already-fetched bucket_rows scoped
-    to the authenticated user_id — never sources user_id itself.
+    Named-field version of what a `dict[bucket, WDLCounter]` would give for free — kept as
+    explicit `if`/`elif`/`else` (not `getattr`/`setattr`) since `_MetricTcAccumulator`'s
+    fields are dataclass attributes, not dict keys; a dynamic-attribute-name version would
+    trade this function's three branches for un-type-checked string-built attribute access.
     """
-    _effective_rows: Mapping[CdfMetricId, Mapping[TimeControlBucket, PercentileRow]] = (
-        percentile_rows if percentile_rows is not None else {}
-    )
+    if bucket == "conversion":
+        acc.conv_total += 1
+        if is_win:
+            acc.conv_wins += 1
+        elif is_draw:
+            acc.conv_draws += 1
+    elif bucket == "recovery":
+        acc.recov_total += 1
+        if is_win:
+            acc.recov_wins += 1
+        elif is_draw:
+            acc.recov_draws += 1
+    else:
+        acc.parity_total += 1
+        if is_win:
+            acc.parity_wins += 1
+        elif is_draw:
+            acc.parity_draws += 1
 
-    # Single pass: accumulate per-TC stats
+
+def _append_bucket_gap(acc: "_MetricTcAccumulator", bucket: str, span_gap: float) -> None:
+    """Append one row's ΔES span gap to the accumulator's matching per-bucket gap list."""
+    if bucket == "conversion":
+        acc.gaps_conv.append(span_gap)
+    elif bucket == "recovery":
+        acc.gaps_recov.append(span_gap)
+    else:
+        acc.gaps_parity.append(span_gap)
+
+
+def _accumulate_per_tc_stats(
+    bucket_rows: Sequence[Row[Any] | tuple[Any, ...]],
+) -> dict[str, "_MetricTcAccumulator"]:
+    """Single pass through bucket_rows grouping `_MetricTcAccumulator` by TC.
+
+    Column indices: game_id[0], endgame_class[1], result[2], user_color[3], eval_cp[4],
+    eval_mate[5], time_control_bucket[6], next_entry_eval_cp[7], next_entry_eval_mate[8].
+
+    Bucket classification reuses `_classify_endgame_bucket` (eval_cp, eval_mate, user_color)
+    with the existing conversion > recovery > parity priority from `_aggregate_bucket_counts`.
+    ΔES span gaps are computed from the LEAD next-eval columns (cols 7-8) via
+    `_compute_span_gap` — since bucket_rows has one row per game, next_entry_eval columns
+    are always NULL, so all spans are terminal and use the game result as exit score.
+    """
     tc_accumulators: dict[str, _MetricTcAccumulator] = {}
     for row in bucket_rows:
-        # Column indices: game_id[0], endgame_class[1], result[2], user_color[3],
-        # eval_cp[4], eval_mate[5], time_control_bucket[6],
-        # next_entry_eval_cp[7], next_entry_eval_mate[8]
         tc = row[6]
         result_str = row[2]
         user_color = row[3]
@@ -2645,27 +2654,7 @@ def _compute_per_tc_metric_cards(
 
         bucket = _classify_endgame_bucket(eval_cp, eval_mate, user_color)
         outcome = derive_user_result(result_str, user_color)
-        is_win = outcome == "win"
-        is_draw = outcome == "draw"
-
-        if bucket == "conversion":
-            acc.conv_total += 1
-            if is_win:
-                acc.conv_wins += 1
-            elif is_draw:
-                acc.conv_draws += 1
-        elif bucket == "recovery":
-            acc.recov_total += 1
-            if is_win:
-                acc.recov_wins += 1
-            elif is_draw:
-                acc.recov_draws += 1
-        else:
-            acc.parity_total += 1
-            if is_win:
-                acc.parity_wins += 1
-            elif is_draw:
-                acc.parity_draws += 1
+        _bump_bucket_wdl(acc, bucket, outcome == "win", outcome == "draw")
 
         # ΔES span gap: next_eval columns are always NULL for bucket_rows
         # (terminal span semantics), so _compute_span_gap falls back to game result.
@@ -2678,66 +2667,97 @@ def _compute_per_tc_metric_cards(
             user_color,
         )
         if span_gap is not None:
-            if bucket == "conversion":
-                acc.gaps_conv.append(span_gap)
-            elif bucket == "recovery":
-                acc.gaps_recov.append(span_gap)
-            else:
-                acc.gaps_parity.append(span_gap)
+            _append_bucket_gap(acc, bucket, span_gap)
 
-    # Build cards in fixed TC order, gating on MIN_GAMES_PER_TC_CARD
+    return tc_accumulators
+
+
+def _build_tc_metric_card(
+    tc: str,
+    acc: "_MetricTcAccumulator",
+    percentile_rows: Mapping[CdfMetricId, Mapping[TimeControlBucket, PercentileRow]],
+) -> EndgameMetricsTcCard:
+    """Build one `EndgameMetricsTcCard` from a TC's accumulator and percentile lookups.
+
+    Direct per-TC percentile lookup bypassing `_aggregate_per_tc_percentile` (D-09, D-10).
+    CdfMetricId keys use legacy inconsistent naming — preserved as-is. Phase 99: raw-rate
+    percentile rows use the same `fetch_for_user[metric][tc]` path as the gap rows; they
+    return None until Plan 05 backfills those metrics.
+    """
+    tc_literal = cast(Literal["bullet", "blitz", "rapid", "classical"], tc)
+    tc_bucket: TimeControlBucket = tc_literal
+
+    conv_row = percentile_rows.get("score_gap_conv", {}).get(tc_bucket)
+    parity_row = percentile_rows.get("score_gap_parity", {}).get(tc_bucket)
+    recov_row = percentile_rows.get("recovery_score_gap", {}).get(tc_bucket)
+
+    conv_rate_row = percentile_rows.get("conversion_rate", {}).get(tc_bucket)
+    parity_rate_row = percentile_rows.get("parity_rate", {}).get(tc_bucket)
+    recov_rate_row = percentile_rows.get("recovery_rate", {}).get(tc_bucket)
+
+    conversion_stats = _build_per_tc_bucket_stats(
+        acc,
+        "conversion",
+        acc.gaps_conv,
+        conv_row,
+        conv_rate_row,
+    )
+    parity_stats = _build_per_tc_bucket_stats(
+        acc,
+        "parity",
+        acc.gaps_parity,
+        parity_row,
+        parity_rate_row,
+    )
+    recovery_stats = _build_per_tc_bucket_stats(
+        acc,
+        "recovery",
+        acc.gaps_recov,
+        recov_row,
+        recov_rate_row,
+    )
+
+    return EndgameMetricsTcCard(
+        tc=tc_literal,
+        total=acc.total,
+        conversion=conversion_stats,
+        parity=parity_stats,
+        recovery=recovery_stats,
+    )
+
+
+def _compute_per_tc_metric_cards(
+    bucket_rows: Sequence[Row[Any] | tuple[Any, ...]],
+    *,
+    percentile_rows: Mapping[CdfMetricId, Mapping[TimeControlBucket, PercentileRow]] | None = None,
+) -> EndgameMetricsCardsResponse:
+    """Compute per-TC endgame metric cards from bucket_rows.
+
+    Phase 97 (D-15 Sub-option A): mirrors _compute_time_pressure_cards structure.
+
+    For each TC with total >= MIN_GAMES_PER_TC_CARD, builds one EndgameMetricsTcCard
+    with three PerTcBucketStats (conversion/parity/recovery). Card ordering follows
+    _TIME_CONTROL_ORDER (bullet -> blitz -> rapid -> classical).
+
+    T-97-03 mitigation: receives already-fetched bucket_rows scoped to the authenticated
+    user_id — never sources user_id itself.
+
+    Pipeline: accumulate per-TC stats (_accumulate_per_tc_stats) -> build one card per TC
+    in fixed order, gated on MIN_GAMES_PER_TC_CARD (_build_tc_metric_card) -> return.
+    """
+    effective_rows: Mapping[CdfMetricId, Mapping[TimeControlBucket, PercentileRow]] = (
+        percentile_rows if percentile_rows is not None else {}
+    )
+
+    tc_accumulators = _accumulate_per_tc_stats(bucket_rows)
+
     cards: list[EndgameMetricsTcCard] = []
     for tc in _TIME_CONTROL_ORDER:
         acc = tc_accumulators.get(tc)
         if acc is None or acc.total < MIN_GAMES_PER_TC_CARD:
             continue
+        cards.append(_build_tc_metric_card(tc, acc, effective_rows))
 
-        tc_literal = cast(Literal["bullet", "blitz", "rapid", "classical"], tc)
-        tc_bucket: TimeControlBucket = tc_literal
-
-        # Direct per-TC percentile lookup bypassing _aggregate_per_tc_percentile
-        # (D-09, D-10). CdfMetricId keys use legacy inconsistent naming — preserved as-is.
-        conv_row = _effective_rows.get("score_gap_conv", {}).get(tc_bucket)
-        parity_row = _effective_rows.get("score_gap_parity", {}).get(tc_bucket)
-        recov_row = _effective_rows.get("recovery_score_gap", {}).get(tc_bucket)
-
-        # Phase 99: raw-rate percentile rows — same fetch_for_user [metric][tc] path
-        # as the gap rows. Returns None until Plan 05 backfills these metrics.
-        conv_rate_row = _effective_rows.get("conversion_rate", {}).get(tc_bucket)
-        parity_rate_row = _effective_rows.get("parity_rate", {}).get(tc_bucket)
-        recov_rate_row = _effective_rows.get("recovery_rate", {}).get(tc_bucket)
-
-        conversion_stats = _build_per_tc_bucket_stats(
-            acc,
-            "conversion",
-            acc.gaps_conv,
-            conv_row,
-            conv_rate_row,
-        )
-        parity_stats = _build_per_tc_bucket_stats(
-            acc,
-            "parity",
-            acc.gaps_parity,
-            parity_row,
-            parity_rate_row,
-        )
-        recovery_stats = _build_per_tc_bucket_stats(
-            acc,
-            "recovery",
-            acc.gaps_recov,
-            recov_row,
-            recov_rate_row,
-        )
-
-        cards.append(
-            EndgameMetricsTcCard(
-                tc=tc_literal,
-                total=acc.total,
-                conversion=conversion_stats,
-                parity=parity_stats,
-                recovery=recovery_stats,
-            )
-        )
     return EndgameMetricsCardsResponse(cards=cards)
 
 

@@ -692,6 +692,197 @@ class TestEndgameTypeAchievableScoreGapPayload:
 
 
 # ---------------------------------------------------------------------------
+# TestGoldenUserPrompt
+# ---------------------------------------------------------------------------
+
+
+class TestGoldenUserPrompt:
+    """Byte-level oracle for `_assemble_user_prompt`'s full rendered output.
+
+    Phase 214 Plan 07: prior tests only assert on substrings of the prompt,
+    which cannot catch a reordered section, a dropped blank line, or a
+    filter stage applied one position too early/late. This golden closes
+    that gap with whole-string equality against a file captured from
+    pre-refactor code (before `_apply_a2_filter` and its siblings were
+    extracted from `_assemble_user_prompt`/`_retained_series_for_summary`/
+    `_render_series_block`/`_render_subsection_block`).
+
+    Fixture design (deliberately reuses the same `SubsectionFinding` /
+    `TimePoint` / `_sample_filter_context` / `EndgamePerformanceResponse`
+    constructors every other test in this module uses -- no new fixture
+    abstraction is introduced):
+    - `endgame_elo_timeline` / `endgame_elo_gap`: an `all_time` series of 50
+      deterministic monthly points (2022-01 .. 2026-02) -- deliberately more
+      than `_ALL_TIME_MAX_POINTS` (36), so the C6 tail-cap has real points to
+      drop (proven by the mutation test in Task 3's SUMMARY) -- plus a
+      `last_3mo` counterpart for the same (metric, subsection) pair, which
+      exercises C5 (the last_3mo `[series ...]` block is skipped because the
+      all_time series for the same pair is retained) and the
+      `_render_endgame_elo_summary_block` / `_render_non_endgame_elo_summary_block`
+      dedup target (both fire together whenever subsection_id ==
+      "endgame_elo_timeline" and metric == "endgame_elo_gap").
+    - `score_timeline` / `score_gap`: a second subsection with its own short
+      (4-point) all_time series and a zone-bounded band.
+    - `endgame_type_blitz` / `endgame_type_achievable_score_gap`: the
+      zone-bounded per-class metric (same values as
+      `TestEndgameTypeAchievableScoreGapPayload.test_gap_renders_summary_block_full_cohort`),
+      exercising `_format_zone_bounds`'s per-class-TC dispatch.
+    - `overall_performance`: feeds the `## Chart: overall_wdl` block and the
+      `## Payload summary` total-games line.
+
+    Determinism: `as_of` is a fixed `datetime.datetime`, and every series
+    point's `bucket_start` is a fixed string -- no `datetime.now()`/`.today()`
+    read inside the fixture itself. `_assemble_user_prompt` does read
+    `datetime.date.today()` once (for the C2 90-day `all_time_cutoff`), but
+    every fixture point in the 50-point all_time series predates 2026-02-01,
+    so as long as the suite runs on or after 2026-05-02 (today - 90d >
+    2026-02-01) the C2 cutoff comparison's outcome (0 points trimmed) cannot
+    change -- verified deterministic by running this test twice in the same
+    session (`_build_golden_findings()` called twice, prompts compared byte
+    for byte) before the golden file was captured.
+    """
+
+    def _build_golden_findings(self) -> EndgameTabFindings:
+        from typing import cast
+
+        from app.schemas.endgames import EndgamePerformanceResponse, EndgameWDLSummary
+        from app.schemas.insights import MetricId, SampleQuality, SubsectionId, Zone
+
+        filters = _sample_filter_context()
+
+        elo_all_time_series = [
+            TimePoint(
+                bucket_start=f"{2022 + (i // 12)}-{(i % 12) + 1:02d}-01",
+                value=40.0 + i,
+                n=15,
+                actual_elo=1400 + i,
+                non_endgame_elo=1420 + i,
+            )
+            for i in range(50)
+        ]
+        elo_last_3mo_series = [
+            TimePoint(
+                bucket_start=f"2026-01-{day:02d}",
+                value=88.0,
+                n=12,
+                actual_elo=1600,
+                non_endgame_elo=1620,
+            )
+            for day in (5, 12, 19, 26)
+        ]
+        elo_all_time = SubsectionFinding(
+            subsection_id=cast(SubsectionId, "endgame_elo_timeline"),
+            parent_subsection_id=None,
+            window="all_time",
+            metric=cast(MetricId, "endgame_elo_gap"),
+            value=89.0,
+            zone=cast(Zone, "typical"),
+            trend="n_a",
+            weekly_points_in_window=0,
+            sample_size=200,
+            sample_quality=cast(SampleQuality, "rich"),
+            is_headline_eligible=True,
+            dimension={"platform": "chess.com", "time_control": "blitz"},
+            series=elo_all_time_series,
+        )
+        elo_last_3mo = SubsectionFinding(
+            subsection_id=cast(SubsectionId, "endgame_elo_timeline"),
+            parent_subsection_id=None,
+            window="last_3mo",
+            metric=cast(MetricId, "endgame_elo_gap"),
+            value=88.0,
+            zone=cast(Zone, "typical"),
+            trend="n_a",
+            weekly_points_in_window=0,
+            sample_size=12,
+            sample_quality=cast(SampleQuality, "rich"),
+            is_headline_eligible=True,
+            dimension={"platform": "chess.com", "time_control": "blitz"},
+            series=elo_last_3mo_series,
+        )
+        gap_finding = SubsectionFinding(
+            subsection_id=cast(SubsectionId, "endgame_type_blitz"),
+            parent_subsection_id=None,
+            window="all_time",
+            metric=cast(MetricId, "endgame_type_achievable_score_gap"),
+            value=0.07,
+            zone=cast(Zone, "strong"),
+            trend="n_a",
+            weekly_points_in_window=0,
+            sample_size=30,
+            sample_quality=cast(SampleQuality, "rich"),
+            is_headline_eligible=True,
+            dimension={"endgame_class": "rook", "time_control": "blitz"},
+            series=None,
+        )
+        score_timeline_series = [
+            TimePoint(bucket_start=f"2026-01-{week:02d}", value=-0.05, n=50)
+            for week in (5, 12, 19, 26)
+        ]
+        score_gap_finding = SubsectionFinding(
+            subsection_id=cast(SubsectionId, "score_timeline"),
+            parent_subsection_id=None,
+            window="all_time",
+            metric=cast(MetricId, "score_gap"),
+            value=-0.05,
+            zone=cast(Zone, "typical"),
+            trend="n_a",
+            weekly_points_in_window=0,
+            sample_size=200,
+            sample_quality=cast(SampleQuality, "rich"),
+            is_headline_eligible=True,
+            dimension={"part": "endgame"},
+            series=score_timeline_series,
+        )
+
+        overall_performance = EndgamePerformanceResponse(
+            endgame_wdl=EndgameWDLSummary(
+                wins=120,
+                draws=40,
+                losses=80,
+                total=240,
+                win_pct=50.0,
+                draw_pct=16.7,
+                loss_pct=33.3,
+            ),
+            non_endgame_wdl=EndgameWDLSummary(
+                wins=300,
+                draws=50,
+                losses=350,
+                total=700,
+                win_pct=42.9,
+                draw_pct=7.1,
+                loss_pct=50.0,
+            ),
+            endgame_win_rate=50.0,
+        )
+
+        return EndgameTabFindings(
+            as_of=datetime.datetime(2026, 2, 1, tzinfo=datetime.UTC),
+            filters=filters,
+            findings=[elo_all_time, elo_last_3mo, gap_finding, score_gap_finding],
+            overall_performance=overall_performance,
+            findings_hash="c" * 64,
+        )
+
+    def test_golden_user_prompt_matches_committed_file(self) -> None:
+        """Whole-string equality against `tests/services/golden/insights_user_prompt.txt`.
+
+        The golden was captured from pre-refactor code (before
+        `_apply_a2_filter`/`_apply_c2_filter`/`_apply_c3_filter`/`_apply_c5_filter`/
+        `_apply_c6_filter` existed) and is never regenerated to match a
+        post-refactor output -- if this fails, the split changed the emitted
+        prompt and the split (not the golden) must be fixed.
+        """
+        from pathlib import Path
+
+        golden_path = Path(__file__).resolve().parent / "golden" / "insights_user_prompt.txt"
+        expected = golden_path.read_text(encoding="utf-8")
+        actual = _assemble_user_prompt(self._build_golden_findings())
+        assert actual == expected
+
+
+# ---------------------------------------------------------------------------
 # TestPromptAssembly
 # ---------------------------------------------------------------------------
 

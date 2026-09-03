@@ -14,6 +14,9 @@ Scripts, database access, and the dev clock. The root `CLAUDE.md` keeps only the
 - **`scripts/gen_*.py`** (e.g. `gen_endgame_zones_ts.py`, `gen_flaw_thresholds_ts.py`) — regenerate committed `frontend/src/generated/*` files from Python sources. CI fails on drift, so re-run after editing the source registry.
 - **`scripts/backfill_*.py`** — most take `--db dev|benchmark|prod` and `--user-id`; `--db prod` requires `prod_db_tunnel.sh`.
 - **`scripts/reset_train_state.py`** — wipes one user's Train/drill state (items, sessions, solves, streak snapshot) so a schedule test starts clean. Refuses `--db prod`. Pairs with the dev clock below.
+- **`scripts/check_function_size.py`** — AST nesting-depth + logic-LOC gate (no ruff stable rule covers nesting depth; ruff's preview-only `PLR1702` was rejected because `--preview` expands the effective rule set from ~5 rules to 914). `uv run python scripts/check_function_size.py app/ --fail-over-depth 4 --fail-over-loc 200`; `--json` for machine-readable output. A function whose LOC is inflated by a large literal (config dict, lookup table) can be exempted from the LOC threshold only — never depth — with a `# check-function-size: allow-loc <reason>` pragma on the line immediately above its `def`.
+- **Ruff complexity rules** — `C901` (mccabe, `max-complexity = 15`), `PLR0912` (too-many-branches, `max-branches = 12`), `PLR0915` (too-many-statements, `max-statements = 100`) are enabled project-wide in `[tool.ruff.lint]`. Every pre-existing breach is baselined in `[tool.ruff.lint.per-file-ignores]`; a file's entry is deleted once its complexity is fixed — `uv run ruff check .` must stay green.
+- **`complexipy`** — Sonar cognitive-complexity metric (nesting-weighted, matches CLAUDE.md's ≤15 target). `uv run complexipy app/ --max-complexity-allowed 15 --failed --sort desc` for a report; not gated in CI (many pre-existing breaches remain outside Phase 214's six files).
 
 ## Database access (MCP)
 

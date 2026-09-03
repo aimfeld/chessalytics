@@ -2,18 +2,17 @@
 gsd_state_version: 1.0
 milestone: v2.13
 current_phase: 214
-current_phase_name: Backend God-File Decomposition
 status: completed
-stopped_at: Phase 213 complete — all phases complete
-last_updated: "2026-09-02T19:14:27.537Z"
-last_activity: 2026-09-02
-last_activity_desc: "Quick task 260831-s4y complete: fast-forward button on the analysis board (UAT approved)"
-state_head: 3c3bef49a1f726d7ebe4151c5c8d40f4ea010e06
+stopped_at: Phase 214 complete — all phases complete
+last_updated: "2026-09-03T04:59:07.247Z"
+last_activity: 2026-09-03
+last_activity_desc: Phase 214 complete
+state_head: e4973cba50312c355e3b364f4b0bf34374c0413f
 progress:
   total_phases: 2
-  completed_phases: 1
+  completed_phases: 2
   total_plans: 31
-  completed_plans: 21
+  completed_plans: 29
 milestone_name: Ways In & Honest Answers
 ---
 
@@ -21,9 +20,19 @@ milestone_name: Ways In & Honest Answers
 
 ## Current Position
 
-Phase: 214 (Backend God-File Decomposition) — READY TO EXECUTE
-Plans: 0 of 8 complete (wave 1 tooling, wave 2 six file plans, wave 3 closeout)
-Status: Ready to execute (planned 2026-09-02; plan-checker passed with one warning, fixed)
+Phase: 214
+Plans: 8 of 8 complete (wave 1 tooling done: 214-01; wave 2 tactic_detector.py split done: 214-02; wave 2 endgame_service.py aggregation split done: 214-03; wave 2 library_repository.py flaw-filter split done: 214-04; wave 2 eval_apply.py transactional pipeline split done: 214-05; wave 2 train_repository.py session-composition split done: 214-06; wave 2 insights_llm.py prompt-assembler split + golden test done: 214-07; wave 2 complete; wave 3 closeout done: 214-08 — phase-wide five-criteria after-baseline measured and recorded, CONCERNS.md "Large God files" entry narrowed to the four frontend files)
+Status: All phases complete
+
+**Phase 214 is COMPLETE as of 2026-09-03** (8/8 plans, verification 9/9 passed, full backend
+suite 4497 passed / 19 skipped, ruff/ty/format clean). All six in-scope backend files lost their
+`per-file-ignores` entries; `check_function_size.py` reports zero breaches across them (283
+functions); complexipy app-wide 97 -> 89; `tests/` diff additions-only; CONCERNS.md "Large God
+files" now lists only the four frontend files. Ran sequentially on the main tree (all wave-2
+plans share one `pyproject.toml` line); 214-05 was interrupted by a session usage limit after
+Task 1 and completed by a continuation executor. Phase branch
+`gsd/phase-214-backend-god-file-decomposition` NOT yet squash-merged to `main` (run the full
+pre-merge gate, add a CHANGELOG bullet under Unreleased, then squash-merge).
 
 **Phase 213 is COMPLETE as of 2026-08-29** (12/12 plans, UAT 34 passed / 0 issues,
 verification 39/39). The cold-start UX shipped through five UAT-driven gap-closure
@@ -118,7 +127,7 @@ Cloudflare nameservers, `maia3_simplified.onnx` and `stockfish-18-lite-single.wa
 return `cf-cache-status: HIT` while still carrying the origin's `max-age=2592000`, and
 `maia-worker.js` still returns `cache-control: no-cache`.
 
-Last activity: 2026-09-02 - Completed quick task 260902-rmn: audited 69 uncaptured except blocks in app/services + app/routers; 7 genuine silent-swallow sites (Stockfish respawn/crash, stored-PGN parse at 4 eval sites, played-move SAN) now capture to Sentry with source tag + context; 62 others are expected conditions and unchanged
+Last activity: 2026-09-03 — Phase 214 complete
 
 Prior: Phase 213 complete
 `games.initial_fen` added and backfilled in-migration, the opening-transition sample
@@ -141,9 +150,9 @@ Both deployed to production via releases #295 and #296; `main` and `origin/produ
 
 ## Project Reference
 
-See: .planning/PROJECT.md (updated 2026-08-29 after Phase 213)
+See: .planning/PROJECT.md (updated 2026-09-03 after Phase 214)
 Core value: Position-precise WDL across openings + endgames + time pressure on top of users' actual chess.com / lichess games, with personalized LLM commentary and an auto-generated opening-strengths/weaknesses report.
-Current focus: **Milestone v2.13 (Ways In & Honest Answers) 100% complete 2026-08-29 — Phases 212 and 213 both done. Next: squash-merge `gsd/phase-213-*` to `main` (full pre-merge gate), then close the milestone.** Previously: v2.12 closed Train's two silent-failure surfaces: push reminders that fail to arrive now recover themselves (device re-sync without spending the one-shot permission, local-day-bounded TTL, VAPID mismatch repair on gesture, claim released on a no-delivery fan-out — Phase 204, SEED-135), and a Train puzzle can no longer contradict itself (free-play root ply graded from the mount search's own ranks, plus a dead band excluding items whose top-two margin sits inside browser-search noise at a measured 34.80% pool cost — Phase 205, SEED-137). Still open and carried forward: SEED-136 (verify the iOS push path on real hardware — no iPhone available, BrowserStack unused), SEED-138 (push-prune log noise + Sentry scope bleed), SEED-130 (uncleared browser Stockfish TT, the reason the dead band is 0.05 wide).
+Current focus: **Phase 214 (Backend God-File Decomposition) complete 2026-09-03 on its phase branch. Next: squash-merge `gsd/phase-214-backend-god-file-decomposition` to `main` (full pre-merge gate + CHANGELOG bullet); no open milestone — `/gsd-new-milestone` or the frontend god-file follow-up phase.** Before that: Milestone v2.13 (Ways In & Honest Answers) 100% complete 2026-08-29 — Phases 212 and 213 both done; squash-merge `gsd/phase-213-*` to `main` (full pre-merge gate), then close the milestone. Previously: v2.12 closed Train's two silent-failure surfaces: push reminders that fail to arrive now recover themselves (device re-sync without spending the one-shot permission, local-day-bounded TTL, VAPID mismatch repair on gesture, claim released on a no-delivery fan-out — Phase 204, SEED-135), and a Train puzzle can no longer contradict itself (free-play root ply graded from the mount search's own ranks, plus a dead band excluding items whose top-two margin sits inside browser-search noise at a measured 34.80% pool cost — Phase 205, SEED-137). Still open and carried forward: SEED-136 (verify the iOS push path on real hardware — no iPhone available, BrowserStack unused), SEED-138 (push-prune log noise + Sentry scope bleed), SEED-130 (uncleared browser Stockfish TT, the reason the dead band is 0.05 wide).
 
 ### Superseded: focus after the v2.11 close
 
@@ -297,6 +306,11 @@ v1.29 Live-Engine Analysis Page shipped 2026-06-29 — 5 phases (136–140), 14 
 
 (Cleared at v1.31 close — full log in `.planning/PROJECT.md` Key Decisions + the milestone archives.)
 
+- [Phase 214-01]: ruff `C901`/`PLR0912`/`PLR0915` enabled with a repo-wide `per-file-ignores` baseline (52 findings / 24 files, not the plan's app-only 35 / 14, because the gate is `ruff check .`); ruff `--preview` rejected; nesting depth gated by the stdlib-AST `scripts/check_function_size.py` (`allow-loc` pragma is LOC-only, never depth); complexipy reports, does not gate.
+- [Phase 214-03]: `track_eval_and_played_at` flag on the shared endgame accumulator exists to PRESERVE pre-split output on `categories_by_tc` (API-serialized fields stay at schema defaults); the per-TC path keeps its own row-shape dispatch because its tuple fixtures put `time_control_bucket` where the pooled path expects `next_entry_eval_cp`.
+- [Phase 214-04]: `fetch_flaw_comparison` carries a reasoned `# check-function-size: allow-loc` pragma instead of a split (one 284-line `select()`, no ruff rule fires).
+- [Phase 214-07]: byte-level golden of the LLM user prompt captured BEFORE the split is the oracle; the plan's C4 filter stage was already-retired dead code and is documented as such, not fabricated.
+- [Phase 214]: no in-scope helper moved to a sibling module (module-attribute patches in four files' tests would silently stop applying); every extracted seam mutation-proven.
 - [Phase 194-02]: ABORT-02 needed zero production edit to `useBotGame.ts` — all four abort sites already aborted the right controller, and that signal already flowed through `createDeadlineSearch`; Task 1's wiring of the signal into `providers.grade` alone closed the gap. Proven by an empty `git diff --stat` on the hook plus four integration cases, rather than by adding `pool.stopAll()` calls the requirement explicitly prohibited.
 - [Phase 194-04]: `vi.spyOn(moduleNamespace, 'fn')` does not intercept a same-module function's internal self-call in this Vite/Vitest setup (verified empirically on a scratch module before writing production code). Non-invocation of the lazy `modalPath` builder is proven through a `modalPathBuilder = { build }` indirection object, whose late-bound property lookup IS spy-able.
 - [Phase 194-04]: The RankedLine spread audit was done by TYPE, not by the plan's literal grep — which cannot return zero because it matches its own required explanatory comment and two unrelated `line` variables. The type-based pass found a second real spread (`Analysis.tsx`, split across two source lines and therefore invisible to a line-based grep) that would have silently defeated JANK-03.
@@ -767,6 +781,14 @@ v1.29 Live-Engine Analysis Page shipped 2026-06-29 — 5 phases (136–140), 14 
 - [Phase ?]: 211-02: cap-dependent tests recast onto the herring budget — soft's true alternative bound is one (the blob's single su)
 - [Phase 211]: D-01 amended (operator, 211-03 Task 3 round 2): soft puzzles serve [deep best (quality 'best'), second-best su] best-first from game_positions.best_move — the 'several fine moves' copy is always backed by displayable evidence; D-04 intact (no blob/worker change)
 - [Phase 211]: Free-play root-ply precedence (D-06, 211-03): terminal > engine-is-best > served-key quality > engine ES classification — a key move's badge is the server tier, never re-derived from mixed-source evals; soft arrow cap stays 1 (best-first order, test-pinned); played deep best records tier 'good' (D-07, no 'best' tier in the score ladder) with a drop-0 graded-ES pair
+- [Phase 214]: 214-01: baselined 17 additional out-of-app/ ruff findings (alembic/, analysis/, scripts/) beyond the plan's app/-scoped measurement — ruff check . scans the whole repo, not just app/; the plan's 35-finding measurement missed 17 findings across 10 other files needed to keep the gate green project-wide (full baseline: 52 findings, 24 files)
+- [Phase 214]: 214-02: one extracted predicate for detect_clearance's branch reduction (conditions 3-5), not five one-line helpers -- matches the source's own comment grouping and the plan's anti-over-split guidance. — Conditions 3-5 were already comment-grouped in the source as requiring the prior pov move; extracting exactly that group dropped PLR0912 from 13 to well under 12 in one move without violating CLAUDE.md's split-to-fit-a-signature prohibition.
+- [Phase 214]: 214-03: track_eval_and_played_at flag on the shared _accumulate_endgame_rows gates eval-mean/last_played_at accumulation for the per-TC-breakdown caller — without it the shared _build_category_stats would have populated avg_eval_pawns/last_played_at on categories_by_tc (a directly-serialized API field) where the pre-split code always left them at schema defaults, a silent API behavior change the test suite wouldn't have caught on its own. _aggregate_endgame_stats_by_tc also keeps its own row-shape dispatch rather than reusing _normalize_endgame_row, since its tuple test fixtures embed time_control_bucket at a different index than the pooled path's fixtures use for next_entry_eval_cp/mate.
+- [Phase 214]: 214-04: build_flaw_filter_clauses split via exactly one extraction (_build_tactic_clause for the ~30-line tactic block); the four smaller severity/tempo/opportunity/impact/phase blocks (3-8 lines each) stay inline — extracting them would have produced five near-trivial single-caller helpers, the "split to fit a signature" anti-pattern CLAUDE.md forbids. fetch_flaw_comparison (243 logic LOC, one select() with ~30 labelled columns) got a `# check-function-size: allow-loc` pragma instead of a split, citing PLR0915 not firing as the tie-breaker evidence that the length is literal-heavy, not logic-heavy.
+- [Phase 214]: 214-05: _classify_and_fill_oracle's three early-return guards preserved across the split as sentinel-return checks (None / "reason" in result / False) against each stage helper's return value rather than inline conditions — existing_plies/already_blobbed_plies are read in the orchestrator itself, before calling _diff_upsert_flaw_rows, so the read-before-delete ordering hazard survives the function boundary. _build_best_move_candidates' five stages use plain arguments (no context dataclass, up to 10 params on the row-assembly stage) per the plan's explicit prohibition. Interrupted by a rate limit after Task 1; continuation executor re-verified Task 1's committed extraction before resuming Tasks 2-3.
+- [Phase 214]: 214-06: compose_and_materialize_session split into _resolve_existing_session / _assemble_session_items / _materialize_session_rows; the D-06/D-07 warm-up discriminant stayed inside _assemble_session_items (computed right after the D-09 shuffle, where it always was) rather than moving to materialize or the orchestrator, since it depends on surviving_sr_keys which only exists post-shuffle. Two-way mutation proof (RESEARCH's thin-test-seam flag for this file, zero private helpers imported by name in tests): stubbing _assemble_session_items empty failed 45/223 tests, stubbing _resolve_existing_session to always return None failed 8/223 — both genuinely covered, no test additions needed.
+- [Phase 214]: 214-07: added a byte-level golden-prompt test (tests/services/golden/insights_user_prompt.txt) as the split oracle for _assemble_user_prompt, first use of this pattern in the phase. Discovered the plan's Task 2 literally required five named filter helpers (_apply_c2_filter..._apply_c6_filter) "called from _assemble_user_prompt" — but only A2 is actually inline there; C2/C6 live in _retained_series_for_summary, C3 in _render_series_block, C5 in _render_subsection_block's raw-series loop, and C4 ("drop overall subsection when overall_wdl renders") is dead code — the scalar overall subsection was already retired from _SECTION_LAYOUT in a prior Phase 102 UAT pass. Extracted each real stage at its actual call site instead of hoisting deep per-row logic into the orchestrator; documented C4 as retired rather than faking a no-op. _assemble_user_prompt's real depth-5/PLR0912 source was the _SECTION_LAYOUT render loop's nested dispatch, not the filter chain — fixed via _render_layout_item + two extracted prep loops. Deduplicating the two near-identical ELO summary renderers didn't clear C901 by itself (ruff scores a nested closure's branches into the enclosing function) — had to also hoist the per-window closure to module level. Mutation proof: stubbing _apply_c6_filter to skip its cap turned both the golden test and a pre-existing test red.
+- [Phase 214]: 214-08 (wave 3 closeout, final plan): measured all five ROADMAP success criteria against the merged trunk — ruff clean project-wide (52→31 whole-repo ignore-emptied findings, zero from the six in-scope files), complexipy app-wide 97→89, all six in-scope files individually zero-breach on check_function_size.py, full pre-merge gate green (4497 passed/19 skipped), tests/ diff additions-only, zero new `# ty: ignore`. Narrowed CONCERNS.md "Large God files" to the four frontend files with a Phase 214 history line. Found the plan's own Task 1 acceptance-criteria command (check_function_size.py scoped to app/services+app/repositories broadly, not just the six files) fails on 6 pre-existing out-of-scope depth breaches — a plan-authoring scope mismatch against the ROADMAP criterion, which the six files satisfy individually; did not patch out-of-scope files (forbidden by this plan). Also corrected the orchestrator's pre-supplied "three out-of-scope breaches" claim to the actually-measured six.
 
 ### Pending Todos
 
@@ -774,6 +796,8 @@ None active.
 
 ### Blockers/Concerns
 
+- [Phase 214 review, 214-REVIEW.md] Two BLOCKER findings in the new `scripts/check_function_size.py` gate, neither flipping a verdict for the six in-scope files but both load-bearing for the tool going forward: CR-01 `_depth_of_try` undercounts depth by one when a block sits directly inside a `try` body/handler (false negative; reproduced: `try` + four nested `if`s passes `--fail-over-depth 4`), and CR-02 `logic_loc` counts multi-line signature continuation lines as body (overcounts 201/283 functions, conservative direction). Fix via `/gsd-code-review 214 --fix` before the squash-merge to `main`.
+- [Phase 214] `check_function_size.py` over all of `app/` still reports six pre-existing out-of-scope depth breaches (`lichess_client.py` `fetch_lichess_games` depth 6, `openings_service.py` `get_time_series`, `user_benchmark_percentiles_service.py` `compute_stage_b`, `chesscom_client.py:375`, `import_service.py:1010`, `library_service.py:478`) and 31 baselined ruff complexity findings remain outside the six files; the script gates per file, not app-wide. The four frontend god files (`Analysis.tsx` 4,370, `useBotGame.ts`, `workerPool.ts`, `Openings.tsx`) are untouched and need their own phase with eslint `complexity`/`max-depth`.
 - active. (v1.31 and v1.32 are both deployed to production.)
 - [Phase 194] CACHE-01's "a 400-node search evicts none of its own working set" remains inferred, not measured — `GRADE_CACHE_MAX = 1024` against a 352-386 distinct-FEN ceiling measured *before* the change. Accepted as an acknowledged gap at UAT (2026-07-30); risk is extra Stockfish grading work, not wrong results. Closeable cheaply by counting distinct FENs reaching `providers.grade` in a 400-node run through the existing `mctsSearch` test harness. Worth doing if Phase 196's cache-replay design ends up depending on residency.
 
@@ -914,9 +938,9 @@ Items acknowledged and deferred at **v1.29 milestone close on 2026-06-29** (user
 
 ## Session Continuity
 
-**Stopped at:** Phase 213 complete — all phases of milestone v2.13 complete, ready to close milestone
+**Stopped at:** Phase 214 complete — all phases complete
 
-**Last session:** 2026-08-29
+**Last session:** 2026-09-03T04:46:23.000Z
 
 **Resume file:** None
 
@@ -1059,6 +1083,14 @@ Items acknowledged and deferred at **v1.29 milestone close on 2026-06-29** (user
 | Phase 211 P01 | 22 min | 3 tasks | 12 files |
 | Phase 211 P02 | 19 min | 3 tasks | 8 files |
 | Phase 211 P03 | 105 min | 3 tasks | 15 files |
+| Phase 214 P01 | 55min | 3 tasks | 6 files |
+| Phase 214 P02 | 15min | 3 tasks | 2 files |
+| Phase 214 P03 | 38min | 3 tasks | 2 files |
+| Phase 214 P04 | 20min | 2 tasks | 2 files |
+| Phase 214 P05 | ~75min (55min Task 1 prior session + ~20min Tasks 2-3 continuation) | 3 tasks | 2 files |
+| Phase 214 P06 | 20min | 3 tasks | 2 files |
+| Phase 214 P07 | ~50min | 3 tasks | 4 files |
+| Phase 214 P08 | ~25min | 2 tasks | 1 files |
 
 ## Performance Metrics
 

@@ -1965,6 +1965,23 @@ def detect_self_interference(
     return False, None, 0, None
 
 
+def _clearance_prior_move_is_valid(prev_move: chess.Move, move: chess.Move) -> bool:
+    """Conditions 3-5: the prior pov move must be eligible to have set up this clearance.
+
+    Not a promotion, and its destination square doesn't collide with either endpoint
+    of the clearing move (which would mean the prior move already occupied the
+    clearance target or origin, breaking the "square vacated -> another piece uses
+    it" geometry this motif requires).
+    """
+    if prev_move.promotion is not None:
+        return False
+    if prev_move.to_square == move.from_square:
+        return False
+    if prev_move.to_square == move.to_square:
+        return False
+    return True
+
+
 def detect_clearance(
     boards: list[chess.Board], moves: list[chess.Move], pov: chess.Color
 ) -> tuple[bool, None, int, int | None]:
@@ -2005,19 +2022,10 @@ def detect_clearance(
         if moved_piece.piece_type not in _RAY_PIECES:
             continue
 
-        # Conditions 3-5 require the prior pov move.
+        # Conditions 3-5 require the prior pov move: not a promotion, and its
+        # destination doesn't collide with either endpoint of the clearing move.
         prev_move = moves[k - 2]
-
-        # Condition 3: prior pov move was NOT a promotion.
-        if prev_move.promotion is not None:
-            continue
-
-        # Condition 4: prior pov move did not land on the square we clear FROM.
-        if prev_move.to_square == move.from_square:
-            continue
-
-        # Condition 5: prior pov move did not land on the square we clear TO.
-        if prev_move.to_square == move.to_square:
+        if not _clearance_prior_move_is_valid(prev_move, move):
             continue
 
         # Condition 6: the opponent was NOT in check before pov's clearing move.
@@ -2410,114 +2418,85 @@ _MOVE_TYPE_DETECTOR_FNS: dict[TacticMotif, _BoolPieceFn] = {
 }
 
 
-def detect_tactic_motif(
-    board_after_flaw: chess.Board,
-    pv_str: str,
-    has_forced_mate: bool = False,
-) -> tuple[int | None, int | None, int | None, int | None]:
-    """Detect the highest-priority tactic motif from the refutation PV (D-07/D-02).
+def _dispatch_mate_tier(
+    boards: list[chess.Board],
+    moves: list[chess.Move],
+    pov: chess.Color,
+    has_forced_mate: bool,
+) -> tuple[int, int | None, int, int | None] | None:
+    """Tier 1: mate subtypes (D-03 dominance -- always checked first, always wins).
 
-    Args:
-        board_after_flaw: Position immediately after the flawed move was played.
-                          board_after_flaw.turn is the refuting side (pov).
-        pv_str: Space-joined UCI refutation line from game_positions.pv.
-        has_forced_mate: When True, the mate branch runs even when boards[-1].is_checkmate()
-                         is False. Required when Stockfish reports a mate-in-N score but the
-                         PV is truncated at PV_CAP_PLIES (~12) so the final board is not yet
-                         checkmate. The stored Stockfish score (eval_mate) is the authoritative
-                         gate (D-06); is_checkmate() is preserved as the fast path when the
-                         PV is short enough to show the final mating position.
+    Mates never enter the non-mate candidate pool (Tiers 2-5); this tier
+    short-circuits `detect_tactic_motif` immediately when it fires.
 
     Returns:
-        (tactic_motif_int, tactic_piece, tactic_confidence, tactic_depth) where:
-        - tactic_motif_int: TacticMotifInt value or None if no detector fired.
-        - tactic_piece: chess.PieceType int (1-6) or None (per-motif semantic D-12).
-        - tactic_confidence: 0-100 or None when tactic_motif_int is None.
-        - tactic_depth: raw half-move ply index from flaw_ply+1 (D-04), or None.
-          Caveat (Phase 148 truncated-mate fallback): when `has_forced_mate=True` and
-          the PV was capped before reaching mate, this is the last-displayed-ply
-          approximation (len(moves)-1), not the true (unknown) mating ply — so it is
-          systematically shallower than a fully-resolved mate's depth.
-
-    Dispatch strategy (D-02): mates (Tier 1) short-circuit and always win (D-03/D-07).
-    All non-mate detectors run and collect firings; the SHALLOWEST motif wins (depth primary,
-    D-05); equal depth breaks by priority tier/rank so exactly one motif is returned.
-    Hanging-piece (Tier 4, depth 0) beats a fork (Tier 2, depth 2) because depth dominates.
-
-    Safe: malformed/None/empty pv_str returns (None, None, None, None) without raising.
+        (tactic_motif_int, tactic_piece, tactic_confidence, tactic_depth) when a mate
+        subtype fires, or None when mate detection is ineligible (D-06) or no mate
+        detector fires -- signalling the caller to fall through to the non-mate tiers.
     """
-    # Guard: T-124-03 / T-127-01 — malformed or empty PV must never raise (threat register)
-    if not pv_str:
-        return None, None, None, None
-
-    try:
-        boards, moves = _parse_pv(board_after_flaw, pv_str)
-    except ValueError:
-        return None, None, None, None
-
-    if not moves:
-        return None, None, None, None
-
-    pov = board_after_flaw.turn
-
     # D-06: mate branch eligibility. boards[-1].is_checkmate() is the fast path for
     # complete PVs; has_forced_mate=True is the fallback for Stockfish-reported mates
     # whose PV is truncated before the mating position.
-    _can_run_mate = boards[-1].is_checkmate() or has_forced_mate
+    if not (boards[-1].is_checkmate() or has_forced_mate):
+        return None
 
-    # --- Tier 1: mate subtypes (D-03 dominance — always checked first, always wins) ---
-    # Mates never enter the candidate pool; they short-circuit the dispatcher immediately.
+    # Named-mate subtypes in priority order (A3)
+    for motif_str, motif_int in _NAMED_MATE_REGISTRY:
+        fn = _NAMED_MATE_DETECTOR_FNS[motif_str]
+        fired, piece, depth = fn(boards, moves, pov)
+        if fired:
+            return int(motif_int), piece, TACTIC_CONFIDENCE_HIGH, depth
 
-    if _can_run_mate:
-        # Named-mate subtypes in priority order (A3)
-        for motif_str, motif_int in _NAMED_MATE_REGISTRY:
-            fn = _NAMED_MATE_DETECTOR_FNS[motif_str]
-            fired, piece, depth = fn(boards, moves, pov)
-            if fired:
-                return int(motif_int), piece, TACTIC_CONFIDENCE_HIGH, depth
+    # Special: boden / double-bishop (returns motif string or None)
+    boden_motif, boden_piece, boden_depth = detect_boden_or_double_bishop_mate(boards, moves, pov)
+    if boden_motif is not None:
+        return _MOTIF_TO_INT[boden_motif], boden_piece, TACTIC_CONFIDENCE_HIGH, boden_depth
 
-        # Special: boden / double-bishop (returns motif string or None)
-        boden_motif, boden_piece, boden_depth = detect_boden_or_double_bishop_mate(
-            boards, moves, pov
-        )
-        if boden_motif is not None:
-            return _MOTIF_TO_INT[boden_motif], boden_piece, TACTIC_CONFIDENCE_HIGH, boden_depth
+    # Back-rank mate (before generic mate)
+    br_fired, br_piece, br_depth = detect_back_rank_mate(boards, moves, pov)
+    if br_fired:
+        return TacticMotifInt.BACK_RANK_MATE, br_piece, TACTIC_CONFIDENCE_HIGH, br_depth
 
-        # Back-rank mate (before generic mate)
-        br_fired, br_piece, br_depth = detect_back_rank_mate(boards, moves, pov)
-        if br_fired:
-            return TacticMotifInt.BACK_RANK_MATE, br_piece, TACTIC_CONFIDENCE_HIGH, br_depth
+    # Generic mate (catch-all for any checkmate)
+    gm_fired, gm_piece, gm_depth = detect_generic_mate(boards, moves, pov)
+    if gm_fired:
+        return TacticMotifInt.MATE, gm_piece, TACTIC_CONFIDENCE_HIGH, gm_depth
 
-        # Generic mate (catch-all for any checkmate)
-        gm_fired, gm_piece, gm_depth = detect_generic_mate(boards, moves, pov)
-        if gm_fired:
-            return TacticMotifInt.MATE, gm_piece, TACTIC_CONFIDENCE_HIGH, gm_depth
+    # BUGFIX (Phase 148, D-01): has_forced_mate=True means Stockfish reported a
+    # genuine eval_mate score, but every per-detector mate function above (and
+    # detect_generic_mate) bails out via `if not boards[-1].is_checkmate()` when
+    # the PV is capped at PV_CAP_PLIES (engine.py) before reaching the mating
+    # position — so a real, deep forced mate previously fell through to Tier 2+
+    # untagged (no-op). Named-mate geometry cannot be verified on a truncated
+    # line, so tag the generic fallback only — do NOT suppress a real mate.
+    # `moves` is guaranteed non-empty here (checked by the caller before this
+    # function is invoked).
+    if has_forced_mate and not boards[-1].is_checkmate():
+        _fallback_depth = len(moves) - 1
+        _fallback_piece: int | None = None
+        _last = boards[-1].piece_at(moves[-1].to_square)
+        if _last is not None and _last.color == pov:
+            _fallback_piece = _last.piece_type
+        return TacticMotifInt.MATE, _fallback_piece, TACTIC_CONFIDENCE_HIGH, _fallback_depth
 
-        # BUGFIX (Phase 148, D-01): has_forced_mate=True means Stockfish reported a
-        # genuine eval_mate score, but every per-detector mate function above (and
-        # detect_generic_mate) bails out via `if not boards[-1].is_checkmate()` when
-        # the PV is capped at PV_CAP_PLIES (engine.py) before reaching the mating
-        # position — so a real, deep forced mate previously fell through to Tier 2+
-        # untagged (no-op). Named-mate geometry cannot be verified on a truncated
-        # line, so tag the generic fallback only — do NOT suppress a real mate.
-        # `moves` is guaranteed non-empty here (early-return above when `not moves`).
-        if has_forced_mate and not boards[-1].is_checkmate():
-            _fallback_depth = len(moves) - 1
-            _fallback_piece: int | None = None
-            _last = boards[-1].piece_at(moves[-1].to_square)
-            if _last is not None and _last.color == pov:
-                _fallback_piece = _last.piece_type
-            return TacticMotifInt.MATE, _fallback_piece, TACTIC_CONFIDENCE_HIGH, _fallback_depth
+    return None
 
-    # --- Collect all non-mate firings (D-05: depth-primary dispatch) ---
-    # Candidates: run ALL non-mate detectors and collect firings.
-    # Winner selection: primary key = depth (shallowest wins, D-05/D-07).
-    # Tiebreaker at equal depth = (tier, priority_rank) — D-07 priority order preserved.
-    # A hanging-piece (Tier 4) at depth 0 beats a fork (Tier 2) at depth 2 because
-    # depth dominates. A fork at depth 0 beats hanging-piece at depth 0 via tier (2 < 4).
-    # None depth sorts last (treat as infinity) — depth-unknown firings lose to depth-known.
-    Candidate = tuple[int, int, int | None, int, int | None, int]
-    candidates: list[Candidate] = []
+
+_Candidate = tuple[int, int, int | None, int, int | None, int]
+
+
+def _collect_non_mate_candidates(
+    boards: list[chess.Board],
+    moves: list[chess.Move],
+    pov: chess.Color,
+) -> list[_Candidate]:
+    """Tiers 2-5: collect every non-mate motif firing on this PV (D-05).
+
+    Tier 5 (move-type) only runs when tiers 2-4 produced no candidates -- move-type
+    is a fallback for positions where no real tactic fired, never a competitor
+    against one (see the inline ordering comment).
+    """
+    candidates: list[_Candidate] = []
 
     # Tier 2: geometric material-winners
     TIER2 = 2
@@ -2568,20 +2547,91 @@ def detect_tactic_motif(
                     (TIER_MOVE_TYPE, rank, piece, TACTIC_CONFIDENCE_HIGH, depth, int(motif_int))
                 )
 
-    if not candidates:
-        return None, None, None, None
+    return candidates
 
-    # Sort key: depth-primary (D-05/D-07). Shallowest tactic wins.
-    # Equal-depth ties break by (tier, rank) — preserving existing priority order.
-    # Consequence: hanging-piece (Tier 4, depth 0) beats a fork (Tier 2, depth 2)
-    # because depth 0 < depth 2. A fork (Tier 2) at depth 0 beats hanging-piece
-    # (Tier 4) at depth 0 via tier tiebreak (2 < 4) — this is correct (D-07): when
-    # the fork IS at depth 0, it is equally shallow and more specific. Tier-3 motifs
-    # at depth 0 can beat Tier-2 at depth 2 (D-05 is intentional); they are suppressed
-    # at query time via _TACTIC_CHIP_CONFIDENCE_MIN so this has no user-facing impact.
-    def _sort_key(c: Candidate) -> tuple[int, int, int]:
+
+def _select_shallowest_candidate(candidates: list[_Candidate]) -> _Candidate | None:
+    """Depth-primary winner selection with a (tier, rank) tiebreak (D-05/D-07).
+
+    Shallowest tactic wins. Equal-depth ties break by (tier, rank) — preserving
+    existing priority order. Consequence: hanging-piece (Tier 4, depth 0) beats a
+    fork (Tier 2, depth 2) because depth 0 < depth 2. A fork (Tier 2) at depth 0
+    beats hanging-piece (Tier 4) at depth 0 via tier tiebreak (2 < 4) — this is
+    correct (D-07): when the fork IS at depth 0, it is equally shallow and more
+    specific. Tier-3 motifs at depth 0 can beat Tier-2 at depth 2 (D-05 is
+    intentional); they are suppressed at query time via _TACTIC_CHIP_CONFIDENCE_MIN
+    so this has no user-facing impact. None depth sorts last (treated as infinity).
+    """
+    if not candidates:
+        return None
+
+    def _sort_key(c: _Candidate) -> tuple[int, int, int]:
         depth_val = c[4] if c[4] is not None else 999999
         return (depth_val, c[0], c[1])  # (depth, tier, rank) — depth primary
 
-    winner = min(candidates, key=_sort_key)
+    return min(candidates, key=_sort_key)
+
+
+def detect_tactic_motif(
+    board_after_flaw: chess.Board,
+    pv_str: str,
+    has_forced_mate: bool = False,
+) -> tuple[int | None, int | None, int | None, int | None]:
+    """Detect the highest-priority tactic motif from the refutation PV (D-07/D-02).
+
+    Args:
+        board_after_flaw: Position immediately after the flawed move was played.
+                          board_after_flaw.turn is the refuting side (pov).
+        pv_str: Space-joined UCI refutation line from game_positions.pv.
+        has_forced_mate: When True, the mate branch runs even when boards[-1].is_checkmate()
+                         is False. Required when Stockfish reports a mate-in-N score but the
+                         PV is truncated at PV_CAP_PLIES (~12) so the final board is not yet
+                         checkmate. The stored Stockfish score (eval_mate) is the authoritative
+                         gate (D-06); is_checkmate() is preserved as the fast path when the
+                         PV is short enough to show the final mating position.
+
+    Returns:
+        (tactic_motif_int, tactic_piece, tactic_confidence, tactic_depth) where:
+        - tactic_motif_int: TacticMotifInt value or None if no detector fired.
+        - tactic_piece: chess.PieceType int (1-6) or None (per-motif semantic D-12).
+        - tactic_confidence: 0-100 or None when tactic_motif_int is None.
+        - tactic_depth: raw half-move ply index from flaw_ply+1 (D-04), or None.
+          Caveat (Phase 148 truncated-mate fallback): when `has_forced_mate=True` and
+          the PV was capped before reaching mate, this is the last-displayed-ply
+          approximation (len(moves)-1), not the true (unknown) mating ply — so it is
+          systematically shallower than a fully-resolved mate's depth.
+
+    Dispatch strategy (D-02): mates (Tier 1) short-circuit and always win (D-03/D-07).
+    All non-mate detectors run and collect firings; the SHALLOWEST motif wins (depth primary,
+    D-05); equal depth breaks by priority tier/rank so exactly one motif is returned.
+    Hanging-piece (Tier 4, depth 0) beats a fork (Tier 2, depth 2) because depth dominates.
+
+    Safe: malformed/None/empty pv_str returns (None, None, None, None) without raising.
+    """
+    # Guard: T-124-03 / T-127-01 — malformed or empty PV must never raise (threat register)
+    if not pv_str:
+        return None, None, None, None
+
+    try:
+        boards, moves = _parse_pv(board_after_flaw, pv_str)
+    except ValueError:
+        return None, None, None, None
+
+    if not moves:
+        return None, None, None, None
+
+    pov = board_after_flaw.turn
+
+    # --- Tier 1: mate subtypes (D-03 dominance — always checked first, always wins) ---
+    # Mates never enter the candidate pool; they short-circuit the dispatcher immediately.
+    mate_result = _dispatch_mate_tier(boards, moves, pov, has_forced_mate)
+    if mate_result is not None:
+        return mate_result
+
+    # --- Collect all non-mate firings, then pick the winner (D-05: depth-primary) ---
+    candidates = _collect_non_mate_candidates(boards, moves, pov)
+    winner = _select_shallowest_candidate(candidates)
+    if winner is None:
+        return None, None, None, None
+
     return winner[5], winner[2], winner[3], winner[4]

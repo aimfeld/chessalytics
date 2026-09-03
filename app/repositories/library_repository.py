@@ -524,6 +524,89 @@ def decided_lost_sql(
     )
 
 
+def _build_tactic_clause(
+    tactic_families: Sequence[str],
+    orientation: TacticOrientation,
+    min_tactic_depth: int | None,
+    max_tactic_depth: int | None,
+    decided_lost: ColumnElement[bool] | None,
+) -> ColumnElement[bool] | None:
+    """Build the tactic-family WHERE clause for build_flaw_filter_clauses, or None.
+
+    Extracted verbatim from build_flaw_filter_clauses (Phase 214 Plan 04) -- this is
+    the one family block substantial enough to name on its own; the other four
+    (severity/tempo/opportunity/impact/phase) stay inline there as 3-8 line blocks.
+
+    Quick 260621-sm8 refactor: depth and orientation are independently meaningful
+    even without a family selection.
+
+    BUG FIXED (260621-sm8): previously depth+orientation predicates were nested
+    inside `if tactic_families:`, making them silent no-ops when no family was
+    selected. The filter claimed to restrict by depth/orientation but did nothing
+    unless a family chip was also active.
+
+    New logic: when ANY tactic control is active (family, orientation, or depth),
+    emit an OR-of-in-scope-slots row clause. Each in-scope slot (per the
+    orientation parameter) contributes: (family-match, if families selected) AND
+    (confidence >= threshold) AND (depth-in-range, if depth not full-range). When
+    all controls are at defaults (_tactic_controls_active returns False), this
+    returns None so no tactic clause is emitted and non-tactic flaws are included.
+
+    The SQL predicate here and tactic_slot_visible (the Python display predicate
+    used at serialization time) must agree: same FAMILY_TO_MOTIF_INTS, same
+    _TACTIC_CHIP_CONFIDENCE_MIN, same _depth_in_range offset semantics. See
+    tactic_slot_visible's docstring for the authoritative slot-match definition.
+
+    Args:
+        tactic_families: Raw family strings from the caller (build_flaw_filter_clauses'
+            tactic_families param). Unknown keys are resolved out below.
+        orientation: Which tactic column set(s) to filter on ("either"/"missed"/"allowed").
+        min_tactic_depth / max_tactic_depth: Inclusive depth-range bounds, or None for
+            unbounded on that side.
+        decided_lost: Optional SQL boolean expression; when non-None, ANDs
+            NOT(decided_lost) onto the assembled tactic clause only.
+
+    Returns:
+        A single SQLAlchemy boolean column expression, or None when no tactic
+        control is active (caller must not append a None clause).
+    """
+    # Resolve family strings to motif ints first -- unknown family keys produce
+    # empty lists (they do not contribute to the filter and are silently dropped,
+    # per test_unknown_tactic_family_adds_no_clause).
+    motif_ints = [m for fam in tactic_families for m in FAMILY_TO_MOTIF_INTS.get(fam, [])]
+    # Pass resolved (known) families as the families parameter so unknown-only
+    # selections don't trigger a tactic clause when orientation and depth are
+    # also at defaults. If orientation or depth are active, the clause is still
+    # emitted (orientation/depth work independently -- Quick 260621-sm8 fix).
+    resolved_families: Sequence[str] = [
+        fam for fam in tactic_families if fam in FAMILY_TO_MOTIF_INTS
+    ]
+    if not _tactic_controls_active(
+        resolved_families, orientation, min_tactic_depth, max_tactic_depth
+    ):
+        return None
+
+    # _tactic_orientation_pairs returns 1 tuple for missed/allowed, 2 for either.
+    # Each branch: (family-match, if families) & confidence_gate & depth_ok (if active).
+    pair_branches = []
+    for motif_col, conf_col, depth_col, depth_offset in _tactic_orientation_pairs(orientation):
+        branch: ColumnElement[bool] = conf_col >= _TACTIC_CHIP_CONFIDENCE_MIN
+        if motif_ints:
+            branch = motif_col.in_(motif_ints) & branch
+        branch = branch & _depth_in_range(
+            depth_col, min_tactic_depth, max_tactic_depth, depth_offset
+        )
+        pair_branches.append(branch)
+    tactic_clause: ColumnElement[bool] = or_(*pair_branches)
+
+    # Decided-lost suppression: exclude flaws from positions already decisively
+    # lost for the mover. Only the tactic clause is gated -- severity/tempo/
+    # opportunity/impact/phase clauses are intentionally NOT gated (flaw still exists).
+    if decided_lost is not None:
+        tactic_clause = and_(tactic_clause, not_(decided_lost))
+    return tactic_clause
+
+
 def build_flaw_filter_clauses(
     severity: Sequence[FlawSeverity],
     tags: Sequence[FlawTag],
@@ -624,53 +707,13 @@ def build_flaw_filter_clauses(
         clauses.append(GameFlaw.phase.in_([_PHASE_INT[t] for t in phase_tags]))
 
     # Tactic filter (Quick 260621-sm8 refactor): depth and orientation are now
-    # independently meaningful even without a family selection.
-    #
-    # BUG FIXED (260621-sm8): previously depth+orientation predicates were nested
-    # inside `if tactic_families:`, making them silent no-ops when no family was
-    # selected. The filter claimed to restrict by depth/orientation but did nothing
-    # unless a family chip was also active.
-    #
-    # New logic: when ANY tactic control is active (family, orientation, or depth),
-    # emit an OR-of-in-scope-slots row clause. Each in-scope slot (per the
-    # orientation parameter) contributes: (family-match, if families selected) AND
-    # (confidence >= threshold) AND (depth-in-range, if depth not full-range).
-    # When all controls are at defaults (_tactic_controls_active returns False),
-    # no tactic clause is emitted so non-tactic flaws are included.
-    #
-    # The SQL predicate here and tactic_slot_visible (the Python display predicate
-    # used at serialization time) must agree: same FAMILY_TO_MOTIF_INTS, same
-    # _TACTIC_CHIP_CONFIDENCE_MIN, same _depth_in_range offset semantics.
-    # See tactic_slot_visible docstring for the authoritative slot-match definition.
-    # Resolve family strings to motif ints first — unknown family keys produce
-    # empty lists (they do not contribute to the filter and are silently dropped,
-    # per test_unknown_tactic_family_adds_no_clause).
-    motif_ints = [m for fam in tactic_families for m in FAMILY_TO_MOTIF_INTS.get(fam, [])]
-    # Pass resolved (known) families as the families parameter so unknown-only
-    # selections don't trigger a tactic clause when orientation and depth are
-    # also at defaults. If orientation or depth are active, the clause is still
-    # emitted (orientation/depth work independently — Quick 260621-sm8 fix).
-    resolved_families: Sequence[str] = [
-        fam for fam in tactic_families if fam in FAMILY_TO_MOTIF_INTS
-    ]
-    if _tactic_controls_active(resolved_families, orientation, min_tactic_depth, max_tactic_depth):
-        # _tactic_orientation_pairs returns 1 tuple for missed/allowed, 2 for either.
-        # Each branch: (family-match, if families) & confidence_gate & depth_ok (if active).
-        pair_branches = []
-        for motif_col, conf_col, depth_col, depth_offset in _tactic_orientation_pairs(orientation):
-            branch: ColumnElement[bool] = conf_col >= _TACTIC_CHIP_CONFIDENCE_MIN
-            if motif_ints:
-                branch = motif_col.in_(motif_ints) & branch
-            branch = branch & _depth_in_range(
-                depth_col, min_tactic_depth, max_tactic_depth, depth_offset
-            )
-            pair_branches.append(branch)
-        tactic_clause: ColumnElement[bool] = or_(*pair_branches)
-        # Decided-lost suppression: exclude flaws from positions already decisively
-        # lost for the mover. Only the tactic clause is gated — severity/tempo/
-        # opportunity/impact/phase clauses are intentionally NOT gated (flaw still exists).
-        if decided_lost is not None:
-            tactic_clause = and_(tactic_clause, not_(decided_lost))
+    # independently meaningful even without a family selection. See
+    # _build_tactic_clause's docstring for the full family/orientation/depth/
+    # decided-lost semantics; this call site only appends its result when active.
+    tactic_clause = _build_tactic_clause(
+        tactic_families, orientation, min_tactic_depth, max_tactic_depth, decided_lost
+    )
+    if tactic_clause is not None:
         clauses.append(tactic_clause)
 
     return clauses
@@ -1957,6 +2000,11 @@ async def analyzed_game_ids(
     return list(rows)
 
 
+# 214-RESEARCH.md "Pitfall 1: Raw line count is not logic LOC" -- this function is a
+# single select() with ~30 labelled COUNT(...).filter(...) column expressions (15
+# metrics x player/opp), not control-flow complexity; PLR0915 (statement count) does
+# not fire on it, which is the tie-breaker signal that grants the exemption below.
+# check-function-size: allow-loc one select() with ~30 labelled COUNT(...).filter(...) column expressions (15 metrics x player/opp); PLR0915 (statement count) does not fire, confirming the length is a literal-heavy column list, not control-flow complexity
 async def fetch_flaw_comparison(
     session: AsyncSession,
     user_id: int,

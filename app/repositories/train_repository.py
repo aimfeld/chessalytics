@@ -1702,6 +1702,368 @@ async def _backfill_sharp_fillers(
     return picked
 
 
+async def _resolve_existing_session(
+    session: AsyncSession,
+    *,
+    user_id: int,
+    today: datetime.date,
+    n: int,
+    blob_pending_count: int,
+) -> ComposedSession | None:
+    """Resolve a session `compose_and_materialize_session` should hand back
+    as-is, or `None` to continue into fresh composition.
+
+    Extracted from `compose_and_materialize_session` (Phase 214 Plan 06,
+    task 1) — the "is there already a session to hand back?" decision:
+
+    3. D-12: if an open session still exists (after the caller's own
+       `expire_stale_sessions` call), RESUME it (`_resume_session`) rather
+       than composing a new one. EXCEPTION (191-06 UAT bug fix,
+       `_discard_if_untouched_and_resized`): an open session with ZERO
+       recorded solves whose frozen `puzzle_count` no longer matches the
+       CURRENT `puzzles_per_session` is discarded instead, falling through to
+       fresh composition below — this is what lets a same-day settings edit
+       actually take effect before the first puzzle is solved.
+    3b. D-10 guard (190.1 bug fix): if a COMPLETED session's window still
+       covers today (`completed_session_in_window`), return it instead of
+       composing fresh — completing a session must not unlock an immediate
+       replacement on reload; the next session arrives when the window rolls
+       over. Phase 191's ad-hoc "train now" (SCHD-03) will need an explicit
+       opt-out of this guard, not a bypass of the open-session resume above.
+
+    Args:
+        session: AsyncSession. Caller commits.
+        user_id: Authenticated user's internal PK (V4: never client-supplied).
+        today: The composition's local calendar day (from `local_today`).
+        n: Requested puzzles per session (`settings_row.puzzles_per_session`).
+        blob_pending_count: Pre-computed by the caller — passed through
+            unread here, never re-queried (a second read against the same
+            session is a behavior change even when the value happens to
+            match).
+
+    Returns:
+        A `ComposedSession` built from the resumed/completed row, or `None`
+        if the caller must compose fresh.
+    """
+    open_session = await open_session_for_user(session, user_id=user_id)
+    if open_session is not None:
+        if await _discard_if_untouched_and_resized(
+            session, drill_session=open_session, requested_count=n
+        ):
+            open_session = None
+        else:
+            return await _resume_session(
+                session,
+                user_id=user_id,
+                drill_session=open_session,
+                requested_count=n,
+                blob_pending_count=blob_pending_count,
+            )
+
+    # Step 3b (190.1 bug fix): a completed session still inside its D-10
+    # window blocks fresh composition — without this, a reload right after
+    # finishing a session composed a brand-new one (status='completed' rows
+    # are invisible to the open-session resume above), granting unlimited
+    # same-day sessions and draining the pool.
+    completed = await completed_session_in_window(session, user_id=user_id, today=today)
+    if completed is not None:
+        return await _resume_session(
+            session,
+            user_id=user_id,
+            drill_session=completed,
+            requested_count=n,
+            blob_pending_count=blob_pending_count,
+        )
+
+    return None
+
+
+@dataclass(frozen=True)
+class _AssembledSessionItems:
+    """The item-assembly stage's output (Phase 214 Plan 06 task 2). Four
+    fields, three DIFFERENT downstream readers in
+    `compose_and_materialize_session`/`_materialize_session_rows`:
+    `reconstructed` feeds the empty-session early return AND the row-insert
+    loop, `new_sr_items`/`surviving_sr_keys` together gate which pool-sourced
+    picks get a brand-new `drill_items` row, and `is_warmup` is frozen onto
+    the `drill_sessions` row. Not a context object — `surviving_sr_keys` is
+    carried rather than recomputed because it is derived from the
+    POST-shuffle `reconstructed` list, and recomputing it in the materialize
+    stage from the same list would just be the identical computation typed
+    out twice.
+    """
+
+    reconstructed: list[_ReconstructedPuzzle]
+    new_sr_items: list[tuple[int, int, Game]]
+    surviving_sr_keys: set[tuple[int | None, int]]
+    is_warmup: bool
+
+
+async def _assemble_session_items(
+    session: AsyncSession, *, user_id: int, today: datetime.date, n: int
+) -> _AssembledSessionItems:
+    """The item-assembly stage: candidate selection, FEN reconstruction,
+    Phase 206 sharp-filler shortfall fill, and the D-09 deterministic
+    shuffle. Extracted from `compose_and_materialize_session` (Phase 214
+    Plan 06, task 2).
+
+    4. `_select_candidates` returns due `drill_items` (most-overdue-first)
+       padded from `pool_entry_stmt` up to `sr_slots`, plus `herring_stmt` up
+       to `herring_slots`.
+    5. Reconstruct each puzzle's full FEN + arriving move via
+       `fen_and_last_move_at_ply`; a puzzle whose FEN cannot be
+       reconstructed is dropped rather than served broken (never
+       backfilled — the slot arithmetic already ran).
+    Phase 206 (D-03): sharp filler fills EVERY residual shortfall after SR +
+       herring reconstruction — not gated on "is this an all-filler
+       session". Computed POST-reconstruction on purpose: it absorbs
+       puzzles dropped above for an unparseable FEN, which the
+       pre-reconstruction slot arithmetic in `_select_candidates` cannot
+       see. This is why the sharp stage is not folded into
+       `_select_candidates` — it runs at a different point in the pipeline.
+    6. If nothing survives, `reconstructed` is empty and the caller must
+       write NO `drill_sessions` row. Otherwise shuffle deterministically by
+       `(user_id, today)` (D-09: a red herring's position must not be
+       inferable from ordering).
+
+    The D-06/D-07 warm-up discriminant is computed here — a plain equality
+    against zero, never a ratio, never a threshold — because it is derived
+    from `surviving_sr_keys`, which only exists once the shuffle has run;
+    moving it to a different stage would either recompute
+    `surviving_sr_keys` there or thread it through as an extra argument for
+    no reason.
+
+    Args:
+        session: AsyncSession. Caller commits.
+        user_id: Authenticated user's internal PK (V4: never client-supplied).
+        today: The composition's local calendar day.
+        n: Requested puzzles per session (`settings_row.puzzles_per_session`).
+    """
+    sr_slots, herring_slots = compose_slots(n)
+
+    candidates = await _select_candidates(
+        session, user_id=user_id, today=today, n=n, sr_slots=sr_slots, herring_slots=herring_slots
+    )
+    sr_candidates = candidates.sr_candidates
+    herring_candidates = candidates.herring_candidates
+    new_sr_items = candidates.new_sr_items
+
+    # --- Reconstruct FENs + arriving move, dropping (never backfilling)
+    # unparseable puzzles ---
+    reconstructed: list[_ReconstructedPuzzle] = []
+    for game_id, ply, game in sr_candidates:
+        result = fen_and_last_move_at_ply(game.pgn, ply)
+        if result is None:
+            continue
+        fen, last_move_uci = result
+        reconstructed.append(
+            _ReconstructedPuzzle(
+                game_id=game_id,
+                ply=ply,
+                fen=fen,
+                last_move_uci=last_move_uci,
+                side_to_move=mover_color_for_ply(ply),
+                source=DrillSource.SR_ITEM,
+                herring_pool_id=None,
+                sharp_puzzle_id=None,
+            )
+        )
+    # D-10: own-game herrings are permitted, so a position can legitimately be
+    # both a several-fine-moves pool row and the user's own blunder ply —
+    # drop the herring before insert rather than colliding on
+    # uq_drill_solves_session_puzzle and raising IntegrityError mid-composition.
+    sr_keys = {(puzzle.game_id, puzzle.ply) for puzzle in reconstructed}
+    for pool_row in herring_candidates:
+        if (pool_row.game_id, pool_row.ply) in sr_keys:
+            continue
+        reconstructed.append(
+            _ReconstructedPuzzle(
+                game_id=pool_row.game_id,
+                ply=pool_row.ply,
+                fen=pool_row.fen,
+                last_move_uci=pool_row.arriving_move_uci,
+                side_to_move=cast(Literal["white", "black"], pool_row.mover_color),
+                source=DrillSource.RED_HERRING,
+                herring_pool_id=pool_row.id,
+                sharp_puzzle_id=None,
+            )
+        )
+    # Phase 206 (D-03): sharp filler fills EVERY residual shortfall after SR
+    # + herring reconstruction — not gated on "is this an all-filler
+    # session". Computed POST-reconstruction on purpose: it absorbs puzzles
+    # dropped above for an unparseable FEN, which the pre-reconstruction slot
+    # arithmetic in _select_candidates cannot see. This is why the sharp
+    # stage is not folded into _select_candidates — it runs at a different
+    # point in the pipeline.
+    sharp_shortfall = n - len(reconstructed)
+    if sharp_shortfall > 0:
+        reconstructed.extend(
+            await _backfill_sharp_fillers(session, user_id=user_id, shortfall=sharp_shortfall)
+        )
+    reconstructed = reconstructed[:n]  # defensive cap; slot arithmetic already sums to <= n
+
+    if not reconstructed:
+        return _AssembledSessionItems(
+            reconstructed=[], new_sr_items=new_sr_items, surviving_sr_keys=set(), is_warmup=False
+        )
+
+    # D-09: deterministic (user_id, session_date)-seeded shuffle so a red
+    # herring's slot is never inferable from a fixed SR-then-herring layout,
+    # and re-composition (e.g. this same call) is reproducible.
+    random.Random(f"{user_id}:{today.isoformat()}").shuffle(reconstructed)
+
+    surviving_sr_keys = {
+        (puzzle.game_id, puzzle.ply)
+        for puzzle in reconstructed
+        if puzzle.source == DrillSource.SR_ITEM
+    }
+    # Phase 206 (D-06/D-07): the warm-up discriminant is a plain equality
+    # against zero — never a ratio, never a threshold — computed from
+    # surviving_sr_keys alone and frozen onto the drill_sessions row below.
+    is_warmup = len(surviving_sr_keys) == 0
+
+    return _AssembledSessionItems(
+        reconstructed=reconstructed,
+        new_sr_items=new_sr_items,
+        surviving_sr_keys=surviving_sr_keys,
+        is_warmup=is_warmup,
+    )
+
+
+async def _materialize_session_rows(
+    session: AsyncSession,
+    *,
+    user_id: int,
+    today: datetime.date,
+    n: int,
+    settings_row: TrainSettingsRow,
+    blob_pending_count: int,
+    items: _AssembledSessionItems,
+) -> ComposedSession:
+    """The row-materialization stage: insert the `DrillItem`/`DrillSession`/
+    `DrillSolve` rows for `items` and return the `ComposedSession`. Extracted
+    from `compose_and_materialize_session` (Phase 214 Plan 06, task 2). Only
+    called once `items.reconstructed` is non-empty — the caller handles the
+    empty case itself, since that path writes no rows at all.
+
+    7. The `DrillSession` insert (plus any new `drill_items` padding rows) is
+       wrapped in a SAVEPOINT (`session.begin_nested()`). A concurrent second
+       composition winning the `uq_drill_sessions_user_open` race — or
+       colliding on a `drill_items` primary key from the same simultaneous
+       padding scan — raises `IntegrityError`; that partial unique index is
+       the authority for "at most one open session per user" (T-189-14), so
+       the loser resumes the winner's session instead of erroring.
+
+    (Sequential awaits only throughout, per CLAUDE.md's AsyncSession rule.)
+
+    Args:
+        session: AsyncSession. Caller commits.
+        user_id: Authenticated user's internal PK (V4: never client-supplied).
+        today: The composition's local calendar day.
+        n: Requested puzzles per session (`settings_row.puzzles_per_session`).
+        settings_row: The caller's already-fetched `train_settings` row.
+        blob_pending_count: Pre-computed by the caller — passed through, not
+            re-queried.
+        items: The item-assembly stage's output.
+    """
+    try:
+        async with session.begin_nested():
+            for gid, ply, _game in items.new_sr_items:
+                if (gid, ply) not in items.surviving_sr_keys:
+                    continue  # dropped for a broken FEN — never track a puzzle we can't serve
+                session.add(
+                    DrillItem(
+                        user_id=user_id,
+                        game_id=gid,
+                        ply=ply,
+                        status=DrillStatus.ACTIVE,
+                        streak=0,
+                        due_date=today,
+                        fail_count=0,
+                        ever_correct=False,
+                    )
+                )
+
+            drill_session = DrillSession(
+                user_id=user_id,
+                session_date=today,
+                status="open",
+                puzzle_count=len(items.reconstructed),
+                requested_count=n,
+                expires_on=session_window(today, settings_row.weekday_mask),
+                is_warmup=items.is_warmup,
+            )
+            session.add(drill_session)
+            # Populate drill_session.id for the DrillSolve FK below, and
+            # surface uq_drill_sessions_user_open here if a concurrent
+            # request already won the race.
+            await session.flush()
+
+            puzzles: list[ComposedPuzzle] = []
+            for position, puzzle in enumerate(items.reconstructed):
+                # Phase 192 Plan 02: `drill_solves.game_id` is now nullable
+                # (D-05) — a herring composed from an already-orphaned pool
+                # row (its source game deleted before this composition ran)
+                # legitimately has `game_id=None` here. SR items always carry
+                # a non-None `game_id` (sourced via an INNER JOIN to `games`
+                # above), so this is never a real NULL constraint violation.
+                session.add(
+                    DrillSolve(
+                        session_id=drill_session.id,
+                        position=position,
+                        user_id=user_id,
+                        game_id=puzzle.game_id,
+                        ply=puzzle.ply,
+                        source=puzzle.source,
+                        herring_pool_id=puzzle.herring_pool_id,
+                        sharp_puzzle_id=puzzle.sharp_puzzle_id,
+                        solved_at=None,
+                    )
+                )
+                puzzles.append(
+                    ComposedPuzzle(
+                        position=position,
+                        game_id=puzzle.game_id,
+                        ply=puzzle.ply,
+                        fen=puzzle.fen,
+                        side_to_move=puzzle.side_to_move,
+                        last_move_uci=puzzle.last_move_uci,
+                        herring_pool_id=puzzle.herring_pool_id,
+                    )
+                )
+            await session.flush()
+    except IntegrityError:
+        # uq_drill_sessions_user_open (the partial unique index enforcing
+        # D-12's at-most-one-open-session invariant) is the authority here —
+        # a concurrent request won the race, or a simultaneous padding scan
+        # collided on a drill_items primary key from the same underlying
+        # race. Resume the winner's session instead of surfacing a 500
+        # (T-189-14).
+        resumed = await open_session_for_user(session, user_id=user_id)
+        if resumed is None:
+            raise
+        return await _resume_session(
+            session,
+            user_id=user_id,
+            drill_session=resumed,
+            requested_count=n,
+            blob_pending_count=blob_pending_count,
+        )
+
+    return ComposedSession(
+        session_id=drill_session.id,
+        session_date=drill_session.session_date,
+        expires_on=drill_session.expires_on,
+        puzzle_count=len(puzzles),
+        requested_count=n,
+        solved_count=0,
+        blob_pending_count=blob_pending_count,
+        puzzles=puzzles,
+        solved_results=[],
+        is_warmup=items.is_warmup,
+    )
+
+
 async def compose_and_materialize_session(
     session: AsyncSession, *, user_id: int, now_utc: datetime.datetime
 ) -> ComposedSession:
@@ -1801,100 +2163,14 @@ async def compose_and_materialize_session(
 
     blob_pending_count = (await session.execute(blob_pending_stmt(user_id))).scalar_one()
 
-    open_session = await open_session_for_user(session, user_id=user_id)
-    if open_session is not None:
-        if await _discard_if_untouched_and_resized(
-            session, drill_session=open_session, requested_count=n
-        ):
-            open_session = None
-        else:
-            return await _resume_session(
-                session,
-                user_id=user_id,
-                drill_session=open_session,
-                requested_count=n,
-                blob_pending_count=blob_pending_count,
-            )
-
-    # Step 3b (190.1 bug fix): a completed session still inside its D-10
-    # window blocks fresh composition — without this, a reload right after
-    # finishing a session composed a brand-new one (status='completed' rows
-    # are invisible to the open-session resume above), granting unlimited
-    # same-day sessions and draining the pool.
-    completed = await completed_session_in_window(session, user_id=user_id, today=today)
-    if completed is not None:
-        return await _resume_session(
-            session,
-            user_id=user_id,
-            drill_session=completed,
-            requested_count=n,
-            blob_pending_count=blob_pending_count,
-        )
-
-    sr_slots, herring_slots = compose_slots(n)
-
-    candidates = await _select_candidates(
-        session, user_id=user_id, today=today, n=n, sr_slots=sr_slots, herring_slots=herring_slots
+    resolved = await _resolve_existing_session(
+        session, user_id=user_id, today=today, n=n, blob_pending_count=blob_pending_count
     )
-    sr_candidates = candidates.sr_candidates
-    herring_candidates = candidates.herring_candidates
-    new_sr_items = candidates.new_sr_items
+    if resolved is not None:
+        return resolved
 
-    # --- Reconstruct FENs + arriving move, dropping (never backfilling)
-    # unparseable puzzles ---
-    reconstructed: list[_ReconstructedPuzzle] = []
-    for game_id, ply, game in sr_candidates:
-        result = fen_and_last_move_at_ply(game.pgn, ply)
-        if result is None:
-            continue
-        fen, last_move_uci = result
-        reconstructed.append(
-            _ReconstructedPuzzle(
-                game_id=game_id,
-                ply=ply,
-                fen=fen,
-                last_move_uci=last_move_uci,
-                side_to_move=mover_color_for_ply(ply),
-                source=DrillSource.SR_ITEM,
-                herring_pool_id=None,
-                sharp_puzzle_id=None,
-            )
-        )
-    # D-10: own-game herrings are permitted, so a position can legitimately be
-    # both a several-fine-moves pool row and the user's own blunder ply —
-    # drop the herring before insert rather than colliding on
-    # uq_drill_solves_session_puzzle and raising IntegrityError mid-composition.
-    sr_keys = {(puzzle.game_id, puzzle.ply) for puzzle in reconstructed}
-    for pool_row in herring_candidates:
-        if (pool_row.game_id, pool_row.ply) in sr_keys:
-            continue
-        reconstructed.append(
-            _ReconstructedPuzzle(
-                game_id=pool_row.game_id,
-                ply=pool_row.ply,
-                fen=pool_row.fen,
-                last_move_uci=pool_row.arriving_move_uci,
-                side_to_move=cast(Literal["white", "black"], pool_row.mover_color),
-                source=DrillSource.RED_HERRING,
-                herring_pool_id=pool_row.id,
-                sharp_puzzle_id=None,
-            )
-        )
-    # Phase 206 (D-03): sharp filler fills EVERY residual shortfall after SR
-    # + herring reconstruction — not gated on "is this an all-filler
-    # session". Computed POST-reconstruction on purpose: it absorbs puzzles
-    # dropped above for an unparseable FEN, which the pre-reconstruction slot
-    # arithmetic in _select_candidates cannot see. This is why the sharp
-    # stage is not folded into _select_candidates — it runs at a different
-    # point in the pipeline.
-    sharp_shortfall = n - len(reconstructed)
-    if sharp_shortfall > 0:
-        reconstructed.extend(
-            await _backfill_sharp_fillers(session, user_id=user_id, shortfall=sharp_shortfall)
-        )
-    reconstructed = reconstructed[:n]  # defensive cap; slot arithmetic already sums to <= n
-
-    if not reconstructed:
+    items = await _assemble_session_items(session, user_id=user_id, today=today, n=n)
+    if not items.reconstructed:
         return ComposedSession(
             session_id=None,
             session_date=today,
@@ -1908,116 +2184,14 @@ async def compose_and_materialize_session(
             is_warmup=False,
         )
 
-    # D-09: deterministic (user_id, session_date)-seeded shuffle so a red
-    # herring's slot is never inferable from a fixed SR-then-herring layout,
-    # and re-composition (e.g. this same call) is reproducible.
-    random.Random(f"{user_id}:{today.isoformat()}").shuffle(reconstructed)
-
-    surviving_sr_keys = {
-        (puzzle.game_id, puzzle.ply)
-        for puzzle in reconstructed
-        if puzzle.source == DrillSource.SR_ITEM
-    }
-    # Phase 206 (D-06/D-07): the warm-up discriminant is a plain equality
-    # against zero — never a ratio, never a threshold — computed from
-    # surviving_sr_keys alone and frozen onto the drill_sessions row below.
-    is_warmup = len(surviving_sr_keys) == 0
-
-    try:
-        async with session.begin_nested():
-            for gid, ply, _game in new_sr_items:
-                if (gid, ply) not in surviving_sr_keys:
-                    continue  # dropped for a broken FEN — never track a puzzle we can't serve
-                session.add(
-                    DrillItem(
-                        user_id=user_id,
-                        game_id=gid,
-                        ply=ply,
-                        status=DrillStatus.ACTIVE,
-                        streak=0,
-                        due_date=today,
-                        fail_count=0,
-                        ever_correct=False,
-                    )
-                )
-
-            drill_session = DrillSession(
-                user_id=user_id,
-                session_date=today,
-                status="open",
-                puzzle_count=len(reconstructed),
-                requested_count=n,
-                expires_on=session_window(today, settings_row.weekday_mask),
-                is_warmup=is_warmup,
-            )
-            session.add(drill_session)
-            # Populate drill_session.id for the DrillSolve FK below, and
-            # surface uq_drill_sessions_user_open here if a concurrent
-            # request already won the race.
-            await session.flush()
-
-            puzzles: list[ComposedPuzzle] = []
-            for position, puzzle in enumerate(reconstructed):
-                # Phase 192 Plan 02: `drill_solves.game_id` is now nullable
-                # (D-05) — a herring composed from an already-orphaned pool
-                # row (its source game deleted before this composition ran)
-                # legitimately has `game_id=None` here. SR items always carry
-                # a non-None `game_id` (sourced via an INNER JOIN to `games`
-                # above), so this is never a real NULL constraint violation.
-                session.add(
-                    DrillSolve(
-                        session_id=drill_session.id,
-                        position=position,
-                        user_id=user_id,
-                        game_id=puzzle.game_id,
-                        ply=puzzle.ply,
-                        source=puzzle.source,
-                        herring_pool_id=puzzle.herring_pool_id,
-                        sharp_puzzle_id=puzzle.sharp_puzzle_id,
-                        solved_at=None,
-                    )
-                )
-                puzzles.append(
-                    ComposedPuzzle(
-                        position=position,
-                        game_id=puzzle.game_id,
-                        ply=puzzle.ply,
-                        fen=puzzle.fen,
-                        side_to_move=puzzle.side_to_move,
-                        last_move_uci=puzzle.last_move_uci,
-                        herring_pool_id=puzzle.herring_pool_id,
-                    )
-                )
-            await session.flush()
-    except IntegrityError:
-        # uq_drill_sessions_user_open (the partial unique index enforcing
-        # D-12's at-most-one-open-session invariant) is the authority here —
-        # a concurrent request won the race, or a simultaneous padding scan
-        # collided on a drill_items primary key from the same underlying
-        # race. Resume the winner's session instead of surfacing a 500
-        # (T-189-14).
-        resumed = await open_session_for_user(session, user_id=user_id)
-        if resumed is None:
-            raise
-        return await _resume_session(
-            session,
-            user_id=user_id,
-            drill_session=resumed,
-            requested_count=n,
-            blob_pending_count=blob_pending_count,
-        )
-
-    return ComposedSession(
-        session_id=drill_session.id,
-        session_date=drill_session.session_date,
-        expires_on=drill_session.expires_on,
-        puzzle_count=len(puzzles),
-        requested_count=n,
-        solved_count=0,
+    return await _materialize_session_rows(
+        session,
+        user_id=user_id,
+        today=today,
+        n=n,
+        settings_row=settings_row,
         blob_pending_count=blob_pending_count,
-        puzzles=puzzles,
-        solved_results=[],
-        is_warmup=is_warmup,
+        items=items,
     )
 
 

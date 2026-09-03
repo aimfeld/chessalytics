@@ -23,7 +23,7 @@ import functools
 import math
 import time
 from pathlib import Path
-from collections.abc import Sequence
+from collections.abc import Callable, Sequence
 from typing import Literal, cast
 
 import sentry_sdk
@@ -360,6 +360,16 @@ _TIMELINE_SUBSECTION_IDS: frozenset[str] = frozenset(
 )
 
 
+def _render_zone_spec(spec: ZoneSpec, metric_id: str) -> str:
+    """Format a resolved `ZoneSpec` as '(typical LO to UP[, lower is better])'."""
+    scale = _scale_for_metric(metric_id)
+    precision = _precision_for_metric(metric_id)
+    lo = spec.typical_lower * scale
+    hi = spec.typical_upper * scale
+    direction_note = ", lower is better" if spec.direction == "lower_is_better" else ""
+    return f"(typical {lo:+.{precision}f} to {hi:+.{precision}f}{direction_note})"
+
+
 def _format_zone_bounds(metric_id: str, dimension: dict[str, str] | None) -> str:
     """Render '(typical LO to UP[, lower is better])' for a finding bullet.
 
@@ -386,10 +396,15 @@ def _format_zone_bounds(metric_id: str, dimension: dict[str, str] | None) -> str
     (which DOES have a calibrated [0.45, 0.55] band that should render).
     The skip-set lives in `_NO_BAND_METRICS` so future renames have a
     single discoverable touchpoint.
+
+    v21 (Phase 214): the original if/elif/.../elif dispatch chain nested one
+    level deeper per branch (each `elif` lives in the previous `If`'s
+    `orelse`), reaching AST depth 6. Flattened to sibling early-return `if`
+    statements — same precedence order, same result, but each condition now
+    sits at depth 1 instead of stacking.
     """
     if metric_id in _NO_BAND_METRICS:
         return ""
-    spec: ZoneSpec | None = None
     bucket = dimension.get("bucket") if dimension else None
     endgame_class = dimension.get("endgame_class") if dimension else None
     # Phase 102 UAT: metrics_elo findings carry a `time_control` dimension only;
@@ -400,6 +415,7 @@ def _format_zone_bounds(metric_id: str, dimension: dict[str, str] | None) -> str
     time_control = dimension.get("time_control") if dimension else None
     bucketed = cast("dict[str, dict[str, ZoneSpec]]", dict(BUCKETED_ZONE_REGISTRY))
     scalar = cast("dict[str, ZoneSpec]", dict(ZONE_REGISTRY))
+
     if (
         # Phase 102 UAT: per-TC Endgame Type findings carry BOTH endgame_class and
         # time_control — band per-(class × TC) via PER_CLASS_TC_GAUGE_ZONES so the
@@ -423,16 +439,18 @@ def _format_zone_bounds(metric_id: str, dimension: dict[str, str] | None) -> str
             lo_hi = tc_bands.recovery
         else:
             lo_hi = tc_bands.achievable_score_gap
-        spec = ZoneSpec(lo_hi[0], lo_hi[1], "higher_is_better")
-    elif (
+        return _render_zone_spec(ZoneSpec(lo_hi[0], lo_hi[1], "higher_is_better"), metric_id)
+
+    if (
         metric_id in ("conversion_win_pct", "recovery_save_pct")
         and endgame_class is not None
         and endgame_class in PER_CLASS_GAUGE_ZONES
     ):
         bands = PER_CLASS_GAUGE_ZONES[cast("EndgameClass", endgame_class)]
         lo_hi = bands.conversion if metric_id == "conversion_win_pct" else bands.recovery
-        spec = ZoneSpec(lo_hi[0], lo_hi[1], "higher_is_better")
-    elif (
+        return _render_zone_spec(ZoneSpec(lo_hi[0], lo_hi[1], "higher_is_better"), metric_id)
+
+    if (
         # Phase 87.1 (SEED-016 D-10): per-class Score Gap band dispatch.
         # Currently both PER_CLASS_GAUGE_ZONES[<class>].achievable_score_gap and
         # the global ZONE_REGISTRY entry hold the same ±5% placeholder, but
@@ -444,26 +462,27 @@ def _format_zone_bounds(metric_id: str, dimension: dict[str, str] | None) -> str
     ):
         bands = PER_CLASS_GAUGE_ZONES[cast("EndgameClass", endgame_class)]
         lo_hi = bands.achievable_score_gap
-        spec = ZoneSpec(lo_hi[0], lo_hi[1], "higher_is_better")
-    elif (
+        return _render_zone_spec(ZoneSpec(lo_hi[0], lo_hi[1], "higher_is_better"), metric_id)
+
+    if (
         # Phase 102 UAT: per-TC band for the metrics_elo metrics.
         metric_id in _TC_BAND_METRICS
         and time_control is not None
         and time_control in TC_METRIC_BANDS
     ):
         spec = tc_metric_zone_spec(cast(TcBandMetricId, metric_id), cast(TcBucket, time_control))
-    elif metric_id in bucketed and bucket is not None:
-        spec = bucketed[metric_id].get(bucket)
-    elif metric_id in scalar:
-        spec = scalar[metric_id]
-    if spec is None:
-        return ""
-    scale = _scale_for_metric(metric_id)
-    precision = _precision_for_metric(metric_id)
-    lo = spec.typical_lower * scale
-    hi = spec.typical_upper * scale
-    direction_note = ", lower is better" if spec.direction == "lower_is_better" else ""
-    return f"(typical {lo:+.{precision}f} to {hi:+.{precision}f}{direction_note})"
+        return _render_zone_spec(spec, metric_id)
+
+    if metric_id in bucketed and bucket is not None:
+        bucketed_spec = bucketed[metric_id].get(bucket)
+        if bucketed_spec is None:
+            return ""
+        return _render_zone_spec(bucketed_spec, metric_id)
+
+    if metric_id in scalar:
+        return _render_zone_spec(scalar[metric_id], metric_id)
+
+    return ""
 
 
 def _format_filters_for_prompt(filters: FilterContext) -> list[str]:
@@ -487,92 +506,97 @@ def _format_filters_for_prompt(filters: FilterContext) -> list[str]:
     ]
 
 
+def _render_player_profile_entry(entry: PlayerProfileEntry) -> list[str]:
+    """Render one (platform, time_control) combo's `[summary actual_elo]` block.
+
+    All_time line: current / min / max / mean / n / buckets / window / trend /
+    std (plus `stale: ...` when the combo hasn't been played in >183 days).
+    Last_3mo line: mean / n / buckets / trend / std, or `no data` when the
+    combo has no calendar-recent activity. Sparse-history entries (Fix B)
+    suppress trend/std on both lines — unreliable below ~20 weekly buckets.
+    """
+    is_sparse = entry.quality == "sparse"
+    header = f"[summary actual_elo | platform={entry.platform}, time_control={entry.time_control}]"
+    lines: list[str] = [header]
+
+    at_parts = [
+        f"current={entry.current_elo}",
+        f"mean={entry.all_time_mean}",
+        f"min={entry.min_elo}",
+        f"max={entry.max_elo}",
+        f"n={entry.all_time_n}",
+        f"buckets={entry.all_time_buckets} (weekly)",
+        f"window={entry.window_days}d",
+    ]
+    if not is_sparse:
+        at_parts.append(f"trend={entry.all_time_trend}")
+        at_parts.append(f"std={entry.all_time_std}")
+    else:
+        at_parts.append("quality=sparse")
+    if entry.stale_last_bucket and entry.stale_months is not None:
+        at_parts.append(f"stale: last {entry.stale_last_bucket} ({entry.stale_months} mo ago)")
+    lines.append("  all_time: " + ", ".join(at_parts))
+
+    if entry.last_3mo_mean is None:
+        lines.append("  last_3mo: no data")
+        return lines
+
+    lm_parts = [
+        f"mean={entry.last_3mo_mean}",
+        f"n={entry.last_3mo_n}",
+        f"buckets={entry.last_3mo_buckets} (weekly)",
+    ]
+    if not is_sparse and entry.last_3mo_trend is not None:
+        lm_parts.append(f"trend={entry.last_3mo_trend}")
+    if not is_sparse and entry.last_3mo_std is not None:
+        lm_parts.append(f"std={entry.last_3mo_std}")
+    if is_sparse:
+        lm_parts.append("quality=sparse")
+    lines.append("  last_3mo: " + ", ".join(lm_parts))
+    return lines
+
+
+def _player_profile_anchor_tag(profile: list[PlayerProfileEntry], *, all_sparse: bool) -> str:
+    """Return the `[anchor-combo ...]` tag line for the player-profile block.
+
+    v12: points at the most-played live combo (no stale marker). When every
+    combo is stale, emits `all-stale` so the LLM frames the whole profile in
+    past tense instead of fabricating a current-Elo read from a 27-month-old
+    rating. Sparse-history profiles (Fix B) get their own cautionary variant.
+    """
+    if all_sparse:
+        return (
+            "[anchor-combo] sparse-history — narrate cautiously; only current Elo and "
+            "basic range are reliable; do NOT claim trend, learning arc, or trajectory; "
+            'use plain present-tense framing like "you play at ~<rating>"'
+        )
+    anchor: PlayerProfileEntry | None = next(
+        (e for e in profile if e.stale_last_bucket is None),
+        None,
+    )
+    if anchor is not None:
+        return f"[anchor-combo platform={anchor.platform}, time_control={anchor.time_control}]"
+    return "[anchor-combo] all-stale — narrate in past tense"
+
+
 def _format_player_profile_block(
     profile: list[PlayerProfileEntry] | None,
 ) -> list[str]:
     """Render the `## Player profile` block as per-combo [summary actual_elo] blocks.
 
     Each qualifying (platform, time_control) combo emits one [summary] block
-    whose format mirrors every other windowed metric: an all_time line with
-    current / min / max / mean / n / buckets / window / trend / std (plus
-    `stale: ...` when the combo hasn't been played in >183 days) and a
-    last_3mo line with mean / n / buckets / trend / std (or `no data` when
-    the combo has no calendar-recent activity). Combos are already sorted by
-    game count desc upstream in compute_player_profile.
-
-    Sparse-history (Fix B): when every entry carries `quality="sparse"`
-    (short-history user — no combo cleared the full-quality bucket floor),
-    the [anchor-combo] tag is swapped for a `sparse-history` variant and
-    each entry's trend / std fields are suppressed (those signals are
-    unreliable below ~20 weekly buckets). The renderer still emits real
-    current / min / max / mean / n / buckets so the LLM has a concrete
-    Elo anchor for the `player_profile` output field instead of having to
-    invent one.
+    (built by `_render_player_profile_entry`). Combos are already sorted by
+    game count desc upstream in compute_player_profile. The leading
+    `[anchor-combo ...]` tag (`_player_profile_anchor_tag`) frames which combo
+    — or which caution — the LLM should anchor its narration to.
     """
     if not profile:
         return []
     lines: list[str] = ["## Player profile"]
     all_sparse = all(e.quality == "sparse" for e in profile)
-    # v12: emit an [anchor-combo] tag pointing at the most-played live combo
-    # (no stale marker). When every combo is stale, emit `all-stale` so the
-    # LLM frames the whole profile in past tense instead of fabricating a
-    # current-Elo read from a 27-month-old rating.
-    anchor: PlayerProfileEntry | None = next(
-        (e for e in profile if e.stale_last_bucket is None),
-        None,
-    )
-    if all_sparse:
-        lines.append(
-            "[anchor-combo] sparse-history — narrate cautiously; only current Elo and "
-            "basic range are reliable; do NOT claim trend, learning arc, or trajectory; "
-            'use plain present-tense framing like "you play at ~<rating>"'
-        )
-    elif anchor is not None:
-        lines.append(
-            f"[anchor-combo platform={anchor.platform}, time_control={anchor.time_control}]"
-        )
-    else:
-        lines.append("[anchor-combo] all-stale — narrate in past tense")
+    lines.append(_player_profile_anchor_tag(profile, all_sparse=all_sparse))
     for entry in profile:
-        is_sparse = entry.quality == "sparse"
-        header = (
-            f"[summary actual_elo | platform={entry.platform}, time_control={entry.time_control}]"
-        )
-        lines.append(header)
-
-        at_parts = [
-            f"current={entry.current_elo}",
-            f"mean={entry.all_time_mean}",
-            f"min={entry.min_elo}",
-            f"max={entry.max_elo}",
-            f"n={entry.all_time_n}",
-            f"buckets={entry.all_time_buckets} (weekly)",
-            f"window={entry.window_days}d",
-        ]
-        if not is_sparse:
-            at_parts.append(f"trend={entry.all_time_trend}")
-            at_parts.append(f"std={entry.all_time_std}")
-        else:
-            at_parts.append("quality=sparse")
-        if entry.stale_last_bucket and entry.stale_months is not None:
-            at_parts.append(f"stale: last {entry.stale_last_bucket} ({entry.stale_months} mo ago)")
-        lines.append("  all_time: " + ", ".join(at_parts))
-
-        if entry.last_3mo_mean is None:
-            lines.append("  last_3mo: no data")
-        else:
-            lm_parts = [
-                f"mean={entry.last_3mo_mean}",
-                f"n={entry.last_3mo_n}",
-                f"buckets={entry.last_3mo_buckets} (weekly)",
-            ]
-            if not is_sparse and entry.last_3mo_trend is not None:
-                lm_parts.append(f"trend={entry.last_3mo_trend}")
-            if not is_sparse and entry.last_3mo_std is not None:
-                lm_parts.append(f"std={entry.last_3mo_std}")
-            if is_sparse:
-                lm_parts.append("quality=sparse")
-            lines.append("  last_3mo: " + ", ".join(lm_parts))
+        lines.extend(_render_player_profile_entry(entry))
     lines.append("")
     return lines
 
@@ -980,6 +1004,16 @@ def _newest_bucket_date(findings: list[SubsectionFinding]) -> datetime.date | No
     return newest
 
 
+def _apply_c6_filter(points: list[TimePoint]) -> list[TimePoint]:
+    """C6: cap an `all_time` series at the last `_ALL_TIME_MAX_POINTS` buckets.
+
+    Shared by `_all_time_window_bounds` and `_retained_series_for_summary` so
+    the payload-summary window text and the actually-rendered series/summary
+    data always agree on which buckets survived the cap.
+    """
+    return points[-_ALL_TIME_MAX_POINTS:]
+
+
 def _all_time_window_bounds(
     findings: list[SubsectionFinding],
 ) -> tuple[datetime.date, datetime.date] | None:
@@ -996,7 +1030,7 @@ def _all_time_window_bounds(
     for f in findings:
         if f.series is None or f.window != "all_time":
             continue
-        retained = [pt for pt in f.series if pt.n >= MIN_BUCKET_N][-_ALL_TIME_MAX_POINTS:]
+        retained = _apply_c6_filter([pt for pt in f.series if pt.n >= MIN_BUCKET_N])
         for pt in retained:
             try:
                 d = datetime.date.fromisoformat(pt.bucket_start)
@@ -1417,116 +1451,6 @@ def _endgame_elo_per_bucket(points: list[TimePoint] | None) -> list[tuple[float,
     return out
 
 
-def _render_endgame_elo_summary_block(
-    *,
-    dim_key: str,
-    all_time_finding: SubsectionFinding | None,
-    last_3mo_finding: SubsectionFinding | None,
-    all_time_series: list[TimePoint] | None,
-    last_3mo_series: list[TimePoint] | None,
-    stale_markers: dict[int, str],
-) -> list[str]:
-    """Emit `[summary endgame_elo | dim]` derived from the endgame_elo_gap series.
-
-    v11: the chart's headline value is Endgame ELO (absolute Elo, score-gap-adjusted)
-    not the gap. We derive a per-window aggregate from the same retained series
-    points used by the gap summary so the LLM can cite the chart number directly
-    without doing arithmetic. No zone / quality fields — endgame_elo has no
-    calibrated band; the paired `[summary endgame_elo_gap]` block (rendered
-    immediately after this one) carries the zone interpretation.
-
-    Phase 87.5 (D-06): restored from the Phase 87.4 helper name and every
-    legacy identifier in lockstep with the metric rename to `endgame_elo_*`.
-    """
-
-    def window_line(
-        window_label: str, finding: SubsectionFinding | None, series: list[TimePoint] | None
-    ) -> tuple[str | None, float | None]:
-        """Return (rendered_line, weighted_mean) or (None, None) if no usable data."""
-        values = _endgame_elo_per_bucket(series)
-        if not values:
-            return None, None
-        total_n = sum(n for _, n in values)
-        if total_n == 0:
-            return None, None
-        weighted_mean = sum(v * n for v, n in values) / total_n
-        elos = [v for v, _ in values]
-        elo_mean = sum(elos) / len(elos)
-        std = (
-            (sum((v - elo_mean) ** 2 for v in elos) / (len(elos) - 1)) ** 0.5
-            if len(elos) >= 2
-            else 0.0
-        )
-        granularity = "weekly" if window_label == "last_3mo" else "monthly"
-        parts: list[str] = [
-            f"mean={weighted_mean:+.0f} Elo",
-            f"n={finding.sample_size if finding is not None else total_n}",
-            f"buckets={len(values)} ({granularity})",
-        ]
-        within_noise = False
-        if len(elos) >= _TREND_MIN_POINTS:
-            latest = elos[-1]
-            prior_mean = sum(elos[-4:-1]) / 3
-            diff = latest - prior_mean
-            if abs(diff) < _TREND_FLAT_THRESHOLD_ELO:
-                direction = "flat"
-            elif diff > 0:
-                direction = "improving"
-            else:
-                direction = "regressing"
-            parts.append(f"trend={direction}")
-            within_noise = direction != "flat" and abs(diff) < _DELTA_WITHIN_NOISE_ELO
-        parts.append(f"std={std:.0f}")
-        if within_noise:
-            parts.append("within-noise")
-        if finding is not None:
-            stale = stale_markers.get(id(finding), "")
-            if stale:
-                parts.append(stale)
-        return f"  {window_label}: " + ", ".join(parts), weighted_mean
-
-    # Phase 87.5 (D-06): header literal restored from the Phase 87.4 form.
-    header = "[summary endgame_elo"
-    if dim_key:
-        header += f" | {dim_key}"
-    header += "]"
-
-    at_line, at_mean = window_line("all_time", all_time_finding, all_time_series)
-    lm_line, lm_mean = window_line("last_3mo", last_3mo_finding, last_3mo_series)
-
-    if at_line is None and lm_line is None:
-        return []
-
-    lines: list[str] = [header]
-    if at_line is not None:
-        lines.append(at_line)
-    if lm_line is not None:
-        lines.append(lm_line)
-    elif at_line is not None:
-        lines.append("  last_3mo: no data")
-
-    if (
-        at_line is not None
-        and lm_line is not None
-        and at_mean is not None
-        and lm_mean is not None
-        and all_time_finding is not None
-        and last_3mo_finding is not None
-    ):
-        shift = lm_mean - at_mean
-        sample_mismatch = (
-            all_time_finding.sample_size > 0
-            and (last_3mo_finding.sample_size / all_time_finding.sample_size)
-            < _DELTA_SMALL_SAMPLE_RATIO
-        )
-        shift_line = f"  shift={shift:+.0f} Elo"
-        if abs(shift) < _DELTA_WITHIN_NOISE_ELO and sample_mismatch:
-            shift_line += ", within-noise"
-        lines.append(shift_line)
-
-    return lines
-
-
 def _non_endgame_elo_per_bucket(points: list[TimePoint] | None) -> list[tuple[float, int]]:
     """Return [(non_endgame_elo_value, n), ...] from endgame_elo_gap series points.
 
@@ -1546,8 +1470,66 @@ def _non_endgame_elo_per_bucket(points: list[TimePoint] | None) -> list[tuple[fl
     return out
 
 
-def _render_non_endgame_elo_summary_block(
+def _elo_variant_window_line(
+    window_label: str,
+    finding: SubsectionFinding | None,
+    series: list[TimePoint] | None,
     *,
+    per_bucket: Callable[[list[TimePoint] | None], list[tuple[float, int]]],
+    stale_markers: dict[int, str],
+) -> tuple[str | None, float | None]:
+    """Return (rendered_line, weighted_mean) or (None, None) if no usable data.
+
+    One window's line ("all_time" or "last_3mo") of an elo-variant summary
+    block. Extracted to its own module-level function (not a closure inside
+    `_render_elo_variant_summary_block`) so ruff's per-function complexity
+    check scores it independently of the caller.
+    """
+    values = per_bucket(series)
+    if not values:
+        return None, None
+    total_n = sum(n for _, n in values)
+    if total_n == 0:
+        return None, None
+    weighted_mean = sum(v * n for v, n in values) / total_n
+    elos = [v for v, _ in values]
+    elo_mean = sum(elos) / len(elos)
+    std = (
+        (sum((v - elo_mean) ** 2 for v in elos) / (len(elos) - 1)) ** 0.5 if len(elos) >= 2 else 0.0
+    )
+    granularity = "weekly" if window_label == "last_3mo" else "monthly"
+    parts: list[str] = [
+        f"mean={weighted_mean:+.0f} Elo",
+        f"n={finding.sample_size if finding is not None else total_n}",
+        f"buckets={len(values)} ({granularity})",
+    ]
+    within_noise = False
+    if len(elos) >= _TREND_MIN_POINTS:
+        latest = elos[-1]
+        prior_mean = sum(elos[-4:-1]) / 3
+        diff = latest - prior_mean
+        if abs(diff) < _TREND_FLAT_THRESHOLD_ELO:
+            direction = "flat"
+        elif diff > 0:
+            direction = "improving"
+        else:
+            direction = "regressing"
+        parts.append(f"trend={direction}")
+        within_noise = direction != "flat" and abs(diff) < _DELTA_WITHIN_NOISE_ELO
+    parts.append(f"std={std:.0f}")
+    if within_noise:
+        parts.append("within-noise")
+    if finding is not None:
+        stale = stale_markers.get(id(finding), "")
+        if stale:
+            parts.append(stale)
+    return f"  {window_label}: " + ", ".join(parts), weighted_mean
+
+
+def _render_elo_variant_summary_block(
+    *,
+    label: str,
+    per_bucket: Callable[[list[TimePoint] | None], list[tuple[float, int]]],
     dim_key: str,
     all_time_finding: SubsectionFinding | None,
     last_3mo_finding: SubsectionFinding | None,
@@ -1555,70 +1537,38 @@ def _render_non_endgame_elo_summary_block(
     last_3mo_series: list[TimePoint] | None,
     stale_markers: dict[int, str],
 ) -> list[str]:
-    """Emit `[summary non_endgame_elo | dim]` from the endgame_elo_gap series.
+    """Emit `[summary {label} | dim]` derived from an endgame_elo_gap series.
 
-    Analogous to `_render_endgame_elo_summary_block` but reads pt.non_endgame_elo
-    directly (the FIDE Performance Rating for the non-endgame game subset).
-    No zone / quality fields — non_endgame_elo has no calibrated band; the
-    paired `[summary endgame_elo_gap]` block carries the zone interpretation.
+    Shared body for `_render_endgame_elo_summary_block` (`label="endgame_elo"`,
+    `per_bucket=_endgame_elo_per_bucket`) and `_render_non_endgame_elo_summary_block`
+    (`label="non_endgame_elo"`, `per_bucket=_non_endgame_elo_per_bucket`) — the
+    two were byte-identical except for the header label and which per-bucket
+    extractor they called. No zone / quality fields on either variant — the
+    paired `[summary endgame_elo_gap]` block (rendered immediately after)
+    carries the zone interpretation.
 
-    Phase 87.6: new helper enabling THREE summary blocks per combo in the
-    endgame_elo_timeline subsection.
+    Phase 87.5 (D-06) / Phase 87.6: identifiers restored/added in lockstep
+    with the metric rename to `endgame_elo_*` and the non_endgame_elo variant.
     """
-
-    def window_line(
-        window_label: str, finding: SubsectionFinding | None, series: list[TimePoint] | None
-    ) -> tuple[str | None, float | None]:
-        """Return (rendered_line, weighted_mean) or (None, None) if no usable data."""
-        values = _non_endgame_elo_per_bucket(series)
-        if not values:
-            return None, None
-        total_n = sum(n for _, n in values)
-        if total_n == 0:
-            return None, None
-        weighted_mean = sum(v * n for v, n in values) / total_n
-        elos = [v for v, _ in values]
-        elo_mean = sum(elos) / len(elos)
-        std = (
-            (sum((v - elo_mean) ** 2 for v in elos) / (len(elos) - 1)) ** 0.5
-            if len(elos) >= 2
-            else 0.0
-        )
-        granularity = "weekly" if window_label == "last_3mo" else "monthly"
-        parts: list[str] = [
-            f"mean={weighted_mean:+.0f} Elo",
-            f"n={finding.sample_size if finding is not None else total_n}",
-            f"buckets={len(values)} ({granularity})",
-        ]
-        within_noise = False
-        if len(elos) >= _TREND_MIN_POINTS:
-            latest = elos[-1]
-            prior_mean = sum(elos[-4:-1]) / 3
-            diff = latest - prior_mean
-            if abs(diff) < _TREND_FLAT_THRESHOLD_ELO:
-                direction = "flat"
-            elif diff > 0:
-                direction = "improving"
-            else:
-                direction = "regressing"
-            parts.append(f"trend={direction}")
-            within_noise = direction != "flat" and abs(diff) < _DELTA_WITHIN_NOISE_ELO
-        parts.append(f"std={std:.0f}")
-        if within_noise:
-            parts.append("within-noise")
-        if finding is not None:
-            stale = stale_markers.get(id(finding), "")
-            if stale:
-                parts.append(stale)
-        return f"  {window_label}: " + ", ".join(parts), weighted_mean
-
-    header = "[summary non_endgame_elo"
+    header = f"[summary {label}"
     if dim_key:
         header += f" | {dim_key}"
     header += "]"
 
-    at_line, at_mean = window_line("all_time", all_time_finding, all_time_series)
-    lm_line, lm_mean = window_line("last_3mo", last_3mo_finding, last_3mo_series)
+    at_line, at_mean = _elo_variant_window_line(
+        "all_time",
+        all_time_finding,
+        all_time_series,
+        per_bucket=per_bucket,
+        stale_markers=stale_markers,
+    )
+    lm_line, lm_mean = _elo_variant_window_line(
+        "last_3mo",
+        last_3mo_finding,
+        last_3mo_series,
+        per_bucket=per_bucket,
+        stale_markers=stale_markers,
+    )
 
     if at_line is None and lm_line is None:
         return []
@@ -1651,6 +1601,67 @@ def _render_non_endgame_elo_summary_block(
         lines.append(shift_line)
 
     return lines
+
+
+def _render_endgame_elo_summary_block(
+    *,
+    dim_key: str,
+    all_time_finding: SubsectionFinding | None,
+    last_3mo_finding: SubsectionFinding | None,
+    all_time_series: list[TimePoint] | None,
+    last_3mo_series: list[TimePoint] | None,
+    stale_markers: dict[int, str],
+) -> list[str]:
+    """Emit `[summary endgame_elo | dim]` derived from the endgame_elo_gap series.
+
+    v11: the chart's headline value is Endgame ELO (absolute Elo, score-gap-adjusted)
+    not the gap. We derive a per-window aggregate from the same retained series
+    points used by the gap summary so the LLM can cite the chart number directly
+    without doing arithmetic. Thin wrapper over `_render_elo_variant_summary_block`
+    — kept as its own named function because `monkeypatch`/test imports and the
+    `_render_subsection_block` call site both pin this exact name.
+    """
+    return _render_elo_variant_summary_block(
+        label="endgame_elo",
+        per_bucket=_endgame_elo_per_bucket,
+        dim_key=dim_key,
+        all_time_finding=all_time_finding,
+        last_3mo_finding=last_3mo_finding,
+        all_time_series=all_time_series,
+        last_3mo_series=last_3mo_series,
+        stale_markers=stale_markers,
+    )
+
+
+def _render_non_endgame_elo_summary_block(
+    *,
+    dim_key: str,
+    all_time_finding: SubsectionFinding | None,
+    last_3mo_finding: SubsectionFinding | None,
+    all_time_series: list[TimePoint] | None,
+    last_3mo_series: list[TimePoint] | None,
+    stale_markers: dict[int, str],
+) -> list[str]:
+    """Emit `[summary non_endgame_elo | dim]` from the endgame_elo_gap series.
+
+    Analogous to `_render_endgame_elo_summary_block` but reads pt.non_endgame_elo
+    directly (the FIDE Performance Rating for the non-endgame game subset).
+    Thin wrapper over `_render_elo_variant_summary_block` — kept as its own
+    named function for the same reason as `_render_endgame_elo_summary_block`.
+
+    Phase 87.6: new helper enabling THREE summary blocks per combo in the
+    endgame_elo_timeline subsection.
+    """
+    return _render_elo_variant_summary_block(
+        label="non_endgame_elo",
+        per_bucket=_non_endgame_elo_per_bucket,
+        dim_key=dim_key,
+        all_time_finding=all_time_finding,
+        last_3mo_finding=last_3mo_finding,
+        all_time_series=all_time_series,
+        last_3mo_series=last_3mo_series,
+        stale_markers=stale_markers,
+    )
 
 
 def _lookup_pctl_record(
@@ -1921,6 +1932,22 @@ _TYPE_SUBSECTION_TO_TC: dict[str, str] = {
 }
 
 
+def _apply_c2_filter(
+    points: list[TimePoint], *, drop_last_90_days: bool, all_time_cutoff: str
+) -> list[TimePoint]:
+    """C2: for an `all_time` series, drop points within the last 90 days when
+    a matching `last_3mo` series exists for the same (metric, subsection) pair.
+
+    `drop_last_90_days` is pre-computed by the caller (True only when this is
+    an `all_time`-window finding whose (metric, subsection) pair also has a
+    `last_3mo` finding) so this helper stays a pure points-in, points-out
+    filter rather than re-deriving that condition from a `SubsectionFinding`.
+    """
+    if not drop_last_90_days:
+        return points
+    return [pt for pt in points if pt.bucket_start < all_time_cutoff]
+
+
 def _retained_series_for_summary(
     finding: SubsectionFinding,
     *,
@@ -1936,19 +1963,35 @@ def _retained_series_for_summary(
     """
     if finding.series is None or finding.subsection_id not in _TIMELINE_SUBSECTION_IDS:
         return None
-    points = [pt for pt in finding.series if pt.n >= MIN_BUCKET_N]
-    if (
-        finding.window == "all_time"
-        and (
-            finding.metric,
-            finding.subsection_id,
-        )
-        in last_3mo_pairs
-    ):
-        points = [pt for pt in points if pt.bucket_start < all_time_cutoff]
-    if finding.window == "all_time":
-        points = points[-_ALL_TIME_MAX_POINTS:]
+    points = [pt for pt in finding.series if pt.n >= MIN_BUCKET_N]  # A4
+    is_all_time = finding.window == "all_time"
+    points = _apply_c2_filter(
+        points,
+        drop_last_90_days=is_all_time and (finding.metric, finding.subsection_id) in last_3mo_pairs,
+        all_time_cutoff=all_time_cutoff,
+    )
+    if is_all_time:
+        points = _apply_c6_filter(points)
     return points
+
+
+def _apply_c3_filter(
+    prev_date: datetime.date | None,
+    curr_date: datetime.date,
+    prev_bucket_start: str | None,
+    curr_bucket_start: str,
+) -> str | None:
+    """C3: return an `[activity-gap] ...` marker line for a >90-day gap between
+    two consecutive retained series points, or None when there is no gap
+    (or no prior point to compare against).
+    """
+    if (
+        prev_date is not None
+        and prev_bucket_start is not None
+        and (curr_date - prev_date).days > _ACTIVITY_GAP_DAYS
+    ):
+        return f"[activity-gap] {prev_bucket_start} → {curr_bucket_start}"
+    return None
 
 
 def _render_series_block(finding: SubsectionFinding, points: list[TimePoint]) -> list[str]:
@@ -1996,12 +2039,9 @@ def _render_series_block(finding: SubsectionFinding, points: list[TimePoint]) ->
             curr_date = datetime.date.fromisoformat(pt.bucket_start)
         except ValueError:
             continue
-        if (
-            prev_date is not None
-            and prev_bucket_start is not None
-            and (curr_date - prev_date).days > _ACTIVITY_GAP_DAYS
-        ):
-            lines.append(f"[activity-gap] {prev_bucket_start} → {pt.bucket_start}")
+        gap_marker = _apply_c3_filter(prev_date, curr_date, prev_bucket_start, pt.bucket_start)
+        if gap_marker:
+            lines.append(gap_marker)
         pt_value = pt.value * series_scale
         if emit_elo and pt.actual_elo is not None:
             # Phase 87.6: extend series rows with non_eg_elo= when available.
@@ -2021,6 +2061,58 @@ def _render_series_block(finding: SubsectionFinding, points: list[TimePoint]) ->
         prev_date = curr_date
         prev_bucket_start = pt.bucket_start
     return lines
+
+
+def _group_findings_by_metric_dim(
+    members: list[SubsectionFinding],
+) -> tuple[dict[tuple[str, str], dict[str, SubsectionFinding]], list[tuple[str, str]]]:
+    """Group `members` by (metric, dim_key) -> {window: finding}.
+
+    Preserves the order in which metric/dim pairs first appear so the LLM
+    sees them in the original payload order (matches the old bullet
+    ordering). Returns (groups, order) — `order` is the group-first-seen
+    sequence `_render_subsection_block` iterates over.
+    """
+    groups: dict[tuple[str, str], dict[str, SubsectionFinding]] = {}
+    order: list[tuple[str, str]] = []
+    for f in members:
+        key = (f.metric, _dim_key_for_finding(f))
+        if key not in groups:
+            groups[key] = {}
+            order.append(key)
+        groups[key][f.window] = f
+    return groups, order
+
+
+def _apply_c5_filter(
+    candidate_finding: SubsectionFinding | None,
+    candidate_series: list[TimePoint] | None,
+    *,
+    all_time_series_pairs: set[tuple[str, str]],
+    live_series_metrics: set[tuple[str, str]],
+    stale_markers: dict[int, str],
+) -> bool:
+    """C5 (+ stale/live-twin gate): should this candidate's raw `[series ...]`
+    block be emitted?
+
+    False when there is nothing to render, when this is a `last_3mo` series
+    superseded by an `all_time` series for the same (metric, subsection) pair
+    (C5 proper), or when this is a stale combo shadowed by a live twin for
+    the same pair.
+    """
+    if candidate_finding is None or not candidate_series:
+        return False
+    if (
+        candidate_finding.window == "last_3mo"
+        and (candidate_finding.metric, candidate_finding.subsection_id) in all_time_series_pairs
+    ):
+        return False
+    if (
+        id(candidate_finding) in stale_markers
+        and (candidate_finding.metric, candidate_finding.subsection_id) in live_series_metrics
+    ):
+        return False
+    return True
 
 
 def _render_subsection_block(
@@ -2070,17 +2162,7 @@ def _render_subsection_block(
             lines.append(recovery_pattern)
         lines.extend(_asymmetry_lines(members, type_tc))
 
-    # Group findings by (metric, dim_key) → {window: finding}. Preserves the
-    # order in which metric/dim pairs first appear so the LLM sees them in
-    # the original payload order (matches the old bullet ordering).
-    groups: dict[tuple[str, str], dict[str, SubsectionFinding]] = {}
-    order: list[tuple[str, str]] = []
-    for f in members:
-        key = (f.metric, _dim_key_for_finding(f))
-        if key not in groups:
-            groups[key] = {}
-            order.append(key)
-        groups[key][f.window] = f
+    groups, order = _group_findings_by_metric_dim(members)
 
     recovery_note_emitted = False
     for key in order:
@@ -2158,35 +2240,166 @@ def _render_subsection_block(
             )
             recovery_note_emitted = True
 
-        # Raw [series ...] block below the summary. Same C5 / stale-live-twin
-        # gates as before: skip last_3mo series when an all_time series exists
-        # for the same (metric, subsection); skip stale combos when a live
-        # combo exists.
+        # Raw [series ...] block below the summary. _apply_c5_filter carries
+        # the same C5 / stale-live-twin gates as before: skip last_3mo series
+        # when an all_time series exists for the same (metric, subsection);
+        # skip stale combos when a live combo exists.
         for candidate_finding, candidate_series in (
             (all_time, all_time_series),
             (last_3mo, last_3mo_series),
         ):
-            if candidate_finding is None or not candidate_series:
-                continue
-            if (
-                candidate_finding.window == "last_3mo"
-                and (
-                    candidate_finding.metric,
-                    candidate_finding.subsection_id,
-                )
-                in all_time_series_pairs
+            if not _apply_c5_filter(
+                candidate_finding,
+                candidate_series,
+                all_time_series_pairs=all_time_series_pairs,
+                live_series_metrics=live_series_metrics,
+                stale_markers=stale_markers,
             ):
                 continue
-            if (
-                id(candidate_finding) in stale_markers
-                and (candidate_finding.metric, candidate_finding.subsection_id)
-                in live_series_metrics
-            ):
-                continue
+            # _apply_c5_filter's first check (candidate_finding is None or not
+            # candidate_series) means both are non-None here; ty cannot narrow
+            # across the function-call boundary, so assert to keep the
+            # explicit-type-safety guarantee CLAUDE.md requires.
+            assert candidate_finding is not None
+            assert candidate_series is not None
             lines.extend(_render_series_block(candidate_finding, candidate_series))
 
     lines.append("")
     return lines
+
+
+def _apply_a2_filter(raw_findings: list[SubsectionFinding]) -> list[SubsectionFinding]:
+    """A5 + A2: drop hidden subsections, NaN values, and thin empty findings.
+
+    v6: also drops any finding dimensioned on endgame_class=pawnless — the UI
+    hides pawnless rows (ENDGAME_CLASS_LABELS, Endgames.tsx) so the LLM must
+    not narrate a type the user cannot see. All three drop rules ran as one
+    inline list comprehension in `_assemble_user_prompt` before Phase 214;
+    named and extracted here per the docstring's own filter-stage bullets.
+    """
+    return [
+        f
+        for f in raw_findings
+        if not math.isnan(f.value)
+        and not (f.sample_size == 0 and f.sample_quality == "thin")
+        and not (f.dimension is not None and f.dimension.get("endgame_class") == "pawnless")
+    ]
+
+
+def _compute_all_time_series_pairs(
+    visible: list[SubsectionFinding],
+    *,
+    last_3mo_pairs: set[tuple[str, str]],
+    all_time_cutoff: str,
+) -> set[tuple[str, str]]:
+    """Register a (metric, subsection) pair ONLY when the all_time series
+    still has retained points after the A4/C2/C6 filter chain.
+
+    For short-history users whose entire history fits inside the 90-day C2
+    cutoff, the all_time series filters to empty — without this gate the
+    empty pair would silently suppress the last_3mo [series] block (C5) so
+    the LLM would see [summary] lines pointing at no series data. See
+    `.planning/debug/llm-prompt-missing-sections.md` (Fix A).
+    """
+    all_time_series_pairs: set[tuple[str, str]] = set()
+    for f in visible:
+        if f.window != "all_time" or f.series is None:
+            continue
+        retained = _retained_series_for_summary(
+            f,
+            last_3mo_pairs=last_3mo_pairs,
+            all_time_cutoff=all_time_cutoff,
+        )
+        if retained:
+            all_time_series_pairs.add((f.metric, f.subsection_id))
+    return all_time_series_pairs
+
+
+def _compute_stale_markers_and_live_metrics(
+    visible: list[SubsectionFinding], *, newest_date: datetime.date | None
+) -> tuple[dict[int, str], int, set[tuple[str, str]]]:
+    """Return (stale_markers, stale_count, live_series_metrics) for `visible`.
+
+    `stale_markers` keys by `id(finding)` (matches the `stale_markers.get(id(f))`
+    lookups downstream); `live_series_metrics` carries the (metric, subsection)
+    pairs of every NON-stale series, so a stale combo can be shadowed by a
+    live twin for the same pair (C5's stale-live-twin gate).
+    """
+    stale_markers: dict[int, str] = {}
+    stale_count = 0
+    live_series_metrics: set[tuple[str, str]] = set()
+    for f in visible:
+        if f.series is None:
+            continue
+        marker = _stale_marker(f.series, newest_date)
+        if marker:
+            stale_markers[id(f)] = marker
+            stale_count += 1
+        else:
+            live_series_metrics.add((f.metric, f.subsection_id))
+    return stale_markers, stale_count, live_series_metrics
+
+
+def _render_layout_item(
+    kind: str,
+    block_id: str,
+    *,
+    chart_blocks: dict[str, list[str]],
+    groups: dict[str, list[SubsectionFinding]],
+    type_wdl_tables: dict[str, list[str]],
+    stale_markers: dict[int, str],
+    live_series_metrics: set[tuple[str, str]],
+    last_3mo_pairs: set[tuple[str, str]],
+    all_time_series_pairs: set[tuple[str, str]],
+    all_time_cutoff: str,
+    findings: EndgameTabFindings,
+) -> list[str]:
+    """Render one `_SECTION_LAYOUT` entry (a "chart" or "subsection" block).
+
+    Extracted from `_assemble_user_prompt`'s per-section render loop so the
+    `if not members and not wdl_table: if block_id == ...:` special case (the
+    `endgame_elo_timeline` sparse-history header) does not nest 5 levels deep
+    inside the caller's own `for section_id / for kind, block_id` loops.
+    """
+    if kind == "chart":
+        return list(chart_blocks.get(block_id, []))
+    # subsection
+    members = groups.get(block_id) or []
+    wdl_table = type_wdl_tables.get(block_id)
+    if not members and not wdl_table:
+        # Fix C: keep the `endgame_elo_timeline` header visible even when
+        # every (platform, time_control) combo is sparse (< SPARSE_COMBO_FLOOR
+        # weekly buckets). Without this the whole subsection vanishes for
+        # short-history users, and the LLM has no signal that the Endgame
+        # ELO chart exists. See `.planning/debug/llm-prompt-missing-sections.md`.
+        # Phase 87.5 (D-06): block_id restored from the Phase 87.4 name.
+        if block_id == "endgame_elo_timeline":
+            return [
+                "### Subsection: endgame_elo_timeline",
+                (
+                    f"[no qualifying combo — every (platform, time_control) "
+                    f"combo has fewer than {SPARSE_COMBO_FLOOR} weekly buckets; "
+                    "no Endgame ELO trajectory available yet]"
+                ),
+                "",
+            ]
+        return []
+    # Phase 102 UAT: a per-TC Endgame Type subsection still renders its WDL
+    # table even when the TC has no Conv/Recov/Score-Gap findings (e.g. an
+    # all-parity TC), mirroring the UI card that always shows the WDL bars.
+    return _render_subsection_block(
+        subsection_id=block_id,
+        members=members,
+        stale_markers=stale_markers,
+        live_series_metrics=live_series_metrics,
+        last_3mo_pairs=last_3mo_pairs,
+        all_time_series_pairs=all_time_series_pairs,
+        all_time_cutoff=all_time_cutoff,
+        type_wdl_table=wdl_table,
+        metric_percentiles=findings.metric_percentiles,
+        per_tc_metric_percentiles=findings.per_tc_metric_percentiles,
+        cohort_anchors=findings.cohort_anchors,
+    )
 
 
 def _assemble_user_prompt(findings: EndgameTabFindings) -> str:
@@ -2197,23 +2410,35 @@ def _assemble_user_prompt(findings: EndgameTabFindings) -> str:
     blocks interleaved in UI order. Each section maps 1:1 to one `section_id`
     in the LLM output. Empty sections (no qualifying blocks) are omitted.
 
-    Filters applied:
+    Filters applied (each stage is a same-named `_apply_<code>_filter` helper
+    at the point in the pipeline where it actually runs -- not all of them
+    execute inline in this function's own body; see each helper's docstring
+    for its real call site):
     - A2: skip findings where value is NaN or (sample_size=0 AND thin quality).
-    - A4: drop series points with n < MIN_BUCKET_N.
+      Applied here, via `_apply_a2_filter`.
+    - A4: drop series points with n < MIN_BUCKET_N. Applied inside
+      `_retained_series_for_summary`.
     - C2: for `all_time` series, drop points within last 90 days if a matching
       `last_3mo` series exists for the same (metric, subsection) pair.
+      Applied inside `_retained_series_for_summary`, via `_apply_c2_filter`.
     - C3: insert `[activity-gap] ...` markers when consecutive retained
-      series points are > _ACTIVITY_GAP_DAYS apart.
-    - C4: drop the scalar `overall` subsection when the overall_wdl chart
-      renders — the 2-row chart already carries the framing.
+      series points are > _ACTIVITY_GAP_DAYS apart. Applied inside
+      `_render_series_block`, via `_apply_c3_filter`.
     - C5: skip the `last_3mo` Series block when an `all_time` Series for
       the same (metric, subsection) is emitted. The last_3mo scalar stays.
+      Applied inside `_render_subsection_block`, via `_apply_c5_filter`.
     - C6: cap `all_time` series at the last _ALL_TIME_MAX_POINTS buckets.
+      Applied inside `_retained_series_for_summary` and
+      `_all_time_window_bounds`, via `_apply_c6_filter`.
     - Inline zone bounds: every finding bullet includes a
       `(typical LO to UP[, lower is better])` fragment next to the zone token.
+
+    A former C4 stage ("drop the scalar `overall` subsection when the
+    overall_wdl chart renders") is retired: the scalar `overall` subsection
+    itself was removed from `_SECTION_LAYOUT` in the Phase 102 UAT pass (see
+    the comment on the `overall` section's layout list) — there is no longer
+    a runtime branch to gate, so no `_apply_c4_filter` exists.
     """
-    # Pre-render chart blocks so we can gate the scalar `overall` subsection
-    # (C4) on whether the overall_wdl chart will emit.
     overall_wdl_block = _format_overall_wdl_chart_block(findings)
     # Phase 88.1 (Plan 09, REVIEW.md WR-06): the time-pressure 10-bucket
     # chart block was dropped alongside its formatter helper.
@@ -2237,17 +2462,7 @@ def _assemble_user_prompt(findings: EndgameTabFindings) -> str:
     # under the `endgame_type_<tc>` subsections, so no in-renderer synthesis is needed.
     raw_findings: list[SubsectionFinding] = list(findings.findings)
 
-    # A5 + A2: drop hidden subsections, NaN values, and thin empty findings.
-    # v6: also drop any finding dimensioned on endgame_class=pawnless — the UI
-    # hides pawnless rows (ENDGAME_CLASS_LABELS, Endgames.tsx) so the LLM must
-    # not narrate a type the user cannot see.
-    visible: list[SubsectionFinding] = [
-        f
-        for f in raw_findings
-        if not math.isnan(f.value)
-        and not (f.sample_size == 0 and f.sample_quality == "thin")
-        and not (f.dimension is not None and f.dimension.get("endgame_class") == "pawnless")
-    ]
+    visible: list[SubsectionFinding] = _apply_a2_filter(raw_findings)
 
     # v9/Phase 68: the `overall` subsection carries the authoritative
     # aggregate `[summary score_gap]` alongside the overall_wdl chart
@@ -2262,38 +2477,14 @@ def _assemble_user_prompt(findings: EndgameTabFindings) -> str:
     }
     today = datetime.date.today()
     all_time_cutoff = (today - datetime.timedelta(days=_ALL_TIME_CUTOFF_DAYS)).isoformat()
-    # Register a (metric, subsection) pair in all_time_series_pairs ONLY when
-    # the all_time series still has retained points after the A4/C2/C6 filter
-    # chain. For short-history users whose entire history fits inside the
-    # 90-day C2 cutoff, the all_time series filters to empty — without this
-    # gate the empty pair would silently suppress the last_3mo [series] block
-    # below (C5) so the LLM would see [summary] lines pointing at no series
-    # data. See `.planning/debug/llm-prompt-missing-sections.md` (Fix A).
-    all_time_series_pairs: set[tuple[str, str]] = set()
-    for f in visible:
-        if f.window != "all_time" or f.series is None:
-            continue
-        retained = _retained_series_for_summary(
-            f,
-            last_3mo_pairs=last_3mo_pairs,
-            all_time_cutoff=all_time_cutoff,
-        )
-        if retained:
-            all_time_series_pairs.add((f.metric, f.subsection_id))
+    all_time_series_pairs = _compute_all_time_series_pairs(
+        visible, last_3mo_pairs=last_3mo_pairs, all_time_cutoff=all_time_cutoff
+    )
 
     newest_date = _newest_bucket_date(visible)
-    stale_markers: dict[int, str] = {}
-    stale_count = 0
-    live_series_metrics: set[tuple[str, str]] = set()
-    for f in visible:
-        if f.series is None:
-            continue
-        marker = _stale_marker(f.series, newest_date)
-        if marker:
-            stale_markers[id(f)] = marker
-            stale_count += 1
-        else:
-            live_series_metrics.add((f.metric, f.subsection_id))
+    stale_markers, stale_count, live_series_metrics = _compute_stale_markers_and_live_metrics(
+        visible, newest_date=newest_date
+    )
     # Phase 102 UAT: the asymmetry / recovery-pattern hints are now computed
     # per-TC inside _render_subsection_block from each endgame_type_<tc>
     # subsection's own members (no global pre-computation).
@@ -2329,53 +2520,21 @@ def _assemble_user_prompt(findings: EndgameTabFindings) -> str:
     for section_id, layout in _SECTION_LAYOUT:
         section_body: list[str] = []
         for kind, block_id in layout:
-            if kind == "chart":
-                block = chart_blocks.get(block_id, [])
-                if block:
-                    section_body.extend(block)
-            else:  # subsection
-                members = groups.get(block_id) or []
-                wdl_table = type_wdl_tables.get(block_id)
-                if not members and not wdl_table:
-                    # Fix C: keep the `endgame_elo_timeline` header visible
-                    # even when every (platform, time_control) combo is
-                    # sparse (< SPARSE_COMBO_FLOOR weekly buckets). Without
-                    # this the whole subsection vanishes for short-history
-                    # users, and the LLM has no signal that the Endgame ELO
-                    # chart exists. See `.planning/debug/llm-prompt-missing-sections.md`.
-                    # Phase 87.5 (D-06): block_id restored from the Phase 87.4 name.
-                    if block_id == "endgame_elo_timeline":
-                        section_body.extend(
-                            [
-                                "### Subsection: endgame_elo_timeline",
-                                (
-                                    f"[no qualifying combo — every (platform, time_control) "
-                                    f"combo has fewer than {SPARSE_COMBO_FLOOR} weekly buckets; "
-                                    "no Endgame ELO trajectory available yet]"
-                                ),
-                                "",
-                            ]
-                        )
-                    continue
-                # Phase 102 UAT: a per-TC Endgame Type subsection still renders its
-                # WDL table even when the TC has no Conv/Recov/Score-Gap findings
-                # (e.g. an all-parity TC), mirroring the UI card that always shows
-                # the WDL bars.
-                section_body.extend(
-                    _render_subsection_block(
-                        subsection_id=block_id,
-                        members=members,
-                        stale_markers=stale_markers,
-                        live_series_metrics=live_series_metrics,
-                        last_3mo_pairs=last_3mo_pairs,
-                        all_time_series_pairs=all_time_series_pairs,
-                        all_time_cutoff=all_time_cutoff,
-                        type_wdl_table=wdl_table,
-                        metric_percentiles=findings.metric_percentiles,
-                        per_tc_metric_percentiles=findings.per_tc_metric_percentiles,
-                        cohort_anchors=findings.cohort_anchors,
-                    )
+            section_body.extend(
+                _render_layout_item(
+                    kind,
+                    block_id,
+                    chart_blocks=chart_blocks,
+                    groups=groups,
+                    type_wdl_tables=type_wdl_tables,
+                    stale_markers=stale_markers,
+                    live_series_metrics=live_series_metrics,
+                    last_3mo_pairs=last_3mo_pairs,
+                    all_time_series_pairs=all_time_series_pairs,
+                    all_time_cutoff=all_time_cutoff,
+                    findings=findings,
                 )
+            )
         if not section_body:
             continue
         lines.append(f"## Section: {section_id}")

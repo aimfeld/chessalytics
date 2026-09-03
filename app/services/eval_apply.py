@@ -79,7 +79,12 @@ from app.services.best_move_candidates import (
     passes_inaccuracy_gate,
     pinned_elo_for_mover,
 )
-from app.services.flaws_service import FlawRecord, classify_game_flaws, count_game_severities
+from app.services.flaws_service import (
+    FlawRecord,
+    GameFlawsResult,
+    classify_game_flaws,
+    count_game_severities,
+)
 from app.services.eval_utils import derive_is_lichess_eval_game
 from app.services.forcing_line_gate import PvNode
 from app.services.maia_engine import score_move
@@ -1077,10 +1082,99 @@ async def _classify_and_fill_oracle(
     T-108-04 still applies at the drain-tick level: _full_drain_tick wraps the entire
     write phase in its own exception boundary so one bad game never aborts the drain.
     """
+    loaded = await _load_game_and_positions(session, game_id)
+    if loaded is None:
+        return
+    game, positions = loaded
+
+    flaw_result, freshly_blobbed = await _classify_flaw_rows(
+        game, positions, engine_result_map, flaw_pv_blobs, blobs_pending
+    )
+    if "reason" in flaw_result:
+        # GameNotAnalyzed: insufficient eval coverage — skip.
+        return
+    flaw_list = flaw_result  # list[FlawRecord]
+
+    # existing_plies / already_blobbed_plies MUST be read here, in the orchestrator,
+    # BEFORE _diff_upsert_flaw_rows runs its DELETE — this is the read-before-delete
+    # ordering the split must preserve (RESEARCH.md "eval_apply.py -- three
+    # verified/corrected invariants" #1; PATTERNS.md "Hazard -- ordering constraint").
+    # Passed as arguments so the ordering survives the function boundary rather than
+    # being re-derived (and potentially re-read post-delete) inside the helper.
+    existing_plies = set(
+        (
+            await session.scalars(
+                select(GameFlaw.ply).where(
+                    GameFlaw.game_id == game.id,
+                    GameFlaw.user_id == game.user_id,
+                )
+            )
+        ).all()
+    )
+    # Only a ply that ALREADY carries a real blob (allowed_pv_lines IS NOT NULL) has
+    # anything worth preserving — mirrors the gate the deleted caller-side snapshot
+    # helper used to apply (see the diff/upsert docstring section above).
+    already_blobbed_plies = set(
+        (
+            await session.scalars(
+                select(GameFlaw.ply).where(
+                    GameFlaw.game_id == game.id,
+                    GameFlaw.user_id == game.user_id,
+                    GameFlaw.allowed_pv_lines.isnot(None),
+                )
+            )
+        ).all()
+    )
+
+    await _diff_upsert_flaw_rows(
+        session,
+        game,
+        flaw_list,
+        existing_plies,
+        already_blobbed_plies,
+        freshly_blobbed,
+        flaw_pv_blobs,
+    )
+
+    oracle_counts_written = await _write_oracle_counts(session, game, positions)
+    if not oracle_counts_written:
+        # Shouldn't happen (same coverage gate as classify_game_flaws), but be defensive.
+        return
+
+    # Stage 5 (D-117-02 / SEED-054): flaw PV write, dedup by ply, one batched UPDATE.
+    # Extracted to _write_flaw_pvs — see its docstring for the full ply-N/ply-N+1
+    # rationale and the fault-tolerance reasoning for the try/except boundary.
+    await _write_flaw_pvs(session, game_id, flaw_list, engine_result_map)
+
+    # SEED-125: unconditional, end-of-function refresh of the games-side blob
+    # completion stamp. Deliberately NOT hooked onto the `if flaw_pv_blobs:`
+    # branch inside _diff_upsert_flaw_rows (its _batch_update_flaw_pv_lines call)
+    # -- a submit carrying zero blobs (the local-drain `blobs_pending=True` path)
+    # can insert NULL-blob plies (via _diff_upsert_flaw_rows above) without ever
+    # entering that branch, which would leave a reclassified game wrongly stamped
+    # complete. This is also the clear-direction site for tier-3 branch (b):
+    # it picks lichess-eval games whose full_evals_completed_at is already
+    # stamped, and the diff/upsert reclassification above can insert a fresh
+    # NULL-blob ply on a game that already carries a blobs_completed_at stamp
+    # from an earlier tier-4 pass.
+    # (Comment fixed 214-05 Task 2: this used to say "delete-then-insert
+    # reclassification" -- stale since the Phase 150 R3 diff/upsert rewrite; see
+    # the diff/upsert docstring above for what the write actually does.)
+    await _refresh_blobs_completed(session, game_id)
+
+
+async def _load_game_and_positions(
+    session: AsyncSession, game_id: int
+) -> tuple[Game, list[GamePosition]] | None:
+    """Stage 1 of `_classify_and_fill_oracle`: load the game row and its ordered positions.
+
+    Returns None when the game does not exist (mirrors the orchestrator's original
+    `if game is None: return` guard) so positions are never queried for a missing game.
+    """
     game_result = await session.execute(select(Game).where(Game.id == game_id))
     game = game_result.scalar_one_or_none()
     if game is None:
-        return
+        return None
 
     positions_result = await session.execute(
         select(GamePosition)
@@ -1091,7 +1185,22 @@ async def _classify_and_fill_oracle(
         .order_by(GamePosition.ply)
     )
     positions = list(positions_result.scalars().all())
+    return game, positions
 
+
+async def _classify_flaw_rows(
+    game: Game,
+    positions: list[GamePosition],
+    engine_result_map: dict[int, tuple[int | None, int | None, str | None, str | None]],
+    flaw_pv_blobs: dict[int, tuple[list[PvNode], list[PvNode]]] | None,
+    blobs_pending: bool,
+) -> tuple[GameFlawsResult, set[int]]:
+    """Stage 2 of `_classify_and_fill_oracle`: classify_game_flaws + freshly_blobbed.
+
+    Returns the raw `GameFlawsResult` (list[FlawRecord] or a GameNotAnalyzed "reason"
+    dict) unchanged so the orchestrator keeps its own "reason" in flaw_result guard,
+    plus the freshly_blobbed ply set used by the diff/upsert stage.
+    """
     # Live tactic tagging (260618-aiq): the freshly-computed PVs in
     # engine_result_map are NOT yet written to game_positions at this point (the
     # batched PV UPDATE below runs after classify). _detect_tactic_for_flaw reads
@@ -1112,10 +1221,7 @@ async def _classify_and_fill_oracle(
         blobs_pending=blobs_pending,
     )
     if "reason" in flaw_result:
-        # GameNotAnalyzed: insufficient eval coverage — skip.
-        return
-
-    flaw_list = flaw_result  # list[FlawRecord]
+        return flaw_result, set()
 
     # D-03: freshly_blobbed — plies this pass produced a REAL (non-empty) blob
     # for on at least one line — is the fresh-vs-preserve discriminator. A ply
@@ -1127,40 +1233,31 @@ async def _classify_and_fill_oracle(
         if flaw_pv_blobs
         else set()
     )
+    return flaw_result, freshly_blobbed
 
+
+async def _diff_upsert_flaw_rows(
+    session: AsyncSession,
+    game: Game,
+    flaw_list: Sequence[FlawRecord],
+    existing_plies: set[int],
+    already_blobbed_plies: set[int],
+    freshly_blobbed: set[int],
+    flaw_pv_blobs: dict[int, tuple[list[PvNode], list[PvNode]]] | None,
+) -> None:
+    """Stage 3 of `_classify_and_fill_oracle`: the 4-way diff/upsert against
+    `existing_plies` (Phase 150 R3) -- DELETE / INSERT / UPDATE-fresh /
+    UPDATE-preserve-by-omission, plus the PV-line blob write. See the diff/upsert
+    docstring on `_classify_and_fill_oracle` for the full column-preservation
+    rationale. `existing_plies` and `already_blobbed_plies` are received as
+    arguments -- the orchestrator reads them BEFORE calling this function, and this
+    function's own DELETE below must never re-derive them post-delete.
+    """
     rows_by_ply: dict[int, dict[str, Any]] = {
         flaw["ply"]: flaw_record_to_row(user_id=game.user_id, game_id=game.id, flaw=flaw)
         for flaw in flaw_list
     }
     desired_plies = set(rows_by_ply)
-    existing_plies = set(
-        (
-            await session.scalars(
-                select(GameFlaw.ply).where(
-                    GameFlaw.game_id == game.id,
-                    GameFlaw.user_id == game.user_id,
-                )
-            )
-        ).all()
-    )
-    # Only a ply that ALREADY carries a real blob (allowed_pv_lines IS NOT NULL) has
-    # anything worth preserving — mirrors the gate the deleted caller-side snapshot
-    # helper used to apply (see the Diff/upsert docstring section above).
-    # A stale entry-pass row or a not-yet-blobbed flaw has nothing to protect: its
-    # tactic-tag columns take this pass's fresh (possibly None) values same as any
-    # other fresh row, and its blob column is free to receive this pass's write
-    # (real content, or the D-06 `[]` sentinel if structurally un-walkable).
-    already_blobbed_plies = set(
-        (
-            await session.scalars(
-                select(GameFlaw.ply).where(
-                    GameFlaw.game_id == game.id,
-                    GameFlaw.user_id == game.user_id,
-                    GameFlaw.allowed_pv_lines.isnot(None),
-                )
-            )
-        ).all()
-    )
     # D-03: a ply preserves its blob + tactic-tag columns only if it already had a
     # real blob AND this pass did not freshly re-blob it.
     preserve_plies = already_blobbed_plies - freshly_blobbed
@@ -1208,8 +1305,24 @@ async def _classify_and_fill_oracle(
         blobs_to_write = {
             ply: blob for ply, blob in flaw_pv_blobs.items() if ply not in preserve_plies
         }
-        await _batch_update_flaw_pv_lines(session, game_id, blobs_to_write)
+        await _batch_update_flaw_pv_lines(session, game.id, blobs_to_write)
 
+
+async def _write_oracle_counts(
+    session: AsyncSession, game: Game, positions: list[GamePosition]
+) -> bool:
+    """Stage 4 of `_classify_and_fill_oracle`: the two `count_game_severities` calls
+    and the single `UPDATE games` oracle-column write.
+
+    Returns False (skipping the UPDATE) when either color's counts carry a "reason"
+    key -- the orchestrator's own guard mirrors this return value, matching the
+    original inline `if "reason" in counts_white or "reason" in counts_black: return`.
+
+    Takes `game` only (no separate `game_id` param, WR-01, 214-REVIEW.md): the
+    caller always loads `game` via `select(Game).where(Game.id == game_id)`, so
+    a second parameter carrying the same value could silently desync from
+    `game.id` on a future edit. `game.id` is used directly in the `WHERE` clause.
+    """
     # Oracle count columns: count_game_severities reads only game.user_color.
     # Call twice with a swapped-color view (no DB I/O in count_game_severities —
     # it's pure Python over already-loaded positions).
@@ -1225,7 +1338,7 @@ async def _classify_and_fill_oracle(
     # Use "reason" key as the TypedDict discriminator (isinstance on TypedDict raises TypeError).
     if "reason" in counts_white or "reason" in counts_black:
         # Shouldn't happen (same coverage gate as classify_game_flaws), but be defensive.
-        return
+        return False
 
     # Phase 178 Plan 03: lichess-compatible accuracy/ACPL (D-01/D-03/D-04). Reuses
     # the SAME already-loaded `positions` list — zero extra query — and calls the
@@ -1241,7 +1354,7 @@ async def _classify_and_fill_oracle(
     # fails the game must be retried, not silently marked complete with NULL counts.
     await session.execute(
         update(games_table)  # ty: ignore[invalid-argument-type]
-        .where(games_table.c.id == game_id)
+        .where(games_table.c.id == game.id)
         .values(
             white_inaccuracies=counts_white["inaccuracy"],
             white_mistakes=counts_white["mistake"],
@@ -1263,31 +1376,43 @@ async def _classify_and_fill_oracle(
             ),
         )
     )
+    return True
 
-    # Flaw PV write (D-117-02 / SEED-054): for each FlawRecord at ply N, write pv at
-    # BOTH ply N and ply N+1:
-    #   - ply N    = the ideal-continuation line from the pre-blunder decision board
-    #                (latent until a frontend surface renders it — SEED-054 Part 2).
-    #   - ply N+1  = the refutation line from the post-blunder board (D-117-02, the
-    #                SEED-039 tactic-motif input).
-    # Each pv_string comes from engine_result_map at its OWN ply. Post-174-06 (SEED-109
-    # Option C) lichess-eval games run the full MultiPV-2 pass, so ply N is engine-evaluated
-    # like every other ply (the old _flaw_engine_plies selective path is retired); for
-    # chess.com every ply already ran. Opening dedup-transplanted plies are absent
-    # from engine_result_map → pv stays NULL there (acceptable per SEED-054). Deduped
-    # by ply: consecutive flaws can make one flaw's ply N collide with another's N+1.
-    #
-    # FLAWCHESS-6B: collect surviving (ply, pv_string) pairs, then ONE batched UPDATE
-    # via _batch_update_pv_rows.
-    #
-    # Fault tolerance rationale: batching trades per-row isolation for one round-trip —
-    # acceptable because pv is unbounded Text (PostgreSQL won't reject it at the column
-    # level), so the realistic failure mode is a DB connection error that would have
-    # invalidated the whole session anyway, not a single bad row. The surviving rows
-    # commit atomically with the flaw rows and oracle counts above (T-117-11). If the
-    # batched execute fails, flaw rows + oracle counts are NOT rolled back — both the
-    # old code and this block are inside the write_session transaction; asyncpg-level
-    # errors invalidate the whole session regardless.
+
+async def _write_flaw_pvs(
+    session: AsyncSession,
+    game_id: int,
+    flaw_list: Sequence[FlawRecord],
+    engine_result_map: dict[int, tuple[int | None, int | None, str | None, str | None]],
+) -> None:
+    """Stage 5 of `_classify_and_fill_oracle`: flaw PV write, dedup by ply (D-117-02 /
+    SEED-054), one batched UPDATE.
+
+    For each FlawRecord at ply N, write pv at BOTH ply N and ply N+1:
+      - ply N    = the ideal-continuation line from the pre-blunder decision board
+                   (latent until a frontend surface renders it — SEED-054 Part 2).
+      - ply N+1  = the refutation line from the post-blunder board (D-117-02, the
+                   SEED-039 tactic-motif input).
+    Each pv_string comes from engine_result_map at its OWN ply. Post-174-06 (SEED-109
+    Option C) lichess-eval games run the full MultiPV-2 pass, so ply N is engine-evaluated
+    like every other ply (the old _flaw_engine_plies selective path is retired); for
+    chess.com every ply already ran. Opening dedup-transplanted plies are absent
+    from engine_result_map → pv stays NULL there (acceptable per SEED-054). Deduped
+    by ply: consecutive flaws can make one flaw's ply N collide with another's N+1.
+
+    FLAWCHESS-6B: collect surviving (ply, pv_string) pairs, then ONE batched UPDATE
+    via _batch_update_pv_rows.
+
+    Fault tolerance rationale: batching trades per-row isolation for one round-trip —
+    acceptable because pv is unbounded Text (PostgreSQL won't reject it at the column
+    level), so the realistic failure mode is a DB connection error that would have
+    invalidated the whole session anyway, not a single bad row. The surviving rows
+    commit atomically with the flaw rows and oracle counts written by the caller
+    (T-117-11). If the batched execute fails, flaw rows + oracle counts are NOT
+    rolled back — both the old code and this function are inside the caller's
+    write_session transaction; asyncpg-level errors invalidate the whole session
+    regardless.
+    """
     flaw_pv_by_ply: dict[int, str] = {}
     for flaw in flaw_list:
         flaw_ply_val: int = flaw["ply"]
@@ -1307,27 +1432,14 @@ async def _classify_and_fill_oracle(
             await _batch_update_pv_rows(session, game_id, list(flaw_pv_by_ply.items()))
         except Exception as exc:
             # T-108-04 / WR-01: PV write failure must not abort flaw rows + oracle
-            # counts already written above. Capture for visibility without embedding
-            # variables in the message string (CLAUDE.md Sentry grouping rule).
+            # counts already written by the caller. Capture for visibility without
+            # embedding variables in the message string (CLAUDE.md Sentry grouping rule).
             sentry_sdk.set_context(
                 "classify_oracle",
                 {"game_id": game_id},
             )
             sentry_sdk.set_tag("source", "full_eval_drain")
             sentry_sdk.capture_exception(exc)
-
-    # SEED-125: unconditional, end-of-function refresh of the games-side blob
-    # completion stamp. Deliberately NOT hooked onto the `if flaw_pv_blobs:`
-    # branch above (the _batch_update_flaw_pv_lines call at line ~1050) — a
-    # submit carrying zero blobs (the local-drain `blobs_pending=True` path)
-    # can insert NULL-blob plies (step 1/2/3/4 above) without ever entering
-    # that branch, which would leave a reclassified game wrongly stamped
-    # complete. This is also the clear-direction site for tier-3 branch (b):
-    # it picks lichess-eval games whose full_evals_completed_at is already
-    # stamped, and the delete-then-insert reclassification above can insert a
-    # fresh NULL-blob ply on a game that already carries a blobs_completed_at
-    # stamp from an earlier tier-4 pass.
-    await _refresh_blobs_completed(session, game_id)
 
 
 async def _classify_with_overlay(
@@ -2118,121 +2230,196 @@ async def _build_best_move_candidates(
         return []
     second_best_map = second_best_map or {}
     try:
-        # 1. Out-of-book test (pure, in-memory — no re-parse, Pitfall 3).
-        book_plies = find_opening_ply_count(_contiguous_san_prefix(targets))
+        book_plies = _out_of_book_ply_count(targets)
 
-        # 2. Identify candidates: out-of-book plies where played == Stockfish best.
-        candidate_targets: list[_FullPlyEvalTarget] = []
-        for t in targets:
-            if t.is_terminal or t.move_uci is None or t.ply < book_plies:
-                continue
-            entry = engine_result_map.get(t.ply)
-            if entry is None:
-                continue
-            best_uci = entry[2]
-            if best_uci is None or best_uci != t.move_uci:
-                continue
-            candidate_targets.append(t)
+        candidate_targets = _identify_candidate_targets(targets, engine_result_map, book_plies)
         if not candidate_targets:
             return []
 
-        # 3. Pitfall-1 fallback: plies lacking a runner-up get a targeted MultiPV-2
-        #    Stockfish call. ONE gather, NO session open (CLAUDE.md hard rule).
-        fallback_targets = [t for t in candidate_targets if t.ply not in second_best_map]
-        fallback_by_ply: dict[
-            int,
-            tuple[
-                int | None, int | None, str | None, str | None, int | None, int | None, str | None
-            ],
-        ] = {}
-        if fallback_targets:
-            # Phase 177 D-06/OBS-01: tag by source so a worker-submit-path fallback
-            # (the regression signal, expected ~zero post-shift) is queryable
-            # independent of the expected drain-local fallback noise. Variables go
-            # in set_context, never the message string (CLAUDE.md Sentry rules).
-            sentry_sdk.set_tag("source", source)
-            sentry_sdk.set_context(
-                "best_move_candidates_fallback",
-                {"game_id": game_id, "fallback_ply_count": len(fallback_targets)},
-            )
-            results = await asyncio.gather(
-                *(engine_service.evaluate_nodes_multipv2(t.board) for t in fallback_targets)
-            )
-            for t, res in zip(fallback_targets, results, strict=True):
-                fallback_by_ply[t.ply] = res
+        fallback_by_ply = await _fetch_multipv2_fallback(
+            game_id, candidate_targets, second_best_map, source
+        )
 
-        # 4. Rating metadata — short read session, CLOSED before any Maia inference.
-        async with async_session_maker() as read_session:
-            game_row = (
-                await read_session.execute(
-                    select(
-                        Game.white_rating,
-                        Game.black_rating,
-                        Game.platform,
-                        Game.time_control_bucket,
-                        Game.time_control_str,
-                    ).where(Game.id == game_id)
-                )
-            ).one_or_none()
-        if game_row is None:
+        rating_metadata = await _fetch_rating_metadata(game_id)
+        if rating_metadata is None:
             return []
-        white_rating, black_rating, platform_raw, tc_bucket_raw, tc_str = game_row
-        is_correspondence = is_correspondence_time_control(tc_str)
-        platform = cast(Platform, platform_raw)
-        tc_bucket = cast("TimeControlBucket | None", tc_bucket_raw)
+        white_rating, black_rating, platform, tc_bucket, is_correspondence = rating_metadata
 
-        # 5. Gate + Maia inference + row assembly — NO session open.
-        rows: list[dict[str, Any]] = []
-        for t in candidate_targets:
-            played_uci = t.move_uci
-            if played_uci is None:  # unreachable (filtered above); narrows for ty
-                continue
-            best_cp, best_mate, _best_uci, _pv = engine_result_map[t.ply]
-            second = second_best_map.get(t.ply)
-            if second is not None:
-                second_cp, second_mate = second[0], second[1]
-            else:
-                fb = fallback_by_ply.get(t.ply)
-                if fb is None:
-                    continue
-                second_cp, second_mate = fb[4], fb[5]
-
-            mover = mover_color_for_ply(t.ply)
-            if not passes_inaccuracy_gate(best_cp, best_mate, second_cp, second_mate, mover):
-                continue
-
-            raw_rating = white_rating if mover == "white" else black_rating
-            if raw_rating is None:
-                # No rating for the mover — can't pin the Maia ELO; skip gracefully.
-                continue
-            elo = pinned_elo_for_mover(
-                raw_rating=raw_rating,
-                platform=platform,
-                time_control_bucket=tc_bucket,
-                is_correspondence=is_correspondence,
-            )
-            prob = score_move(t.board.fen(), elo, played_uci)
-            if prob is None:
-                # Maia disabled (no onnxruntime) or move not in the policy — no candidate.
-                continue
-            rows.append(
-                {
-                    "game_id": game_id,
-                    "ply": t.ply,
-                    "maia_prob": float(prob),
-                    "best_cp": best_cp,
-                    "best_mate": best_mate,
-                    "second_cp": second_cp,
-                    "second_mate": second_mate,
-                }
-            )
-        return rows
+        return _assemble_candidate_rows(
+            game_id,
+            candidate_targets,
+            engine_result_map,
+            second_best_map,
+            fallback_by_ply,
+            white_rating,
+            black_rating,
+            platform,
+            tc_bucket,
+            is_correspondence,
+        )
     except Exception:
         # Gem detection is a secondary concern: it must never abort the primary eval
         # write. Report and yield no rows (the eval + flaws still commit).
         sentry_sdk.set_context("best_move_candidates", {"game_id": game_id})
         sentry_sdk.capture_exception()
         return []
+
+
+def _out_of_book_ply_count(targets: Sequence[_FullPlyEvalTarget]) -> int:
+    """Stage 1 of `_build_best_move_candidates`: out-of-book test (pure, in-memory —
+    no re-parse, Pitfall 3).
+    """
+    return find_opening_ply_count(_contiguous_san_prefix(targets))
+
+
+def _identify_candidate_targets(
+    targets: Sequence[_FullPlyEvalTarget],
+    engine_result_map: dict[int, tuple[int | None, int | None, str | None, str | None]],
+    book_plies: int,
+) -> list[_FullPlyEvalTarget]:
+    """Stage 2 of `_build_best_move_candidates`: identify candidates — out-of-book
+    plies where the played move == Stockfish's best move.
+    """
+    candidate_targets: list[_FullPlyEvalTarget] = []
+    for t in targets:
+        if t.is_terminal or t.move_uci is None or t.ply < book_plies:
+            continue
+        entry = engine_result_map.get(t.ply)
+        if entry is None:
+            continue
+        best_uci = entry[2]
+        if best_uci is None or best_uci != t.move_uci:
+            continue
+        candidate_targets.append(t)
+    return candidate_targets
+
+
+async def _fetch_multipv2_fallback(
+    game_id: int,
+    candidate_targets: Sequence[_FullPlyEvalTarget],
+    second_best_map: dict[int, tuple[int | None, int | None, str | None]],
+    source: str,
+) -> dict[
+    int, tuple[int | None, int | None, str | None, str | None, int | None, int | None, str | None]
+]:
+    """Stage 3 of `_build_best_move_candidates`: Pitfall-1 fallback — plies lacking a
+    runner-up get a targeted MultiPV-2 Stockfish call. ONE gather, NO session open
+    (CLAUDE.md hard rule).
+    """
+    fallback_targets = [t for t in candidate_targets if t.ply not in second_best_map]
+    fallback_by_ply: dict[
+        int,
+        tuple[int | None, int | None, str | None, str | None, int | None, int | None, str | None],
+    ] = {}
+    if fallback_targets:
+        # Phase 177 D-06/OBS-01: tag by source so a worker-submit-path fallback
+        # (the regression signal, expected ~zero post-shift) is queryable
+        # independent of the expected drain-local fallback noise. Variables go
+        # in set_context, never the message string (CLAUDE.md Sentry rules).
+        sentry_sdk.set_tag("source", source)
+        sentry_sdk.set_context(
+            "best_move_candidates_fallback",
+            {"game_id": game_id, "fallback_ply_count": len(fallback_targets)},
+        )
+        results = await asyncio.gather(
+            *(engine_service.evaluate_nodes_multipv2(t.board) for t in fallback_targets)
+        )
+        for t, res in zip(fallback_targets, results, strict=True):
+            fallback_by_ply[t.ply] = res
+    return fallback_by_ply
+
+
+async def _fetch_rating_metadata(
+    game_id: int,
+) -> tuple[int | None, int | None, Platform, "TimeControlBucket | None", bool] | None:
+    """Stage 4 of `_build_best_move_candidates`: rating metadata — short read session,
+    CLOSED before any Maia inference (session-discipline hard rule, see this
+    function's own docstring).
+    """
+    async with async_session_maker() as read_session:
+        game_row = (
+            await read_session.execute(
+                select(
+                    Game.white_rating,
+                    Game.black_rating,
+                    Game.platform,
+                    Game.time_control_bucket,
+                    Game.time_control_str,
+                ).where(Game.id == game_id)
+            )
+        ).one_or_none()
+    if game_row is None:
+        return None
+    white_rating, black_rating, platform_raw, tc_bucket_raw, tc_str = game_row
+    is_correspondence = is_correspondence_time_control(tc_str)
+    platform = cast(Platform, platform_raw)
+    tc_bucket = cast("TimeControlBucket | None", tc_bucket_raw)
+    return white_rating, black_rating, platform, tc_bucket, is_correspondence
+
+
+def _assemble_candidate_rows(
+    game_id: int,
+    candidate_targets: Sequence[_FullPlyEvalTarget],
+    engine_result_map: dict[int, tuple[int | None, int | None, str | None, str | None]],
+    second_best_map: dict[int, tuple[int | None, int | None, str | None]],
+    fallback_by_ply: dict[
+        int,
+        tuple[int | None, int | None, str | None, str | None, int | None, int | None, str | None],
+    ],
+    white_rating: int | None,
+    black_rating: int | None,
+    platform: Platform,
+    tc_bucket: "TimeControlBucket | None",
+    is_correspondence: bool,
+) -> list[dict[str, Any]]:
+    """Stage 5 of `_build_best_move_candidates`: gate + Maia inference + row
+    assembly — NO session open.
+    """
+    rows: list[dict[str, Any]] = []
+    for t in candidate_targets:
+        played_uci = t.move_uci
+        if played_uci is None:  # unreachable (filtered above); narrows for ty
+            continue
+        best_cp, best_mate, _best_uci, _pv = engine_result_map[t.ply]
+        second = second_best_map.get(t.ply)
+        if second is not None:
+            second_cp, second_mate = second[0], second[1]
+        else:
+            fb = fallback_by_ply.get(t.ply)
+            if fb is None:
+                continue
+            second_cp, second_mate = fb[4], fb[5]
+
+        mover = mover_color_for_ply(t.ply)
+        if not passes_inaccuracy_gate(best_cp, best_mate, second_cp, second_mate, mover):
+            continue
+
+        raw_rating = white_rating if mover == "white" else black_rating
+        if raw_rating is None:
+            # No rating for the mover — can't pin the Maia ELO; skip gracefully.
+            continue
+        elo = pinned_elo_for_mover(
+            raw_rating=raw_rating,
+            platform=platform,
+            time_control_bucket=tc_bucket,
+            is_correspondence=is_correspondence,
+        )
+        prob = score_move(t.board.fen(), elo, played_uci)
+        if prob is None:
+            # Maia disabled (no onnxruntime) or move not in the policy — no candidate.
+            continue
+        rows.append(
+            {
+                "game_id": game_id,
+                "ply": t.ply,
+                "maia_prob": float(prob),
+                "best_cp": best_cp,
+                "best_mate": best_mate,
+                "second_cp": second_cp,
+                "second_mate": second_mate,
+            }
+        )
+    return rows
 
 
 async def _upsert_best_move_rows(session: AsyncSession, rows: Sequence[dict[str, Any]]) -> None:
