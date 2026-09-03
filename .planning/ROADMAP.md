@@ -826,11 +826,40 @@ same `eslint.config.js` override block, so they merge sequentially like 214):
 5. CONCERNS.md "Large God files" entry retired (or narrowed to the out-of-scope next tier
    with the gate now enforcing the limit on all new code).
 
-**Plans**: TBD — planned via `/gsd-plan-phase 215`. Expected shape, mirroring 214: wave 1
-tooling; wave 2 one plan per file in test-oracle-strength order (`workerPool.ts`, then
-`useBotGame.ts`, then `Analysis.tsx` — likely two plans, hooks/data extraction then
-render/handler split — then `Openings.tsx` with its characterization test first); wave 3 the
-phase-wide closeout that measures the criteria and retires the CONCERNS.md entry.
+**Plans**: 8 plans (waves 1 / 2 / 3), tracer-first. Wave 1 is the tooling; wave 2 is one plan
+per file in test-oracle-strength order, except `Analysis.tsx`, which takes three (2,037 counted
+lines, 213 statements, cyclomatic 176 — one plan would exceed a single executor's context, and
+the statement budget only clears 100 after all three); wave 3 is the phase-wide closeout that
+measures the six success criteria and narrows the CONCERNS.md entry to the next tier. The six
+wave-2 plans touch disjoint source files but all read `frontend/eslint.config.js`'s Phase 215
+baseline override region, so they are squash-merged one at a time, mirroring Phase 214.
+
+Planner corrections recorded at planning time (measured 2026-09-03, eslint 10.4.1): the three
+rules are scoped to `**/*.{ts,tsx}` because `eslint .` also walks six vendored bundles under
+`frontend/public/`; the `.ts`/`.tsx` baseline is `complexity` 69 breaches / 52 files,
+`max-statements` 1 / 1 (`Analysis.tsx`) and `max-depth` 6 / 1 (a test file), so `max-depth` DOES
+need a baseline entry; and `useBotGame.ts` and `workerPool.ts` breach none of the three enforced
+rules today (cyclomatic 15 and 14 respectively), so they have no baseline entry to delete and
+their deliverable is the `max-lines-per-function` reduction (544 and 418, hard limit 200).
+
+Plans:
+
+**Wave 1** *(tooling — everything after it is measured, not eyeballed)*
+
+- [ ] 215-01-PLAN.md — eslint `complexity`/`max-depth`/`max-statements` at `error` inside the `**/*.{ts,tsx}` block with all pre-existing breaches baselined in one labelled override region so `npm run lint` is green day one; `eslint-plugin-sonarjs` behind a report-only `npm run lint:cognitive`; all of it documented in `docs/dev-tooling.md` and both CLAUDE.md files; before-baselines recorded
+
+**Wave 2** *(one plan per file, blocked on Wave 1; merged sequentially)*
+
+- [ ] 215-02-PLAN.md — `workerPool.ts`: `createWorkerPool`'s 18 closures split into `workerPoolState`/`Watchdog`/`Dispatch`/`Lifecycle` siblings (418 counted lines to 200), with `createWorkerPool`/`isLowPowerDevice`/`computePoolSize` kept as top-level exports so all four partial-shape `vi.mock` factories stay valid; 109-test oracle plus three mutation proofs
+- [ ] 215-03-PLAN.md — `useBotGame.ts`: clock, engine dispatch, draw offer and snapshot clusters into sibling hooks (544 counted lines toward 200), preserving the `runBotTurnRef` always-call-the-latest-closure indirection and all 26 `UseBotGameState` fields; 167-test oracle plus four mutation proofs
+- [ ] 215-04-PLAN.md — `Analysis.tsx` 1/3: `useAnalysisRouteParams`, `useAnalysisEngineLines` (clears the cyclomatic-16 `qualityBySanWithGem`) and `useAnalysisRouteSeeding` (the six effects with their five suppression comments, dependency arrays byte-identical)
+- [ ] 215-05-PLAN.md — `Analysis.tsx` 2/3: `useAnalysisBoardArrows` and `useAnalysisGemMarkers`, clearing the cyclomatic 27, 19 and 18 arrows — the three worst non-component offenders in the file
+- [ ] 215-06-PLAN.md — `Analysis.tsx` 3/3: the render tree into four components under `src/components/analysis/`, landing `Analysis()` inside complexity 15 and 100 statements, deleting BOTH baseline entries; HUMAN-UAT smoke (library-game, paste, tactic; desktop + mobile)
+- [ ] 215-07-PLAN.md — `Openings.tsx`: a NEW render-level characterization test first (the existing 16 tests never mount `OpeningsPage`), then one shared `OpeningsFilterFields` serving both the desktop sidebar and the mobile drawer with both testid sets intact, plus `useOpeningsChartData`; complexity 64 to 15, baseline entry deleted, three mutation proofs; HUMAN-UAT smoke
+
+**Wave 3** *(phase closeout, blocked on all six file plans)*
+
+- [ ] 215-08-PLAN.md — measure success criteria 0-4 phase-wide (lint with the baseline region defeated over the four files and everything the phase created, cognitive and `max-lines-per-function` before/after, additions-only test diff, unchanged 28 `react-hooks/*` warnings, per-file testid/umami inventories, collected HUMAN-UAT records), then narrow the CONCERNS.md "Large God files" entry to the out-of-scope next tier (criterion 5)
 
 ## Backlog
 
