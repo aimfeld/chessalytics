@@ -612,6 +612,11 @@
       "number": "214",
       "name": "Backend God-File Decomposition (CONCERNS.md, unassigned)",
       "status": "complete"
+    },
+    {
+      "number": "215",
+      "name": "Frontend God-File Decomposition (CONCERNS.md, unassigned)",
+      "status": "pending"
     }
   ],
   "next": {

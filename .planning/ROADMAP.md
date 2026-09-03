@@ -176,6 +176,7 @@
 | 212. Benchmark Full-Game Analysis Lane (SEED-152, unassigned) | 10/10 | Complete | 2026-08-29 |
 | 213. First-Run Engine Cold Start — Asset-Check Gate & Download Progress UI (SEED-155, unassigned) | 12/12 | Complete    | 2026-08-29 |
 | 214. Backend God-File Decomposition (CONCERNS.md, unassigned) | 8/8 | Complete    | 2026-09-03 |
+| 215. Frontend God-File Decomposition (CONCERNS.md, unassigned) | 0/? | Not started | — |
 
 ## Active Phases (unassigned milestone)
 
@@ -695,6 +696,139 @@ Plans:
 **Wave 3** *(phase closeout, blocked on all six file plans)*
 
 - [x] 214-08-PLAN.md — measure success criteria 0-3 phase-wide (ruff with an emptied ignore table over the six files, `check_function_size.py` over `app/services` + `app/repositories`, complexipy before/after, additions-only `tests/` diff, zero added `# ty: ignore`), then narrow the CONCERNS.md "Large God files" entry to the four frontend files (criterion 4)
+
+### Phase 215: Frontend God-File Decomposition
+
+**Goal**: The four largest frontend modules stop breaching the CLAUDE.md function-size
+rules, with zero behavior change, and the frontend gets the same automated complexity gate
+the backend got in Phase 214. Every function in the four files below fits the hard limits
+(200 logic LOC, nesting depth 4) and most fit the soft ones (100 logic LOC, nesting 3,
+cognitive/cyclomatic complexity ~15). Splits follow the documented frontend seams (React
+components -> extract data shaping into a `useXyzData` hook; split desktop/mobile renderers
+past ~40 LOC of logic each; handler arrows -> named functions; closure factories -> one
+function per stage) and NOT "split to fit a signature": no context objects with fewer than
+three fields and one reader, no "handlers" hook bundling unrelated callbacks by shared deps.
+Rendered DOM (every `data-testid`, every Umami `data-umami-event`), hook dependency arrays,
+engine message protocol, and TanStack query keys are unchanged, so the existing vitest suites
+are the behavior oracle and must pass untouched (tests may be ADDED where a split exposes an
+untested seam, never rewritten to fit the refactor). Moving cohesive groups of hooks or
+sub-components into sibling files (e.g. `hooks/analysis/useAnalysisEngineLines.ts`,
+`components/openings/OpeningsSidebar.tsx`) is the expected mechanism; renaming the public
+entry points (`Analysis`, `OpeningsPage`, `useBotGame`, `createWorkerPool`) is not.
+
+**Files in scope** (measured 2026-09-03 with eslint core rules, `--no-inline-config`):
+
+| File | Lines | God function | Lines / statements / cyclomatic | Oracle |
+|------|------:|--------------|--------------------------------|--------|
+| `frontend/src/pages/Analysis.tsx` | 4,370 | `Analysis()` (line 549) | 2,037 / 213 / **176**; 62 hooks (13 effects, 19 memos, 22 states); 5 handler arrows at cc 16-27 | `pages/__tests__/Analysis.test.tsx` (85 tests) |
+| `frontend/src/hooks/useBotGame.ts` | 1,662 | `useBotGame()` (line 506) | 544 / - / <15; one 112-line arrow at line 1367 | `hooks/__tests__/useBotGame.test.ts` (85) + `Bots.test.tsx` (33), `useStoreBotGame`, `botGameSnapshot`, `botPendingStore` tests |
+| `frontend/src/lib/engine/workerPool.ts` | 1,451 | `createWorkerPool()` (line 596) | 418 / - / <15; 18 inner closures over shared `slots`/`pending` state | **NONE** — every importer's test `vi.mock`s the module |
+| `frontend/src/pages/Openings.tsx` | 1,376 | `OpeningsPage()` (line 114) | 1,088 / - / **64**; 33 hooks; 585-line JSX return with duplicated desktop sidebar + mobile drawer | `pages/__tests__/Openings.statsBoard.test.tsx` (16 tests, stats board only) |
+
+App-wide non-test baseline (to be re-measured and recorded by plan 1): `complexity > 15`:
+68 functions in ~35 files; `max-statements > 100`: 1 (`Analysis`, 213); `max-depth > 4`: 0;
+`max-depth > 3`: 10; `max-lines-per-function > 100`: 94, `> 200`: 32. Pre-existing
+`react-hooks/exhaustive-deps` warnings: 25 (6 inside `Analysis()`), `react-hooks/refs`: 3.
+
+**Out of scope**: the next tier of large components (`TrainReveal.tsx` 1,365,
+`EvalChart.tsx` 1,311, `LibraryGameCard.tsx` 1,299, `TrainSolveScreen.tsx` 1,214,
+`VariationTree.tsx` 1,121, `App.tsx` 1,032) — they get baselined by the gate and shrink
+under the "refactor on sight" rule. Fixing any of the 28 pre-existing `react-hooks/*`
+warnings (adding a dependency re-fires an effect: that IS a behavior change). Any change to
+what the UI computes or renders, including "obvious" fixes spotted during the split (capture
+those as seeds or quick tasks instead). Backend files (done in Phase 214).
+
+**Depends on**: nothing. Phase 214 is squash-merged to `main` (`ccf783be8`), so this phase
+branches from a clean trunk.
+
+**Source**: `.planning/codebase/CONCERNS.md` "Large God files" (narrowed to these four
+files by 214-08 on 2026-09-03); Phase 214 goal text "the four frontend god files ... get
+their own phase".
+
+**Complexity tooling (decided 2026-09-03, mirrors Phase 214 plan 1)** — lands as the
+FIRST plan so every later split is measured, not eyeballed:
+
+- **eslint core rules, zero new dependencies, CI-ready** (`npm run lint` already runs in
+  CI at `.github/workflows/ci.yml:141`): enable `complexity` (`max: 15`, the `C901`
+  analog), `max-depth` (`max: 4`, the `check_function_size.py` depth gate; zero breaches
+  today so it needs no baseline), and `max-statements` (`max: 100`, the `PLR0915` /
+  logic-LOC analog — a JSX return tree is ONE statement, so unlike
+  `max-lines-per-function` it honours CLAUDE.md's "excluding the returned JSX tree"
+  carve-out; only `Analysis` breaches it today). `max-lines-per-function` is REPORT-ONLY
+  (it counts the JSX return, so `OpeningsPage`'s 585-line render would fail it forever);
+  the phase records its before/after counts but does not gate on it. Baseline the 68
+  pre-existing `complexity` breaches so lint is green from day one — recommended
+  mechanism is a dedicated `files: [...]` override block in `eslint.config.js` that
+  lists each breaching file with the rule relaxed (the `per-file-ignores` analog, one
+  place, only ever shrinks); each file's plan then DELETES its own entry as it fixes it.
+  Planner may choose inline `// eslint-disable-next-line complexity -- <reason>` instead
+  if it judges 35 file entries too coarse; either way every relaxation names the rule.
+- **Cognitive complexity via `eslint-plugin-sonarjs` `cognitive-complexity`** (Sonar's
+  metric, the `complexipy` analog, the ≤15 target CLAUDE.md names). Add as a
+  devDependency behind its own npm script (`npm run lint:cognitive`), NOT inside
+  `npm run lint`; report-only, before/after counts recorded per file. Whether it gates CI
+  is a decision for the plan (recommend: not yet, same reasoning as 214). If the plugin
+  fails the `audit-ci` allowlist or drags in an unacceptable dependency tree, drop it and
+  record cyclomatic `complexity` only — do not add a second lint toolchain.
+- Document the rules in `docs/dev-tooling.md` next to the backend tools and reference
+  them from the function-size rule in the root `CLAUDE.md` and from `frontend/CLAUDE.md`.
+
+**Gates per plan** (each file is one plan, one squash-merge unit; all wave-2 plans edit the
+same `eslint.config.js` override block, so they merge sequentially like 214):
+
+- `npm run lint` (with the new rules), `npm run build` (`tsc -b` — lint and vitest do NOT
+  type-check), `npm run knip` (every new export must have an importer), and
+  `npm test -- --run <the file's test modules>` green before and after; full frontend gate
+  plus the backend gate at the phase's pre-merge gate.
+- **Extraction invariants**: (a) every `useEffect`/`useMemo`/`useCallback` keeps its
+  dependency array byte-identical, including intentionally missing deps — move the
+  existing `eslint-disable` comment with the code; the app-wide `react-hooks/*` warning
+  count must not change in either direction. (b) `vi.mock('<path>')` mocks by module
+  path: a function moved out of `workerPool.ts` or `useBotGame.ts` into a sibling module
+  is NOT covered by the existing mocks any more, and an importer whose import path changes
+  silently loses its mock — every moved export is either re-exported from the original
+  module or its mocks are updated in the same plan, and the plan says which.
+  (c) `react-refresh/only-export-components` decides file boundaries: hooks and
+  non-component helpers go in `.ts` files, components in `.tsx`, or the existing
+  per-directory override is extended deliberately. (d) `data-testid` / `data-umami-event`
+  inventory per file (`grep -o 'data-testid="[^"]*"' | sort`) is identical before and
+  after, so the browser-automation contract and analytics events survive the split.
+- **Oracle strengthening where the seam is thin**: `workerPool.ts` has no direct test, so
+  its plan writes characterization tests for `createWorkerPool` (dispatch order, watchdog
+  re-arm/respawn, grade cache, pool-ready promise) BEFORE touching it, with a mandatory
+  two-way mutation proof (mutate one extracted helper, confirm a test fails; revert). The
+  `Openings.tsx` plan adds a render-level characterization test (desktop and mobile
+  layout, mocked queries, testid presence) before splitting the sidebar/drawer duplication.
+- **Visual HUMAN-UAT** (unlike 214, this phase changes render trees): after each page
+  plan, a five-minute smoke of the page on desktop and a mobile width — Analysis in
+  library-game mode, paste mode, and tactic mode; Openings with sidebar and drawer open.
+  Memory rule: the analysis board INTENTIONALLY shows opponent gems (position-scoped
+  `best_move_tier`); a split that "fixes" that is a regression.
+
+**Success criteria**:
+
+0. `npm run lint` passes with `complexity`/`max-depth`/`max-statements` enabled; the
+   four in-scope files have NO remaining relaxations for those rules; cognitive-complexity
+   and `max-lines-per-function` before/after counts recorded in VERIFICATION.
+1. No function in the four files exceeds 100 statements, cyclomatic complexity 15, or
+   nesting depth 4; a listing of remaining functions between 100 and 200 raw lines is
+   recorded in the phase VERIFICATION with a one-line justification each.
+2. Full frontend gate (`lint`, `build`, `knip`, `test`) and the backend gate pass at the
+   pre-merge gate with no test deleted or weakened (diff of `__tests__/` and `*.test.*`
+   shows additions only); the app-wide `react-hooks/*` warning count is unchanged.
+3. Per file, the before/after `data-testid` and `data-umami-event` inventories are
+   identical; `git diff --stat` per plan shows file-count growth only from deliberate
+   hook/component extractions; no new `@ts-ignore`/`@ts-expect-error` or `eslint-disable`
+   lines beyond the ones that moved with their code.
+4. HUMAN-UAT smoke on Analysis and Openings (desktop + mobile) passed and recorded.
+5. CONCERNS.md "Large God files" entry retired (or narrowed to the out-of-scope next tier
+   with the gate now enforcing the limit on all new code).
+
+**Plans**: TBD — planned via `/gsd-plan-phase 215`. Expected shape, mirroring 214: wave 1
+tooling; wave 2 one plan per file in test-oracle-strength order (`useBotGame.ts`, then
+`Analysis.tsx` — likely two plans, hooks/data extraction then render/handler split — then
+`Openings.tsx`, then `workerPool.ts` with its characterization tests first); wave 3 the
+phase-wide closeout that measures the criteria and retires the CONCERNS.md entry.
 
 ## Backlog
 
