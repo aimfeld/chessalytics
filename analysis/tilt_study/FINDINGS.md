@@ -20,7 +20,9 @@ break help? Exploration of story candidate §1 in
    scores 0.7 pp (bullet) to 1.7 pp (rapid) below expectation; after 3+ wins, 1.1 to
    2.1 pp above. That is roughly one extra loss per 60–140 games. Longer time controls
    swing harder than bullet; classical is noisier (fewer games) but its single-loss
-   effect is the largest (−2.0 pp).
+   effect is the largest (−2.0 pp). Pooled over everything (§1b), the raw next-game score
+   runs 49.5% after 4 losses to 52.3% after 4 wins; only 7+ streaks (~1% of games)
+   reach 45% / 57%, and there the hot hand exceeds tilt (+5.2 vs −4.3 pp).
 2. **It is a state, not just form.** Right after the streak, the hot-minus-cold gap is
    1.9 pp (bullet/blitz) to 3.5 pp (rapid) and 5 pp (classical); a day later it is 0–1.5
    pp. The streak effect also survives inside every trailing-20-game form tercile.
@@ -111,6 +113,146 @@ By rating (SQL, filtered): the cold effect is strongest around 1200 (blitz −2.
 −2.4 pp after LLL+) and near zero at 2000–2400 in blitz. The hot effect is +1.1 to +2.6
 pp in most cells, with 800 rapid/bullet the largest (+2.8 to +3.5 pp). Classical 800 and
 2400 are too sparse after the filter (n < 100).
+
+## 1b. The streak curve, −8 … +8 (`streak_curve_all_8.png`, `streak_curve_elo_8.png`, `streak_curve_tc_8.png`)
+
+Same design as §1 but with exact streak length on the x-axis (−8/+8 are open-ended: eight
+*or more*), same session, equal-footing scored games, 200-rep user bootstrap per cell.
+Numbers are the **raw score in the next game** (what a reader experiences), the calibrated
+expectation is shown alongside; the difference is the tilt / hot-hand component. Produced by
+`analysis/tilt_study/probes/streak_curve.py 8`; tables `tbl_streak_curve_{all,elo,tc}_8.csv`.
+
+### All players pooled (hero chart)
+
+| streak just ended | n | next-game score | expected | tilt (residual) | 95% CI |
+|---|---|---|---|---|---|
+| −8+ | 4,855 | 45.4 | 49.7 | −4.3 | ±1.7 |
+| −7 | 4,434 | 47.6 | 49.9 | −2.3 | ±1.5 |
+| −6 | 8,790 | 48.1 | 50.0 | −1.9 | ±1.0 |
+| −5 | 17,871 | 48.8 | 50.1 | −1.3 | ±0.7 |
+| −4 | 36,994 | 49.5 | 50.2 | −0.7 | ±0.5 |
+| −3 | 76,872 | 49.7 | 50.3 | −0.7 | ±0.3 |
+| −2 | 162,422 | 49.7 | 50.5 | −0.7 | ±0.3 |
+| −1 | 354,330 | 50.5 | 50.7 | −0.1 | ±0.2 |
+| draw | 65,183 | 51.3 | 51.0 | +0.3 | ±0.4 |
+| +1 | 371,787 | 51.2 | 50.8 | +0.4 | ±0.2 |
+| +2 | 179,476 | 51.8 | 50.9 | +0.9 | ±0.3 |
+| +3 | 88,672 | 52.2 | 51.0 | +1.2 | ±0.3 |
+| +4 | 44,278 | 52.3 | 51.1 | +1.2 | ±0.5 |
+| +5 | 22,237 | 53.2 | 51.2 | +2.0 | ±0.6 |
+| +6 | 11,294 | 53.3 | 51.2 | +2.1 | ±0.8 |
+| +7 | 5,906 | 53.7 | 51.4 | +2.3 | ±1.3 |
+| +8+ | 7,230 | 56.9 | 51.7 | +5.2 | ±1.2 |
+
+Reading: between −4 and +4, where 97% of games sit, the whole swing is 49.5 → 52.3. The
+tails are real (−8+ is 4 CI-widths below par) but rare: streaks of 7+ precede ~1% of games.
+The curve is **asymmetric**: the hot hand exceeds tilt at every length (+1.2 vs −0.7 at 3,
++2.0 vs −1.3 at 5, +5.2 vs −4.3 at 8+); part of that is rating lag (a player on a long win
+streak is momentarily under-rated, which the pooled calibration only partly absorbs).
+
+Why the expectation is not flat 50%: the equal-footing band caps the gap at ±100, it does not
+centre it. After 5+ losses the player is the higher-rated side in 44.6% of next games (mean
+gap −4.5), after 5+ wins in 56.0% (+7.3), moving the expectation from 50.0 to 51.3. Of the
+raw 5.8 pp swing from −5 to +5, ≈1.3 pp is this matchmaking drift and ≈4.5 pp is state.
+
+### By rating bucket (all TCs pooled; raw next-game score %, *italics* = n < 500)
+
+| rating | −8+ | −7 | −6 | −5 | −4 | −3 | −2 | −1 | draw | +1 | +2 | +3 | +4 | +5 | +6 | +7 | +8+ |
+|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|
+| 800 | 43.8 | 43.6 | 46.3 | 48.5 | 48.9 | 48.7 | 49.2 | 50.0 | 50.0 | 51.0 | 52.1 | 51.9 | 52.4 | 53.1 | 53.1 | 53.2 | 56.3 |
+| 1200 | 43.2 | 48.9 | 48.7 | 47.9 | 49.2 | 49.8 | 49.5 | 49.9 | 51.0 | 51.0 | 51.4 | 51.3 | 51.7 | 53.1 | 52.1 | 54.9 | 56.6 |
+| 1600 | 45.4 | 48.6 | 48.5 | 49.1 | 49.3 | 49.6 | 49.5 | 50.3 | 51.4 | 50.7 | 51.3 | 52.2 | 51.6 | 52.4 | 52.6 | 50.2 | 55.4 |
+| 2000 | 50.5 | 48.7 | 47.1 | 50.2 | 50.5 | 50.1 | 50.3 | 51.3 | 51.5 | 51.6 | 52.2 | 52.4 | 53.0 | 54.5 | 53.7 | 54.9 | 57.7 |
+| 2400 | *51.2* | *48.8* | 52.1 | 48.1 | 50.6 | 50.5 | 50.6 | 51.8 | 51.6 | 52.2 | 52.6 | 54.0 | 53.3 | 52.8 | 55.6 | 55.5 | 57.9 |
+
+The slope is steepest below 1600 (800: 43.8 → 56.3) and flattest at 2000–2400, whose
+lines sit above 50% even after long losing streaks. The −6/−7 zigzags at 2000/2400 are
+noise (CI ±3–5 pp); the buckets are usable to about ±6.
+
+### By time control (all ratings pooled)
+
+| TC | −8+ | −7 | −6 | −5 | −4 | −3 | −2 | −1 | draw | +1 | +2 | +3 | +4 | +5 | +6 | +7 | +8+ |
+|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|
+| bullet | 46.3 | 47.1 | 49.0 | 48.5 | 49.6 | 49.4 | 49.8 | 50.6 | 51.2 | 50.7 | 51.6 | 52.2 | 51.8 | 52.6 | 53.4 | 52.6 | 54.6 |
+| blitz | 43.9 | 48.8 | 47.2 | 49.0 | 49.3 | 50.1 | 49.7 | 50.6 | 51.3 | 51.2 | 51.6 | 52.0 | 51.9 | 53.0 | 52.1 | 52.9 | 55.6 |
+| rapid | 46.3 | 46.7 | 48.0 | 49.0 | 49.5 | 49.4 | 49.6 | 50.5 | 51.4 | 51.8 | 52.3 | 52.4 | 53.7 | 54.1 | 55.0 | 55.4 | 60.3 |
+| classical | *42.4* | *49.5* | *47.3* | *50.1* | 51.2 | 50.6 | 49.5 | 50.1 | 50.9 | 52.5 | 53.4 | 53.3 | 52.1 | 55.5 | *51.0* | *62.3* | *64.9* |
+
+The three fast controls behave the same to within their CIs (±2–3 pp at the tails);
+classical has 100–330 games per tail cell (CI ±9 pp) and should be dropped or greyed past
+±4. Cell sizes: bullet 2.1k / blitz 1.6k / rapid 1.0k at −8+.
+
+### Confound controls on the pooled curve (`tbl_streak_controls.csv`, `probes/streak_controls.py`)
+
+Diagnostics per streak length: 8+ streaks lie within one session only 27% (losses) / 32%
+(wins) of the time (2-streaks: 77–80%); streaks that *began* after a ≥7-day absence are
+0.3–1.8% of cases; 13–18% of streak-ending games fall in the user's first 100 games in the
+TC (baseline 13%); games played >150 points from the user's long-run median rating (smurf /
+provisional proxy) are 2% at baseline, 4.4% at −8+ and 7.9% at +8+. Returning after an
+absence does **not** hurt: first game back after 7–30 d +0.6 pp, 30–90 d +1.4, >90 d +1.4
+(all CIs include 0); the only "first game" penalty is the 1–24 h one (−0.7 pp, warm-up).
+
+Residual (pp) after applying each control; raw score in brackets at the tails:
+
+| streak | A as published | B streak within one session | C drop first 100 games | D drop \|r − median\| > 150 | E = B+C+D (n at tails) |
+|---|---|---|---|---|---|
+| −8+ | −4.3 (45.4) | −5.4 (44.0) | −3.7 | −3.7 | −4.8 (44.5, n=1.1k) |
+| −7 | −2.3 | −4.8 | −2.3 | −2.2 | −4.0 (n=1.3k) |
+| −5 | −1.3 | −1.2 | −1.3 | −1.3 | −1.5 |
+| −3 | −0.7 | −0.7 | −0.6 | −0.7 | −0.7 |
+| −1 | −0.1 | −0.1 | −0.1 | −0.2 | −0.2 |
+| +1 | +0.4 | +0.4 | +0.4 | +0.3 | +0.3 |
+| +3 | +1.2 | +1.5 | +1.0 | +1.0 | +1.4 |
+| +5 | +2.0 | +2.1 | +1.6 | +1.5 | +2.0 |
+| +7 | +2.3 | +2.2 | +2.0 | +1.6 | +2.2 (n=2.0k) |
+| +8+ | +5.2 (56.9) | +3.4 (54.9) | +3.7 | +3.8 | +2.3 (53.9, n=1.9k) |
+
+Reading: the middle of the curve (−5 … +5) is untouched by every control. The **cold tail
+is robust and, restricted to same-session streaks, deeper** (−4.8 to −5.4 pp), which is what
+a state effect should do. About half of the extreme **hot tail is account artefacts**: new
+histories and off-median ratings (provisional ratings climbing, smurfs) take +8+ from +5.2 to
++2.3 pp. After controls the curve is roughly symmetric (−4.8 / +2.3 at 8+, −1.5 / +2.0 at 5).
+For the story use variant E (same-session streaks, hygiene filters C+D), cap the exact axis
+at ±6 and pool 7+ (n ≈ 2.4k per tail, CI ±2 pp).
+
+**Player fixed effects** (`tbl_streak_controls_fe.csv`, `probes/streak_controls2.py`): on
+variant E, subtract each user×TC's mean residual over *all* their scored games. Players who
+reach 8+ streaks are systematically off their rating (mean user FE −0.7 pp at −8+, +1.5 pp at
++8+), so the FE removes 0.3–0.7 pp at the tails and nothing in the middle:
+
+| streak | E | E + user FE | CI |
+|---|---|---|---|
+| −8+ | −4.8 | −4.1 | ±3.4 |
+| −7 | −4.0 | −3.3 | ±2.6 |
+| −5 | −1.5 | −1.1 | ±1.2 |
+| −3 | −0.7 | −0.4 | ±0.4 |
+| −2 | −0.8 | −0.7 | ±0.3 |
+| +2 | +0.7 | +0.7 | ±0.3 |
+| +3 | +1.4 | +1.3 | ±0.4 |
+| +5 | +2.0 | +1.6 | ±1.0 |
+| +6 | +3.2 | +2.7 | ±1.5 |
+| +8+ | +2.3 | +0.8 | ±2.1 |
+
+The cold tail survives; the hot tail at 8+ is now within noise of zero (players on 8+ win
+streaks are simply the ones who beat their rating in general). Not checked (would need an
+extra extraction or are mediators rather than confounds): colour mix after streaks (the
+calibration ignores colour), berserk in arena games, fatigue/session depth, sub-TC mix.
+
+### Additional probes (2026-09-03): tilt is small on every other dimension too
+
+Scripts in `analysis/tilt_study/probes/`, run against the same games plus per-move clocks
+(`move_feats.parquet`) and, for move quality, the uniformly-analysed rapid/classical arm
+(`flaws_byus.parquet`, `full_evals_completed_at` set and `lichess_evals_at` null).
+
+| probe | after L vs W (same session, equal footing) | verdict |
+|---|---|---|
+| P(loss) after k straight losses | 47–49% raw for k = 1…5; crosses 50% only at k ≥ 7 | flat |
+| "stop after LL" counterfactual | saves 0.2–0.4 losses per 100 games (≈0.01–0.02 rating pts) | ≈0 |
+| think time per move, moves 3–20 | −3% (blitz 4.99 vs 5.14 s, rapid 11.4 vs 11.7 s); 76% of blitz users faster after L | real, tiny |
+| blunders/100 own moves, uniform arm (rapid) | 6.51 vs 6.51 after L/W; 7.11 vs 6.36 after LLL+/WWW+, opponent's rate rises too (6.96 vs 6.57) | no move-quality tilt |
+| ACPL / blunders in the lichess-analysed arm | +15–20% after LLL+ | selection artefact: analysis rate 25.6% after LLL+ vs 31.5% after WWW+ |
+| opening switch after a same-colour loss (move-2 line) | 87.9% vs 87.8% | none |
+| faster TC / casual game after a loss | ≈0 | cohort is selected per TC, unmeasurable here |
 
 ## 2. State or trait? The break test (`break_test.png`)
 
