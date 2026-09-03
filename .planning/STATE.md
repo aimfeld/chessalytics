@@ -4,10 +4,10 @@ milestone: v2.13
 current_phase: 214
 status: completed
 stopped_at: Phase 214 complete — all phases complete
-last_updated: "2026-09-03T04:59:07.247Z"
+last_updated: "2026-09-03T16:31:18.748Z"
 last_activity: 2026-09-03
-last_activity_desc: Phase 214 complete
-state_head: e4973cba50312c355e3b364f4b0bf34374c0413f
+last_activity_desc: Phase 214 shipped — squash-merged to main
+state_head: ccf783be874c6d401ede574f8c7da8572f00ecbd
 progress:
   total_phases: 2
   completed_phases: 2
@@ -22,7 +22,7 @@ milestone_name: Ways In & Honest Answers
 
 Phase: 214
 Plans: 8 of 8 complete (wave 1 tooling done: 214-01; wave 2 tactic_detector.py split done: 214-02; wave 2 endgame_service.py aggregation split done: 214-03; wave 2 library_repository.py flaw-filter split done: 214-04; wave 2 eval_apply.py transactional pipeline split done: 214-05; wave 2 train_repository.py session-composition split done: 214-06; wave 2 insights_llm.py prompt-assembler split + golden test done: 214-07; wave 2 complete; wave 3 closeout done: 214-08 — phase-wide five-criteria after-baseline measured and recorded, CONCERNS.md "Large God files" entry narrowed to the four frontend files)
-Status: All phases complete
+Status: Phase 214 shipped — squash-merged to main (ccf783be8)
 
 **Phase 214 is COMPLETE as of 2026-09-03** (8/8 plans, verification 9/9 passed, full backend
 suite 4497 passed / 19 skipped, ruff/ty/format clean). All six in-scope backend files lost their
@@ -127,7 +127,7 @@ Cloudflare nameservers, `maia3_simplified.onnx` and `stockfish-18-lite-single.wa
 return `cf-cache-status: HIT` while still carrying the origin's `max-age=2592000`, and
 `maia-worker.js` still returns `cache-control: no-cache`.
 
-Last activity: 2026-09-03 — Phase 214 complete
+Last activity: 2026-09-03 — Phase 214 shipped — squash-merged to main (ccf783be8)
 
 Prior: Phase 213 complete
 `games.initial_fen` added and backfilled in-migration, the opening-transition sample
