@@ -172,11 +172,17 @@ class TestStartupValidation:
         insights_llm.get_insights_agent.cache_clear()
 
     def test_bad_provider_raises(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        # pydantic-ai 2.39 wraps the unknown-provider ValueError from
+        # infer_provider_class in a UserError (RuntimeError subclass, NOT a
+        # ValueError), so the old pytest.raises(ValueError) stopped matching.
+        # Both startup-validation paths now raise UserError.
+        from pydantic_ai.exceptions import UserError
+
         insights_llm.get_insights_agent.cache_clear()
         monkeypatch.setattr(
             insights_llm.settings, "PYDANTIC_AI_MODEL_INSIGHTS", "bogus-provider:foo"
         )
-        with pytest.raises(ValueError):
+        with pytest.raises(UserError):
             insights_llm.get_insights_agent()
         insights_llm.get_insights_agent.cache_clear()
 

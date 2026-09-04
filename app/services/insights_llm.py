@@ -311,8 +311,10 @@ def get_insights_agent() -> Agent[None, EndgameInsightsReport]:
     pydantic-ai silently ignores the Google-specific settings anyway.
 
     Raises:
-        UserError: empty PYDANTIC_AI_MODEL_INSIGHTS or unknown model suffix.
-        ValueError: unknown provider prefix (e.g., "bogus-provider:foo").
+        UserError: empty PYDANTIC_AI_MODEL_INSIGHTS, unknown model suffix, or
+            unknown provider prefix (e.g., "bogus-provider:foo"). The provider
+            case raised a bare ValueError before pydantic-ai 2.39, which now
+            wraps it in UserError (a RuntimeError subclass, not a ValueError).
 
     Called from (a) main.py lifespan for startup validation (Plan 06), and
     (b) generate_insights() at request time. lru_cache ensures one Agent
@@ -2560,7 +2562,7 @@ def _maybe_strip_overview(report: EndgameInsightsReport) -> EndgameInsightsRepor
 
 # -- Agent invocation wrapper: exception -> (None, marker), success -> (report, ...) --
 
-_THOUGHTS_DETAIL_KEY = "thoughts_tokens"  # pydantic-ai Google adapter key (models/google.py:1454)
+_THOUGHTS_DETAIL_KEY = "thoughts_tokens"  # pydantic-ai Google adapter key (models/google.py:2065)
 
 
 async def _run_agent(
