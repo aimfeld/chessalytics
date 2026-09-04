@@ -1,11 +1,12 @@
 ---
 phase: 216-audit-bugs-and-quick-wins
 verified: 2026-09-04T20:30:00Z
-status: human_needed
+status: passed
 score: 7/7 truths verified
 behavior_unverified: 0
 overrides_applied: 0
 human_verification:
+
   - test: "Post-deploy: query worker_heartbeats.last_ip"
     expected: "SELECT last_ip, max(last_seen) FROM worker_heartbeats GROUP BY 1 ORDER BY 2 DESC LIMIT 5 on prod — newest rows are real ISP/Hetzner addresses, not 162.158.*/104.23.*/172.71.* (Cloudflare)"
     why_human: "Only observable against production after the next /deploy; explicitly scoped as post-deploy HUMAN-UAT in ROADMAP.md and 216-01-PLAN.md"
