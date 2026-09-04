@@ -10,9 +10,12 @@ short-lived connection inside the timeout. It deliberately does NOT use the
 request-scoped `get_async_session`: that dependency commits after its `yield`, outside
 the handler's try/except, so a cancelled query would be followed by an unbounded
 commit() on a cancelled asyncpg connection and surface as a 500 or a hang instead of
-the intended 503 (Phase 216 code review, BLOCKER). The happy-path test therefore
-overrides `get_engine` with the per-run test engine so the whole slice
-(HTTP -> FastAPI dependency -> fresh Postgres connection) still runs for real.
+the intended 503 (Phase 216 code review, BLOCKER). The session-scoped autouse
+fixture in conftest.py overrides `get_engine` with the per-run test engine, so the
+happy path runs the whole slice (HTTP -> FastAPI dependency -> fresh Postgres
+connection) for real. The failure-path tests swap in a stub engine and must RESTORE
+that session-level override afterwards rather than pop it, or every later test that
+touches /api/health would fall through to the app's real engine.
 """
 
 import asyncio
@@ -29,13 +32,20 @@ from app.main import app
 
 
 @pytest.fixture
-def override_get_engine(test_engine: Any) -> Iterator[None]:
-    """Route the health probe to the per-run test DB (a fresh pooled connection)."""
-    app.dependency_overrides[get_engine] = lambda: test_engine
+def stub_engine_factory() -> Iterator[Any]:
+    """Install a stub engine for one test, then restore the session-level override."""
+    previous = app.dependency_overrides.get(get_engine)
+
+    def _install(execute: Any) -> None:
+        app.dependency_overrides[get_engine] = lambda: _StubEngine(execute)
+
     try:
-        yield
+        yield _install
     finally:
-        app.dependency_overrides.pop(get_engine, None)
+        if previous is None:
+            app.dependency_overrides.pop(get_engine, None)
+        else:
+            app.dependency_overrides[get_engine] = previous
 
 
 class _StubConnection:
@@ -66,14 +76,14 @@ async def _get(client_app: Any) -> httpx.Response:
         return await client.get("/api/health")
 
 
-async def test_health_check_returns_ok_when_db_reachable(override_get_engine: None) -> None:
+async def test_health_check_returns_ok_when_db_reachable() -> None:
     resp = await _get(app)
 
     assert resp.status_code == 200
     assert resp.json() == {"status": "ok"}
 
 
-async def test_health_check_returns_degraded_when_probe_raises() -> None:
+async def test_health_check_returns_degraded_when_probe_raises(stub_engine_factory: Any) -> None:
     """A connection whose query raises must yield a fixed, detail-free 503 body.
 
     The failure originates inside the probe (connect + execute), which is what the
@@ -83,17 +93,16 @@ async def test_health_check_returns_degraded_when_probe_raises() -> None:
     async def _raise() -> None:
         raise RuntimeError("simulated DB connection failure")
 
-    app.dependency_overrides[get_engine] = lambda: _StubEngine(_raise)
-    try:
-        resp = await _get(app)
-    finally:
-        app.dependency_overrides.pop(get_engine, None)
+    stub_engine_factory(_raise)
+    resp = await _get(app)
 
     assert resp.status_code == 503
     assert resp.json() == {"status": "degraded"}
 
 
-async def test_health_check_returns_degraded_on_timeout(monkeypatch: pytest.MonkeyPatch) -> None:
+async def test_health_check_returns_degraded_on_timeout(
+    monkeypatch: pytest.MonkeyPatch, stub_engine_factory: Any
+) -> None:
     """A probe slower than _HEALTH_DB_TIMEOUT_S must yield 503, proven fast via monkeypatch.
 
     With the old request-scoped session this path was followed by the dependency's
@@ -105,11 +114,8 @@ async def test_health_check_returns_degraded_on_timeout(monkeypatch: pytest.Monk
     async def _hang() -> None:
         await asyncio.sleep(0.5)
 
-    app.dependency_overrides[get_engine] = lambda: _StubEngine(_hang)
-    try:
-        resp = await _get(app)
-    finally:
-        app.dependency_overrides.pop(get_engine, None)
+    stub_engine_factory(_hang)
+    resp = await _get(app)
 
     assert resp.status_code == 503
     assert resp.json() == {"status": "degraded"}
