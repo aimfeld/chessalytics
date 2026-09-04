@@ -8,6 +8,16 @@ in `YYYY-MM-DD` (Europe/Zurich).
 
 ## [Unreleased]
 
+## [v2.15] God-File Decomposition & Complexity Gates — 2026-09-04
+
+### Changed
+
+- Internal: the six largest backend modules (endgame service, Train and Library repositories, eval apply, insights LLM, tactic detector) were split into smaller functions and sibling modules with no behavior change, and all six now pass the backend function-size gate without per-file exemptions. (Phase 214)
+
+- The Openings page now shares one filter-fields component between the desktop sidebar and the mobile drawer, so the two can no longer drift apart. Internal: the analysis board, bot-game hook and engine worker pool were split into smaller modules with no behavior change, and the frontend lint now enforces complexity limits on new code. (Phase 215)
+
+## [v2.14] Engine Cold Start & Benchmark Analysis Lane — 2026-09-02
+
 ### Added
 
 - Admins can now open the Activity Pulse dashboard at `/activity` from the main nav, instead of running it locally over an SSH tunnel. Data loads on open and refreshes only when asked.
@@ -1385,7 +1395,9 @@ bookmarks, game cards, and rating / stats pages.
 - Rating history, global stats, openings W/D/L charts.
 - Multi-user auth with data isolation.
 
-[Unreleased]: https://github.com/flawchess/flawchess/compare/v2.13...HEAD
+[Unreleased]: https://github.com/flawchess/flawchess/compare/v2.15...HEAD
+[v2.15]: https://github.com/flawchess/flawchess/compare/v2.14...v2.15
+[v2.14]: https://github.com/flawchess/flawchess/compare/v2.13...v2.14
 [v2.13]: https://github.com/flawchess/flawchess/compare/v2.12...v2.13
 [v2.12]: https://github.com/flawchess/flawchess/compare/v2.11...v2.12
 [v2.11]: https://github.com/flawchess/flawchess/compare/v2.10...v2.11

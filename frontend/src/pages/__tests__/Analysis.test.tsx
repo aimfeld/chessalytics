@@ -1152,6 +1152,29 @@ describe('Analysis desktop layout (Phase 161, SEED-088)', () => {
     const gridRow = humanColumn.parentElement;
     expect(gridRow?.className).toContain('desk3col:grid-cols-[360px_1fr_360px]');
   });
+
+  // Phase 215 Plan 05 mutation-proof coverage: useBoardStageSize's measured
+  // board width is otherwise indistinguishable from a hardcoded 0 in every
+  // OTHER test in this file — jsdom's zero-layout clientWidth (see the D-04
+  // comment above) makes computeBoardSize's own zero-budget guard return 0
+  // regardless of whether the real measurement code runs at all. Stub a
+  // nonzero measured width (mirrors the D-12 arrow test's own clientWidthSpy
+  // pattern) so the board's actual pixel size proves the ResizeObserver
+  // measurement path — not a mocked/hardcoded value — drives it.
+  it('sizes the board from the measured stage width via computeBoardSize (mutation-proof: a hardcoded 0 would fail this)', () => {
+    const clientWidthSpy = vi.spyOn(Element.prototype, 'clientWidth', 'get').mockReturnValue(800);
+    try {
+      renderAnalysis();
+      const board = screen.getByTestId('analysis-board');
+      // computeBoardSize(800 - BOARD_EVAL_BARS_ALLOWANCE_PX(56) - EVAL_SLIDER_SLACK_PX(12)*2 = 720,
+      // Infinity, BOARD_MAX_WIDTH=540) === 540 (the width-budget-vs-maxWidth clamp) — a
+      // hardcoded 0 (or any value not derived from the 800px stub) would fail here.
+      expect(board.style.width).toBe('540px');
+      expect(board.style.height).toBe('540px');
+    } finally {
+      clientWidthSpy.mockRestore();
+    }
+  });
 });
 
 // 171-08 (171 UAT gap 1) — free-play `?orientation=` auto-flip. Board squares

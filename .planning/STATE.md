@@ -1,28 +1,38 @@
 ---
 gsd_state_version: 1.0
-milestone: v2.13
-current_phase: 213
-status: completed
-stopped_at: Phase 213 complete — all phases complete
-last_updated: "2026-09-02T17:59:43.295Z"
-last_activity: 2026-09-02
-last_activity_desc: "Quick task 260831-s4y complete: fast-forward button on the analysis board (UAT approved)"
-state_head: 7fc994cf71a73c68c3053c501f6a1afeef09fb50
+milestone: v2.15
+milestone_name: God-File Decomposition & Complexity Gates
+current_phase: 215
+status: milestone_complete
+stopped_at: v2.14 and v2.15 closed — phases 212–215 archived, tagged, released; v2.15 not yet deployed
+last_updated: "2026-09-04T12:00:00.000Z"
+last_activity: 2026-09-04
+last_activity_desc: v2.14 Engine Cold Start & Benchmark Analysis Lane and v2.15 God-File Decomposition & Complexity Gates closed (retroactive)
 progress:
-  total_phases: 2
-  completed_phases: 1
-  total_plans: 23
-  completed_plans: 21
-milestone_name: Ways In & Honest Answers
+  total_phases: 4
+  completed_phases: 4
+  total_plans: 38
+  completed_plans: 38
+current_phase_name: frontend-god-file-decomposition
 ---
 
 # Project State: FlawChess
 
 ## Current Position
 
-Phase: 213
-Plans: 12 of 12 complete (05 original + 07 gap-closure: 213-06..213-12)
-Status: All phases complete
+Phase: 215
+Plans: 8 of 8 complete (215-01 through 215-07 per prior session notes below; 215-08 phase-wide closeout DONE — all six ROADMAP success criteria (0-5) measured against the merged trunk (05c8a38fc) with recorded commands and numbers: lint green with exactly the two documented page-component residuals (Analysis complexity 132/statements 152, OpeningsPage complexity 48); full frontend gate green (lint/build/knip/test, 3894/3894 tests, 251/251 files); full backend gate green (ruff/ty/pytest, 4499 passed/19 skipped, scoped away from an unrelated concurrent session's own commit in analysis/tilt_study/probes/); aggregate test diff additions-only (0 deletions); app-wide react-hooks/exhaustive-deps+refs count exactly 30, unchanged; per-file testid/umami inventories byte-identical to phase base; both 215-06/215-07 HUMAN-UAT records collected; CONCERNS.md "Large God files" entry narrowed to the six next-tier files (TrainReveal.tsx, EvalChart.tsx, LibraryGameCard.tsx, TrainSolveScreen.tsx, VariationTree.tsx, App.tsx) with a Phase 215 history line appended)
+Status: All phases complete. **v2.14 (212–213) and v2.15 (214–215) closed 2026-09-04**; v2.15 is merged to `main` but NOT deployed — production is at release #335. Next: `/deploy`, then a new phase or `/gsd-new-milestone`.
+
+**Phase 214 is COMPLETE as of 2026-09-03** (8/8 plans, verification 9/9 passed, full backend
+suite 4497 passed / 19 skipped, ruff/ty/format clean). All six in-scope backend files lost their
+`per-file-ignores` entries; `check_function_size.py` reports zero breaches across them (283
+functions); complexipy app-wide 97 -> 89; `tests/` diff additions-only; CONCERNS.md "Large God
+files" now lists only the four frontend files. Ran sequentially on the main tree (all wave-2
+plans share one `pyproject.toml` line); 214-05 was interrupted by a session usage limit after
+Task 1 and completed by a continuation executor. Phase branch
+`gsd/phase-214-backend-god-file-decomposition` NOT yet squash-merged to `main` (run the full
+pre-merge gate, add a CHANGELOG bullet under Unreleased, then squash-merge).
 
 **Phase 213 is COMPLETE as of 2026-08-29** (12/12 plans, UAT 34 passed / 0 issues,
 verification 39/39). The cold-start UX shipped through five UAT-driven gap-closure
@@ -117,7 +127,7 @@ Cloudflare nameservers, `maia3_simplified.onnx` and `stockfish-18-lite-single.wa
 return `cf-cache-status: HIT` while still carrying the origin's `max-age=2592000`, and
 `maia-worker.js` still returns `cache-control: no-cache`.
 
-Last activity: 2026-09-02 - Completed quick task 260902-rmn: audited 69 uncaptured except blocks in app/services + app/routers; 7 genuine silent-swallow sites (Stockfish respawn/crash, stored-PGN parse at 4 eval sites, played-move SAN) now capture to Sentry with source tag + context; 62 others are expected conditions and unchanged
+Last activity: 2026-09-04 — Phase 215 complete
 
 Prior: Phase 213 complete
 `games.initial_fen` added and backfilled in-migration, the opening-transition sample
@@ -140,9 +150,9 @@ Both deployed to production via releases #295 and #296; `main` and `origin/produ
 
 ## Project Reference
 
-See: .planning/PROJECT.md (updated 2026-08-29 after Phase 213)
+See: .planning/PROJECT.md (updated 2026-09-04 after Phase 215)
 Core value: Position-precise WDL across openings + endgames + time pressure on top of users' actual chess.com / lichess games, with personalized LLM commentary and an auto-generated opening-strengths/weaknesses report.
-Current focus: **Milestone v2.13 (Ways In & Honest Answers) 100% complete 2026-08-29 — Phases 212 and 213 both done. Next: squash-merge `gsd/phase-213-*` to `main` (full pre-merge gate), then close the milestone.** Previously: v2.12 closed Train's two silent-failure surfaces: push reminders that fail to arrive now recover themselves (device re-sync without spending the one-shot permission, local-day-bounded TTL, VAPID mismatch repair on gesture, claim released on a no-delivery fan-out — Phase 204, SEED-135), and a Train puzzle can no longer contradict itself (free-play root ply graded from the mount search's own ranks, plus a dead band excluding items whose top-two margin sits inside browser-search noise at a measured 34.80% pool cost — Phase 205, SEED-137). Still open and carried forward: SEED-136 (verify the iOS push path on real hardware — no iPhone available, BrowserStack unused), SEED-138 (push-prune log noise + Sentry scope bleed), SEED-130 (uncleared browser Stockfish TT, the reason the dead band is 0.05 wide).
+Current focus: **Phase 215 (Frontend God-File Decomposition) complete 2026-09-04 on its phase branch (verified 6/6, code review 0 critical / 7 warnings in 215-REVIEW.md). Next: optionally `/gsd-code-review 215 --fix` for the warnings (facade<->stage import cycle in workerPool, three never-called `PoolOps` fields, `forkPlyForOrientation`/`flawKey` duplicated across files), then squash-merge `gsd/phase-215-frontend-god-file-decomposition` to `main` (full pre-merge gate; note `analysis/tilt_study/probes/` from the user's own tilt-study commit currently fails ruff/format and rides on this branch). No open milestone: `/gsd-new-milestone` or a seed.** Before that: Milestone v2.13 (Ways In & Honest Answers) 100% complete 2026-08-29 — Phases 212 and 213 both done; squash-merge `gsd/phase-213-*` to `main` (full pre-merge gate), then close the milestone. Previously: v2.12 closed Train's two silent-failure surfaces: push reminders that fail to arrive now recover themselves (device re-sync without spending the one-shot permission, local-day-bounded TTL, VAPID mismatch repair on gesture, claim released on a no-delivery fan-out — Phase 204, SEED-135), and a Train puzzle can no longer contradict itself (free-play root ply graded from the mount search's own ranks, plus a dead band excluding items whose top-two margin sits inside browser-search noise at a measured 34.80% pool cost — Phase 205, SEED-137). Still open and carried forward: SEED-136 (verify the iOS push path on real hardware — no iPhone available, BrowserStack unused), SEED-138 (push-prune log noise + Sentry scope bleed), SEED-130 (uncleared browser Stockfish TT, the reason the dead band is 0.05 wide).
 
 ### Superseded: focus after the v2.11 close
 
@@ -196,7 +206,11 @@ No v2.7 milestone audit doc was generated (`/gsd-audit-milestone` not run): the 
 
 ## Milestone Progress
 
-Forty-six milestones complete (v1.0–v2.13). **v2.13 Ways In & Honest Answers closed 2026-08-22.**
+Forty-eight milestones complete (v1.0–v2.15). **v2.14 Engine Cold Start & Benchmark Analysis Lane and v2.15 God-File Decomposition & Complexity Gates both closed 2026-09-04.**
+
+v2.15 God-File Decomposition & Complexity Gates closed 2026-09-04 — 2 phases (214, 215), 16 plans, 17 commits on `main` since the `v2.14` tag (73 non-planning files, +13,887/−6,622; the range also carries the `analysis/tilt_study` probes and the lint-scope chore excluding them). A **retroactive lightweight close** sourced from CONCERNS.md rather than a seed. **Phase 214** split the six largest backend modules (`endgame_service.py`, `train_repository.py`, `eval_apply.py`, `library_repository.py`, `insights_llm.py`, `tactic_detector.py`) with zero behavior change: all six lost their `per-file-ignores`, `check_function_size.py` reports zero breaches across 283 functions, complexipy app-wide 97 → 89, `tests/` diff additions-only, 4,497 passed / 19 skipped, VERIFICATION 9/9. **Phase 215** did the same for `Analysis.tsx`, `useBotGame.ts`, `workerPool.ts` and `Openings.tsx` and put the frontend eslint `complexity`/`max-depth`/`max-statements` rules at `error`, baselined per pre-existing breach; `Analysis()` (132 / 152 statements) and `OpeningsPage()` (48) are **accepted page-component residuals**, gate stays 15 for new code, real seam is SEED-160; 3,894/3,894 tests, testid/umami inventories byte-identical, `react-hooks` warnings unchanged at 30, VERIFICATION 6/6. Archived to `milestones/v2.15-ROADMAP.md`, phases to `milestones/v2.15-phases/`, CHANGELOG promoted, tagged v2.15, GitHub release published. **NOT deployed at close** — `origin/production` is at release #335 (the v2.14 content); this milestone is the undeployed tail. Deferred, not fixed: the pre-existing `Train.guestGate.test.tsx` full-run flake (`215/deferred-items.md`).
+
+v2.14 Engine Cold Start & Benchmark Analysis Lane closed 2026-09-04 (shipped 2026-09-02) — 2 phases (212, 213), 22 plans, 171 commits on `main` since the `v2.13` tag (355 non-planning files, +47,121/−1,641; the range also carries twelve quick tasks: `/activity` dashboard hosting, time-range filter and mobile layout, `users.promoted_at`, the per-game advisory lock in `apply_full_eval`, Train leech parking, the Import-tab paste entry, the Maia OOM terminal state, the fast-forward button and its cadence/animation rework, board animation on every device, player-side-first game card headers, the Bots intro card, the Train reveal played-in-game arrow with ownership gating and analysis link, and missing Sentry captures). A **retroactive lightweight close** of two unrelated, already-deployed phases bundled by window; requirement IDs minted per-phase at planning time. **Phase 212 (SEED-152)**: the classical benchmark tranche **completed** (not stopped at the boundary) — 27,020/27,020 lichess arm and 23,662/23,717 never-analyzed on every axis, the 55 remaining having zero movetext, so 50,682/50,682 analyzable; 3,266,036 `best_move` cells, 520,613 PVs, 309,213 `game_flaws`, 384,885 `game_best_moves`; `stamped_but_unselected` delta zero against 1,805,063, D-04 held (90.2% of snapshot plies differ, all 27,020 still carry `lichess_evals_at`); the tier-3 branch (b) one-ply stamp was root-caused and fixed in `d7b40e30a` (production never affected); first VERIFICATION `gaps_found` because the deliverable had not run, re-verified 7/7 on 2026-08-29. The rapid tranche is running as post-phase operational work; blitz/bullet unselected. **Phase 213 (SEED-155)**: asset-check-then-download-with-progress for every engine consumer, bot play gated on the worker's own `ready` message with no warmup inference (D-02), the analysis board behind the same non-dismissible `EngineReadyGate` after G-213-34 reversed the no-gate decision, single shared Stockfish fetch, main-thread ORT ownership, D-20 CacheStorage byte-ownership for all three assets with the CR-01 truncation guard, 128px WebP lazy avatars; UAT 34/0, VERIFICATION 39/39; `ui.safety-gate` overridden by the user 2026-08-28 (no UI-SPEC, gate left active, `213-GATE-OVERRIDE.md`). Archived to `milestones/v2.14-ROADMAP.md`, phases to `milestones/v2.14-phases/`, CHANGELOG promoted, tagged v2.14 at `77c6ee865` (the last `main` commit before Phase 214 merged, byte-identical to `origin/production` outside `.planning/`), GitHub release published; SEED-152 and SEED-155 closed. **Deployed throughout** via releases #319–#335.
 
 v2.13 Ways In & Honest Answers closed 2026-08-22 — 6 phases (206, 207, 208, 209, 210, 211), 20 plans, 262 commits on `main` since the `v2.12` tag (308 non-planning files, +31,705/−3,657; the range also carries the public data-stories site, Umami outbound-link tracking, two Caddy access-log secret-leak fixes, a `pydantic-ai` 2.x upgrade, and a run of sound-design and move-browsing quick tasks belonging to no phase). A **retroactive lightweight close** — assembled from six already-shipped, already-deployed phases with no `/gsd-new-milestone` requirements cycle, same pattern as v2.6, v2.8 and v2.12; requirement IDs were minted per-phase at planning time and live in each phase's first PLAN.md. **Two doors that did not exist**: **Phase 207 (SEED-143)** closed a *total* recovery gap — `reset_password_token_secret` was configured and consumed by nothing, `get_reset_password_router()` absent entirely, email capability 100% absent — so a user who forgot their password had to register a different address and re-import everything; and **Phase 208 (SEED-144)** gave `/analysis` a door in via one sniffed textarea (a bare FEN handed to chess.js `loadPgn()` throws a distinguishable parse error, which is what makes a single box safe), persisting nothing until an explicit "Analyze full game" writes a `platform='pgn'` row that is unconditionally excluded from analytics. **Two Train honesty fixes**: **Phase 206 (SEED-140)** — the seed's own opening question was answered in the negative (herrings do NOT enter the SR rotation), so the defect was composition, not scheduling: a herring-only backfill made every slot a several-fine-moves position, so the binary guess was *always* "several", teaching an actively harmful prior while permanently burning herrings; now a scarcity-triggered, server-computed warm-up label plus a 208-position sharp CC0 filler pool backing every SR shortfall. **Phase 211 (SEED-150)** — "Also fine" moves are now server-vetted and graded from the server's deep evals instead of ranks 2–4 of a 1.5s MultiPV-4 browser search, with `TRAIN_GRADING_MULTIPV_WIDTH` dropped to 1. **Two robustness phases**: **Phase 209 (SEED-146)** import concurrency cap + queued state, readiness-poll backoff ladder under a 30-minute budget, guest promotion and percentile compute off the event loop, and an operator-executed Cloudflare CDN cutover verified live; **Phase 210 (SEED-042)** `games.initial_fen` backfilled in-migration so a custom-start game no longer crashes `/analysis` or silently evicts an opening line from insights. **The correction worth keeping**: Phase 207's D-05 was superseded mid-phase when the operator challenged the apex-SPF merge — SPF is evaluated against the envelope-from, not the visible `From`, so Resend scopes SPF to a `send.` subdomain while DKIM signs at the apex; the "only step that can break live mail" was retired before it ran, and the seed's `include:_spf.resend.com` token was wrong (`include:amazonses.com`). Archived to `milestones/v2.13-ROADMAP.md`, phases to `milestones/v2.13-phases/`, CHANGELOG promoted, tagged v2.13, GitHub release published; all six source seeds closed. **Already deployed to production** throughout via releases #297–#318 — `main` and `origin/production` are byte-identical outside `.planning/`. **Verification coverage is uneven and recorded as such**: 206/207/211 carry a passing VERIFICATION.md; **Phase 208 closed `human_needed`** with four live-browser UAT items still `[pending]` and shipped anyway; **Phases 209 and 210 have no VERIFICATION.md at all** (209 has a VALIDATION.md, 210 a SUMMARY.md with a per-requirement red-before-fix proof table — evidence, but not the standard artifact).
 
@@ -296,6 +310,16 @@ v1.29 Live-Engine Analysis Page shipped 2026-06-29 — 5 phases (136–140), 14 
 
 (Cleared at v1.31 close — full log in `.planning/PROJECT.md` Key Decisions + the milestone archives.)
 
+- [Phase 215]: SC-0/SC-1 RELAXED 2026-09-04 (commit 5687e41c7) for page-component bodies: cyclomatic 15 is a soft target for `Analysis()` (176 -> 132) and `OpeningsPage()` (64 -> 48) because both ESLint `complexity` and Sonar cognitive add +1 per flat `&&`/`?:` derivation and per JSX conditional; both keep reasoned-residual baseline entries in `frontend/eslint.config.js`. The gate for NEW code stays at 15. Do not plan a gap-closure for the residuals; the real seam is SEED-160 (analysis-session state store).
+- [Phase 215-02/03]: extracted seams in `workerPool.ts`/`useBotGame.ts` proven by two-way mutation tests against the existing oracles (109 + 167 tests); `runBotTurnRef` indirection and all `Sentry.captureException` sites preserved; module paths for `vi.mock` factories unchanged.
+- [Phase 215-04/05]: hook extraction from `Analysis()` must keep dependency arrays byte-identical and hit hook-ordering deadlocks when a plan's field list ignores data flow; scope narrower than the plan rather than reorder effects.
+- [Phase 215-07]: desktop `filter-piece-filter*` and mobile `*-sidebar` testid sets are one shared `OpeningsFilterFields` with a `testIdSuffix` prop; the two sets are a browser-automation contract, never collapse them.
+
+- [Phase 214-01]: ruff `C901`/`PLR0912`/`PLR0915` enabled with a repo-wide `per-file-ignores` baseline (52 findings / 24 files, not the plan's app-only 35 / 14, because the gate is `ruff check .`); ruff `--preview` rejected; nesting depth gated by the stdlib-AST `scripts/check_function_size.py` (`allow-loc` pragma is LOC-only, never depth); complexipy reports, does not gate.
+- [Phase 214-03]: `track_eval_and_played_at` flag on the shared endgame accumulator exists to PRESERVE pre-split output on `categories_by_tc` (API-serialized fields stay at schema defaults); the per-TC path keeps its own row-shape dispatch because its tuple fixtures put `time_control_bucket` where the pooled path expects `next_entry_eval_cp`.
+- [Phase 214-04]: `fetch_flaw_comparison` carries a reasoned `# check-function-size: allow-loc` pragma instead of a split (one 284-line `select()`, no ruff rule fires).
+- [Phase 214-07]: byte-level golden of the LLM user prompt captured BEFORE the split is the oracle; the plan's C4 filter stage was already-retired dead code and is documented as such, not fabricated.
+- [Phase 214]: no in-scope helper moved to a sibling module (module-attribute patches in four files' tests would silently stop applying); every extracted seam mutation-proven.
 - [Phase 194-02]: ABORT-02 needed zero production edit to `useBotGame.ts` — all four abort sites already aborted the right controller, and that signal already flowed through `createDeadlineSearch`; Task 1's wiring of the signal into `providers.grade` alone closed the gap. Proven by an empty `git diff --stat` on the hook plus four integration cases, rather than by adding `pool.stopAll()` calls the requirement explicitly prohibited.
 - [Phase 194-04]: `vi.spyOn(moduleNamespace, 'fn')` does not intercept a same-module function's internal self-call in this Vite/Vitest setup (verified empirically on a scratch module before writing production code). Non-invocation of the lazy `modalPath` builder is proven through a `modalPathBuilder = { build }` indirection object, whose late-bound property lookup IS spy-able.
 - [Phase 194-04]: The RankedLine spread audit was done by TYPE, not by the plan's literal grep — which cannot return zero because it matches its own required explanatory comment and two unrelated `line` variables. The type-based pass found a second real spread (`Analysis.tsx`, split across two source lines and therefore invisible to a line-based grep) that would have silently defeated JANK-03.
@@ -766,6 +790,22 @@ v1.29 Live-Engine Analysis Page shipped 2026-06-29 — 5 phases (136–140), 14 
 - [Phase ?]: 211-02: cap-dependent tests recast onto the herring budget — soft's true alternative bound is one (the blob's single su)
 - [Phase 211]: D-01 amended (operator, 211-03 Task 3 round 2): soft puzzles serve [deep best (quality 'best'), second-best su] best-first from game_positions.best_move — the 'several fine moves' copy is always backed by displayable evidence; D-04 intact (no blob/worker change)
 - [Phase 211]: Free-play root-ply precedence (D-06, 211-03): terminal > engine-is-best > served-key quality > engine ES classification — a key move's badge is the server tier, never re-derived from mixed-source evals; soft arrow cap stays 1 (best-first order, test-pinned); played deep best records tier 'good' (D-07, no 'best' tier in the score ladder) with a drop-0 graded-ES pair
+- [Phase 214]: 214-01: baselined 17 additional out-of-app/ ruff findings (alembic/, analysis/, scripts/) beyond the plan's app/-scoped measurement — ruff check . scans the whole repo, not just app/; the plan's 35-finding measurement missed 17 findings across 10 other files needed to keep the gate green project-wide (full baseline: 52 findings, 24 files)
+- [Phase 214]: 214-02: one extracted predicate for detect_clearance's branch reduction (conditions 3-5), not five one-line helpers -- matches the source's own comment grouping and the plan's anti-over-split guidance. — Conditions 3-5 were already comment-grouped in the source as requiring the prior pov move; extracting exactly that group dropped PLR0912 from 13 to well under 12 in one move without violating CLAUDE.md's split-to-fit-a-signature prohibition.
+- [Phase 214]: 214-03: track_eval_and_played_at flag on the shared _accumulate_endgame_rows gates eval-mean/last_played_at accumulation for the per-TC-breakdown caller — without it the shared _build_category_stats would have populated avg_eval_pawns/last_played_at on categories_by_tc (a directly-serialized API field) where the pre-split code always left them at schema defaults, a silent API behavior change the test suite wouldn't have caught on its own. _aggregate_endgame_stats_by_tc also keeps its own row-shape dispatch rather than reusing _normalize_endgame_row, since its tuple test fixtures embed time_control_bucket at a different index than the pooled path's fixtures use for next_entry_eval_cp/mate.
+- [Phase 214]: 214-04: build_flaw_filter_clauses split via exactly one extraction (_build_tactic_clause for the ~30-line tactic block); the four smaller severity/tempo/opportunity/impact/phase blocks (3-8 lines each) stay inline — extracting them would have produced five near-trivial single-caller helpers, the "split to fit a signature" anti-pattern CLAUDE.md forbids. fetch_flaw_comparison (243 logic LOC, one select() with ~30 labelled columns) got a `# check-function-size: allow-loc` pragma instead of a split, citing PLR0915 not firing as the tie-breaker evidence that the length is literal-heavy, not logic-heavy.
+- [Phase 214]: 214-05: _classify_and_fill_oracle's three early-return guards preserved across the split as sentinel-return checks (None / "reason" in result / False) against each stage helper's return value rather than inline conditions — existing_plies/already_blobbed_plies are read in the orchestrator itself, before calling _diff_upsert_flaw_rows, so the read-before-delete ordering hazard survives the function boundary. _build_best_move_candidates' five stages use plain arguments (no context dataclass, up to 10 params on the row-assembly stage) per the plan's explicit prohibition. Interrupted by a rate limit after Task 1; continuation executor re-verified Task 1's committed extraction before resuming Tasks 2-3.
+- [Phase 214]: 214-06: compose_and_materialize_session split into _resolve_existing_session / _assemble_session_items / _materialize_session_rows; the D-06/D-07 warm-up discriminant stayed inside _assemble_session_items (computed right after the D-09 shuffle, where it always was) rather than moving to materialize or the orchestrator, since it depends on surviving_sr_keys which only exists post-shuffle. Two-way mutation proof (RESEARCH's thin-test-seam flag for this file, zero private helpers imported by name in tests): stubbing _assemble_session_items empty failed 45/223 tests, stubbing _resolve_existing_session to always return None failed 8/223 — both genuinely covered, no test additions needed.
+- [Phase 214]: 214-07: added a byte-level golden-prompt test (tests/services/golden/insights_user_prompt.txt) as the split oracle for _assemble_user_prompt, first use of this pattern in the phase. Discovered the plan's Task 2 literally required five named filter helpers (_apply_c2_filter..._apply_c6_filter) "called from _assemble_user_prompt" — but only A2 is actually inline there; C2/C6 live in _retained_series_for_summary, C3 in _render_series_block, C5 in _render_subsection_block's raw-series loop, and C4 ("drop overall subsection when overall_wdl renders") is dead code — the scalar overall subsection was already retired from _SECTION_LAYOUT in a prior Phase 102 UAT pass. Extracted each real stage at its actual call site instead of hoisting deep per-row logic into the orchestrator; documented C4 as retired rather than faking a no-op. _assemble_user_prompt's real depth-5/PLR0912 source was the _SECTION_LAYOUT render loop's nested dispatch, not the filter chain — fixed via _render_layout_item + two extracted prep loops. Deduplicating the two near-identical ELO summary renderers didn't clear C901 by itself (ruff scores a nested closure's branches into the enclosing function) — had to also hoist the per-window closure to module level. Mutation proof: stubbing _apply_c6_filter to skip its cap turned both the golden test and a pre-existing test red.
+- [Phase 214]: 214-08 (wave 3 closeout, final plan): measured all five ROADMAP success criteria against the merged trunk — ruff clean project-wide (52→31 whole-repo ignore-emptied findings, zero from the six in-scope files), complexipy app-wide 97→89, all six in-scope files individually zero-breach on check_function_size.py, full pre-merge gate green (4497 passed/19 skipped), tests/ diff additions-only, zero new `# ty: ignore`. Narrowed CONCERNS.md "Large God files" to the four frontend files with a Phase 214 history line. Found the plan's own Task 1 acceptance-criteria command (check_function_size.py scoped to app/services+app/repositories broadly, not just the six files) fails on 6 pre-existing out-of-scope depth breaches — a plan-authoring scope mismatch against the ROADMAP criterion, which the six files satisfy individually; did not patch out-of-scope files (forbidden by this plan). Also corrected the orchestrator's pre-supplied "three out-of-scope breaches" claim to the actually-measured six.
+- [Phase 215]: 215-01: complexity/max-depth/max-statements enforced at error across frontend/src/**/*.{ts,tsx}, every pre-existing breach baselined in one Phase 215 override region; eslint-plugin-sonarjs wired behind report-only npm run lint:cognitive, outside npm run lint and CI.
+- [Phase 215]: 215-02: noLiveSlotRemains/sideToMove promoted to top-level workerPool.ts exports (not PoolOps fields) to avoid growing the 12-field dispatch table for pure, side-effect-free cross-stage helpers — Needed identically by grade() (dispatch stage) and replaceDeadSlot() (lifecycle stage); routing through PoolOps or duplicating the expression were both worse than a plain exported function taking PoolState directly
+- [Phase 215]: 215-03: useBotGame() split 544->233 counted lines over 5 sibling hooks (clock/draw-offer/engine-dispatch/snapshot/moves); 233-line residual recorded as a reasoned SC-1 exemption (init/resume + state + 5 sub-hook wiring calls + 2 cross-cutting effects + newGame + return, no further extractable cluster). Deviated from the plan's literal "return the ref alongside the callback" design for clockBaseRef/turnStartedAtRef/pausedAtRef — full encapsulation instead, since eslint-plugin-react-hooks cannot prove a ref returned from a custom hook is stable, and a naive return introduced 7 react-hooks/exhaustive-deps warnings. Applied consistently: own refs fully encapsulate behind named functions; where a raw ref must cross a boundary (runBotTurnRef, abortControllerRef), add it to the consuming callback's own deps array (behaviorally inert). applyDrawOfferUpdate's mutation proof exposed a genuine coverage gap (no test ever asserted botDrawOffer becomes true) — 2 tests added to useBotGame.test.ts.
+- [Phase 215]: 215-04: Analysis() split 176/213/2037->168/181/1854 (complexity/statements/lines) over 3 sibling hooks (useAnalysisRouteParams, useAnalysisEngineLines, useAnalysisRouteSeeding) under src/hooks/analysis/. qualityBySanWithGem's cyclomatic-16 breach fixed via one named seam (resolveStoredTierShortCircuit), which also cleared its sonarjs cognitive-complexity breach. Deviated from the plan's literal field-ownership lists for useAnalysisRouteParams and useAnalysisEngineLines: each had a field (initialTactic/autoOrientation; unionSans) that creates a genuine hook-ordering deadlock with a field the SAME hook must also own earlier in the render (gameId needed before gameData exists; unionSans needed before the useStockfishGradingEngine call that produces grading) — scoped both hooks narrower, kept the conflicting fields local, zero behavior change (verified by 85-test oracle + full 3886-test suite + 3 mutation proofs). Corrected the plan's stated app-wide react-hooks warning invariant from 28 to 30 (matches 215-01's own independently-measured baseline); confirmed unchanged either way. seededKey/pasteHandoffConsumed returned as raw RefObjects (named with a "Ref" suffix per eslint-plugin-react-hooks's immutability rule) since Analysis.tsx's Import-tab paste-handoff effect still reads/writes them.
+- [Phase 215]: 215-05: useAnalysisGemMarkers scoped to flawMarkerByNodeId/resolveMarkerFor/moveListMarkers/resolution-effect only (not the plan's 8-field list) — the excluded fields feed local engine calls (useGemSweep, second useStockfishGradingEngine) or 215-04's earlier useAnalysisEngineLines, mirroring 215-04's own two ordering-deadlock deviations. — Real data-flow ordering constraint verified against the actual render-order dependency graph, not the plan's cluster-table hypothesis (RESEARCH.md's own caveat).
+- [Phase 215]: 215-06: SC-0/SC-1 for Analysis.tsx not reached; eslint baseline entries left in place, bisection shows ~100 of 132 remaining complexity points in the unscoped hooks/data section (421-2148); resolution policy pending
+- [Phase 215]: SC-0/SC-1 for Openings.tsx MET under the 2026-09-04 relaxed criteria (contrast Analysis.tsx's NOT-reached status in 215-06): residual complexity 48 recorded with bisection evidence, eslint.config.js baseline entry annotated not deleted, lint stays green
+- [Phase 215]: OpeningsMobileBoardPanel.tsx's shared chessboard info-popover copy extracted to ChessboardInfoCopy.tsx to avoid a circular import — not scope creep, required by the plan's own named mobile-panel seam
 
 ### Pending Todos
 
@@ -773,6 +813,11 @@ None active.
 
 ### Blockers/Concerns
 
+- ⚠️ [Phase 215] `Analysis()` is still ~1,100 logic lines / cyclomatic 132 after nine extractions; more `useXyz` hooks would be metric-chasing. Real fix is a state store for the analysis session (SEED-160), only worth doing with a product trigger.
+- ⚠️ [Phase 215] `src/pages/__tests__/Train.guestGate.test.tsx`: 2 tests intermittently fail in the full vitest run (bare `waitFor` ceiling under load), pass in isolation, pre-existing on main. See `215-.../deferred-items.md`.
+
+- [Phase 214 review, 214-REVIEW.md] Two BLOCKER findings in the new `scripts/check_function_size.py` gate, neither flipping a verdict for the six in-scope files but both load-bearing for the tool going forward: CR-01 `_depth_of_try` undercounts depth by one when a block sits directly inside a `try` body/handler (false negative; reproduced: `try` + four nested `if`s passes `--fail-over-depth 4`), and CR-02 `logic_loc` counts multi-line signature continuation lines as body (overcounts 201/283 functions, conservative direction). Fix via `/gsd-code-review 214 --fix` before the squash-merge to `main`.
+- [Phase 214] `check_function_size.py` over all of `app/` still reports six pre-existing out-of-scope depth breaches (`lichess_client.py` `fetch_lichess_games` depth 6, `openings_service.py` `get_time_series`, `user_benchmark_percentiles_service.py` `compute_stage_b`, `chesscom_client.py:375`, `import_service.py:1010`, `library_service.py:478`) and 31 baselined ruff complexity findings remain outside the six files; the script gates per file, not app-wide. The four frontend god files (`Analysis.tsx` 4,370, `useBotGame.ts`, `workerPool.ts`, `Openings.tsx`) are untouched and need their own phase with eslint `complexity`/`max-depth`.
 - active. (v1.31 and v1.32 are both deployed to production.)
 - [Phase 194] CACHE-01's "a 400-node search evicts none of its own working set" remains inferred, not measured — `GRADE_CACHE_MAX = 1024` against a 352-386 distinct-FEN ceiling measured *before* the change. Accepted as an acknowledged gap at UAT (2026-07-30); risk is extra Stockfish grading work, not wrong results. Closeable cheaply by counting distinct FENs reaching `providers.grade` in a 400-node run through the existing `mctsSearch` test harness. Worth doing if Phase 196's cache-replay design ends up depending on residency.
 
@@ -913,9 +958,9 @@ Items acknowledged and deferred at **v1.29 milestone close on 2026-06-29** (user
 
 ## Session Continuity
 
-**Stopped at:** Phase 213 complete — all phases of milestone v2.13 complete, ready to close milestone
+**Stopped at:** Phase 215 complete — all phases complete
 
-**Last session:** 2026-08-29
+**Last session:** 2026-09-04T09:21:27.741Z
 
 **Resume file:** None
 
@@ -1058,6 +1103,21 @@ Items acknowledged and deferred at **v1.29 milestone close on 2026-06-29** (user
 | Phase 211 P01 | 22 min | 3 tasks | 12 files |
 | Phase 211 P02 | 19 min | 3 tasks | 8 files |
 | Phase 211 P03 | 105 min | 3 tasks | 15 files |
+| Phase 214 P01 | 55min | 3 tasks | 6 files |
+| Phase 214 P02 | 15min | 3 tasks | 2 files |
+| Phase 214 P03 | 38min | 3 tasks | 2 files |
+| Phase 214 P04 | 20min | 2 tasks | 2 files |
+| Phase 214 P05 | ~75min (55min Task 1 prior session + ~20min Tasks 2-3 continuation) | 3 tasks | 2 files |
+| Phase 214 P06 | 20min | 3 tasks | 2 files |
+| Phase 214 P07 | ~50min | 3 tasks | 4 files |
+| Phase 214 P08 | ~25min | 2 tasks | 1 files |
+| Phase 215 P01 | 30min | 3 tasks | 7 files |
+| Phase 215 P02 | 60min | 3 tasks | 5 files |
+| Phase 215 P03 | 68min | 3 tasks | 7 files |
+| Phase 215 P04 | 100min | 3 tasks | 4 files |
+| Phase 215 P05 | 62min | 3 tasks | 5 files |
+| Phase 215 P06 | 95min | 4 tasks | 5 files |
+| Phase 215 P07 | 40min | 4 tasks | 9 files |
 
 ## Performance Metrics
 

@@ -24,6 +24,7 @@ dependencies = [
 
 [dependency-groups]
 dev = [
+    "complexipy>=7.0.1",
     "pillow>=12.3.0",
     "pytest>=8.0.0",
     "pytest-asyncio>=0.23.0",
@@ -75,10 +76,48 @@ addopts = "--ignore=tests/scripts/benchmarks --ignore=tests/scripts/tagger"
 
 [tool.ruff]
 line-length = 100
+# analysis/tilt_study/probes/ holds notebook-style REPL snippets that reuse the marimo
+# notebook's globals (F821 everywhere); they are scratch probes, not modules.
+extend-exclude = ["analysis/tilt_study/probes"]
+
+[tool.ruff.lint]
+extend-select = ["C901", "PLR0912", "PLR0915"]
+
+[tool.ruff.lint.mccabe]
+max-complexity = 15
+
+[tool.ruff.lint.pylint]
+max-branches = 12
+max-statements = 100
 
 [tool.ruff.lint.per-file-ignores]
 "app/models/*.py" = ["F821"]  # SQLAlchemy forward references in relationship() strings
 "alembic/versions/*.py" = ["F401"]  # Alembic auto-imports sa/op that may appear unused
+# Phase 214 baseline (measured 2026-09-02, ruff 0.15.15: 35 findings, 14 files) — each
+# entry is deleted by the plan that fixes that file. All six in-scope files (plans
+# 214-02..214-07) are now clean; only out-of-scope entries remain below.
+# Out of Phase 214 scope (stay until a future phase touches them):
+"app/main.py" = ["PLR0912"]
+"app/repositories/query_utils.py" = ["C901", "PLR0912"]
+"app/repositories/openings_repository.py" = ["PLR0912"]
+"app/services/chesscom_client.py" = ["C901", "PLR0912"]
+"app/services/library_service.py" = ["C901", "PLR0912"]
+"app/services/lichess_client.py" = ["C901", "PLR0912"]
+"app/services/normalization.py" = ["PLR0912"]
+"app/services/position_classifier.py" = ["C901", "PLR0912"]
+# Outside app/ entirely — `ruff check .` scans the whole repo, so these also need a
+# baseline entry to keep the gate green project-wide (measured 2026-09-02, 17 findings,
+# 10 files: alembic/, analysis/, scripts/). Not part of Phase 214's six in-scope files.
+"alembic/versions/20260403_203535_adfafb71bacc_repair_bookmark_fens_and_target_hashes.py" = ["C901", "PLR0912"]
+"analysis/engine_disagreement_study/seed153_tail_analysis.py" = ["C901", "PLR0912", "PLR0915"]
+"scripts/archive/backfill_best_move_pv.py" = ["PLR0912"]
+"scripts/archive/backfill_eval.py" = ["PLR0912"]
+"scripts/backfill_flaws.py" = ["C901", "PLR0912"]
+"scripts/engine_disagreement_study/seed153_verify_manifest.py" = ["PLR0912"]
+"scripts/import_benchmark_users.py" = ["C901", "PLR0912"]
+"scripts/import_stress_monitor.py" = ["PLR0912"]
+"scripts/retag_flaws.py" = ["C901", "PLR0912"]
+"scripts/two_pawns_up/gen_report_v2.py" = ["C901", "PLR0912"]
 
 [tool.ty.environment]
 # Scripts in scripts/ are run as `python scripts/foo.py`, so sibling modules
@@ -100,7 +139,9 @@ extra-paths = ["scripts"]
 # project's own environment, where the imports resolve. This exclude only keeps
 # a root-level `ty check .` from reporting the whole tree as unresolved.
 [tool.ty.src]
-exclude = ["analysis"]
+# analysis/tilt_study/probes/ holds notebook-style REPL snippets that reuse the marimo
+# notebook's globals; scratch probes, not modules (also excluded from ruff above).
+exclude = ["analysis", "analysis/tilt_study/probes"]
 
 [tool.ty.rules]
 # Warn on unused suppression comments so stale ignores don't accumulate

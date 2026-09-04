@@ -1,3 +1,4 @@
+/// <reference types="vitest/config" />
 import { createHash } from 'crypto'
 import fs from 'fs'
 import path from 'path'
@@ -35,8 +36,25 @@ function forceExitAfterBuild(): Plugin {
   }
 }
 
+// Vitest ceilings. These are NOT budgets: a passing test never waits for them,
+// only a hung or failing one does, so raising them costs nothing on the happy
+// path. Vitest's 5s default sits within one CPU-contention spike of the
+// whole-page mounts (Train, Analysis, Bots) and the openings.tsv replay, all of
+// which run ~4-5s under the full parallel `vitest run` on a loaded box and
+// then fail with a bare "Test timed out in 5000ms" even though nothing is
+// wrong. Per-file `}, 15000)` band-aids kept recurring for each new heavy
+// test; one project-wide ceiling ends that. testing-library's `waitFor` has an
+// independent 1000ms ceiling, raised in src/vitest.setup.ts for the same reason.
+const TEST_TIMEOUT_MS = 20_000
+const HOOK_TIMEOUT_MS = 30_000
+
 // https://vite.dev/config/
 export default defineConfig({
+  test: {
+    testTimeout: TEST_TIMEOUT_MS,
+    hookTimeout: HOOK_TIMEOUT_MS,
+    setupFiles: ['src/vitest.setup.ts'],
+  },
   envDir: path.resolve(__dirname, '..'), // Load .env from project root
   optimizeDeps: {
     // Prevent Vite's esbuild optimizer from relocating the stockfish/onnxruntime-web

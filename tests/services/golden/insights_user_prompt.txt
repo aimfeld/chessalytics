@@ -1,0 +1,83 @@
+## Payload summary
+- Total games in scope: 940
+- Newest bucket across all series: 2026-02-01
+- All-time series window: 2023-03 → 2026-02 (capped at 36 monthly buckets per series)
+
+
+## Section: overall
+
+### Chart: overall_wdl (all_time)
+Two-row WDL comparison for games that reached an Endgame Phase vs games that did not. All columns are whole-number percentages; score_pct uses wins=100, draws=50, losses=0.
+| series      | games | win_pct | draw_pct | loss_pct | score_pct |
+| ----------- | ----- | ------- | -------- | -------- | --------- |
+| endgame     | 240   | 50     | 17      | 33      | 58       |
+| non_endgame | 700   | 43     | 7      | 50      | 46       |
+
+### Subsection: score_timeline
+[summary score_gap | part=endgame]
+  all_time: mean=-5, n=200, buckets=4 (weekly), zone=typical (typical -10 to +10), quality=rich, trend=flat, std=0
+  last_3mo: no data
+[series score_gap, all_time, weekly, part=endgame]
+[n=50 for every point]
+2026-01-05: -5
+2026-01-12: -5
+2026-01-19: -5
+2026-01-26: -5
+
+### Subsection: endgame_elo_timeline
+[summary endgame_elo | platform=chess.com, time_control=blitz]
+  all_time: mean=+1503 Elo, n=200, buckets=36 (monthly), trend=flat, std=21
+  last_3mo: mean=+1688 Elo, n=12, buckets=4 (weekly), trend=flat, std=0
+  shift=+185 Elo
+[summary non_endgame_elo | platform=chess.com, time_control=blitz]
+  all_time: mean=+1452 Elo, n=200, buckets=36 (monthly), trend=flat, std=11
+  last_3mo: mean=+1620 Elo, n=12, buckets=4 (weekly), trend=flat, std=0
+  shift=+168 Elo
+[summary endgame_elo_gap | platform=chess.com, time_control=blitz]
+  all_time: mean=+89, n=200, buckets=36 (monthly), zone=typical (typical -100 to +100), quality=rich, trend=flat, std=11 [near edge]
+  last_3mo: mean=+88, n=12, buckets=4 (weekly), zone=typical (typical -100 to +100), quality=rich, trend=flat, std=0 [near edge]
+  shift=-1, within-noise
+[series endgame_elo_gap, all_time, monthly, platform=chess.com, time_control=blitz]
+2023-03-01: gap=+54, elo=1414, non_eg_elo=1434 (n=15)
+2023-04-01: gap=+55, elo=1415, non_eg_elo=1435 (n=15)
+2023-05-01: gap=+56, elo=1416, non_eg_elo=1436 (n=15)
+2023-06-01: gap=+57, elo=1417, non_eg_elo=1437 (n=15)
+2023-07-01: gap=+58, elo=1418, non_eg_elo=1438 (n=15)
+2023-08-01: gap=+59, elo=1419, non_eg_elo=1439 (n=15)
+2023-09-01: gap=+60, elo=1420, non_eg_elo=1440 (n=15)
+2023-10-01: gap=+61, elo=1421, non_eg_elo=1441 (n=15)
+2023-11-01: gap=+62, elo=1422, non_eg_elo=1442 (n=15)
+2023-12-01: gap=+63, elo=1423, non_eg_elo=1443 (n=15)
+2024-01-01: gap=+64, elo=1424, non_eg_elo=1444 (n=15)
+2024-02-01: gap=+65, elo=1425, non_eg_elo=1445 (n=15)
+2024-03-01: gap=+66, elo=1426, non_eg_elo=1446 (n=15)
+2024-04-01: gap=+67, elo=1427, non_eg_elo=1447 (n=15)
+2024-05-01: gap=+68, elo=1428, non_eg_elo=1448 (n=15)
+2024-06-01: gap=+69, elo=1429, non_eg_elo=1449 (n=15)
+2024-07-01: gap=+70, elo=1430, non_eg_elo=1450 (n=15)
+2024-08-01: gap=+71, elo=1431, non_eg_elo=1451 (n=15)
+2024-09-01: gap=+72, elo=1432, non_eg_elo=1452 (n=15)
+2024-10-01: gap=+73, elo=1433, non_eg_elo=1453 (n=15)
+2024-11-01: gap=+74, elo=1434, non_eg_elo=1454 (n=15)
+2024-12-01: gap=+75, elo=1435, non_eg_elo=1455 (n=15)
+2025-01-01: gap=+76, elo=1436, non_eg_elo=1456 (n=15)
+2025-02-01: gap=+77, elo=1437, non_eg_elo=1457 (n=15)
+2025-03-01: gap=+78, elo=1438, non_eg_elo=1458 (n=15)
+2025-04-01: gap=+79, elo=1439, non_eg_elo=1459 (n=15)
+2025-05-01: gap=+80, elo=1440, non_eg_elo=1460 (n=15)
+2025-06-01: gap=+81, elo=1441, non_eg_elo=1461 (n=15)
+2025-07-01: gap=+82, elo=1442, non_eg_elo=1462 (n=15)
+2025-08-01: gap=+83, elo=1443, non_eg_elo=1463 (n=15)
+2025-09-01: gap=+84, elo=1444, non_eg_elo=1464 (n=15)
+2025-10-01: gap=+85, elo=1445, non_eg_elo=1465 (n=15)
+2025-11-01: gap=+86, elo=1446, non_eg_elo=1466 (n=15)
+2025-12-01: gap=+87, elo=1447, non_eg_elo=1467 (n=15)
+2026-01-01: gap=+88, elo=1448, non_eg_elo=1468 (n=15)
+2026-02-01: gap=+89, elo=1449, non_eg_elo=1469 (n=15)
+
+## Section: type_breakdown
+
+### Subsection: endgame_type_blitz
+[summary endgame_type_achievable_score_gap | endgame_class=rook, time_control=blitz]
+  all_time: mean=+7, n=30, zone=strong (typical -5 to +5), quality=rich
+  last_3mo: no data
