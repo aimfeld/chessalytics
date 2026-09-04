@@ -1031,16 +1031,12 @@ def _build_flaw_item(
         ),
         best_move=pos_at.best_move if pos_at else None,
         allowed_tactic_motif=(
-            _TACTIC_INT_TO_MOTIF.get(flaw.allowed_tactic_motif)  # ty: ignore[invalid-argument-type]
-            if allowed_visible
-            else None
+            _TACTIC_INT_TO_MOTIF.get(flaw.allowed_tactic_motif) if allowed_visible else None
         ),
         allowed_tactic_confidence=(flaw.allowed_tactic_confidence if allowed_visible else None),
         allowed_tactic_depth=(flaw.allowed_tactic_depth if allowed_visible else None),
         missed_tactic_motif=(
-            _TACTIC_INT_TO_MOTIF.get(flaw.missed_tactic_motif)  # ty: ignore[invalid-argument-type]
-            if missed_visible
-            else None
+            _TACTIC_INT_TO_MOTIF.get(flaw.missed_tactic_motif) if missed_visible else None
         ),
         missed_tactic_confidence=(flaw.missed_tactic_confidence if missed_visible else None),
         missed_tactic_depth=(flaw.missed_tactic_depth if missed_visible else None),

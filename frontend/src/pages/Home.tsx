@@ -407,7 +407,7 @@ export function HomePageContent() {
           because the hero's right column already shows the same content there. */}
       <section
         data-testid={`feature-${heroFeature.slug}-mobile`}
-        className="lg:hidden bg-[#1a1a1a] py-12"
+        className="lg:hidden bg-surface-dark py-12"
       >
         <div className="max-w-5xl mx-auto px-4 flex flex-col gap-6">
           <div className="flex items-center gap-4">
@@ -433,8 +433,8 @@ export function HomePageContent() {
           // alternation is flipped: odd-indexed features get charcoal on mobile to avoid
           // two consecutive charcoal bands at the top of the stack.
           const bgClass = index % 2 === 0
-            ? 'lg:bg-[#1a1a1a]'
-            : 'max-lg:bg-[#1a1a1a]';
+            ? 'lg:bg-surface-dark'
+            : 'max-lg:bg-surface-dark';
           const gridCols = imagePosition === 'left'
             ? 'lg:grid-cols-[3fr_2fr]'
             : 'lg:grid-cols-[2fr_3fr]';

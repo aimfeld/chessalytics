@@ -36,8 +36,9 @@ jobs:
         with:
           python-version: "3.13"
 
-      - name: Install uv
-        run: pip install uv
+      - uses: astral-sh/setup-uv@v10
+        with:
+          enable-cache: true
 
       - name: Install Python dependencies
         # Include the isolated maia-inference group (onnxruntime/numpy) so ty can
@@ -96,6 +97,19 @@ jobs:
       - name: Type check (ty, analysis project)
         run: uv run --project analysis --with ty ty check analysis/
 
+      # AST nesting-depth + logic-LOC gate (216-06/D-13/D-14): fails the build
+      # on a regression past the depth-4 hard limit in app/. tests/ and
+      # scripts/ are deliberately not gated.
+      - name: Function-size gate
+        run: uv run python scripts/check_function_size.py app/ --fail-over-depth 4 --fail-over-loc 200
+
+      # Fails the build on a Caddyfile syntax error before merge (SEED-161
+      # group 2 / D-09a) instead of discovering it during a live deploy.
+      - name: Caddyfile validate
+        run: |
+          docker run --rm -v "$PWD/deploy/Caddyfile:/etc/caddy/Caddyfile:ro" \
+            caddy:2.11.4 caddy validate --config /etc/caddy/Caddyfile --adapter caddyfile
+
       - name: Install Stockfish (for engine wrapper tests)
         # Mirrors Dockerfile: download pinned sf_18 binary from GitHub releases instead of
         # apt-get (which is ~24s slower and pulls Stockfish 16, drifting from prod's sf_18).
@@ -125,6 +139,8 @@ jobs:
       - uses: actions/setup-node@v6
         with:
           node-version: "24"
+          cache: 'npm'
+          cache-dependency-path: frontend/package-lock.json
 
       - name: Install frontend dependencies
         run: npm ci
@@ -238,13 +254,39 @@ jobs:
 
       - name: Health check
         run: |
+          SUCCESS=0
           for i in $(seq 1 36); do
             if curl -sf https://flawchess.com/api/health; then
               echo "Health check passed"
-              exit 0
+              SUCCESS=1
+              break
             fi
             echo "Attempt $i/36 failed, waiting 5s..."
             sleep 5
           done
-          echo "Health check failed after 180s"
-          exit 1
+
+          if [ "$SUCCESS" -ne 1 ]; then
+            echo "Health check failed after 180s"
+            exit 1
+          fi
+
+          # SEED-161 group 2 / D-09b: the health loop above only proves the
+          # backend is reachable through Caddy — it says nothing about the
+          # security headers Caddy is supposed to add on every response
+          # (216-02). Assert all five here so a deploy that silently drops
+          # one fails the release instead of going unnoticed.
+          RESPONSE_HEADERS=$(curl -sf -I https://flawchess.com/)
+          echo "Response headers:"
+          echo "$RESPONSE_HEADERS"
+
+          FAIL=0
+          for h in strict-transport-security x-content-type-options referrer-policy \
+                   permissions-policy content-security-policy-report-only; do
+            if echo "$RESPONSE_HEADERS" | grep -qi "$h"; then
+              echo "PASS: $h present"
+            else
+              echo "FAIL: $h missing"
+              FAIL=1
+            fi
+          done
+          exit $FAIL

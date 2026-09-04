@@ -99,10 +99,12 @@ def upgrade() -> None:
 
 
 def downgrade() -> None:
-    # Data migrations that DELETE information (raw pre-gate tactic tags) are not
-    # reversible — matching the repo's convention that lossy bulk-correctness
-    # migrations are upgrade-only in practice (e.g. the eval-only-residue wipe).
-    # There is no approximation to reconstruct: once suppressed, the raw motif
-    # value is gone (it self-heals forward via tier-4's D-07 retag once a blob
-    # is written, not via a downgrade). This is intentionally a documented no-op.
+    """Irreversible: this migration DELETES information (raw pre-gate tactic tags).
+
+    Matches the repo's convention that lossy bulk-correctness migrations are
+    upgrade-only in practice (e.g. the eval-only-residue wipe). There is no
+    approximation to reconstruct: once suppressed, the raw motif value is gone
+    (it self-heals forward via tier-4's D-07 retag once a blob is written, not
+    via a downgrade). This is intentionally a documented no-op.
+    """
     pass

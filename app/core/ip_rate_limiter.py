@@ -35,6 +35,15 @@ class _SlidingWindowRateLimiter:
         timestamps = self._timestamps[ip]
         self._timestamps[ip] = [t for t in timestamps if t > cutoff]
 
+        # Bug fix (F-17/SEED-161): a pruned-to-empty entry was never removed
+        # from the dict, so every IP that ever hit this limiter stayed in
+        # memory for the process lifetime. An empty list can never satisfy
+        # the count check below, so deleting it here doesn't change the
+        # accept/reject outcome — the defaultdict transparently re-creates
+        # the key on the .append(now) call a few lines down.
+        if not self._timestamps[ip]:
+            del self._timestamps[ip]
+
         if len(self._timestamps[ip]) >= self._max_requests:
             return False
 

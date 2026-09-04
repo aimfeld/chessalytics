@@ -32,7 +32,7 @@ import inspect
 import uuid
 from datetime import timedelta, timezone
 from datetime import datetime as dt
-from typing import Any
+from typing import Any, cast
 from unittest.mock import AsyncMock
 
 import pytest
@@ -693,7 +693,8 @@ class TestSingleWalkTargetCollection:
         assert midgame_targets[0].eval_kind == "middlegame_entry"
 
         assert len(endgame_targets) == 2
-        endgame_classes = sorted(t.endgame_class for t in endgame_targets)
+        assert all(t.endgame_class is not None for t in endgame_targets)
+        endgame_classes = sorted(cast(int, t.endgame_class) for t in endgame_targets)
         assert endgame_classes == [1, 2]
         for t in endgame_targets:
             assert t.eval_kind == "endgame_span_entry"

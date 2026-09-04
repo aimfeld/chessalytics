@@ -115,5 +115,5 @@ def upgrade() -> None:
 
 
 def downgrade() -> None:
-    # Data-only migration — no schema to revert. Stale hashes are not recoverable.
+    """Data-only migration — no schema to revert. Stale hashes are not recoverable."""
     pass

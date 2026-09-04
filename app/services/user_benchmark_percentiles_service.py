@@ -84,7 +84,9 @@ Stage A / Stage B race-condition non-issue (RESEARCH Pitfall 2):
 from __future__ import annotations
 
 import asyncio
+import itertools
 from datetime import date
+from typing import Literal
 
 import sentry_sdk
 from sqlalchemy import text
@@ -116,6 +118,7 @@ from app.services.canonical_slice_sql import (
 from app.repositories.benchmark_cohort_cdf_repository import load_cohort_cells
 from app.services.global_percentile_cdf import (
     CdfMetricId,
+    CdfTable,
     _round_anchor_to_grid,
     interpolate_cohort_percentile,
 )
@@ -425,6 +428,58 @@ async def is_below_anchor_floor(
 # ---------------------------------------------------------------------------
 
 
+async def _compute_and_upsert_cell(
+    session: AsyncSession,
+    *,
+    user_id: int,
+    metric: CdfMetricId,
+    tc: TimeControlBucket,
+    anchor: RatingAnchorRow,
+    cohort: dict[tuple[CdfMetricId, int, TimeControlBucket], CdfTable],
+    stage_label: Literal["A", "B"],
+) -> None:
+    """Compute one (metric, tc) cell for a user and upsert its percentile row.
+
+    Shared per-cell body for ``compute_stage_a`` and ``compute_stage_b``
+    (216-06, zero behavior change): re-raises cancellation, captures and
+    continues on any other exception. ``stage_label`` keeps a cell failure
+    attributable to its originating stage in Sentry, matching the inline
+    per-stage ``set_context`` calls it replaces.
+    """
+    try:
+        result = await _compute_metric_for_user_per_tc(session, user_id, metric, tc)
+        if result is None:
+            # Below per-TC floor for this (metric, tc) → no row.
+            return
+        value, n_games = result
+        table = cohort.get((metric, _round_anchor_to_grid(anchor.anchor_rating), tc))
+        percentile: float | None = interpolate_cohort_percentile(value, table)
+        await upsert_percentile(
+            session,
+            user_id=user_id,
+            metric=metric,
+            time_control_bucket=tc,
+            value=value,
+            n_games=n_games,
+            percentile=percentile,
+            cdf_snapshot=date.today(),
+        )
+    except asyncio.CancelledError:
+        raise
+    except Exception as exc:
+        # Per-cell capture: other cells continue.
+        sentry_sdk.set_context(
+            "percentile_compute",
+            {
+                "user_id": user_id,
+                "stage": stage_label,
+                "metric": metric,
+                "tc": tc,
+            },
+        )
+        sentry_sdk.capture_exception(exc)
+
+
 async def compute_stage_a(
     user_id: int,
     *,
@@ -455,42 +510,15 @@ async def compute_stage_a(
                 rounded_anchors = [_round_anchor_to_grid(a.anchor_rating) for a in anchors.values()]
                 cohort_a = await load_cohort_cells(session, rounded_anchors, list(anchors.keys()))
                 for tc, anchor in anchors.items():
-                    try:
-                        result = await _compute_metric_for_user_per_tc(
-                            session, user_id, STAGE_A_METRIC, tc
-                        )
-                        if result is None:
-                            # Below per-TC floor for score_gap → no row.
-                            continue
-                        value, n_games = result
-                        table_a = cohort_a.get(
-                            (STAGE_A_METRIC, _round_anchor_to_grid(anchor.anchor_rating), tc)
-                        )
-                        percentile: float | None = interpolate_cohort_percentile(value, table_a)
-                        await upsert_percentile(
-                            session,
-                            user_id=user_id,
-                            metric=STAGE_A_METRIC,
-                            time_control_bucket=tc,
-                            value=value,
-                            n_games=n_games,
-                            percentile=percentile,
-                            cdf_snapshot=date.today(),
-                        )
-                    except asyncio.CancelledError:
-                        raise
-                    except Exception as exc:
-                        # Per-TC capture: other TCs continue.
-                        sentry_sdk.set_context(
-                            "percentile_compute",
-                            {
-                                "user_id": user_id,
-                                "stage": "A",
-                                "metric": STAGE_A_METRIC,
-                                "tc": tc,
-                            },
-                        )
-                        sentry_sdk.capture_exception(exc)
+                    await _compute_and_upsert_cell(
+                        session,
+                        user_id=user_id,
+                        metric=STAGE_A_METRIC,
+                        tc=tc,
+                        anchor=anchor,
+                        cohort=cohort_a,
+                        stage_label="A",
+                    )
                 await session.commit()
         except asyncio.CancelledError:
             raise  # lifespan shutdown contract
@@ -551,44 +579,23 @@ async def compute_stage_b(
                     _round_anchor_to_grid(a.anchor_rating) for a in anchors.values()
                 ]
                 cohort_b = await load_cohort_cells(session, rounded_anchors_b, list(anchors.keys()))
-                for family in STAGE_B_METRIC_FAMILIES:
-                    for tc, anchor in anchors.items():
-                        try:
-                            result = await _compute_metric_for_user_per_tc(
-                                session, user_id, family, tc
-                            )
-                            if result is None:
-                                # Below per-TC floor for this (family, tc) → no row.
-                                continue
-                            value, n_games = result
-                            table_b = cohort_b.get(
-                                (family, _round_anchor_to_grid(anchor.anchor_rating), tc)
-                            )
-                            percentile: float | None = interpolate_cohort_percentile(value, table_b)
-                            await upsert_percentile(
-                                session,
-                                user_id=user_id,
-                                metric=family,
-                                time_control_bucket=tc,
-                                value=value,
-                                n_games=n_games,
-                                percentile=percentile,
-                                cdf_snapshot=date.today(),
-                            )
-                        except asyncio.CancelledError:
-                            raise
-                        except Exception as exc:
-                            # Per-(family, tc) capture: other cells continue.
-                            sentry_sdk.set_context(
-                                "percentile_compute",
-                                {
-                                    "user_id": user_id,
-                                    "stage": "B",
-                                    "metric": family,
-                                    "tc": tc,
-                                },
-                            )
-                            sentry_sdk.capture_exception(exc)
+                # Flattened into one loop over the (family, tc) product (216-06):
+                # the previous nested-for double loop pushed the shared per-cell
+                # helper call one level past the depth-4 gate. itertools.product
+                # iterates the exact same (family, tc) pairs in the exact same
+                # order (family-major, tc-minor) as the nested loops it replaces.
+                for family, (tc, anchor) in itertools.product(
+                    STAGE_B_METRIC_FAMILIES, anchors.items()
+                ):
+                    await _compute_and_upsert_cell(
+                        session,
+                        user_id=user_id,
+                        metric=family,
+                        tc=tc,
+                        anchor=anchor,
+                        cohort=cohort_b,
+                        stage_label="B",
+                    )
                 await session.commit()
         except asyncio.CancelledError:
             raise

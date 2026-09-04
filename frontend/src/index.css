@@ -62,6 +62,11 @@
     --brand-brown-highlight: #F0DBB9;
     --charcoal: #161412;
     --charcoal-hover: #262220;
+    /* SEED-161/F-20 housekeeping: hoisted from raw #1a1a1a literals in
+       Home.tsx and MaiaMoveQualityBar.tsx. Deliberately its own value, not
+       --charcoal (#161412) — a visually different near-black already used
+       elsewhere; substituting it would be a silent redesign, not a hoist. */
+    --surface-dark: #1a1a1a;
     --inactive-bg: #171717;
     --inactive-bg-hover: #262626;
     --sidebar-bg: #171513;
@@ -154,6 +159,7 @@
     --color-brand-brown-highlight: var(--brand-brown-highlight);
     --color-charcoal: var(--charcoal);
     --color-charcoal-hover: var(--charcoal-hover);
+    --color-surface-dark: var(--surface-dark);
     --color-inactive-bg: var(--inactive-bg);
     --color-inactive-bg-hover: var(--inactive-bg-hover);
     --color-sidebar-bg: var(--sidebar-bg);

@@ -332,14 +332,14 @@ def get_insights_agent() -> Agent[None, EndgameInsightsReport]:
         google_settings = GoogleModelSettings(
             google_thinking_config=_build_google_thinking_config(model_name),  # ty: ignore[invalid-argument-type]
         )
-        return Agent(  # ty: ignore[invalid-return-type]
+        return Agent(
             google_model,
             output_type=EndgameInsightsReport,
             system_prompt=_SYSTEM_PROMPT,
             retries={"output": _OUTPUT_RETRIES},
             model_settings=google_settings,
         )
-    return Agent(  # ty: ignore[invalid-return-type] — pydantic-ai Agent generic params depend on runtime model string; ty cannot infer Agent[None, EndgameInsightsReport] from a str variable
+    return Agent(
         model_str,
         output_type=EndgameInsightsReport,
         system_prompt=_SYSTEM_PROMPT,

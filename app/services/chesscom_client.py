@@ -372,6 +372,31 @@ async def fetch_chesscom_games(
                     on_game_fetched()
 
 
+async def _yield_games_from_archive(
+    resp: httpx.Response, username: str, user_id: int
+) -> AsyncIterator[NormalizedGame]:
+    """Normalize and yield each game in one already-fetched month archive response.
+
+    Extracted from fetch_chesscom_games_backward's per-month fetch loop body
+    (216-06, zero behavior change): same per-game try/except swallow-and-
+    continue on normalization failure as the inline code it replaces, mirroring
+    fetch_lichess_games's per-line extraction (Task 1 of this plan). Callers
+    still own the fetched-game callback since this generator has no visibility
+    into the outer retry-attempt vs. per-yield distinction.
+    """
+    games = resp.json().get("games", [])
+    for game in games:
+        try:
+            normalized = normalize_chesscom_game(game, username, user_id)
+        except Exception as exc:
+            logger.warning("Failed to normalize chess.com game for user_id=%s", user_id)
+            sentry_sdk.set_context("import", {"platform": "chess.com", "user_id": user_id})
+            sentry_sdk.capture_exception(exc)
+            continue
+        if normalized is not None:
+            yield normalized
+
+
 async def fetch_chesscom_games_backward(
     client: httpx.AsyncClient,
     username: str,
@@ -473,19 +498,10 @@ async def fetch_chesscom_games_backward(
         # _fetch_archive_with_retries returns None only for skippable client
         # errors (404/410) -- treat as an attempted-but-empty month, not a stop.
         if resp is not None:
-            games = resp.json().get("games", [])
-            for game in games:
-                try:
-                    normalized = normalize_chesscom_game(game, username, user_id)
-                except Exception as exc:
-                    logger.warning("Failed to normalize chess.com game for user_id=%s", user_id)
-                    sentry_sdk.set_context("import", {"platform": "chess.com", "user_id": user_id})
-                    sentry_sdk.capture_exception(exc)
-                    continue
-                if normalized is not None:
-                    yield normalized
-                    if on_game_fetched is not None:
-                        on_game_fetched()
+            async for normalized in _yield_games_from_archive(resp, username, user_id):
+                yield normalized
+                if on_game_fetched is not None:
+                    on_game_fetched()
         else:
             skipped_any = True
 

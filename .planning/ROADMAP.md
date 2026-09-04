@@ -179,12 +179,82 @@
 | 213. First-Run Engine Cold Start — Asset-Check Gate & Download Progress UI (SEED-155, v2.14) | 12/12 | Complete    | 2026-08-29 |
 | 214. Backend God-File Decomposition (CONCERNS.md, v2.15) | 8/8 | Complete    | 2026-09-03 |
 | 215. Frontend God-File Decomposition (CONCERNS.md, v2.15) | 8/8 | Complete    | 2026-09-04 |
+| 216. Audit Bugs and Quick Wins (SEED-161) | 7/7 | In Progress | — |
 
 ## Active Phases
 
-None. Phases 212–215 closed into v2.14 and v2.15 on 2026-09-04. The next phase goes
-here (or under a new milestone section via `/gsd-new-milestone`); until one is added,
-`.planning/phases/` is empty and the Backlog below is the only open work.
+Standalone phase outside any milestone (v2.14/v2.15 closed 2026-09-04). Fold into the
+next milestone on close, or ship as its own patch release.
+
+### Phase 216: Audit Bugs and Quick Wins
+
+**Goal**: Close the seven groups in SEED-161, the follow-up to the 2026-09-04 quality
+audit: the three verified live production defects (Caddy forwards Cloudflare edge IPs as
+the client IP, so the guest limiter and `worker_heartbeats.last_ip` are wrong; the site
+sends no HSTS / CSP / nosniff / Referrer-Policy / Permissions-Policy; Renovate never ran
+because the GitHub App was never installed), two CI/ops quick wins (CI dependency caching;
+`/api/health` proves the database with a `SELECT 1`), the function-size gate in CI and the
+pre-merge list with its eight nesting-depth breaches fixed rather than baselined, and the
+housekeeping bundle (digest-pin the frontend image bases, rate-limiter key eviction,
+`.env.example` gaps, four hex literals, no-op downgrade docstrings + `compare_type`, one
+orphan worktree). No product behavior change; each group independently shippable.
+
+**Success criteria**:
+
+1. `deploy/Caddyfile` trusts the Cloudflare ranges and reads `Cf-Connecting-Ip`; a `bin/`
+   script diffs the inline ranges against cloudflare.com/ips-v4 + ips-v6. Post-deploy
+   (HUMAN-UAT): new `worker_heartbeats.last_ip` rows are no longer Cloudflare addresses.
+2. `curl -I https://flawchess.com/` shows HSTS (1 y, includeSubDomains, no preload),
+   `X-Content-Type-Options`, `Referrer-Policy`, `Permissions-Policy`, and a
+   `Content-Security-Policy-Report-Only` reporting to Sentry; no COOP/COEP. CI runs
+   `caddy validate`; the deploy job's health step asserts the headers.
+3. Renovate GitHub App installed (HUMAN-UAT), Dependency Dashboard issue open,
+   `renovate.json` unchanged; in-range `npm update` + `uv lock --upgrade` landed with the
+   full gate green; no major bumps.
+4. `astral-sh/setup-uv` cache + `setup-node` npm cache in CI; before/after median run
+   time recorded.
+5. `/api/health` returns 503 when the DB round-trip fails or exceeds its timeout, `200
+   {"status": "ok"}` otherwise; the deploy curl loop is unchanged.
+6. `scripts/check_function_size.py app/ --fail-over-depth 4 --fail-over-loc 200` passes
+   with zero breaches (the eight listed in `216-CONTEXT.md` D-13 fixed, tests untouched or
+   added) and runs as a CI step and a `CLAUDE.md` pre-merge gate line.
+7. Housekeeping bullets from SEED-161 §7 applied.
+
+**Out of scope**: SEED-161 "Not in this seed" list (F-04, F-05/F-13, F-06/F-07, F-10,
+F-11, F-14, F-15); major-version dependency bumps; enforcing CSP; COOP/COEP.
+
+**Depends on**: nothing. Branches from `main` at or after `3703b4bbc`.
+
+**Source**: `.planning/seeds/SEED-161-audit-2026-09-04-bugs-and-quick-wins.md`;
+`reports/quality-assessment/flawchess_quality_assessment_2026-09-04.md` §5/§6/§8.
+
+**Canonical refs:** `.planning/phases/216-audit-bugs-and-quick-wins/216-CONTEXT.md`.
+
+**Plans:** 7 plans
+
+Plans:
+**Wave 1**
+
+- [x] 216-01-PLAN.md — Caddy trusts the Cloudflare ranges and reads `Cf-Connecting-Ip`, plus a range-drift script and docs (wave 1)
+- [x] 216-03-PLAN.md — in-range dependency catch-up with no major bumps, then the Renovate GitHub App install (wave 1)
+- [x] 216-05-PLAN.md — `/api/health` proves the database under a named timeout and answers 503 on failure (wave 1)
+- [x] 216-07-PLAN.md — housekeeping bundle: limiter key eviction, digest pins, colour literals, alembic, `.env.example`, orphan worktree (wave 1)
+
+**Wave 2** *(blocked on Wave 1 completion)*
+
+- [x] 216-02-PLAN.md — five security headers and a report-only CSP on the site block, asserted by `caddy validate` in CI and by the deploy health step (wave 2)
+
+**Wave 3** *(blocked on Wave 2 completion)*
+
+- [x] 216-04-PLAN.md — cached `astral-sh/setup-uv` and npm store in CI, with the before-median run time recorded (wave 3)
+
+**Wave 4** *(blocked on Wave 3 completion)*
+
+- [x] 216-06-PLAN.md — fix all eight nesting-depth breaches, then gate the function-size rule in CI and the pre-merge block (wave 4)
+
+**Cross-cutting constraints:**
+
+- Spec-less probe fallback: skipped visibly — this phase has no requirement IDs and no SPEC.md/UI-SPEC.md/AI-SPEC.md, so no probe predicates were generated.
 
 ## Backlog
 

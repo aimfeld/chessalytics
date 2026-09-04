@@ -96,6 +96,16 @@ export const EVAL_BAR_BLACK = EVAL_CHART_AREA_BLACK_AHEAD;
 export const SIDE_SWATCH_WHITE = 'oklch(0.985 0 0)';
 export const SIDE_SWATCH_BLACK = 'var(--charcoal)';
 
+// SEED-161/F-20 housekeeping: single source of truth for the two colour
+// literals used at Home.tsx's dark section backgrounds and
+// MaiaMoveQualityBar's on-segment text colour. SURFACE_DARK resolves to the
+// --surface-dark custom property (index.css), NOT the existing --charcoal
+// token, which is a visually distinct near-black. PURE_WHITE keeps its exact
+// prior literal rather than being mapped onto SIDE_SWATCH_WHITE above, which
+// is a slightly different off-white value.
+export const SURFACE_DARK = 'var(--surface-dark)';
+export const PURE_WHITE = '#ffffff';
+
 // Analysis eval-bar source accents (Phase 151.1 UAT). The two bars flanking the
 // analysis board are color-coded by their source so the pair is legible at a
 // glance: Stockfish (blue) on the right, Maia human-model (red) on the left. The

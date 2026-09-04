@@ -1,28 +1,74 @@
 ---
 gsd_state_version: 1.0
 milestone: v2.15
-milestone_name: God-File Decomposition & Complexity Gates
-current_phase: 215
-status: milestone_complete
-stopped_at: v2.14 and v2.15 closed — phases 212–215 archived, tagged, released; v2.15 not yet deployed
-last_updated: "2026-09-04T12:00:00.000Z"
+current_phase: 216
+current_phase_name: Audit Bugs and Quick Wins
+status: executing
+stopped_at: Completed 216-06-PLAN.md
+last_updated: "2026-09-04T19:33:44.000Z"
 last_activity: 2026-09-04
-last_activity_desc: v2.14 Engine Cold Start & Benchmark Analysis Lane and v2.15 God-File Decomposition & Complexity Gates closed (retroactive)
+last_activity_desc: "Phase 216 plan 06 complete: all eight D-13 nesting-depth breaches fixed via zero-behavior-change extraction (lichess_client.py fetch_lichess_games 7->3, user_benchmark_percentiles_service.py compute_stage_a/b 6/7->4, position_bookmarks.py get_suggestions and openings_service.py get_time_series 5->3, chesscom_client.py/import_service.py/library_service.py 5->4); scripts/check_function_size.py gated as a CI step and a CLAUDE.md pre-merge gate line (D-14); full pre-merge gate green (backend 4506 passed/19 skipped, frontend 3894/3894 tests). Phase 216 is now 7 of 7 plans complete."
+state_head: 7debdfc00
 progress:
-  total_phases: 4
-  completed_phases: 4
-  total_plans: 38
-  completed_plans: 38
-current_phase_name: frontend-god-file-decomposition
+  total_phases: 1
+  completed_phases: 0
+  total_plans: 7
+  completed_plans: 7
+milestone_name: God-File Decomposition & Complexity Gates
 ---
 
 # Project State: FlawChess
 
 ## Current Position
 
-Phase: 215
-Plans: 8 of 8 complete (215-01 through 215-07 per prior session notes below; 215-08 phase-wide closeout DONE — all six ROADMAP success criteria (0-5) measured against the merged trunk (05c8a38fc) with recorded commands and numbers: lint green with exactly the two documented page-component residuals (Analysis complexity 132/statements 152, OpeningsPage complexity 48); full frontend gate green (lint/build/knip/test, 3894/3894 tests, 251/251 files); full backend gate green (ruff/ty/pytest, 4499 passed/19 skipped, scoped away from an unrelated concurrent session's own commit in analysis/tilt_study/probes/); aggregate test diff additions-only (0 deletions); app-wide react-hooks/exhaustive-deps+refs count exactly 30, unchanged; per-file testid/umami inventories byte-identical to phase base; both 215-06/215-07 HUMAN-UAT records collected; CONCERNS.md "Large God files" entry narrowed to the six next-tier files (TrainReveal.tsx, EvalChart.tsx, LibraryGameCard.tsx, TrainSolveScreen.tsx, VariationTree.tsx, App.tsx) with a Phase 215 history line appended)
-Status: All phases complete. **v2.14 (212–213) and v2.15 (214–215) closed 2026-09-04**; v2.15 is merged to `main` but NOT deployed — production is at release #335. Next: `/deploy`, then a new phase or `/gsd-new-milestone`.
+Phase: 216 (Audit Bugs and Quick Wins) — ALL PLANS COMPLETE (7 of 7)
+Plans: 7 of 7 complete. 216-06 done (last plan) — all eight D-13 nesting-depth breaches
+fixed via zero-behavior-change extraction: `lichess_client.py::fetch_lichess_games` 7->3
+(three helpers: `_raise_for_status`, `_normalize_line`, `_stream_one_attempt`),
+`user_benchmark_percentiles_service.py::compute_stage_a`/`compute_stage_b` 6/7->4 (shared
+`_compute_and_upsert_cell` helper + `itertools.product` double-loop flattening for stage B),
+`position_bookmarks.py::get_suggestions` and `openings_service.py::get_time_series` 5->3
+(`_build_position_suggestion`, `_build_bookmark_time_series`), and the three import/library
+breaches in `chesscom_client.py`/`import_service.py`/`library_service.py` 5->4
+(`_yield_games_from_archive`, `_resolve_lichess_since_ms`, `_build_tactic_by_ply_entry`).
+`scripts/check_function_size.py` now gated as a CI step (`Function-size gate`) and a
+`CLAUDE.md` pre-merge gate line (D-14), scoped to `app/`. Full pre-merge gate green: ruff
+format/check clean, ty clean (app+tests+scripts and analysis project), backend suite 4506
+passed/19 skipped, frontend lint clean, frontend tests 3894/3894 passed. No test file
+rewritten, no `check-function-size` pragma added. 216-04 done — CI test job swaps
+`pip install uv` for the cached `astral-sh/setup-uv@v10` action and adds npm store caching to
+`actions/setup-node` keyed on `frontend/package-lock.json`; before-median CI wall-clock
+recorded at 567s/n=7, after-median deferred to the next release PR since ci.yml only triggers
+on `pull_request`/`workflow_dispatch`. 216-05 done — `/api/health` now round-trips Postgres
+under a named timeout and returns 503 with a fixed detail-free body on failure/timeout; SC-5
+covered by tests/test_health.py, full backend gate green 4502 passed/19 skipped. 216-01 done —
+Caddy global `servers{}` block trusts exactly the published Cloudflare ranges and resolves
+`Cf-Connecting-Ip`; Task 2 checkpoint resolved as option A (accept-logged-ip: keep the real
+client IP in the access log, correct the stale comment); `bin/check_cloudflare_ips.sh` drift
+check + docs added; SC-1's post-deploy `worker_heartbeats.last_ip` check is recorded as
+HUMAN-UAT, pending the next `/deploy`. 216-03 (Renovate: app was installed all along, Mend
+Silent mode was the blocker, dashboard #338) and 216-07 (.env.example + orphan worktree) are
+complete too. 216-02 done — `deploy/Caddyfile` ships an unconditioned `header{}` block on
+the `flawchess.com` site body (HSTS no-preload, X-Content-Type-Options, Referrer-Policy,
+Permissions-Policy, report-only CSP reporting to Sentry via report-uri + Reporting-Endpoints);
+`.github/workflows/ci.yml` gained a `Caddyfile validate` step (test job) and the deploy job's
+Health check now asserts all five headers post-deploy; SC-2's post-deploy `curl -I` check and
+Sentry violation monitoring are recorded as HUMAN-UAT, pending the next `/deploy`.
+Status: Phase 216 all 7 plans executed. Ready for the full pre-merge gate + squash-merge to
+`main` (already re-verified green as part of 216-06's Task 5), then `/gsd-verify-work 216`.
+
+**Phase 215 is COMPLETE as of 2026-09-04** (8/8 plans, 215-01 through 215-07 plus 215-08
+phase-wide closeout — all six ROADMAP success criteria (0-5) measured against the merged
+trunk (05c8a38fc) with recorded commands and numbers: lint green with exactly the two
+documented page-component residuals (Analysis complexity 132/statements 152, OpeningsPage
+complexity 48); full frontend gate green (lint/build/knip/test, 3894/3894 tests, 251/251
+files); full backend gate green (ruff/ty/pytest, 4499 passed/19 skipped, scoped away from an
+unrelated concurrent session's own commit in analysis/tilt_study/probes/); aggregate test
+diff additions-only (0 deletions); app-wide react-hooks/exhaustive-deps+refs count exactly
+30, unchanged; per-file testid/umami inventories byte-identical to phase base; both
+215-06/215-07 HUMAN-UAT records collected; CONCERNS.md "Large God files" entry narrowed to
+the six next-tier files (TrainReveal.tsx, EvalChart.tsx, LibraryGameCard.tsx,
+TrainSolveScreen.tsx, VariationTree.tsx, App.tsx) with a Phase 215 history line appended)
 
 **Phase 214 is COMPLETE as of 2026-09-03** (8/8 plans, verification 9/9 passed, full backend
 suite 4497 passed / 19 skipped, ruff/ty/format clean). All six in-scope backend files lost their
@@ -127,7 +173,7 @@ Cloudflare nameservers, `maia3_simplified.onnx` and `stockfish-18-lite-single.wa
 return `cf-cache-status: HIT` while still carrying the origin's `max-age=2592000`, and
 `maia-worker.js` still returns `cache-control: no-cache`.
 
-Last activity: 2026-09-04 — Phase 215 complete
+Last activity: 2026-09-04 — Phase 216 execution started
 
 Prior: Phase 213 complete
 `games.initial_fen` added and backfilled in-migration, the opening-transition sample
@@ -806,6 +852,12 @@ v1.29 Live-Engine Analysis Page shipped 2026-06-29 — 5 phases (136–140), 14 
 - [Phase 215]: 215-06: SC-0/SC-1 for Analysis.tsx not reached; eslint baseline entries left in place, bisection shows ~100 of 132 remaining complexity points in the unscoped hooks/data section (421-2148); resolution policy pending
 - [Phase 215]: SC-0/SC-1 for Openings.tsx MET under the 2026-09-04 relaxed criteria (contrast Analysis.tsx's NOT-reached status in 215-06): residual complexity 48 recorded with bisection evidence, eslint.config.js baseline entry annotated not deleted, lint stays green
 - [Phase 215]: OpeningsMobileBoardPanel.tsx's shared chessboard info-popover copy extracted to ChessboardInfoCopy.tsx to avoid a circular import — not scope creep, required by the plan's own named mobile-panel seam
+- [Phase 216]: Health-check handler catches Exception only (not a TimeoutError tuple), since asyncio.wait_for's TimeoutError is already an Exception subclass on Python 3.13 and CancelledError must keep propagating. — Matches CLAUDE.md guidance and avoids a ruff redundant-except-clause warning.
+- [Phase 216]: 216-01 Task 2 checkpoint resolved as option A (accept-logged-ip): keep the real client IP in the Caddy access log via request.client_ip and correct the stale comment claiming it stops being written to disk. — Restores pre-2026-08-11 behavior, keeps per-visitor 5xx attribution, prod docker log retention is roughly an hour.
+- [Phase 216]: Renovate quiet since April 2026 was Mend per-repo Silent mode, not a missing GitHub App install; toggled Interactive in the Mend portal, dashboard is #338
+- [Phase 216]: BENCHMARK_SELECTION_GATE_ENABLED / BENCHMARK_HOMOGENIZE_EVAL_SOURCE stay out of .env.example on purpose (command-line-only per the file's own note); only OAUTH_TUNNEL_ORIGINS and BEST_MOVE_BACKFILL_ENABLED were added
+- [Phase 216]: 216-02: Sentry security-report endpoint sourced from Sentry Client Keys (DSN) page via Sentry API/MCP, not repo contents or env files. — The DSN public key and org-ingest host are runtime secrets injected via VITE_SENTRY_DSN/SENTRY_DSN and exist nowhere in the repo; the value is safe to commit publicly (ingest-only credential, already ships in the frontend bundle).
+- [Phase 216]: CI test job now installs uv via cached astral-sh/setup-uv@v10 instead of pip install uv; npm store cached via actions/setup-node keyed on frontend/package-lock.json
 
 ### Pending Todos
 
@@ -958,9 +1010,9 @@ Items acknowledged and deferred at **v1.29 milestone close on 2026-06-29** (user
 
 ## Session Continuity
 
-**Stopped at:** Phase 215 complete — all phases complete
+**Stopped at:** Completed 216-06-PLAN.md
 
-**Last session:** 2026-09-04T09:21:27.741Z
+**Last session:** 2026-09-04T19:33:44.000Z
 
 **Resume file:** None
 
@@ -1118,6 +1170,10 @@ Items acknowledged and deferred at **v1.29 milestone close on 2026-06-29** (user
 | Phase 215 P05 | 62min | 3 tasks | 5 files |
 | Phase 215 P06 | 95min | 4 tasks | 5 files |
 | Phase 215 P07 | 40min | 4 tasks | 9 files |
+| Phase 216 P05 | 25min | 3 tasks | 2 files |
+| Phase 216 P01 | 85min | 4 tasks | 4 files |
+| Phase 216 P02 | 15min | 2 tasks | 2 files |
+| Phase 216 P04 | 10 min | 3 tasks | 1 files |
 
 ## Performance Metrics
 

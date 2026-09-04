@@ -8,6 +8,20 @@ in `YYYY-MM-DD` (Europe/Zurich).
 
 ## [Unreleased]
 
+### Fixed
+
+- Worker heartbeats and access logs record the real client address again instead of a Cloudflare edge IP: the reverse proxy now trusts the published Cloudflare ranges and reads `Cf-Connecting-Ip`, with a drift-check script for the range list. (Phase 216)
+- `/api/health` now round-trips a query to Postgres under a two-second timeout and answers 503 when the database is unreachable, so a degraded backend fails the deploy health check instead of passing it. (Phase 216)
+- The guest-creation, feedback and password-reset rate limiters no longer retain an empty entry per IP forever. (Phase 216)
+
+### Security
+
+- flawchess.com now sends Strict-Transport-Security, X-Content-Type-Options, Referrer-Policy and Permissions-Policy headers, plus a report-only Content-Security-Policy that reports violations to Sentry. CI validates the Caddyfile before merge and asserts the headers after deploy. (Phase 216)
+
+### Changed
+
+- Internal: Renovate dependency PRs are live again (the Mend app was in Silent mode); in-range Python and npm dependencies caught up with no major bumps; CI caches the uv and npm stores; the function-size gate (nesting depth and logic LOC) now runs in CI and the pre-merge block with all eight remaining breaches fixed; Alembic compares column types and irreversible migrations document their no-op downgrade; frontend Docker bases are digest-pinned. (Phase 216)
+
 ## [v2.15] God-File Decomposition & Complexity Gates — 2026-09-04
 
 ### Changed

@@ -53,6 +53,7 @@ import {
   type VerdictMove,
 } from '@/lib/positionVerdict';
 import { formatPlayerPovEval } from '@/lib/playerPovEval';
+import { PURE_WHITE, SURFACE_DARK } from '@/lib/theme';
 import { ProseSpan } from '@/components/analysis/ProseSpan';
 import { UnifiedMovePopover } from '@/components/analysis/UnifiedMovePopover';
 import type { MoveQualityEval } from '@/components/analysis/MovesByRatingChart';
@@ -563,7 +564,7 @@ export function MaiaMoveQualityBar({
           const style: React.CSSProperties = {
             width: `${widthPct}%`,
             backgroundColor: meta.color,
-            color: meta.darkText ? '#1a1a1a' : '#ffffff',
+            color: meta.darkText ? SURFACE_DARK : PURE_WHITE,
           };
           const inline = showLabel ? (
             <span className="text-sm font-semibold leading-none">{Math.round(widthPct)}%</span>

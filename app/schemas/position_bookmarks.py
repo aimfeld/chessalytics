@@ -121,7 +121,7 @@ class PositionBookmarkResponse(BaseModel):
                     "sort_order": data.sort_order,
                 }
         if isinstance(data, dict) and "moves" in data:
-            if isinstance(data["moves"], str):  # ty: ignore[invalid-argument-type]  # ty doesn't narrow dict[Unknown, Unknown] key access
+            if isinstance(data["moves"], str):
                 data = dict(data)
                 data["moves"] = json.loads(data["moves"])
         return data
