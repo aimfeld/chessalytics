@@ -1,7 +1,7 @@
 {
   "contract": "1.0.0",
   "flavor": "core",
-  "milestone": "v2.13",
+  "milestone": "v2.15",
   "phases": [
     {
       "number": "1",
@@ -600,22 +600,22 @@
     },
     {
       "number": "212",
-      "name": "Benchmark Full-Game Analysis Lane (SEED-152, unassigned)",
+      "name": "Benchmark Full-Game Analysis Lane (SEED-152, v2.14)",
       "status": "complete"
     },
     {
       "number": "213",
-      "name": "First-Run Engine Cold Start — Asset-Check Gate & Download Progress UI (SEED-155, unassigned)",
+      "name": "First-Run Engine Cold Start — Asset-Check Gate & Download Progress UI (SEED-155, v2.14)",
       "status": "complete"
     },
     {
       "number": "214",
-      "name": "Backend God-File Decomposition (CONCERNS.md, unassigned)",
+      "name": "Backend God-File Decomposition (CONCERNS.md, v2.15)",
       "status": "complete"
     },
     {
       "number": "215",
-      "name": "Frontend God-File Decomposition (CONCERNS.md, unassigned)",
+      "name": "Frontend God-File Decomposition (CONCERNS.md, v2.15)",
       "status": "complete"
     }
   ],
@@ -624,5 +624,5 @@
     "label": "Show progress",
     "reason": "Unsure of state — showing progress"
   },
-  "updated_at": "2026-09-04T10:02:37.668Z"
+  "updated_at": "2026-09-04T12:00:00.000Z"
 }
