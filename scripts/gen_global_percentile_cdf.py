@@ -80,7 +80,7 @@ import sys
 import time
 from datetime import date, datetime, timezone
 from pathlib import Path
-from typing import Final
+from typing import Final, cast
 from urllib.parse import urlparse, urlunparse
 
 import sentry_sdk
@@ -628,8 +628,8 @@ def _render_regen_report(
         log,
         key=lambda e: (
             IN_SCOPE_METRICS.index(e["metric"]),  # type: ignore[arg-type]
-            int(e["anchor"]),  # type: ignore[arg-type]
-            tc_order[e["tc"]],  # type: ignore[index]
+            cast(int, e["anchor"]),
+            tc_order[cast(TimeControlBucket, e["tc"])],
         ),
     )
     rows: list[str] = []

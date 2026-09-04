@@ -384,7 +384,7 @@ def override_get_async_session(test_engine):
     import app.repositories.llm_log_repository as llm_log_repo_module
     import app.services.eval_queue_service as eval_queue_module
     import app.users as users_module
-    from app.core.database import get_async_session
+    from app.core.database import get_async_session, get_engine
     from app.main import app as fastapi_app
 
     test_session_maker = async_sessionmaker(test_engine, expire_on_commit=False)
@@ -412,8 +412,15 @@ def override_get_async_session(test_engine):
             await session.commit()
 
     fastapi_app.dependency_overrides[get_async_session] = _test_session_generator
+    # Phase 216: /api/health probes the DB through the ``get_engine`` dependency
+    # (its own bounded connection, not the request session), so it must be routed
+    # to the per-run test engine too. Without this, any test that touches
+    # /api/health outside tests/test_health.py hits the app's configured engine,
+    # which exists locally (dev DB) but not in CI, where it returned 503.
+    fastapi_app.dependency_overrides[get_engine] = lambda: test_engine
     yield
     fastapi_app.dependency_overrides.pop(get_async_session, None)
+    fastapi_app.dependency_overrides.pop(get_engine, None)
     db_module.async_session_maker = original_db_session_maker
     users_module.async_session_maker = original_users_session_maker
     activity_module.async_session_maker = original_activity_session_maker

@@ -143,5 +143,5 @@ def upgrade() -> None:
 
 
 def downgrade() -> None:
-    # Data-only migration — stale FENs and hashes are not recoverable.
+    """Data-only migration — stale FENs and hashes are not recoverable."""
     pass

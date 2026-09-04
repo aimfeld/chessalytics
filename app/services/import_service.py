@@ -1007,6 +1007,33 @@ async def _run_forward_pass(
         await _flush_batch_with_progress(batch, job, job_id)
 
 
+def _resolve_lichess_since_ms(
+    job: JobState, previous_last_synced_at: datetime | None
+) -> int | None:
+    """Resolve the lichess ``since`` millisecond cursor for a forward-pass fetch.
+
+    Extracted from ``_make_game_iterator``'s lichess branch (216-06, zero
+    behavior change): the benchmark ``since_ms_override`` bypass takes
+    precedence over ``previous_last_synced_at`` entirely; otherwise resolves
+    from ``previous_last_synced_at``, assuming UTC when it is tz-naive, before
+    converting to milliseconds. Lichess ``since`` is milliseconds, not
+    seconds -- the unit conversion is preserved exactly.
+    """
+    if job.since_ms_override is not None:
+        # Benchmark ingest path: skip get_latest_for_user_platform entirely.
+        # The same lichess user can be imported once per perf_type, and the
+        # second run must not inherit the first run's last_synced_at cursor.
+        return job.since_ms_override
+
+    if previous_last_synced_at is None:
+        return None
+
+    last_synced = previous_last_synced_at
+    if last_synced.tzinfo is None:
+        last_synced = last_synced.replace(tzinfo=timezone.utc)
+    return int(last_synced.timestamp() * 1000)
+
+
 async def _make_game_iterator(
     client: httpx.AsyncClient,
     job: JobState,
@@ -1049,18 +1076,7 @@ async def _make_game_iterator(
             yield game
 
     elif job.platform == "lichess":
-        if job.since_ms_override is not None:
-            # Benchmark ingest path: skip get_latest_for_user_platform entirely.
-            # The same lichess user can be imported once per perf_type, and the
-            # second run must not inherit the first run's last_synced_at cursor.
-            since_ms: int | None = job.since_ms_override
-        else:
-            since_ms = None
-            if previous_last_synced_at is not None:
-                last_synced = previous_last_synced_at
-                if last_synced.tzinfo is None:
-                    last_synced = last_synced.replace(tzinfo=timezone.utc)
-                since_ms = int(last_synced.timestamp() * 1000)
+        since_ms = _resolve_lichess_since_ms(job, previous_last_synced_at)
 
         async for game in lichess_client.fetch_lichess_games(
             client,

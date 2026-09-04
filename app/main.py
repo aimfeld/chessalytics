@@ -4,18 +4,21 @@ import asyncio
 import logging
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Annotated, Any
 
 import sentry_sdk
 from asyncpg.exceptions import CannotConnectNowError, ConnectionDoesNotExistError
-from fastapi import FastAPI
+from fastapi import Depends, FastAPI, status
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import RedirectResponse
+from fastapi.responses import JSONResponse, RedirectResponse, Response
+from sqlalchemy import text
+from sqlalchemy.ext.asyncio import AsyncEngine
 
 if TYPE_CHECKING:
     from sentry_sdk._types import Event
 
 from app.core.config import assert_secret_key_configured, settings
+from app.core.database import get_engine
 from app.middleware.last_activity import LastActivityMiddleware
 from app.routers import openings, position_bookmarks, imports, auth, feedback
 from app.routers.admin import router as admin_router
@@ -301,6 +304,35 @@ async def root_redirect():
     return RedirectResponse(url="/docs")
 
 
+# A hung or still-migrating database must fail the deploy health loop, not stall
+# it indefinitely holding a pool connection open.
+_HEALTH_DB_TIMEOUT_S = 2.0
+
+
+async def _probe_database(engine: AsyncEngine) -> None:
+    """Open a fresh pooled connection and run SELECT 1 on it.
+
+    Deliberately NOT the request-scoped ``get_async_session``: that dependency
+    commits after its ``yield``, outside this handler's try/except, so a query
+    cancelled by the timeout below would be followed by an unbounded ``commit()``
+    on a cancelled asyncpg connection and surface as a 500 (or a hang) instead of
+    the intended 503. A bare connection has no post-yield step, and wrapping
+    connect + execute together in ``wait_for`` bounds pool acquisition too.
+    """
+    async with engine.connect() as conn:
+        await conn.execute(text("SELECT 1"))
+
+
 @app.get("/api/health")
-async def health_check() -> dict[str, str]:
-    return {"status": "ok"}
+async def health_check(
+    engine: Annotated[AsyncEngine, Depends(get_engine)],
+) -> Response:
+    try:
+        await asyncio.wait_for(_probe_database(engine), timeout=_HEALTH_DB_TIMEOUT_S)
+    except Exception as exc:
+        sentry_sdk.capture_exception(exc)
+        return JSONResponse(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            content={"status": "degraded"},
+        )
+    return JSONResponse(content={"status": "ok"})

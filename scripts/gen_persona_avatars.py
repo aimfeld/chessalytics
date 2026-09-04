@@ -387,12 +387,7 @@ async def _generate_one(persona: PersonaPrompt, *, logo_ref: bool) -> Path:
     else:
         result = await agent.run(persona.prompt)
 
-    # Suppressed below: ty infers `result.output` as `str` here (a known
-    # pydantic-ai generic-inference limitation with the `output_type=BinaryImage`
-    # kwarg form); confirmed correct at runtime (verified via manual construction
-    # against the installed 1.104.0 package — result.output is a BinaryImage
-    # with a `.data` bytes field).
-    return _downscale_and_save_webp(result.output.data, persona.persona_id)  # ty: ignore[unresolved-attribute]
+    return _downscale_and_save_webp(result.output.data, persona.persona_id)
 
 
 async def run_generation(

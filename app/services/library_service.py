@@ -475,6 +475,80 @@ def _curate_chips_from_rows(flaw_rows: list[GameFlaw]) -> list[FlawTag]:
     return [tag for tag in _CHIP_ORDER if tag in present]
 
 
+def _build_tactic_by_ply_entry(
+    fr: GameFlaw, pos_by_ply: dict[int, GamePosition]
+) -> tuple[int, _TacticByPlyEntry] | None:
+    """Compute one row's tactic-by-ply entry, or `None` if neither slot is visible.
+
+    Extracted from `_build_card`'s per-row tactic-slot loop (216-06, zero
+    behavior change): the decided-lost lookup, both `tactic_slot_visible`
+    gates, and the motif/confidence/depth resolution for the allowed and
+    missed slots are exactly as the inline code it replaces. Visibility
+    gating is preserved exactly -- a slot becoming visible when it previously
+    was not would be a user-visible change.
+    """
+    prev_pos = pos_by_ply.get(fr.ply - 1)
+    fr_decided_lost = is_decided_lost(
+        prev_pos.eval_cp if prev_pos else None,
+        prev_pos.eval_mate if prev_pos else None,
+        mover_is_white=mover_is_white_at_ply(fr.ply),
+    )
+    allowed_visible = tactic_slot_visible(
+        fr.allowed_tactic_motif,
+        fr.allowed_tactic_confidence,
+        fr.allowed_tactic_depth,
+        orientation_kind="allowed",
+        tactic_families=(),
+        tactic_orientation="either",
+        min_tactic_depth=None,
+        max_tactic_depth=None,
+        decided_lost=fr_decided_lost,
+    )
+    allowed_motif_str: str | None = None
+    allowed_conf_val: int | None = None
+    allowed_depth_val: int | None = None
+    if allowed_visible and fr.allowed_tactic_motif is not None:
+        allowed_motif_str = _TACTIC_INT_TO_MOTIF.get(fr.allowed_tactic_motif)
+        if allowed_motif_str is not None:
+            allowed_conf_val = fr.allowed_tactic_confidence
+            allowed_depth_val = fr.allowed_tactic_depth
+
+    missed_visible = tactic_slot_visible(
+        fr.missed_tactic_motif,
+        fr.missed_tactic_confidence,
+        fr.missed_tactic_depth,
+        orientation_kind="missed",
+        tactic_families=(),
+        tactic_orientation="either",
+        min_tactic_depth=None,
+        max_tactic_depth=None,
+        decided_lost=fr_decided_lost,
+    )
+    missed_motif_str: str | None = None
+    missed_conf_val: int | None = None
+    missed_depth_val: int | None = None
+    if missed_visible and fr.missed_tactic_motif is not None:
+        missed_motif_str = _TACTIC_INT_TO_MOTIF.get(fr.missed_tactic_motif)
+        if missed_motif_str is not None:
+            missed_conf_val = fr.missed_tactic_confidence
+            missed_depth_val = fr.missed_tactic_depth
+
+    if allowed_motif_str is None and missed_motif_str is None:
+        return None
+
+    return (
+        fr.ply,
+        (
+            allowed_motif_str,
+            allowed_conf_val,
+            allowed_depth_val,
+            missed_motif_str,
+            missed_conf_val,
+            missed_depth_val,
+        ),
+    )
+
+
 def _build_card(
     game: Game,
     flaw_rows: list[GameFlaw],
@@ -580,61 +654,10 @@ def _build_card(
                 # Decided-lost: look up the pre-move position (ply N-1) and check.
                 # mover_is_white derived from ply parity (single-source convention) so the
                 # gate is correct for both player rows and opponent rows.
-                prev_pos = pos_by_ply.get(fr.ply - 1)
-                fr_decided_lost = is_decided_lost(
-                    prev_pos.eval_cp if prev_pos else None,
-                    prev_pos.eval_mate if prev_pos else None,
-                    mover_is_white=mover_is_white_at_ply(fr.ply),
-                )
-                allowed_visible = tactic_slot_visible(
-                    fr.allowed_tactic_motif,
-                    fr.allowed_tactic_confidence,
-                    fr.allowed_tactic_depth,
-                    orientation_kind="allowed",
-                    tactic_families=(),
-                    tactic_orientation="either",
-                    min_tactic_depth=None,
-                    max_tactic_depth=None,
-                    decided_lost=fr_decided_lost,
-                )
-                allowed_motif_str: str | None = None
-                allowed_conf_val: int | None = None
-                allowed_depth_val: int | None = None
-                if allowed_visible and fr.allowed_tactic_motif is not None:
-                    allowed_motif_str = _TACTIC_INT_TO_MOTIF.get(fr.allowed_tactic_motif)
-                    if allowed_motif_str is not None:
-                        allowed_conf_val = fr.allowed_tactic_confidence
-                        allowed_depth_val = fr.allowed_tactic_depth
-
-                missed_visible = tactic_slot_visible(
-                    fr.missed_tactic_motif,
-                    fr.missed_tactic_confidence,
-                    fr.missed_tactic_depth,
-                    orientation_kind="missed",
-                    tactic_families=(),
-                    tactic_orientation="either",
-                    min_tactic_depth=None,
-                    max_tactic_depth=None,
-                    decided_lost=fr_decided_lost,
-                )
-                missed_motif_str: str | None = None
-                missed_conf_val: int | None = None
-                missed_depth_val: int | None = None
-                if missed_visible and fr.missed_tactic_motif is not None:
-                    missed_motif_str = _TACTIC_INT_TO_MOTIF.get(fr.missed_tactic_motif)
-                    if missed_motif_str is not None:
-                        missed_conf_val = fr.missed_tactic_confidence
-                        missed_depth_val = fr.missed_tactic_depth
-
-                if allowed_motif_str is not None or missed_motif_str is not None:
-                    tactic_by_ply[fr.ply] = (
-                        allowed_motif_str,
-                        allowed_conf_val,
-                        allowed_depth_val,
-                        missed_motif_str,
-                        missed_conf_val,
-                        missed_depth_val,
-                    )
+                entry = _build_tactic_by_ply_entry(fr, pos_by_ply)
+                if entry is not None:
+                    ply, tactic_entry = entry
+                    tactic_by_ply[ply] = tactic_entry
             # SAN mainline for client-side per-ply board reconstruction on chart
             # hover. move_san is None on the terminal position only — filter it out
             # so moves[i] aligns with ply i (positions are ply-ordered). Quick

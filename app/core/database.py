@@ -1,6 +1,11 @@
 from collections.abc import AsyncGenerator
 
-from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
+from sqlalchemy.ext.asyncio import (
+    AsyncEngine,
+    AsyncSession,
+    async_sessionmaker,
+    create_async_engine,
+)
 
 from app.core.config import settings
 
@@ -27,3 +32,17 @@ async def get_async_session() -> AsyncGenerator[AsyncSession, None]:
     async with async_session_maker() as session:
         yield session
         await session.commit()
+
+
+def get_engine() -> AsyncEngine:
+    """Expose the module-level engine as a FastAPI dependency.
+
+    Used by ``/api/health`` so the probe can open its OWN short-lived connection
+    inside its timeout instead of borrowing the request-scoped session above.
+    ``get_async_session`` runs ``session.commit()`` after its ``yield``, outside
+    any handler try/except: after a timed-out (cancelled) ``SELECT 1`` that commit
+    would run unbounded on a cancelled asyncpg connection and turn the intended
+    503 into a 500 or a hang (Phase 216 code review, BLOCKER). Tests override this
+    dependency to inject the per-run test engine or a stub.
+    """
+    return engine

@@ -208,8 +208,9 @@ async def load_facts(db: str) -> list[ProdFact]:
 
 # ---------- user-stratified estimation ----------
 
-# Per user, one (successes, trials) pair per arm; arm key True = lichess-analyzed.
-UserArms = dict[int, dict[bool, list[int]]]
+# Per user, one [trials, successes] pair per arm; arm key True = lichess-analyzed.
+# successes is a float accumulator (success() may return partial/fractional credit).
+UserArms = dict[int, dict[bool, list[float]]]
 
 
 def collect(
@@ -217,7 +218,7 @@ def collect(
     trial: Callable[[ProdFact], bool],
     success: Callable[[ProdFact], float],
 ) -> UserArms:
-    arms: UserArms = defaultdict(lambda: {True: [0, 0], False: [0, 0]})
+    arms: UserArms = defaultdict(lambda: {True: [0.0, 0.0], False: [0.0, 0.0]})
     for r in rows:
         if trial(r):
             cell = arms[r.user_id][r.analyzed]
@@ -227,7 +228,9 @@ def collect(
 
 
 def pooled_rate(arms: UserArms, arm: bool) -> tuple[int, float | None]:
-    n = sum(a[arm][0] for a in arms.values())
+    # Trial counts (index 0) are always whole numbers even though the list is
+    # typed float to share storage with the fractional success accumulator.
+    n = int(sum(a[arm][0] for a in arms.values()))
     s = sum(a[arm][1] for a in arms.values())
     return n, (s / n if n else None)
 

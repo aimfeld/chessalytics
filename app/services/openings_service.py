@@ -3,13 +3,15 @@
 import datetime
 import io
 import logging
-from typing import Literal
+from collections.abc import Sequence
+from typing import Any, Literal
 
 import sentry_sdk
 
 import chess
 import chess.pgn
 from sqlalchemy import select
+from sqlalchemy.engine import Row
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.game import Game
@@ -279,6 +281,71 @@ def _in_window(
     return True
 
 
+def _build_bookmark_time_series(
+    bookmark_id: int,
+    rows: Sequence[Row[Any]],
+    from_date: datetime.date | None,
+    to_date: datetime.date | None,
+) -> BookmarkTimeSeries:
+    """Build one bookmark's rolling-window time series from its chronological rows.
+
+    Extracted from get_time_series's per-bookmark loop body (216-06, zero
+    behavior change): `rows` are (played_at, result, user_color) tuples
+    ordered by played_at ASC, spanning full history so pre-window games warm
+    the rolling average (D-19 amendment) even though only in-window points
+    and WDL totals are emitted.
+    """
+    results_so_far: list[str] = []  # "win", "draw", or "loss" per game
+    total_wins = total_draws = total_losses = 0
+    last_played_at: datetime.datetime | None = None
+    data_by_date: dict[str, TimeSeriesPoint] = {}
+
+    for played_at, result, user_color in rows:
+        outcome = derive_user_result(result, user_color)
+        results_so_far.append(outcome)
+
+        # Rolling window: trailing ROLLING_WINDOW_SIZE results (warm-up).
+        # Computed for every game regardless of window — pre-window games
+        # contribute to the rolling average even when not emitted.
+        window = results_so_far[-ROLLING_WINDOW_SIZE:]
+        window_wins = window.count("win")
+        window_draws = window.count("draw")
+        window_total = len(window)
+        score = (window_wins + 0.5 * window_draws) / window_total if window_total > 0 else 0.0
+
+        point = TimeSeriesPoint(
+            date=played_at.strftime("%Y-%m-%d"),
+            score=round(score, 4),
+            game_count=window_total,
+            window_size=ROLLING_WINDOW_SIZE,
+        )
+
+        # D-19 amendment: gate emission and totals on the date window.
+        if _in_window(played_at, from_date, to_date):
+            if outcome == "win":
+                total_wins += 1
+            elif outcome == "draw":
+                total_draws += 1
+            else:
+                total_losses += 1
+            last_played_at = played_at  # rows ordered ASC; final assignment wins
+            data_by_date[played_at.strftime("%Y-%m-%d")] = point
+
+    # Drop early points with too few games in the rolling window.
+    data = [pt for pt in data_by_date.values() if pt.game_count >= MIN_GAMES_FOR_TIMELINE]
+
+    total_games = total_wins + total_draws + total_losses
+    return BookmarkTimeSeries(
+        bookmark_id=bookmark_id,
+        data=data,
+        total_wins=total_wins,
+        total_draws=total_draws,
+        total_losses=total_losses,
+        total_games=total_games,
+        last_played_at=last_played_at,
+    )
+
+
 async def get_time_series(
     session: AsyncSession,
     user_id: int,
@@ -316,60 +383,8 @@ async def get_time_series(
             opponent_gap_min=request.opponent_gap_min,
             opponent_gap_max=request.opponent_gap_max,
         )
-
-        # Build rolling-window datapoints from chronological per-game rows.
-        # rows: (played_at, result, user_color) tuples ordered by played_at ASC.
-        # Dict keyed by date keeps only the last game's rolling window per day.
-        results_so_far: list[str] = []  # "win", "draw", or "loss" per game
-        total_wins = total_draws = total_losses = 0
-        last_played_at: datetime.datetime | None = None
-        data_by_date: dict[str, TimeSeriesPoint] = {}
-
-        for played_at, result, user_color in rows:
-            outcome = derive_user_result(result, user_color)
-            results_so_far.append(outcome)
-
-            # Rolling window: trailing ROLLING_WINDOW_SIZE results (warm-up).
-            # Computed for every game regardless of window — pre-window games
-            # contribute to the rolling average even when not emitted.
-            window = results_so_far[-ROLLING_WINDOW_SIZE:]
-            window_wins = window.count("win")
-            window_draws = window.count("draw")
-            window_total = len(window)
-            score = (window_wins + 0.5 * window_draws) / window_total if window_total > 0 else 0.0
-
-            point = TimeSeriesPoint(
-                date=played_at.strftime("%Y-%m-%d"),
-                score=round(score, 4),
-                game_count=window_total,
-                window_size=ROLLING_WINDOW_SIZE,
-            )
-
-            # D-19 amendment: gate emission and totals on the date window.
-            if _in_window(played_at, request.from_date, request.to_date):
-                if outcome == "win":
-                    total_wins += 1
-                elif outcome == "draw":
-                    total_draws += 1
-                else:
-                    total_losses += 1
-                last_played_at = played_at  # rows ordered ASC; final assignment wins
-                data_by_date[played_at.strftime("%Y-%m-%d")] = point
-
-        # Drop early points with too few games in the rolling window.
-        data = [pt for pt in data_by_date.values() if pt.game_count >= MIN_GAMES_FOR_TIMELINE]
-
-        total_games = total_wins + total_draws + total_losses
         series.append(
-            BookmarkTimeSeries(
-                bookmark_id=bkm.bookmark_id,
-                data=data,
-                total_wins=total_wins,
-                total_draws=total_draws,
-                total_losses=total_losses,
-                total_games=total_games,
-                last_played_at=last_played_at,
-            )
+            _build_bookmark_time_series(bkm.bookmark_id, rows, request.from_date, request.to_date)
         )
 
     return TimeSeriesResponse(series=series)

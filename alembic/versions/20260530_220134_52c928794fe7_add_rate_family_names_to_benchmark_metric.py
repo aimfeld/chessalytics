@@ -42,4 +42,5 @@ def upgrade() -> None:
 
 
 def downgrade() -> None:
-    pass  # Postgres cannot remove ENUM values without table rewrite — git revert instead
+    """No-op — Postgres cannot remove ENUM values without a table rewrite; git revert instead."""
+    pass

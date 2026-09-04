@@ -16,6 +16,30 @@
             }
         }
     }
+
+    # Real client IP behind Cloudflare (SEED-161 group 1 / F-01). Since the
+    # 2026-08-11 CDN cutover, Caddy's socket peer is a Cloudflare anycast
+    # address, not the visitor — so without this block the guest-creation
+    # rate limiter (app/routers/auth.py) buckets unrelated visitors together
+    # and worker_heartbeats.last_ip records Cloudflare, not the worker host.
+    # trusted_proxies tells Caddy to only honor Cf-Connecting-Ip when the
+    # peer is inside Cloudflare's published ranges; client_ip_headers then
+    # reads the real visitor IP from that header into request.client_ip.
+    # Ranges fetched live from https://www.cloudflare.com/ips-v4 and
+    # https://www.cloudflare.com/ips-v6 — refresh on drift via
+    # bin/check_cloudflare_ips.sh (do not hand-edit without re-fetching).
+    servers {
+        # BEGIN cloudflare-ranges
+        trusted_proxies static \
+            173.245.48.0/20 103.21.244.0/22 103.22.200.0/22 103.31.4.0/22 \
+            141.101.64.0/18 108.162.192.0/18 190.93.240.0/20 188.114.96.0/20 \
+            197.234.240.0/22 198.41.128.0/17 162.158.0.0/15 104.16.0.0/13 \
+            104.24.0.0/14 172.64.0.0/13 131.0.72.0/22 \
+            2400:cb00::/32 2606:4700::/32 2803:f800::/32 2405:b500::/32 \
+            2405:8100::/32 2a06:98c0::/29 2c0f:f248::/32
+        # END cloudflare-ranges
+        client_ip_headers Cf-Connecting-Ip
+    }
 }
 
 flawchess.org, www.flawchess.org {
@@ -28,6 +52,30 @@ analytics.flawchess.com {
 
 flawchess.com {
     encode gzip
+
+    # Security response headers (SEED-161 group 2 / F-02). Unconditioned on
+    # purpose: Caddy's default directive order always runs `header` before
+    # any `handle`, so this one block covers static assets, /api/* and the
+    # SPA fallback alike -- do NOT nest this inside handle @static, which
+    # would silently narrow the fix to static responses only.
+    header {
+        # One year, subdomains included; the browser HSTS-list opt-in
+        # directive is deliberately left off (D-06). Safe because
+        # analytics.flawchess.com is on this same Caddy and already HTTPS.
+        Strict-Transport-Security "max-age=31536000; includeSubDomains"
+        X-Content-Type-Options nosniff
+        Referrer-Policy strict-origin-when-cross-origin
+        Permissions-Policy "camera=(), microphone=(), geolocation=()"
+
+        # Report-only CSP (D-07): reports violations to Sentry via both the
+        # legacy report-uri directive and the newer report-to/
+        # Reporting-Endpoints mechanism; enforces nothing. Directive-by-
+        # directive evidence is in 216-RESEARCH.md Pattern 3. Flip to an
+        # enforcing Content-Security-Policy header only after reviewing a
+        # few weeks of Sentry violation reports.
+        Content-Security-Policy-Report-Only "default-src 'self'; script-src 'self' https://analytics.flawchess.com 'wasm-unsafe-eval'; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src 'self' https://fonts.gstatic.com; img-src 'self' data: blob:; connect-src 'self' https://*.ingest.de.sentry.io https://analytics.flawchess.com blob:; worker-src 'self' blob:; frame-ancestors 'none'; base-uri 'self'; form-action 'self'; report-uri https://o4511084502450176.ingest.de.sentry.io/api/4511084868272208/security/?sentry_key=5ac850dda8e5ec8b838c6dfbf50fc89d; report-to csp-endpoint"
+        Reporting-Endpoints "csp-endpoint=\"https://o4511084502450176.ingest.de.sentry.io/api/4511084868272208/security/?sentry_key=5ac850dda8e5ec8b838c6dfbf50fc89d\""
+    }
 
     # Access log. Without this Caddy logs NOTHING about requests, so any status
     # Caddy produces on its own — above all the 502 it returns while the backend
@@ -56,8 +104,14 @@ flawchess.com {
     # Blacklisting failed twice in one evening (missed the custom header, then
     # missed the error logger), and it silently re-breaks the moment anyone adds
     # an authenticated header. Nothing here needs headers: method, uri, status,
-    # duration and the upstream error message are what diagnose a 5xx. Note this
-    # also drops Cf-Connecting-Ip, so real client IPs stop being written to disk.
+    # duration and the upstream error message are what diagnose a 5xx. This
+    # filter does NOT drop the real client IP: since the global trust block
+    # above (SEED-161 group 1 / F-01) resolves it via client_ip_headers, Caddy
+    # writes it into the top-level request.client_ip field, not under
+    # request>headers, so it is written to disk again just as it was before the
+    # 2026-08-11 CDN cutover. Accepted (216-01 Task 2, option A): restores
+    # per-visitor 5xx attribution, and prod docker log retention is roughly an
+    # hour, keeping the exposure window short.
     # The query filter stays because the reset token rides in the URI, not a
     # header — add any future secret query param there.
     log {

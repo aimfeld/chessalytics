@@ -5,7 +5,7 @@ import { Button } from '@/components/ui/button';
 import { InfoPopover } from '@/components/ui/info-popover';
 import { Tabs, TabsList, TabsTrigger, TabsContent } from '@/components/ui/tabs';
 import { VariationTree } from '@/components/analysis/VariationTree';
-import type { VariationTreeProps, FlawMarkerEntry } from '@/components/analysis/VariationTree';
+import type { VariationTreeProps } from '@/components/analysis/VariationTree';
 import { BoardControls as BoardControlsBase } from '@/components/board/BoardControls';
 import { EngineToggleHeader } from '@/components/analysis/EngineToggleHeader';
 import { EngineLines, EngineLinesSkeleton, LINES_MIN_HEIGHT } from '@/components/analysis/EngineLines';
@@ -801,4 +801,3 @@ export function AnalysisTabs({
   );
 }
 
-export type { FlawMarkerEntry };

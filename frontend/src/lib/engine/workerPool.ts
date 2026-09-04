@@ -53,12 +53,9 @@ import type {
 } from './workerPoolState';
 import {
   GRADE_CACHE_MAX,
-  WORKER_HASH_MB,
   DESKTOP_POOL_MIN,
   DESKTOP_POOL_MAX,
-  DESKTOP_HEADROOM_CORES,
   MOBILE_POOL_SIZE,
-  MOBILE_CORE_THRESHOLD,
   GRADING_WATCHDOG_TIMEOUT_MS,
   GRADING_WATCHDOG_SUSPEND_FACTOR,
   MAX_WATCHDOG_SUSPEND_REARMS,
@@ -71,8 +68,6 @@ import {
   dequeueHighestPriority,
   isLowPowerDevice,
   computePoolSize,
-  sideToMove,
-  noLiveSlotRemains,
 } from './workerPoolState';
 import {
   clearSlotWatchdog as wdClearSlotWatchdog,
@@ -99,12 +94,9 @@ export type { MoveGrade };
 // from workerPoolState.ts rather than local definitions.
 export {
   GRADE_CACHE_MAX,
-  WORKER_HASH_MB,
   DESKTOP_POOL_MIN,
   DESKTOP_POOL_MAX,
-  DESKTOP_HEADROOM_CORES,
   MOBILE_POOL_SIZE,
-  MOBILE_CORE_THRESHOLD,
   GRADING_WATCHDOG_TIMEOUT_MS,
   GRADING_WATCHDOG_SUSPEND_FACTOR,
   MAX_WATCHDOG_SUSPEND_REARMS,
@@ -117,15 +109,15 @@ export {
   dequeueHighestPriority,
   isLowPowerDevice,
   computePoolSize,
-  sideToMove,
-  noLiveSlotRemains,
 };
-export type { PoolWorkerSlot, QueuedGradeRequest, GradeCache };
+export type { QueuedGradeRequest, GradeCache };
 
 // ─── Types ──────────────────────────────────────────────────────────────────
 //
 // QueuedGradeRequest/PoolWorkerSlot/GradeCache moved to workerPoolState.ts
-// (215 code review WR-01) — re-exported above for existing importers.
+// (215 code review WR-01). QueuedGradeRequest/GradeCache are re-exported above
+// for existing importers; PoolWorkerSlot and the pure helpers with no external
+// importer through this module (knip 6.34 flags dead re-exports) are not.
 
 /** The public surface `createWorkerPool()` returns — implements `EngineProviders.grade` (D-08). */
 export interface WorkerPool {

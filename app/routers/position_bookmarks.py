@@ -19,6 +19,7 @@ from app.models.game_position import GamePosition
 from app.models.user import User
 from app.repositories import position_bookmark_repository
 from app.schemas.position_bookmarks import (
+    Color,
     MatchSideUpdateRequest,
     PositionBookmarkCreate,
     PositionBookmarkReorderRequest,
@@ -31,6 +32,83 @@ from app.services.opening_lookup import find_opening
 from app.users import current_active_user
 
 router = APIRouter(prefix="/position-bookmarks", tags=["position-bookmarks"])
+
+
+async def _build_position_suggestion(
+    session: AsyncSession,
+    user_id: int,
+    color: Color,
+    white_hash: int,
+    black_hash: int,
+    full_hash: int,
+    game_count: int,
+) -> PositionSuggestion | None:
+    """Build one suggestion for a most-played position, or `None` to signal skip.
+
+    Extracted from get_suggestions's per-position loop body, including the FEN
+    reconstruction try/except (216-06, zero behavior change): same skip
+    conditions (no representative game row, no PGN, unparseable/malformed
+    PGN), same Sentry capture on the FEN-reconstruction exception. Kept in
+    this router module rather than a service module: position_bookmarks has
+    no existing service layer (only position_bookmark_repository), and this
+    phase is a depth fix, not a layering refactor.
+    """
+    # Find a representative game for this position
+    stmt = (
+        select(GamePosition.game_id, GamePosition.ply)
+        .where(
+            GamePosition.full_hash == full_hash,
+            GamePosition.user_id == user_id,
+        )
+        .limit(1)
+    )
+    gp_result = await session.execute(stmt)
+    gp_row = gp_result.first()
+    if gp_row is None:
+        return None
+
+    game_id, ply = gp_row.game_id, gp_row.ply
+
+    pgn_stmt = select(Game.pgn).where(Game.id == game_id)
+    pgn_result = await session.execute(pgn_stmt)
+    pgn = pgn_result.scalar_one_or_none()
+    if pgn is None:
+        return None
+
+    # Reconstruct FEN and SAN moves at the target ply using python-chess
+    try:
+        game = chess.pgn.read_game(io.StringIO(pgn))
+        if game is None:
+            return None
+        board = game.board()
+        san_moves: list[str] = []
+        for i, move in enumerate(game.mainline_moves()):
+            if i >= ply:
+                break
+            san_moves.append(board.san(move))
+            board.push(move)
+        position_fen = board.fen()
+    except Exception:
+        sentry_sdk.set_context("suggestion", {"game_id": game_id, "ply": ply})
+        sentry_sdk.set_tag("source", "api")
+        sentry_sdk.capture_exception()
+        return None
+
+    # Look up opening name from SAN moves
+    opening_pgn = " ".join(san_moves)
+    opening_eco, opening_name = find_opening(opening_pgn)
+
+    return PositionSuggestion(
+        white_hash=str(white_hash),
+        black_hash=str(black_hash),
+        full_hash=str(full_hash),
+        fen=position_fen,
+        moves=san_moves,
+        color=color,
+        game_count=game_count,
+        opening_name=opening_name,
+        opening_eco=opening_eco,
+    )
 
 
 # NOTE: /suggestions MUST be defined BEFORE /{id} so FastAPI does not attempt to
@@ -69,64 +147,11 @@ async def get_suggestions(
         )
 
         for white_hash, black_hash, full_hash, game_count in top_positions:
-            # Find a representative game for this position
-            stmt = (
-                select(GamePosition.game_id, GamePosition.ply)
-                .where(
-                    GamePosition.full_hash == full_hash,
-                    GamePosition.user_id == user.id,
-                )
-                .limit(1)
+            suggestion = await _build_position_suggestion(
+                session, user.id, color, white_hash, black_hash, full_hash, game_count
             )
-            gp_result = await session.execute(stmt)
-            gp_row = gp_result.first()
-            if gp_row is None:
-                continue
-
-            game_id, ply = gp_row.game_id, gp_row.ply
-
-            pgn_stmt = select(Game.pgn).where(Game.id == game_id)
-            pgn_result = await session.execute(pgn_stmt)
-            pgn = pgn_result.scalar_one_or_none()
-            if pgn is None:
-                continue
-
-            # Reconstruct FEN and SAN moves at the target ply using python-chess
-            try:
-                game = chess.pgn.read_game(io.StringIO(pgn))
-                if game is None:
-                    continue
-                board = game.board()
-                san_moves: list[str] = []
-                for i, move in enumerate(game.mainline_moves()):
-                    if i >= ply:
-                        break
-                    san_moves.append(board.san(move))
-                    board.push(move)
-                position_fen = board.fen()
-            except Exception:
-                sentry_sdk.set_context("suggestion", {"game_id": game_id, "ply": ply})
-                sentry_sdk.set_tag("source", "api")
-                sentry_sdk.capture_exception()
-                continue
-
-            # Look up opening name from SAN moves
-            opening_pgn = " ".join(san_moves)
-            opening_eco, opening_name = find_opening(opening_pgn)
-
-            suggestions.append(
-                PositionSuggestion(
-                    white_hash=str(white_hash),
-                    black_hash=str(black_hash),
-                    full_hash=str(full_hash),
-                    fen=position_fen,
-                    moves=san_moves,
-                    color=color,
-                    game_count=game_count,
-                    opening_name=opening_name,
-                    opening_eco=opening_eco,
-                )
-            )
+            if suggestion is not None:
+                suggestions.append(suggestion)
 
     return SuggestionsResponse(suggestions=suggestions)
 

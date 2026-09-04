@@ -617,12 +617,17 @@
       "number": "215",
       "name": "Frontend God-File Decomposition (CONCERNS.md, v2.15)",
       "status": "complete"
+    },
+    {
+      "number": "216",
+      "name": "Audit Bugs and Quick Wins (SEED-161)",
+      "status": "pending"
     }
   ],
   "next": {
-    "command": "/gsd:progress",
-    "label": "Show progress",
-    "reason": "Unsure of state — showing progress"
+    "command": "/gsd:progress --next",
+    "label": "Advance to the next step",
+    "reason": "Phase 216 of 1 · executing"
   },
-  "updated_at": "2026-09-04T12:00:00.000Z"
+  "updated_at": "2026-09-04T15:10:55.262Z"
 }

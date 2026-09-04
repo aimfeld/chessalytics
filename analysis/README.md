@@ -81,7 +81,7 @@ Claude reads files, not rendered notebook output — an interactive plotly figur
 your browser is invisible to it. To put a chart in front of Claude, export it:
 
 ```python
-fig.write_image("analysis/out/reliability-endgame.png", scale=2)   # needs kaleido
+fig.write_image("analysis/out/reliability-endgame.png", scale=2)  # needs kaleido
 ```
 
 `analysis/out/` is gitignored. Ask Claude to read the path and it will see the

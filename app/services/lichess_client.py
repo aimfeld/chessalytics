@@ -5,9 +5,10 @@ Supports incremental sync via the ``since`` millisecond timestamp parameter.
 """
 
 import asyncio
+from contextlib import aclosing
 import json
 import logging
-from collections.abc import AsyncIterator, Callable
+from collections.abc import AsyncGenerator, AsyncIterator, Callable
 
 import httpx
 import sentry_sdk
@@ -46,6 +47,111 @@ class _RetryableStatusError(Exception):
     def __init__(self, message: str, status_code: int) -> None:
         super().__init__(message)
         self.status_code = status_code
+
+
+def _raise_for_status(response: httpx.Response, username: str) -> None:
+    """Raise if `response`'s status signals not-found, a retryable failure, or a fatal error.
+
+    Returns normally on 200. Extracted from fetch_lichess_games's status-code
+    branch chain (216-06, zero behavior change): same exception types, same
+    ordering, same status codes as the inline code it replaces.
+    """
+    if response.status_code == 404:
+        raise ValueError(f"lichess user '{username}' not found")
+
+    # Check status BEFORE iterating lines. httpx.stream() does not
+    # auto-raise on non-2xx, and aiter_lines() on an error body
+    # would silently produce 0 games and advance last_synced_at.
+    if response.status_code != 200:
+        if response.status_code == 429:
+            sentry_sdk.capture_message(
+                "lichess 429 rate limit hit",
+                level="warning",
+                tags={"source": "import", "platform": "lichess"},
+            )
+            raise _RetryableStatusError(
+                f"lichess returned 429 for {username}",
+                status_code=429,
+            )
+        if response.status_code in _RETRYABLE_STATUS_CODES:
+            raise _RetryableStatusError(
+                f"lichess returned {response.status_code} for {username}",
+                status_code=response.status_code,
+            )
+        # Unexpected non-200 (401/403/etc). Fail loudly rather than
+        # masking it as "0 games imported".
+        raise RuntimeError(
+            f"lichess request for {username} returned unexpected status {response.status_code}"
+        )
+
+
+def _normalize_line(line: str, username: str, user_id: int) -> NormalizedGame | None:
+    """Parse and normalize one NDJSON line, or return `None` to signal skip.
+
+    Extracted from fetch_lichess_games's per-line parse+normalize block
+    (216-06, zero behavior change): swallows exactly `json.JSONDecodeError`
+    (malformed line) and `Exception` (normalization failure, captured to
+    Sentry), same as the inline code it replaces.
+    """
+    try:
+        game = json.loads(line)
+    except json.JSONDecodeError:
+        # Skip malformed lines without aborting the stream
+        return None
+
+    # Item 4 (Phase 148): normalize_lichess_game does direct
+    # dict lookups (e.g. game["players"]) with no fallback,
+    # so a single structurally-malformed (but valid-JSON)
+    # game raised an uncaught KeyError that aborted the
+    # whole import. Mirror the per-game PGN-parse precedent
+    # (import_service.py) — skip the bad game, keep going.
+    # Leave the json.JSONDecodeError guard above untouched.
+    try:
+        normalized = normalize_lichess_game(game, username, user_id)
+    except Exception as exc:
+        logger.warning("Failed to normalize lichess game for user_id=%s", user_id)
+        sentry_sdk.set_context("import", {"platform": "lichess", "user_id": user_id})
+        sentry_sdk.capture_exception(exc)
+        return None
+    return normalized
+
+
+def _noop() -> None:
+    """Default per-game hook when the caller passes none."""
+
+
+async def _stream_one_attempt(
+    client: httpx.AsyncClient,
+    url: str,
+    params: dict[str, str | bool],
+    headers: dict[str, str],
+    username: str,
+    user_id: int,
+) -> AsyncGenerator[NormalizedGame, None]:
+    """Stream and normalize one attempt's NDJSON games, raising on status/stream failure.
+
+    Extracted from fetch_lichess_games's semaphore+stream+per-line loop
+    (216-06) so the outer retry loop's try/except and fetched-game callback
+    stay under the depth-4 gate (D-13/D-14): two helpers alone (`_raise_for_status`,
+    `_normalize_line`) still left the outer generator's yield+callback chain at
+    depth 5, so this third helper takes the per-NDJSON-line seam further, per
+    the plan's own escape valve ("take the second seam further rather than
+    adding a pragma"). Zero behavior change: the same exception types raised by
+    `_raise_for_status` propagate unchanged to the caller's retry handling.
+    """
+    async with (
+        get_lichess_semaphore(),
+        client.stream("GET", url, params=params, headers=headers, timeout=300.0) as response,
+    ):
+        _raise_for_status(response, username)
+
+        async for line in response.aiter_lines():
+            if not line.strip():
+                continue
+
+            normalized = _normalize_line(line, username, user_id)
+            if normalized is not None:
+                yield normalized
 
 
 async def fetch_lichess_games(
@@ -131,6 +237,9 @@ async def fetch_lichess_games(
     # Initialize with a sentinel so raise always has a valid exception even if no
     # attempt captured a specific error (e.g., _MAX_RETRIES == 0).
     last_attempt_error: Exception = Exception("Exhausted retries without capturing an error")
+    # A no-op default keeps the per-game hook unconditional inside the stream loop
+    # (one nesting level fewer under the aclosing() block below).
+    notify_game_fetched: Callable[[], None] = on_game_fetched or _noop
 
     for attempt in range(_MAX_RETRIES + 1):
         if attempt > 0:
@@ -154,74 +263,20 @@ async def fetch_lichess_games(
             await asyncio.sleep(backoff)
 
         try:
-            # Semaphore held for entire stream duration. Lichess streams in one HTTP
-            # connection per job, so the semaphore limits concurrent connections, not
-            # individual requests.
-            async with get_lichess_semaphore():
-                async with client.stream(
-                    "GET", url, params=params, headers=headers, timeout=300.0
-                ) as response:
-                    if response.status_code == 404:
-                        raise ValueError(f"lichess user '{username}' not found")
-
-                    # Check status BEFORE iterating lines. httpx.stream() does not
-                    # auto-raise on non-2xx, and aiter_lines() on an error body
-                    # would silently produce 0 games and advance last_synced_at.
-                    if response.status_code != 200:
-                        if response.status_code == 429:
-                            sentry_sdk.capture_message(
-                                "lichess 429 rate limit hit",
-                                level="warning",
-                                tags={"source": "import", "platform": "lichess"},
-                            )
-                            raise _RetryableStatusError(
-                                f"lichess returned 429 for {username}",
-                                status_code=429,
-                            )
-                        if response.status_code in _RETRYABLE_STATUS_CODES:
-                            raise _RetryableStatusError(
-                                f"lichess returned {response.status_code} for {username}",
-                                status_code=response.status_code,
-                            )
-                        # Unexpected non-200 (401/403/etc). Fail loudly rather than
-                        # masking it as "0 games imported".
-                        raise RuntimeError(
-                            f"lichess request for {username} returned "
-                            f"unexpected status {response.status_code}"
-                        )
-
-                    async for line in response.aiter_lines():
-                        if not line.strip():
-                            continue
-
-                        try:
-                            game = json.loads(line)
-                        except json.JSONDecodeError:
-                            # Skip malformed lines without aborting the stream
-                            continue
-
-                        # Item 4 (Phase 148): normalize_lichess_game does direct
-                        # dict lookups (e.g. game["players"]) with no fallback,
-                        # so a single structurally-malformed (but valid-JSON)
-                        # game raised an uncaught KeyError that aborted the
-                        # whole import. Mirror the per-game PGN-parse precedent
-                        # (import_service.py) — skip the bad game, keep going.
-                        # Leave the json.JSONDecodeError guard above untouched.
-                        try:
-                            normalized = normalize_lichess_game(game, username, user_id)
-                        except Exception as exc:
-                            logger.warning(
-                                "Failed to normalize lichess game for user_id=%s", user_id
-                            )
-                            sentry_sdk.set_context(
-                                "import", {"platform": "lichess", "user_id": user_id}
-                            )
-                            sentry_sdk.capture_exception(exc)
-                            continue
-                        if normalized is not None:
-                            yield normalized
-                            if on_game_fetched is not None:
-                                on_game_fetched()
+            # Semaphore held for entire stream duration (inside _stream_one_attempt).
+            # Lichess streams in one HTTP connection per job, so the semaphore limits
+            # concurrent connections, not individual requests.
+            # aclosing(): an `async for` does not aclose() its iterator when the loop
+            # body raises (a DB write in import_service can), and the semaphore +
+            # open HTTP stream now live in the inner generator's frame. Without this
+            # their release would wait for GC of two abandoned generators instead of
+            # unwinding deterministically as it did before the extraction (216 review WR-01).
+            async with aclosing(
+                _stream_one_attempt(client, url, params, headers, username, user_id)
+            ) as stream:
+                async for normalized in stream:
+                    yield normalized
+                    notify_game_fetched()
 
             # Stream completed successfully — no retry needed
             return
