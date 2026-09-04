@@ -26,7 +26,7 @@ ssh flawchess "cd /opt/flawchess && docker compose down && docker compose up -d"
 ```
 
 - Domain: flawchess.com (Caddy handles auto-TLS)
-- Stack: PostgreSQL 18 + FastAPI/Uvicorn + Caddy 2.11.2
+- Stack: PostgreSQL 18 + FastAPI/Uvicorn + Caddy 2.11.4
 - Hetzner Cloud CPX42, 8 vCPUs, 16 GB RAM + 4 GB swap (`/swapfile`), 160 GB NVMe
 
 ## Current prod config

@@ -10,6 +10,6 @@ ARG VITE_SENTRY_TRACES_SAMPLE_RATE
 ENV VITE_SENTRY_TRACES_SAMPLE_RATE=$VITE_SENTRY_TRACES_SAMPLE_RATE
 RUN npm run build
 
-FROM caddy:2.11.2 AS runtime
+FROM caddy:2.11.4 AS runtime
 COPY --from=builder /app/dist /srv
 COPY deploy/Caddyfile /etc/caddy/Caddyfile
