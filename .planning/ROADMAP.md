@@ -179,7 +179,7 @@
 | 213. First-Run Engine Cold Start — Asset-Check Gate & Download Progress UI (SEED-155, v2.14) | 12/12 | Complete    | 2026-08-29 |
 | 214. Backend God-File Decomposition (CONCERNS.md, v2.15) | 8/8 | Complete    | 2026-09-03 |
 | 215. Frontend God-File Decomposition (CONCERNS.md, v2.15) | 8/8 | Complete    | 2026-09-04 |
-| 216. Audit Bugs and Quick Wins (SEED-161) | 7/7 | In Progress | — |
+| 216. Audit Bugs and Quick Wins (SEED-161) | 7/7 | Complete    | 2026-09-04 |
 
 ## Active Phases
 
@@ -230,7 +230,7 @@ F-11, F-14, F-15); major-version dependency bumps; enforcing CSP; COOP/COEP.
 
 **Canonical refs:** `.planning/phases/216-audit-bugs-and-quick-wins/216-CONTEXT.md`.
 
-**Plans:** 7 plans
+**Plans:** 7/7 plans complete
 
 Plans:
 **Wave 1**
