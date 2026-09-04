@@ -76,6 +76,9 @@ addopts = "--ignore=tests/scripts/benchmarks --ignore=tests/scripts/tagger"
 
 [tool.ruff]
 line-length = 100
+# analysis/tilt_study/probes/ holds notebook-style REPL snippets that reuse the marimo
+# notebook's globals (F821 everywhere); they are scratch probes, not modules.
+extend-exclude = ["analysis/tilt_study/probes"]
 
 [tool.ruff.lint]
 extend-select = ["C901", "PLR0912", "PLR0915"]
@@ -136,7 +139,9 @@ extra-paths = ["scripts"]
 # project's own environment, where the imports resolve. This exclude only keeps
 # a root-level `ty check .` from reporting the whole tree as unresolved.
 [tool.ty.src]
-exclude = ["analysis"]
+# analysis/tilt_study/probes/ holds notebook-style REPL snippets that reuse the marimo
+# notebook's globals; scratch probes, not modules (also excluded from ruff above).
+exclude = ["analysis", "analysis/tilt_study/probes"]
 
 [tool.ty.rules]
 # Warn on unused suppression comments so stale ignores don't accumulate
