@@ -28,6 +28,8 @@ in `YYYY-MM-DD` (Europe/Zurich).
 
 ### Changed
 
+- The Openings page now shares one filter-fields component between the desktop sidebar and the mobile drawer, so the two can no longer drift apart. Internal: the analysis board, bot-game hook and engine worker pool were split into smaller modules with no behavior change, and the frontend lint now enforces complexity limits on new code. (Phase 215)
+
 - Game card headers now list your own side first, so the player you are reading about is always on the left regardless of which colour you had.
 
 - Persona avatars now ship at 128px WebP and load lazily, cutting what the Bots page pulls down on first paint. (Phase 213)

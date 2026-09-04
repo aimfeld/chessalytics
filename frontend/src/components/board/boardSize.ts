@@ -16,6 +16,26 @@ export const BOARD_MIN_WIDTH = 420;
  * own `maxWidth`, not this constant. */
 export const BOARD_MAX_WIDTH = 540;
 
+/** Horizontal space the two flanking eval bars + their `gap-2` gutters consume in the
+ *  desktop analysis board row: 2×(w-5 bar = 20px) + 2×(gap-2 = 8px). Hoisted here (215
+ *  code review WR-04) so `useBoardStageSize.ts` (subtracts it from the stage width to
+ *  compute `boardWidth`) and `Analysis.tsx`/`AnalysisBoardStage.tsx` (add it back to that
+ *  `boardWidth` for the board group's `maxWidth`) share one bound — the two used to be
+ *  independent copies that could silently disagree and clip the eval bars again. */
+export const BOARD_EVAL_BARS_ALLOWANCE_PX = 56;
+
+/** Per-side horizontal slack (px) left between the analysis board group and its center
+ *  track, so the EvalChart slider's thumb overhang doesn't get clipped (Phase 161 UAT).
+ *  Hoisted here (215 code review WR-04) — see `BOARD_EVAL_BARS_ALLOWANCE_PX`'s doc comment
+ *  for why this lives alongside it instead of as a private per-file copy. */
+export const EVAL_SLIDER_SLACK_PX = 12;
+
+/** Desktop-only analysis board-size reduction (UAT 179): draws the board 20px smaller
+ *  than its natural fit. Hoisted here (215 code review WR-04) — see
+ *  `BOARD_EVAL_BARS_ALLOWANCE_PX`'s doc comment for why this lives alongside it instead of
+ *  as a private per-file copy. */
+export const DESKTOP_BOARD_SIZE_REDUCTION_PX = 20;
+
 /**
  * Compute the board's pixel size given a width budget, a height budget, and
  * the caller's own maxWidth prop.

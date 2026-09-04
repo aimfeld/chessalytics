@@ -417,6 +417,108 @@ tilt score" feature would mislead most users. The honest tie-in is a population-
 view (post-loss record with a wide interval) or the behavioural signals in §4–5
 (quit-on-loss rate, revenge-rematch record, short-loss share), not a point estimate.
 
+## 8. Published work vs. our results (web review, 2026-09-03)
+
+Short version: the two rigorous chess studies that condition on ratings find the same thing we
+do (tilt ≈ 0 after one game, at most a few pp after long streaks, weaker for stronger players);
+the popular analyses that report 10–20 pp swings do not control for opponent rating, rating
+lag or session, and Rosenthal shows that is exactly where the big numbers come from. Nobody
+we found has published the break-length, loss-anatomy, revenge-rematch or quit-on-loss
+results, so §2–§5 are new. Our Elo-compression finding runs *opposite* to the one published
+for chess.com top players and needs a colour control before it becomes a story.
+
+### 8a. Does the last game predict the next? (§1, §1b)
+
+| study | data | control for rating / opponent | headline | vs. ours |
+|---|---|---|---|---|
+| Gee, Seese, Curley & Ward 2025, arXiv 2503.21713 (hierarchical Bayesian logit) | Lichess 60+0 and 180+0; 141 focal players 1700 → GM, ~590k bullet games in the 1700–1900 cohort alone; sessions = gaps < 5 min | yes (rating diff, colour, player random effects) | global winner/loser effect centred on 0 in every cohort; individual effects −0.02 … +0.03 in win probability; a 10-game window adds nothing; a 3 pp global effect would have been detectable | our pooled 1-game effect is −0.1 / +0.4 pp and 3+ streak −0.7 / +1.2 pp, i.e. below their detection floor. Agrees. Their cohorts start at 1700; our 800–1200 cells (−2 pp after LLL+) are outside their range |
+| Rosenthal 2025, *Harvard Data Science Review* 7.2 | chess.com, 293k games of 7 top players (57k Hikaru games), mostly 3+0 | yes (excess score = actual − fitted expected) | autocorrelation of *excess* score ≈ 0 at every lag, "no overall evidence of a hot hand … chess players are often thought to experience 'tilt' … one explanation is that these factors are not as large as previously thought"; *raw* score autocorrelation ≈ 0.1 at lags 1–5, attributed to rating updates | our 2000–2400 blitz cells show the cold effect at ≈ 0, matching. His raw-vs-excess gap is our "form vs. state" split (§2): most of what a player feels as a streak is rating lag |
+| Chowdhary, Iacopini & Battiston 2023, *Sci. Rep.* 13:2113 | Lichess blitz 2013–16, 123M games, 0.98M players | no (shuffle test preserving each player's W/D/L totals) | real streaks longer than shuffled; cold streaks longer than hot; beginners far streakier than experts; streak length vs time gap ρ ≈ 0.05, vs rating advantage ρ ≈ 0.28 | direction matches ours (effect strongest below 1600, cold tail deeper than hot tail after controls, breaks matter little). A shuffle test cannot separate state from form/rating drift, which is why their streakiness looks larger than our residuals |
+| Devine (blog, ~2015) | Lichess 2014, ~1M games, mixed-effects logit | no rating control, any time gap | previous result b = 0.25 log-odds (≈ 6 pp) and still b = 0.12 seven games back | textbook uncontrolled estimate: a 6 pp effect that persists 7 games is rating lag/form, not tilt. Our controlled 1-game number is 15× smaller |
+| chessanalysis.co (site, 2025) | Lichess API, ~80k players, 840k games | not stated | 1200–1400: 39.1% after LLLLL, 58.1% after WWWWW; advises stopping after 3 losses | our 1200 bucket, equal footing, same session: 47.9% / 53.1% at ±5. Their 19 pp swing is ~4× ours and includes cross-session streaks, rating drift and unequal pairings |
+| Kakkar, Sivanathan & Pettit 2019, *PNAS* ("status momentum") | 117k pro tennis matches + 5M online amateur chess observations | yes | players under-perform against an opponent whose rank has been *rising* | mechanism candidate for §5: the opponent who just beat you is a rising-rank opponent |
+
+Non-chess anchors for scale: Page & Coates 2017 (*Evol. Hum. Behav.*) find the winner of a
+long first-set tiebreak between equally ranked male tennis players wins the second set ~60 / 40;
+Smith & Dukas 2024 (*Anim. Behav.*, randomised win/lose assignment in Overwatch, n = 219)
+find d = 0.25. Both are far larger than anything in chess, consistent with Gee et al.'s and
+Rosenthal's reading that the chess version of the effect is small once ratings are held fixed.
+Our contribution is the dose–response and rating gradient: the effect is measurable, monotone
+to ±8 (−4.8 / +2.3 pp after controls, §1b) and concentrated below 1600.
+
+### 8b. Breaks (§2)
+
+No chess study measures break length. Closest: Jack J 2020 (League of Legends, 100k games via
+Riot API). Gold players who re-queue immediately after two losses have the lowest win rate;
+a short break is worth ≈ +3 pp; a 3–4 h break reverts to average. At Diamond I the pattern
+*inverts*: playing on immediately beats taking a short break. Our rapid/classical curves look
+like Gold (worst within a minute after LL, −1.5 / −3.7 pp; better after 10–30 min), and our
+bullet curve looks like Diamond (par if you play on, −2.8 pp after a 3–10 min pause). Same
+skill/pace inversion in two games, independently, which makes the bullet "don't stop" result
+less likely to be an artefact. Chowdhary et al.'s ρ ≈ 0.05 for time gaps also says breaks are
+a second-order effect, as in our data.
+
+### 8c. Loss anatomy, revenge, quitting (§3–§5)
+
+Nothing quantitative published for chess. Adjacent evidence:
+
+- Poker: Palomäki, Laakasuo & Salmela 2014 (*J. Gambl. Stud.*, n = 417 survey): more
+  experienced players tilt less severely. Matches our rating gradient (cold effect −2 pp at
+  1200, ≈ 0 at 2000–2400) and the LoL rank inversion.
+- Rematch: chess.com forum threads cite platform stats that players accept rematches more
+  often after a loss than a win. Consistent with our 14-of-18 cells where the post-loss rematch
+  rate exceeds the post-win rate, but the source is anecdotal; no revenge *score* exists in
+  the literature.
+- Quitting: Agarwal, Burghardt & Lerman 2017 (Axon, 850k players) find players quit a session
+  after an abnormally *high* score. Our bullet players do the opposite (session ends after
+  22.4% of losses vs 17.3% of wins). Different game and reward structure; worth stating in the
+  story that fast chess is a "quit on loss" game, unlike casual score games.
+- Behavioural tilt (shorter, more-abandoned losses after a streak, §4) has no chess
+  counterpart in the literature. The LoL paper by the Tampere group (CHI PLAY 2024, 598k top-player
+  matches) reports the analogue: small but significant performance drop during losing streaks and
+  players switching champion/lane when losing, where our players do *not* switch opening (87.9% vs
+  87.8%, §1b probes).
+
+### 8d. Fatigue and time of day (§6)
+
+Leone, Slezak, Golombek & Sigman 2017 (*Cognition*, FICS fast chess): decisions get faster
+and less accurate through the day with no net change in results. No published session-length
+curve for online chess; our rapid/classical −1 to −1.5 pp after 1–4 h and the bullet/blitz
+flat line are new. Time of day is the obvious missing axis in our data (UTC only, §Limits).
+
+### 8e. Rating calibration (methodology pearl)
+
+Rosenthal fits chess.com top-player data with scale **381** (all games) and **356** (3+0), plus a
+White bonus of 18–21 rating points, i.e. a 100-point edge is worth *more* than Elo says. We find
+the opposite on Lichess: 415 (classical) to 540 (bullet), a 100-point edge worth *less*. Both
+cannot be a property of "online chess". Plausible reasons for the gap: his cohort is 7 players
+at the top of the pool (their opponents' ratings are compressed from above), while our 4,525
+users sit at 800–2400 where Glicko-2 rating deviation, provisional accounts and rating lag
+flatten the empirical curve. arXiv 2502.10985 (Lichess 2014, 11.6M games) rejects the
+stationary Bradley–Terry model outright (p < 10⁻¹⁰) and finds a matchmaking correlation of 0.40.
+Two things to do before publishing our calibration: (1) add colour, since a Lichess fit puts
+White at ≈ 22 rating points (patsprojects.org) and OTB 2500+ at ≈ 35 (jk_182), and our
+calibration ignores it; (2) fit within rating band, since the compression may be a
+low-rating/high-RD phenomenon rather than a platform one.
+
+### Sources
+
+- Gee, Seese, Curley, Ward (2025) *Investigating Experiential Effects in Online Chess using a Hierarchical Bayesian Analysis*, arXiv:2503.21713.
+- Rosenthal (2025) *An Investigation Into Probabilities of Streaks in Online Chess*, Harvard Data Science Review 7(2). https://probability.ca/jeff/ftpdir/chessstreakpub.pdf
+- Chowdhary, Iacopini, Battiston (2023) *Quantifying human performance in chess*, Sci. Rep. 13:2113. https://pmc.ncbi.nlm.nih.gov/articles/PMC9902564/
+- Devine, *Tilt and Hype in Online Chess*. http://seandevine.org/blog/chessBlog.html
+- chessanalysis.co, *Chess Improvement Is Not Linear*. https://chessanalysis.co/research/chess-improvement-rating-trajectories
+- Kakkar, Sivanathan, Pettit (2019) status momentum, PNAS. https://www.sciencedaily.com/releases/2019/10/191028175136.htm
+- Page, Coates (2017) *Winner and loser effects in human competitions*, Evol. Hum. Behav. 38(4).
+- Smith, Dukas (2024) *Winner and loser effects in humans: evidence from randomized trials*, Anim. Behav. 207.
+- Jack J (2020) *Analyzing "Tilt" to Win More Games (League of Legends)*. https://www.itero.gg/articles/lol-tilt
+- CHI PLAY 2024, *Streaks and Coping: Decoding Player Performance in League of Legends*. https://dl.acm.org/doi/10.1145/3665463.3678787
+- Palomäki, Laakasuo, Salmela (2014) *Losing More by Losing It*, J. Gambl. Stud. 30(1).
+- Agarwal, Burghardt, Lerman (2017) *On Quitting*, arXiv:1703.04696.
+- Leone, Slezak, Golombek, Sigman (2017) *Time to decide*, Cognition.
+- González-Díaz, Palacios-Huerta (2016) *Cognitive performance in competitive environments*, J. Public Econ. 139 (world-championship matches; first-mover 57.4%, not a tilt result).
+- arXiv:2502.10985 *Is Elo Rating Reliable? A Study Under Model Misspecification*; patsprojects.org *Analyzing chess ratings*; lichess.org/@/jk_182 *Predicting the Outcome of Chess Games*.
+
 ## Limits & caveats
 
 - Time of day is UTC only (no user timezone); not analysed.

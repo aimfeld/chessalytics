@@ -53,6 +53,16 @@ export const GEM_MAIA_MAX_PROB = 0.2;
 export const GREAT_MAIA_MAX_PROB = 0.5;
 
 /**
+ * Cap on the per-session live engine/Maia/flaw FIFO caches keyed by FEN or
+ * node id (`Analysis.tsx`'s `engineEvalByFen`/`maiaCurveByFen`/
+ * `liveFlawByNode`, and `useAnalysisGemMarkers.ts`'s parent-grade retention
+ * cache) — hoisted here (215 code review WR-04) so the two files share one
+ * bound instead of two independently-editable copies that could silently
+ * diverge.
+ */
+export const LIVE_EVAL_CACHE_MAX = 256;
+
+/**
  * C1 (hard to find) AND C2 (only good move). Callers resolve the played
  * move's Maia probability and the parent position's best/second-best
  * expected score BEFORE calling this — this function does no lookups.

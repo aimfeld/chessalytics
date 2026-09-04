@@ -28,238 +28,104 @@
  * app and the `.mjs` calibration harnesses) and carries no wall-clock bound —
  * the removed `GRADING_MOVETIME_SAFETY_CAP_MS` is replaced by the host-side
  * watchdog (D-06, `GRADING_WATCHDOG_TIMEOUT_MS`) added in this file below.
+ *
+ * The tunable degradation knobs, the pool's own types
+ * (`QueuedGradeRequest`/`PoolWorkerSlot`/`GradeCache`), and the pure
+ * priority-queue/pool-sizing/predicate functions (`enqueue`/
+ * `dequeueHighestPriority`/`sideToMove`/`isLowPowerDevice`/`computePoolSize`/
+ * `noLiveSlotRemains`) live in `workerPoolState.ts` (215 code review WR-01) —
+ * this file re-exports every one of them below for its existing external
+ * importers (`useGemSweep.ts`'s `isLowPowerDevice`, `useFlawChessEngine.ts`'s
+ * `computePoolSize`, and this module's own test file), rather than
+ * redefining them, so the module graph stays a DAG: this facade and the
+ * three stage modules all import FROM `workerPoolState.ts`, never the other
+ * way around.
  */
 
-import * as Sentry from '@sentry/react';
-import { parseInfoLine } from '@/hooks/uciParser';
 import type { MoveGrade } from './types';
-import { buildGradeGoCommand, GRADING_ROOT_DEPTH } from './gradingLadder';
+import { markEngineAssetFailed, markEngineAssetReady } from './engineAssetProgress';
+import type {
+  PoolState,
+  PoolOps,
+  PoolWorkerSlot,
+  QueuedGradeRequest,
+  GradeCache,
+} from './workerPoolState';
 import {
-  markEngineAssetFailed,
-  markEngineAssetPending,
-  markEngineAssetReady,
-  reportEngineAssetProgress,
-} from './engineAssetProgress';
-import { createStockfishWorker, ensureStockfishWorkerUrl } from './stockfishWorkerSource';
+  GRADE_CACHE_MAX,
+  WORKER_HASH_MB,
+  DESKTOP_POOL_MIN,
+  DESKTOP_POOL_MAX,
+  DESKTOP_HEADROOM_CORES,
+  MOBILE_POOL_SIZE,
+  MOBILE_CORE_THRESHOLD,
+  GRADING_WATCHDOG_TIMEOUT_MS,
+  GRADING_WATCHDOG_SUSPEND_FACTOR,
+  MAX_WATCHDOG_SUSPEND_REARMS,
+  GRADING_WATCHDOG_LIVENESS_MS,
+  MAX_WATCHDOG_LIVENESS_REARMS,
+  STOP_BESTMOVE_WATCHDOG_TIMEOUT_MS,
+  MAX_SLOT_RESPAWNS,
+  INIT_WATCHDOG_TIMEOUT_MS,
+  enqueue,
+  dequeueHighestPriority,
+  isLowPowerDevice,
+  computePoolSize,
+  sideToMove,
+  noLiveSlotRemains,
+} from './workerPoolState';
+import {
+  clearSlotWatchdog as wdClearSlotWatchdog,
+  armStopWatchdog as wdArmStopWatchdog,
+  armInitWatchdog as wdArmInitWatchdog,
+} from './workerPoolWatchdog';
+import {
+  dispatchNext as dispatchDispatchNext,
+  handleLine as dispatchHandleLine,
+  grade as dispatchGrade,
+} from './workerPoolDispatch';
+import {
+  replaceDeadSlot as lcReplaceDeadSlot,
+  ensureSpawned as lcEnsureSpawned,
+  stopAll as lcStopAll,
+  terminate as lcTerminate,
+  warm as lcWarm,
+} from './workerPoolLifecycle';
 export type { MoveGrade };
 
-// ─── Tunable constants (SC4 degradation knobs — tunable without touching logic) ──
-//
-// Phase 213-08 (G-213-35): this file's `ENGINE_PATH` constant was removed —
-// worker construction now routes through `createStockfishWorker()`
-// (`stockfishWorkerSource.ts`), which owns the served glue path. Confirmed
-// via repo-wide grep (including `scripts/*.mjs`) that nothing outside this
-// file imported the removed export.
-
-/**
- * Pool-level grade-cache cap, counted in `(fen, gradingDepth)` entries. A full
- * 400-node analysis-board search touches a measured 352-386 distinct FENs
- * (194-RESEARCH.md Pattern 4) — 256 was small enough that a single search
- * thrashed its own cache before cross-search reuse was even possible. 1024 is
- * the next power of two above roughly 2.6x the measured 386-FEN ceiling: one
- * full search's working set plus about 1.6 searches worth of navigation
- * history (Phase 194 CACHE-01).
- *
- * Phase 195 caveat (195-06 review WR-02): entries are keyed by `(fen, depth)`,
- * not by FEN alone, so a position reached at two different ladder rungs now
- * occupies two slots. The shipped ladder spans two distinct depths (14 and the
- * floor), so the true worst case is up to 2x the FEN count above — still well
- * inside 1024 for one search, but the headroom for navigation history is
- * correspondingly smaller than the FEN-based arithmetic implies. Re-derive this
- * cap from a measured distinct-key count if the ladder ever spans more rungs.
- */
-export const GRADE_CACHE_MAX = 1024;
-
-/** Per-worker `Hash` UCI option cap (MB) — Pitfall 1 mitigation: shallow searchmoves-restricted grading doesn't benefit from a large hash table, and N workers at default Hash settings multiplies mobile memory pressure for no search-quality gain. */
-export const WORKER_HASH_MB = 8;
-
-/** Desktop pool-size floor (also the DESKTOP_POOL_MIN/undefined-cores fallback). */
-export const DESKTOP_POOL_MIN = 2;
-
-/** Desktop pool-size ceiling. */
-export const DESKTOP_POOL_MAX = 4;
-
-/** Cores reserved for the main thread + Maia worker when sizing the desktop pool. */
-export const DESKTOP_HEADROOM_CORES = 2;
-
-/** Mobile pool size — fixed, not derived from cores (D-01). */
-export const MOBILE_POOL_SIZE = 2;
-
-/** `hardwareConcurrency` at or below this counts as "mobile" (D-01). */
-export const MOBILE_CORE_THRESHOLD = 4;
-
-/**
- * Host-side grading watchdog (ms, D-06) — mirrors the calibration harness's
- * own `GRADING_WATCHDOG_TIMEOUT_MS` (`scripts/lib/calibration-providers.mjs`).
- * A worker-FAULT detector, not a quality knob: it exists to bound a slot that
- * never emits `bestmove` after `sendGo` (a genuinely hung/wedged worker), not
- * to cap a merely slow position. Sized at 60s so it fires only on the former
- * — replaces the removed `GRADING_MOVETIME_SAFETY_CAP_MS` wall-clock bound
- * (D-05), which capped EVERY search regardless of whether the worker was
- * healthy. That "fault, not slowness" intent is only actually ENFORCED by the
- * two re-arm gates in `fireWatchdog` (see `GRADING_WATCHDOG_SUSPEND_FACTOR`
- * and `GRADING_WATCHDOG_LIVENESS_MS`); this constant alone cannot tell the
- * two apart, which is what FLAWCHESS-9G was.
- */
-export const GRADING_WATCHDOG_TIMEOUT_MS = 60_000;
-
-/**
- * Bug fix (FLAWCHESS-9G): multiple of `GRADING_WATCHDOG_TIMEOUT_MS` past which
- * a watchdog fire is attributed to page/tab suspension rather than a wedged
- * worker. A backgrounded mobile tab suspends the page AND its workers; on
- * resume, the elapsed `setTimeout` fires immediately even though the worker
- * never received CPU time, and treating that as a fault permanently killed a
- * healthy slot (4 production events over 20 days, 3 of 4 on mobile browsers,
- * all on /analysis).
- */
-export const GRADING_WATCHDOG_SUSPEND_FACTOR = 1.5;
-
-/**
- * Bug fix (FLAWCHESS-9G): per-dispatch cap on suspend re-arms (see
- * `GRADING_WATCHDOG_SUSPEND_FACTOR`) — keeps a genuinely wedged worker on a
- * repeatedly suspended page from re-arming forever; after this many
- * suspension-attributed fires for the SAME dispatch, `fireWatchdog` falls
- * through to the normal kill path instead of re-arming again.
- */
-export const MAX_WATCHDOG_SUSPEND_REARMS = 3;
-
-/**
- * Bug fix (FLAWCHESS-9G, second pass): silence window (ms) separating a
- * genuinely wedged worker from a merely slow or CPU-starved one. Stockfish
- * emits `info` lines continuously while it searches (depth completions, plus
- * per-root-move `currmove` reports once an iteration passes ~3s), so a slot
- * that produced a line recently is demonstrably ALIVE — its 60s deadline then
- * says nothing about worker health, only that this position is slow on this
- * machine, which `go depth N` explicitly permits (D-05 removed the wall-clock
- * bound). Killing such a slot is a false positive.
- *
- * 20s is a judgement call, not a measurement: comfortably wider than the
- * largest plausible gap between two `info` lines at the depths this pool
- * searches (ladder 10-14, searchmoves-restricted, so only a handful of
- * `currmove` reports per iteration), while still a third of the watchdog
- * window — a worker that has gone completely silent is killed at its FIRST
- * fire, with no added latency. This is the knob to widen if the enriched
- * Sentry context (see `fireWatchdog`) starts showing fires whose
- * `sinceLastInfoMs` sits just past it.
- */
-export const GRADING_WATCHDOG_LIVENESS_MS = 20_000;
-
-/**
- * Bug fix (FLAWCHESS-9G, second pass): per-dispatch cap on liveness re-arms
- * (see `GRADING_WATCHDOG_LIVENESS_MS`) — the same containment
- * `MAX_WATCHDOG_SUSPEND_REARMS` gives the suspension path. A worker that
- * keeps emitting `info` forever without ever reaching `bestmove` must not
- * re-arm forever: `mctsSearch` awaits this grade, so an unbounded re-arm
- * turns a slow node into a stalled search. Counted separately from the
- * suspend re-arms so the two causes stay distinguishable in Sentry.
- *
- * Trade-off, stated plainly: worst case a dispatch is now abandoned after
- * `GRADING_WATCHDOG_TIMEOUT_MS * (1 + MAX_WATCHDOG_SUSPEND_REARMS +
- * MAX_WATCHDOG_LIVENESS_REARMS)` rather than 60s. That is only reachable by a
- * slot that is provably alive the whole time; the alternative is what this
- * fix exists to stop — killing a healthy worker and settling its node with an
- * empty grade, which dents search quality invisibly instead of visibly.
- */
-export const MAX_WATCHDOG_LIVENESS_REARMS = 3;
-
-/**
- * Bug fix (quick 260731-s0z, FIX-4): host-side "stop-bestmove" watchdog (ms),
- * armed instead of a bare `clearSlotWatchdog` whenever this pool sends `stop`
- * to a slot (the abort in-flight branch and `stopAll()`'s thinking branch).
- * Without it, a slot parked in `'stopping'` whose worker never answers with a
- * `bestmove` (a genuinely hung worker) was lost permanently: not marked
- * `dead`, so it also blinded `noLiveSlotRemains()` / the FIX-3 dead-pool
- * guard, and nothing reached Sentry. A `stop` must produce `bestmove`
- * near-immediately (the search polls the stop flag between nodes), so this
- * bound is an order of magnitude tighter than `GRADING_WATCHDOG_TIMEOUT_MS` —
- * a false positive costs one worker respawn (Sentry-visible via
- * `fireStopWatchdog`), and this constant is the tuning knob if that is ever
- * observed in production.
- */
-export const STOP_BESTMOVE_WATCHDOG_TIMEOUT_MS = 10_000;
-
-/**
- * Bug fix (2026-08-23): total slot respawns allowed over ONE pool's lifetime.
- *
- * A slot marked `dead` used to stay dead until `terminate()` — and `terminate()`
- * only runs on the React effect cleanup, i.e. when the user leaves the analysis
- * or bot page. So a single worker fault silently shrank the pool for the whole
- * visit: not wrong answers, but fewer parallel grades, and for the BOT a
- * deadline-bounded search on a smaller pool reaches fewer nodes and can pick a
- * different move. `replaceDeadSlot` now spawns a replacement instead.
- *
- * The cap exists because the respawn paths are not all slow: `worker.onerror`
- * fires immediately for a 404/CSP-blocked engine script, so an uncapped respawn
- * would spin constructing workers. Once the budget is spent the pool degrades
- * exactly as it did before this fix — smaller, then drained — rather than
- * looping. Sized for a couple of full-pool wipes at the desktop maximum of 4
- * slots; a healthy session should never spend more than one or two.
- */
-export const MAX_SLOT_RESPAWNS = 8;
-
-/**
- * Bug fix (2026-08-23): bound (ms) on a REPLACEMENT slot's UCI init handshake.
- *
- * Respawning re-opened a hang that the FIX-3 dead-pool guard used to close by
- * accident. Once every slot was dead, `grade()` resolved new requests empty
- * immediately; now a fresh slot sits in the pool, so `noLiveSlotRemains()` is
- * false and the request enqueues. That is correct as long as the replacement
- * actually boots — but a worker that CONSTRUCTS and then goes silent (never
- * `uciok`, never an `error` event — the shape a memory-starved mobile device
- * produces) would strand the queue forever. This watchdog turns that silence
- * into an ordinary slot death, which the respawn budget then bounds.
- *
- * Armed only on replacements, not on `ensureSpawned`'s initial slots: this
- * closes exactly the hazard the respawn introduces, and leaves the pre-existing
- * (and separate) question of a never-booting FIRST worker alone. Generous
- * relative to a cold WASM compile on slow mobile hardware, since it only ever
- * matters when something is already broken.
- */
-export const INIT_WATCHDOG_TIMEOUT_MS = 30_000;
+// Re-exported for existing external importers (useGemSweep.ts's
+// isLowPowerDevice, useFlawChessEngine.ts's computePoolSize, and this
+// module's own test file) — see the file header for why these are imports
+// from workerPoolState.ts rather than local definitions.
+export {
+  GRADE_CACHE_MAX,
+  WORKER_HASH_MB,
+  DESKTOP_POOL_MIN,
+  DESKTOP_POOL_MAX,
+  DESKTOP_HEADROOM_CORES,
+  MOBILE_POOL_SIZE,
+  MOBILE_CORE_THRESHOLD,
+  GRADING_WATCHDOG_TIMEOUT_MS,
+  GRADING_WATCHDOG_SUSPEND_FACTOR,
+  MAX_WATCHDOG_SUSPEND_REARMS,
+  GRADING_WATCHDOG_LIVENESS_MS,
+  MAX_WATCHDOG_LIVENESS_REARMS,
+  STOP_BESTMOVE_WATCHDOG_TIMEOUT_MS,
+  MAX_SLOT_RESPAWNS,
+  INIT_WATCHDOG_TIMEOUT_MS,
+  enqueue,
+  dequeueHighestPriority,
+  isLowPowerDevice,
+  computePoolSize,
+  sideToMove,
+  noLiveSlotRemains,
+};
+export type { PoolWorkerSlot, QueuedGradeRequest, GradeCache };
 
 // ─── Types ──────────────────────────────────────────────────────────────────
-
-/** A single pending grade() request awaiting dispatch to a free worker slot. */
-export interface QueuedGradeRequest {
-  fen: string;
-  candidateUcis: string[];
-  /** Higher = more urgent. Derived by the caller from the root ancestor's current practicalScore (POOL-02). */
-  priority: number;
-  /** Tie-break 2: shallower depth-from-root wins. Dispatch-priority tie-break (dead until Phase 198) — NOT the resolved Stockfish search depth; see `gradingDepth` below for that. */
-  depth: number;
-  /** The resolved Stockfish SEARCH depth for this request (LADDER-02/D-01), distinct from the `depth` tie-break field above. Composed into the `go` line via `buildGradeGoCommand`. */
-  gradingDepth: number;
-  resolve: (grades: Map<string, MoveGrade>) => void;
-}
-
-/** Internal per-worker UCI state machine states — mirrors useStockfishGradingEngine's EngineState. */
-type SlotState = 'idle' | 'thinking' | 'stopping';
-
-/** One pool worker slot: a classic Worker plus its stop-before-go state machine. */
-export interface PoolWorkerSlot {
-  worker: Worker;
-  state: SlotState;
-  /** True while a `stop` we sent is awaiting its terminal `bestmove` (FLAWCHESS-7V guard). */
-  stopPending: boolean;
-  /** True once this slot's UCI init sequence (uciok -> Hash -> isready -> readyok) completes. */
-  isReady: boolean;
-  /** True once this slot's worker has failed (an `error` event, WR-04, or a watchdog fire) — out of service. The slot itself is replaced by `replaceDeadSlot`; this flag gates dispatch until then and stays set on the discarded slot object forever. */
-  dead: boolean;
-  /** The request currently assigned to this slot, or null when free. */
-  current: QueuedGradeRequest | null;
-  /** In-flight grades accumulated from `info` lines for `current`, keyed by pv[0] (UCI). */
-  accumulator: Map<string, MoveGrade>;
-  /** D-06: handle for the in-flight `GRADING_WATCHDOG_TIMEOUT_MS` timer, or null when idle/no timer running. Started in `sendGo`, cleared by every path that takes the slot out of the `thinking` state. */
-  watchdogTimer: ReturnType<typeof setTimeout> | null;
-  /** FLAWCHESS-9G: wall-clock stamp of the moment the grading watchdog was (re-)armed. Only meaningful while a grading watchdog is in flight. */
-  armedAtMs: number;
-  /** FLAWCHESS-9G: suspend re-arms consumed by the current dispatch (see `MAX_WATCHDOG_SUSPEND_REARMS`). Reset to 0 on every fresh `sendGo` dispatch. */
-  watchdogSuspendRearms: number;
-  /** FLAWCHESS-9G (second pass): wall-clock stamp of the last `info` line this slot emitted for `current`, or 0 when it has emitted none since `sendGo` — the worker-liveness signal `fireWatchdog` uses to tell a wedged worker from a slow one. */
-  lastInfoAtMs: number;
-  /** FLAWCHESS-9G (second pass): liveness re-arms consumed by the current dispatch (see `MAX_WATCHDOG_LIVENESS_REARMS`). Reset to 0 on every fresh `sendGo` dispatch. */
-  watchdogLivenessRearms: number;
-}
+//
+// QueuedGradeRequest/PoolWorkerSlot/GradeCache moved to workerPoolState.ts
+// (215 code review WR-01) — re-exported above for existing importers.
 
 /** The public surface `createWorkerPool()` returns — implements `EngineProviders.grade` (D-08). */
 export interface WorkerPool {
@@ -333,93 +199,13 @@ export interface WorkerPool {
   whenReady(): Promise<void>;
 }
 
-// ─── Priority queue (POOL-02): plain array, linear max-scan ────────────────
+// ─── Priority queue / pool sizing / noLiveSlotRemains (POOL-01/02/04, D-01) ─
 //
-// No maintained priority-queue library fits this workload's scale (hundreds
-// of pending grades per search, not millions) — a hand-rolled O(n) linear
-// scan is both correct and fast enough. Tie-break order matches every other
-// canonical tie-break in the Phase 153 core: NEVER insertion/arrival order.
-//
-// WR-02: `priority`/`depth` are populated by a caller that computes
-// per-root-line practical scores. Every request built by `grade()` today
-// still carries `priority: 0, depth: 0` (see below) because Phase 155's MCTS
-// orchestrator dispatches at most `computePoolSize()` concurrent expansions
-// per round — dispatch capacity always keeps pace with demand, so this
-// ordering logic is correct and tested in isolation but has no discriminating
-// input to act on yet. Phase 198 (mctsSearch continuous dispatch) is the
-// consumer that will populate real priority values once in-flight expansions
-// can exceed free worker slots, making dispatch order matter for the first
-// time. Deliberately retained, not dead code (Phase 194 CACHE-06).
-
-/** Push a new request onto the pending array. */
-export function enqueue(pending: QueuedGradeRequest[], req: QueuedGradeRequest): void {
-  pending.push(req);
-}
-
-/**
- * Remove and return the highest-priority pending request. Ties broken by
- * smaller `depth`, then by ascending `candidateUcis[0]` UCI string —
- * NEVER by insertion/arrival order. Returns undefined on an empty array.
- */
-export function dequeueHighestPriority(
-  pending: QueuedGradeRequest[],
-): QueuedGradeRequest | undefined {
-  let best: QueuedGradeRequest | undefined;
-  let bestIdx = -1;
-  pending.forEach((req, i) => {
-    const better =
-      best === undefined ||
-      req.priority > best.priority ||
-      (req.priority === best.priority && req.depth < best.depth) ||
-      (req.priority === best.priority &&
-        req.depth === best.depth &&
-        (req.candidateUcis[0] ?? '') < (best.candidateUcis[0] ?? ''));
-    if (better) {
-      best = req;
-      bestIdx = i;
-    }
-  });
-  if (bestIdx >= 0) pending.splice(bestIdx, 1);
-  return best;
-}
-
-// ─── Adaptive pool sizing (POOL-04/D-01): plain function, not a React hook ──
-//
-// Because this module is explicitly NOT a React hook, sizing is a plain,
-// non-reactive function computed ONCE at lazy-spawn time (D-02), not a
-// useIsMobile()-style hook with re-render-on-resize semantics.
-// Deliberately not user-agent-string sniffing and not reading the
-// unavailable/coarse-on-Safari device-memory navigator field (both rejected
-// by D-01 as brittle/unreliable signals).
-
-/**
- * True on a "mobile" device: `hardwareConcurrency <= MOBILE_CORE_THRESHOLD` OR
- * a coarse pointer. Deliberately not user-agent-string sniffing and not
- * reading the unavailable/coarse-on-Safari device-memory navigator field
- * (both rejected by D-01 as brittle/unreliable signals).
- *
- * Extracted from `computePoolSize()` in Phase 172 (SEED-106 D-05) so the
- * background gem sweep (`useGemSweep.ts`) can gate itself off on the same
- * devices the Stockfish pool already downsizes for, via ONE heuristic instead
- * of two copies that could drift.
- */
-export function isLowPowerDevice(): boolean {
-  const cores = navigator.hardwareConcurrency || DESKTOP_POOL_MIN;
-  const isCoarsePointer =
-    typeof window.matchMedia === 'function' && window.matchMedia('(pointer: coarse)').matches;
-  return cores <= MOBILE_CORE_THRESHOLD || isCoarsePointer;
-}
-
-/**
- * Compute the number of Stockfish worker slots for this device. Mobile
- * (`isLowPowerDevice()`) always gets `MOBILE_POOL_SIZE`; desktop gets
- * `clamp(cores - DESKTOP_HEADROOM_CORES, DESKTOP_POOL_MIN, DESKTOP_POOL_MAX)`.
- */
-export function computePoolSize(): number {
-  if (isLowPowerDevice()) return MOBILE_POOL_SIZE;
-  const cores = navigator.hardwareConcurrency || DESKTOP_POOL_MIN;
-  return Math.min(DESKTOP_POOL_MAX, Math.max(DESKTOP_POOL_MIN, cores - DESKTOP_HEADROOM_CORES));
-}
+// enqueue/dequeueHighestPriority/isLowPowerDevice/computePoolSize/sideToMove/
+// noLiveSlotRemains moved to workerPoolState.ts (215 code review WR-01) —
+// re-exported above for existing importers (this module's own
+// createGradeCache/createWorkerPool below use the imported bindings
+// directly).
 
 // ─── Pool factory: N worker slots + priority-queued dispatch ───────────────
 //
@@ -430,41 +216,8 @@ export function computePoolSize(): number {
 // request/response cycle. Worker slots are spawned lazily, on the first
 // grade() call (D-02) — never eagerly at factory-construction time.
 
-/** Side-to-move literal read directly off a FEN string (D-08). */
-function sideToMove(fen: string): 'w' | 'b' {
-  return fen.split(' ')[1] === 'b' ? 'b' : 'w';
-}
-
-/**
- * The public surface `createGradeCache()` returns — the shipped grade-outcome
- * cache, extracted from `createWorkerPool`'s closure (INJECT-05) so a Node
- * measurement harness (`scripts/engine-root-injection.mjs`) can read/write
- * through the EXACT same read gate, keying, LRU touch, and merge semantics
- * the browser pool uses, rather than a harness-local reimplementation that
- * would measure a mirror of production behavior instead of production
- * behavior itself.
- */
-export interface GradeCache {
-  /**
-   * Reads a cached grade subset for `(fen, gradingDepth)` restricted to
-   * `candidateUcis`. Returns `null` on any miss (CACHE-04/LADDER-03
-   * all-or-nothing: a cached entry that lacks even one requested UCI is
-   * still a miss). INJECT-05: increments `stats().misses` on every `null`
-   * return and `stats().hits` on every non-null return — these are cache
-   * OUTCOME counters, not Stockfish-dispatch counters. The caller
-   * (`createWorkerPool.grade()`) may still resolve empty AFTER a counted
-   * miss via its own separate zero-live-slots guard; that later failure mode
-   * does not change what THIS counter measures ("was fresh Stockfish work
-   * needed"), so the harness's reported denominator stays unambiguous.
-   */
-  read(fen: string, candidateUcis: string[], gradingDepth: number): Map<string, MoveGrade> | null;
-  /** Merges `grades` into the existing `(fen, gradingDepth)` entry (CACHE-03), never replacing it wholesale. */
-  write(fen: string, gradingDepth: number, grades: Map<string, MoveGrade>): void;
-  /** INJECT-05: exact hit/miss counts since cache creation (or since the last `resetCacheStats()` call). */
-  stats(): { hits: number; misses: number };
-  /** INJECT-05: resets the hit/miss counters to zero WITHOUT evicting any cached entry — a subsequent identical request still reports a hit via `cacheStats()`. */
-  resetCacheStats(): void;
-}
+// GradeCache interface moved to workerPoolState.ts (215 code review WR-01) —
+// re-exported above for existing importers.
 
 /**
  * Extracted from `createWorkerPool`'s in-closure cache (Phase 194
@@ -594,59 +347,61 @@ export function createGradeCache(): GradeCache {
 }
 
 export function createWorkerPool(): WorkerPool {
-  const slots: PoolWorkerSlot[] = [];
-  const pending: QueuedGradeRequest[] = [];
-  const gradeCache = createGradeCache();
-  let spawned = false;
-  /**
-   * Phase 213-08 (G-213-35): true from the moment `ensureSpawned()` starts
-   * until the construction loop (the `ensureStockfishWorkerUrl()`
-   * continuation) has run. While true, `grade()`'s first zero-slot guard
-   * must NOT short-circuit — a request arriving during this window is
-   * queued and dispatched once slots appear, never resolved empty.
-   */
-  let spawnInFlight = false;
-  /**
-   * Phase 213-08: bumped by `terminate()` and captured by `ensureSpawned()`
-   * before its `ensureStockfishWorkerUrl()` await — a spawn continuation
-   * that resolves after a `terminate()` ran mid-fetch compares its captured
-   * generation against the current one and constructs nothing if they no
-   * longer match. Prevents a late continuation from pushing slots into a
-   * pool the caller already tore down.
-   */
-  let spawnGeneration = 0;
-  /**
-   * Phase 213-08: the shared `.wasm` URL once `ensureStockfishWorkerUrl()`
-   * resolves (or `null` on the degraded/failed path) — set once by the
-   * initial spawn's continuation and reused by every later
-   * `replaceDeadSlot()` respawn, which must never re-await the shared fetch.
-   */
-  let resolvedSharedUrl: string | null = null;
-  /** Respawns consumed so far — see `MAX_SLOT_RESPAWNS`. */
-  let slotRespawns = 0;
-  /** Phase 213 D-01: true once ANY slot has completed its UCI init handshake. Reset by `terminate()`. */
-  let poolReady = false;
-  /**
-   * CR-01 (213-REVIEW.md): true once the pool has been marked irrecoverably
-   * dead by `markPoolFailed()` (with no `readyok` ever having landed). Lets a
-   * `whenReady()` call arriving AFTER that point (e.g. `warm()` triggered the
-   * failure earlier, before any consumer awaited readiness) reject
-   * immediately instead of registering a waiter nothing will ever settle —
-   * `ensureSpawned()` is a no-op once `spawned` is already true, so without
-   * this flag `markPoolFailed()`'s own reject-on-fire is the ONLY chance a
-   * late `whenReady()` caller would ever get. Reset by `terminate()`.
-   */
-  let poolFailed = false;
-  /** Callers awaiting `whenReady()` before the first slot has reported `readyok`. */
-  const poolReadyWaiters: (() => void)[] = [];
-  /**
-   * CR-01 (213-REVIEW.md): callers awaiting `whenReady()` to be REJECTED once
-   * the pool can never dispatch another request — settled by `markPoolFailed()`
-   * below, the same moment `markEngineAssetFailed('stockfish-wasm')` fires.
-   * Parallel array to `poolReadyWaiters`, same index per pending `whenReady()`
-   * call (both pushed together in `whenReady()`).
-   */
-  const poolReadyRejecters: ((err: Error) => void)[] = [];
+  const state: PoolState = {
+    slots: [],
+    pending: [],
+    gradeCache: createGradeCache(),
+    spawned: false,
+    /**
+     * Phase 213-08 (G-213-35): true from the moment `ensureSpawned()` starts
+     * until the construction loop (the `ensureStockfishWorkerUrl()`
+     * continuation) has run. While true, `grade()`'s first zero-slot guard
+     * must NOT short-circuit — a request arriving during this window is
+     * queued and dispatched once slots appear, never resolved empty.
+     */
+    spawnInFlight: false,
+    /**
+     * Phase 213-08: bumped by `terminate()` and captured by `ensureSpawned()`
+     * before its `ensureStockfishWorkerUrl()` await — a spawn continuation
+     * that resolves after a `terminate()` ran mid-fetch compares its captured
+     * generation against the current one and constructs nothing if they no
+     * longer match. Prevents a late continuation from pushing slots into a
+     * pool the caller already tore down.
+     */
+    spawnGeneration: 0,
+    /**
+     * Phase 213-08: the shared `.wasm` URL once `ensureStockfishWorkerUrl()`
+     * resolves (or `null` on the degraded/failed path) — set once by the
+     * initial spawn's continuation and reused by every later
+     * `replaceDeadSlot()` respawn, which must never re-await the shared fetch.
+     */
+    resolvedSharedUrl: null,
+    /** Respawns consumed so far — see `MAX_SLOT_RESPAWNS`. */
+    slotRespawns: 0,
+    /** Phase 213 D-01: true once ANY slot has completed its UCI init handshake. Reset by `terminate()`. */
+    poolReady: false,
+    /**
+     * CR-01 (213-REVIEW.md): true once the pool has been marked irrecoverably
+     * dead by `markPoolFailed()` (with no `readyok` ever having landed). Lets a
+     * `whenReady()` call arriving AFTER that point (e.g. `warm()` triggered the
+     * failure earlier, before any consumer awaited readiness) reject
+     * immediately instead of registering a waiter nothing will ever settle —
+     * `ensureSpawned()` is a no-op once `spawned` is already true, so without
+     * this flag `markPoolFailed()`'s own reject-on-fire is the ONLY chance a
+     * late `whenReady()` caller would ever get. Reset by `terminate()`.
+     */
+    poolFailed: false,
+    /** Callers awaiting `whenReady()` before the first slot has reported `readyok`. */
+    poolReadyWaiters: [],
+    /**
+     * CR-01 (213-REVIEW.md): callers awaiting `whenReady()` to be REJECTED once
+     * the pool can never dispatch another request — settled by `markPoolFailed()`
+     * below, the same moment `markEngineAssetFailed('stockfish-wasm')` fires.
+     * Parallel array to `poolReadyWaiters`, same index per pending `whenReady()`
+     * call (both pushed together in `whenReady()`).
+     */
+    poolReadyRejecters: [],
+  };
 
   /**
    * Phase 213 D-01: the single place both `whenReady()`'s promise and the
@@ -655,10 +410,10 @@ export function createWorkerPool(): WorkerPool {
    * `readyok` branch calls this on every slot's readyok, not just the first).
    */
   function markPoolReady(): void {
-    if (poolReady) return;
-    poolReady = true;
-    const waiters = poolReadyWaiters.splice(0, poolReadyWaiters.length);
-    poolReadyRejecters.length = 0; // the promise is settling via resolve(); these are now moot
+    if (state.poolReady) return;
+    state.poolReady = true;
+    const waiters = state.poolReadyWaiters.splice(0, state.poolReadyWaiters.length);
+    state.poolReadyRejecters.length = 0; // the promise is settling via resolve(); these are now moot
     for (const resolve of waiters) resolve();
     markEngineAssetReady('stockfish-wasm');
   }
@@ -679,737 +434,99 @@ export function createWorkerPool(): WorkerPool {
    * already-settled `whenReady()` promise.
    */
   function markPoolFailed(): void {
-    poolFailed = true;
+    state.poolFailed = true;
     markEngineAssetFailed('stockfish-wasm');
-    const rejecters = poolReadyRejecters.splice(0, poolReadyRejecters.length);
-    poolReadyWaiters.length = 0; // paired resolvers for the same promises — now moot
+    const rejecters = state.poolReadyRejecters.splice(0, state.poolReadyRejecters.length);
+    state.poolReadyWaiters.length = 0; // paired resolvers for the same promises — now moot
     for (const reject of rejecters) {
       reject(new Error('Stockfish worker pool: failed to become ready'));
     }
   }
 
-  /** Clear a slot's in-flight watchdog timer, if any. Idempotent. Extracted so the call sites that take a slot out of `thinking` cannot drift apart — bestmove, abort, `stopAll`, `terminate`, `onerror`, and the defensive clear in `sendGo`. */
+  // ─── Watchdog stage delegation (Phase 215-02) ────────────────────────────
+  //
+  // The seven watchdog functions themselves (fault detection for a hung
+  // grading `go`, a hung `stop`, and a hung replacement-slot init handshake)
+  // now live in `workerPoolWatchdog.ts` — see that file for the full
+  // implementation and doc comments. These four thin wrappers exist so every
+  // pre-existing call site below (`clearSlotWatchdog(slot)`,
+  // `armStopWatchdog(slot)`, `armInitWatchdog(slot)`, and the `fireWatchdog`
+  // reference `sendGo` arms directly) keeps reading exactly as it did before
+  // the split — each just forwards this pool's own `state`/`ops` through to
+  // the extracted implementation. `rearmGradingWatchdog` and
+  // `fireStopWatchdog`/`fireInitWatchdog` have no remaining call site in this
+  // file (they are only ever invoked from within `workerPoolWatchdog.ts`
+  // itself), so they are wired directly into `ops` below without a local
+  // wrapper.
   function clearSlotWatchdog(slot: PoolWorkerSlot): void {
-    if (slot.watchdogTimer !== null) {
-      clearTimeout(slot.watchdogTimer);
-      slot.watchdogTimer = null;
-    }
+    wdClearSlotWatchdog(state, ops, slot);
   }
 
-  /**
-   * Re-arm a slot's grading watchdog for another full
-   * `GRADING_WATCHDOG_TIMEOUT_MS` window, leaving its request untouched.
-   * Extracted for the same reason as `clearSlotWatchdog`: both of
-   * `fireWatchdog`'s false-positive branches must re-stamp `armedAtMs` and
-   * the timer together, or the next fire mis-measures its own elapsed time.
-   */
-  function rearmGradingWatchdog(slot: PoolWorkerSlot, nowMs: number): void {
-    slot.armedAtMs = nowMs;
-    slot.watchdogTimer = setTimeout(() => fireWatchdog(slot), GRADING_WATCHDOG_TIMEOUT_MS);
-  }
-
-  /**
-   * D-06: fires when a slot's `sendGo` never produced a `bestmove` within
-   * `GRADING_WATCHDOG_TIMEOUT_MS` — a genuinely hung/wedged worker, not a
-   * merely slow position. Two false-positive gates run first and re-arm
-   * instead of killing (FLAWCHESS-9G): a fire far past its deadline is page
-   * suspension, and a fire from a slot still emitting `info` is a slow or
-   * CPU-starved search. Only a slot that is both on-time and silent falls
-   * through. Past the gates it is treated as a worker fault, mirroring `onerror`
-   * exactly (reusing `dead` rather than inventing a new lifecycle state is
-   * deliberate: a 60s grading `go` with no `bestmove` is not recoverable on
-   * THAT worker, `dispatchNext` already skips non-`isReady` slots, and
-   * `onerror` already proves this exact degradation path). The slot is not
-   * lost with it — `replaceDeadSlot` spawns a fresh worker into its place.
-   */
-  function fireWatchdog(slot: PoolWorkerSlot): void {
-    slot.watchdogTimer = null;
-
-    // Bug fix (FLAWCHESS-9G): 4 production events over 20 days, 3 of 4 on
-    // mobile browsers, all on /analysis — a backgrounded/suspended tab
-    // freezes its workers along with the page, so the elapsed `setTimeout`
-    // fires immediately on resume even though the worker never ran and is
-    // not actually wedged. Treating that as a fault is a false positive that
-    // costs a needless worker respawn (before `replaceDeadSlot` existed it
-    // permanently shrank the pool for the rest of the session, and it still
-    // spends `MAX_SLOT_RESPAWNS` budget). A fire this
-    // far past deadline is attributed to suspension instead and silently
-    // re-armed (bounded by `MAX_WATCHDOG_SUSPEND_REARMS` so a genuinely
-    // wedged worker on a repeatedly suspended page still reaches the kill
-    // path below). Non-goal: `fireStopWatchdog`/`armStopWatchdog` are
-    // deliberately left unchanged — a slot in `'stopping'` has already been
-    // sent `stop` and its request is being abandoned, and no production
-    // Sentry event points at that path. `clearSlotWatchdog` is untouched.
-    const nowMs = Date.now();
-    const elapsedMs = nowMs - slot.armedAtMs;
-    const sinceLastInfoMs = slot.lastInfoAtMs === 0 ? null : nowMs - slot.lastInfoAtMs;
-    if (
-      elapsedMs > GRADING_WATCHDOG_TIMEOUT_MS * GRADING_WATCHDOG_SUSPEND_FACTOR &&
-      slot.watchdogSuspendRearms < MAX_WATCHDOG_SUSPEND_REARMS
-    ) {
-      slot.watchdogSuspendRearms++;
-      rearmGradingWatchdog(slot, nowMs);
-      return;
-    }
-
-    // Bug fix (FLAWCHESS-9G, second pass): the suspension check above reads
-    // HOST wall clock, which says nothing about whether the WORKER got CPU —
-    // it only catches a deep freeze (a fire >90s past deadline). It missed
-    // the desktop-Chrome event that reopened this issue, and by construction
-    // it cannot catch either remaining false-positive shape: a moderately
-    // throttled background tab (timer fires ~62s, worker never stopped
-    // running) or a genuinely slow `go depth N` under CPU contention (D-05
-    // removed the wall-clock bound, so a sharp position on a loaded machine
-    // may legitimately outlast 60s with 2-4 WASM workers and Maia competing).
-    // Both leave the fingerprint a real fault does not: a live `info` stream.
-    // Re-arm on that instead — bounded by `MAX_WATCHDOG_LIVENESS_REARMS`, so
-    // a worker that natters on forever without ever reaching `bestmove` still
-    // reaches the kill path below.
-    if (
-      sinceLastInfoMs !== null &&
-      sinceLastInfoMs < GRADING_WATCHDOG_LIVENESS_MS &&
-      slot.watchdogLivenessRearms < MAX_WATCHDOG_LIVENESS_REARMS
-    ) {
-      slot.watchdogLivenessRearms++;
-      rearmGradingWatchdog(slot, nowMs);
-      return;
-    }
-
-    // Best-effort: ask the worker to stop. It may never respond — that's
-    // exactly why this fired — so this is not awaited or relied upon.
-    slot.worker.postMessage('stop');
-    // FLAWCHESS-9G (second pass): the original capture carried only the
-    // `source` tag, so a fire could not be attributed to any of its three
-    // causes (wedged worker / throttled tab / slow search) after the fact —
-    // which is exactly why the one post-fix production event could not be
-    // classified. Everything needed to tell them apart rides in a context,
-    // never in the message: an interpolated value would fragment Sentry
-    // grouping (CLAUDE.md). `otherLiveSlots` excludes this slot, which is
-    // marked dead immediately below.
-    Sentry.captureException(new Error('Stockfish worker pool: grading watchdog timeout'), {
-      tags: { source: 'stockfish-worker-pool' },
-      contexts: {
-        stockfishWatchdog: {
-          elapsedMs,
-          sinceLastInfoMs,
-          suspendRearms: slot.watchdogSuspendRearms,
-          livenessRearms: slot.watchdogLivenessRearms,
-          gradingDepth: slot.current?.gradingDepth ?? null,
-          candidateCount: slot.current?.candidateUcis.length ?? null,
-          gradesAccumulated: slot.accumulator.size,
-          visibilityState: document.visibilityState,
-          poolSize: slots.length,
-          otherLiveSlots: slots.filter((other) => other !== slot && !other.dead).length,
-          slotRespawns,
-        },
-      },
-    });
-    slot.isReady = false;
-    slot.dead = true;
-    // Settle with a NEW empty Map — never `slot.accumulator`. A watchdog fire
-    // means no terminal `bestmove` arrived within the bound; resolving with
-    // whatever `info` lines happened to accumulate first would be the same
-    // wall-clock-dependent truncation removing `GRADING_MOVETIME_SAFETY_CAP_MS`
-    // exists to eliminate, only rarer and harder to reproduce (D-06).
-    slot.current?.resolve(new Map());
-    slot.current = null;
-    replaceDeadSlot(slot);
-  }
-
-  /**
-   * Bug fix (quick 260731-s0z, FIX-4): arm the stop-bestmove watchdog on a
-   * slot we just sent `stop` to, in place of a bare `clearSlotWatchdog`.
-   * Reuses `watchdogTimer` rather than adding a second field — the two
-   * bounds (`GRADING_WATCHDOG_TIMEOUT_MS` for a "go" that never answers,
-   * `STOP_BESTMOVE_WATCHDOG_TIMEOUT_MS` for a "stop" that never answers) are
-   * mutually exclusive by slot state, and every existing exit path already
-   * clears that one field.
-   */
   function armStopWatchdog(slot: PoolWorkerSlot): void {
-    clearSlotWatchdog(slot);
-    slot.watchdogTimer = setTimeout(() => fireStopWatchdog(slot), STOP_BESTMOVE_WATCHDOG_TIMEOUT_MS);
+    wdArmStopWatchdog(state, ops, slot);
   }
 
-  /**
-   * Bug fix (quick 260731-s0z, FIX-4): fires when a slot we sent `stop` to
-   * never produces the terminating `bestmove` within
-   * `STOP_BESTMOVE_WATCHDOG_TIMEOUT_MS` — the slot was left parked in
-   * `'stopping'` forever, permanently lost but never marked `dead`, so it
-   * also blinded `noLiveSlotRemains()`. Deliberately mirrors `fireWatchdog`
-   * rather than sharing a body: the two differ in whether a `stop` still
-   * needs sending (it doesn't here — we already sent one) and in the Sentry
-   * message; reusing `dead` (instead of a new lifecycle state) is the same
-   * choice D-06 already made for `fireWatchdog`. `slot.stopPending` is left
-   * alone here — `dead` is the dispatch gate, and a late `bestmove` on a
-   * dead slot is already harmless (handleLine's stopPending branch would
-   * just no-op it).
-   */
-  function fireStopWatchdog(slot: PoolWorkerSlot): void {
-    slot.watchdogTimer = null;
-    // STATIC message — no interpolated FEN/UCI (CLAUDE.md Sentry grouping rule).
-    Sentry.captureException(new Error('Stockfish worker pool: stop-bestmove watchdog timeout'), {
-      tags: { source: 'stockfish-worker-pool' },
-    });
-    slot.isReady = false;
-    slot.dead = true;
-    slot.current?.resolve(new Map());
-    slot.current = null;
-    replaceDeadSlot(slot);
-  }
-
-  function sendGo(slot: PoolWorkerSlot, req: QueuedGradeRequest): void {
-    slot.current = req;
-    slot.accumulator = new Map();
-    slot.worker.postMessage(`setoption name MultiPV value ${req.candidateUcis.length}`);
-    slot.worker.postMessage(`position fen ${req.fen}`);
-    slot.worker.postMessage(buildGradeGoCommand(req.gradingDepth, req.candidateUcis));
-    slot.state = 'thinking';
-    clearSlotWatchdog(slot); // defensive: a stale timer must never coexist with a fresh dispatch
-    // FLAWCHESS-9G: a fresh dispatch is the only place the re-arm counters
-    // reset — each grading request gets its own budget for both causes — and
-    // the only place `lastInfoAtMs` clears, so liveness is always measured
-    // against THIS dispatch's output, never the previous request's. That last
-    // reset is DEFENSIVE only while `GRADING_WATCHDOG_LIVENESS_MS <
-    // GRADING_WATCHDOG_TIMEOUT_MS` holds (a carried-over stamp is then always
-    // at least a full watchdog window stale, so it could never vouch for this
-    // dispatch anyway); raising the liveness window past the timeout makes it
-    // load-bearing, and a unit test pins that ordering as the tripwire.
-    slot.armedAtMs = Date.now();
-    slot.watchdogSuspendRearms = 0;
-    slot.watchdogLivenessRearms = 0;
-    slot.lastInfoAtMs = 0;
-    slot.watchdogTimer = setTimeout(() => fireWatchdog(slot), GRADING_WATCHDOG_TIMEOUT_MS);
-  }
-
-  /** Assign as many pending requests as there are free (idle, ready) slots. */
-  function dispatchNext(): void {
-    for (const slot of slots) {
-      if (pending.length === 0) return;
-      if (slot.state !== 'idle' || !slot.isReady || slot.current !== null) continue;
-      const req = dequeueHighestPriority(pending);
-      if (!req) return;
-      sendGo(slot, req);
-    }
-  }
-
-  /** Handle one UCI line emitted by a pool worker (per-slot line handler). */
-  function handleLine(slot: PoolWorkerSlot, line: string): void {
-    if (line === 'uciok') {
-      // Cap Hash low (Pitfall 1) — shallow searchmoves-restricted grading
-      // gains nothing from a large hash table, and N workers at default
-      // settings multiplies mobile memory pressure for no search-quality gain.
-      slot.worker.postMessage(`setoption name Hash value ${WORKER_HASH_MB}`);
-      slot.worker.postMessage('isready');
-      return;
-    }
-
-    if (line === 'readyok') {
-      clearSlotWatchdog(slot); // disarms a replacement slot's init watchdog, if one is armed
-      slot.isReady = true;
-      markPoolReady();
-      dispatchNext();
-      return;
-    }
-
-    if (line.startsWith('info ')) {
-      if (slot.state !== 'thinking' || slot.stopPending || slot.current === null) return;
-      // FLAWCHESS-9G (second pass): stamp liveness BEFORE the parse filters
-      // below. A worker grinding through a hard position emits plenty of
-      // lines this branch goes on to discard (`currmove` reports carry no
-      // score; lower/upperbound scores are not `exact`) — every one of them
-      // is proof the worker is running, which is all `fireWatchdog` needs.
-      slot.lastInfoAtMs = Date.now();
-      const parsed = parseInfoLine(line);
-      if (parsed === null || parsed.bound !== 'exact') return;
-      const uci = parsed.pv[0];
-      if (uci === undefined) return;
-
-      const whitePovSign = sideToMove(slot.current.fen) === 'b' ? -1 : 1;
-      const toWhitePov = (v: number | null): number | null => (v === null ? null : v * whitePovSign);
-
-      // Never key by the info line's raw multipv rank field (it reorders
-      // across depths) — key by pv[0], the move itself (SC5).
-      slot.accumulator.set(uci, {
-        evalCp: toWhitePov(parsed.scoreCp),
-        evalMate: toWhitePov(parsed.scoreMate),
-        depth: parsed.depth,
-      });
-      return;
-    }
-
-    if (line.startsWith('bestmove')) {
-      const req = slot.current;
-      if (slot.stopPending) {
-        // Stale bestmove — the terminal response to our own `stop`. Discard
-        // (FLAWCHESS-7V guard); the request was already settled elsewhere
-        // (abort path, D-06 watchdog fire) or will be re-dispatched.
-        // This clear is also (quick 260731-s0z, FIX-4) the disarm point for
-        // the re-armed stop-bestmove watchdog on the healthy path — a
-        // `bestmove` landing before STOP_BESTMOVE_WATCHDOG_TIMEOUT_MS clears
-        // it here before it can fire.
-        clearSlotWatchdog(slot);
-        slot.stopPending = false;
-        slot.state = 'idle';
-        slot.current = null;
-        dispatchNext();
-        return;
-      }
-
-      clearSlotWatchdog(slot);
-      slot.state = 'idle';
-      slot.current = null;
-      if (req) {
-        // This `bestmove` branch is the ONLY caller of gradeCache.write — the
-        // abort path, stopAll, terminate, and onerror all settle without
-        // writing, which is precisely what keeps a partial grade out of the
-        // cache. Do not "helpfully" add a write to one of those settle paths.
-        gradeCache.write(req.fen, req.gradingDepth, slot.accumulator);
-        req.resolve(slot.accumulator);
-      }
-      dispatchNext();
-    }
-  }
-
-  /** True once every slot currently in the pool is dead — no worker will service a request until one is replaced. */
-  function noLiveSlotRemains(): boolean {
-    return slots.length > 0 && slots.every((slot) => slot.dead);
-  }
-
-  /**
-   * Bound a REPLACEMENT slot's init handshake (see `INIT_WATCHDOG_TIMEOUT_MS`).
-   * Reuses `watchdogTimer`: a slot in init is neither `thinking` nor
-   * `stopping`, so the field is free, and the `readyok` branch of `handleLine`
-   * disarms it — the same field-sharing argument FIX-4 made for the
-   * stop-bestmove bound.
-   */
   function armInitWatchdog(slot: PoolWorkerSlot): void {
-    slot.armedAtMs = Date.now();
-    slot.watchdogTimer = setTimeout(() => fireInitWatchdog(slot), INIT_WATCHDOG_TIMEOUT_MS);
+    wdArmInitWatchdog(state, ops, slot);
   }
 
-  /** A replacement worker never finished its UCI handshake — treat it as any other slot death. */
-  function fireInitWatchdog(slot: PoolWorkerSlot): void {
-    slot.watchdogTimer = null;
-    // STATIC message — no interpolated data (CLAUDE.md Sentry grouping rule).
-    Sentry.captureException(new Error('Stockfish worker pool: replacement worker init timeout'), {
-      tags: { source: 'stockfish-worker-pool' },
-    });
-    slot.isReady = false;
-    slot.dead = true;
-    replaceDeadSlot(slot);
+  // ─── Dispatch stage delegation (Phase 215-02) ────────────────────────────
+  //
+  // `sendGo`/`dispatchNext`/`handleLine`/`grade` themselves — the request
+  // dispatcher, the UCI message parser (`handleLine`, the wire-protocol
+  // interpreter and highest-risk function in the phase), and the public
+  // `grade()` entry point — now live in `workerPoolDispatch.ts`. These two
+  // thin wrappers keep every pre-existing call site in this file
+  // (`dispatchNext()` from `replaceDeadSlot`/`runSpawnConstructionLoop`,
+  // `handleLine(slot, line)` from `createSlot`'s `worker.onmessage`) reading
+  // exactly as before. `sendGo` has no remaining call site in this file (its
+  // only caller, `dispatchNext`, moved with it), so it is not re-wrapped
+  // here.
+  function dispatchNext(): void {
+    dispatchDispatchNext(state, ops);
   }
 
-  /**
-   * Replace a slot whose worker has permanently failed, so one fault costs a
-   * worker rather than a slot for the rest of the page visit (see
-   * `MAX_SLOT_RESPAWNS`). Called by every death path — `worker.onerror`,
-   * `fireWatchdog`, `fireStopWatchdog` — AFTER each has settled the slot's
-   * in-flight request and marked it `dead`.
-   *
-   * Replaces the three call sites' former `if (noLiveSlotRemains()) drainPending()`
-   * and keeps that guarantee: pending requests are still drained when no live
-   * slot is left, which now means the respawn failed or the budget is spent. A
-   * successful respawn deliberately does NOT drain — the fresh worker will
-   * service the queue once its `readyok` lands.
-   *
-   * Two details that are load-bearing rather than defensive:
-   *  - The dead worker is TERMINATED, not just dropped. `fireWatchdog` fires on
-   *    a wedged-but-alive worker, which would otherwise keep its Stockfish heap
-   *    and whatever it is chewing on for the rest of the visit.
-   *  - Its handlers are detached FIRST. A wedged worker can still emit a late
-   *    line or error, and that must not reach a slot no longer in the pool —
-   *    `handleLine` would flip `isReady` on an orphan, and a late `onerror`
-   *    would spend respawn budget on a slot already replaced.
-   */
-  function replaceDeadSlot(slot: PoolWorkerSlot): void {
-    const idx = slots.indexOf(slot);
-    if (idx === -1) return; // already replaced, or the pool was terminated under us
-    clearSlotWatchdog(slot);
-    slot.worker.onmessage = null;
-    slot.worker.onerror = null;
-    slot.worker.terminate();
-
-    if (slotRespawns >= MAX_SLOT_RESPAWNS) {
-      slots.splice(idx, 1);
-    } else {
-      slotRespawns++;
-      try {
-        // Phase 213-08: reuses the ALREADY-RESOLVED shared URL from the
-        // initial spawn — a slot death must never re-trigger (or wait on)
-        // the shared fetch.
-        const fresh = createSlot(resolvedSharedUrl);
-        slots[idx] = fresh;
-        armInitWatchdog(fresh);
-      } catch (err) {
-        // Same graceful-degradation floor as `ensureSpawned` (Pitfall 1): a
-        // Worker constructor that throws leaves a smaller live pool, never an
-        // exception escaping a death handler.
-        Sentry.captureException(err instanceof Error ? err : new Error(String(err)), {
-          tags: { source: 'stockfish-worker-pool' },
-        });
-        slots.splice(idx, 1);
-      }
-    }
-
-    // `noLiveSlotRemains()` is false for an EMPTY pool (it requires
-    // `slots.length > 0`), so the emptiness case has to be tested separately —
-    // otherwise splicing out the last slot would skip the drain and hang every
-    // queued request.
-    if (slots.length === 0 || noLiveSlotRemains()) {
-      // CR-01 (213-REVIEW.md): every constructed slot has died and none can be
-      // replaced (respawn budget spent, or replacement construction also
-      // failed) — the pool can never dispatch another request. Without this,
-      // `stockfish-wasm` never reaches `done: true` NOR `'failed'` in the
-      // shared asset store, so `EngineReadyGate`'s Start button stays
-      // disabled forever with no Retry affordance.
-      markPoolFailed();
-      drainPending();
-      return;
-    }
-    // A sibling may have been idle while this slot held the queue up.
-    dispatchNext();
+  function handleLine(slot: PoolWorkerSlot, line: string): void {
+    dispatchHandleLine(state, ops, slot, line);
   }
 
-  /** Resolve (empty) every still-pending request — nothing will ever dispatch them. */
-  function drainPending(): void {
-    while (pending.length > 0) {
-      const req = pending.pop();
-      req?.resolve(new Map());
-    }
-  }
+  // ─── Lifecycle stage delegation (Phase 215-02) ───────────────────────────
+  //
+  // `replaceDeadSlot`/`drainPending`/`createSlot`/`runSpawnConstructionLoop`/
+  // `ensureSpawned`/`stopAll`/`terminate`/`warm` themselves — spawn/respawn/
+  // death and the three public teardown/prewarm entry points — now live in
+  // `workerPoolLifecycle.ts`. None of them has a remaining direct call site
+  // in this file: every reference below goes through `ops` (for the
+  // dispatch-table fields) or a same-signature local wrapper (for `stopAll`/
+  // `terminate`/`warm`, which the returned `WorkerPool` object still
+  // references by shorthand). `whenReady()`'s own `ensureSpawned()` call
+  // becomes `ops.ensureSpawned()` below for the same reason.
 
-  /**
-   * Phase 213-08 (G-213-35): `sharedUrl` is the ALREADY-RESOLVED shared
-   * `.wasm` URL (or `null` on the degraded direct-construction path) — this
-   * function never awaits `ensureStockfishWorkerUrl()` itself. The initial
-   * spawn resolves it once in `ensureSpawned()`'s continuation and passes it
-   * through; `replaceDeadSlot()` reuses the same already-resolved
-   * `resolvedSharedUrl` closure variable for every later respawn, so a slot
-   * death never re-triggers (or waits on) the shared fetch.
-   */
-  function createSlot(sharedUrl: string | null): PoolWorkerSlot {
-    const worker = createStockfishWorker(sharedUrl);
-
-    // Phase 213 D-01/T-213-01/T-213-07: wire the vendored glue's own,
-    // already-shipped `progressPort` protocol (213-RESEARCH.md Pattern 2) —
-    // this is wiring, not an owned fetch. The glue
-    // (`stockfish-18-lite-single.js`) already streams the `.wasm` internally
-    // against a hardcoded raw byte total; an app-side fetch of the same URL
-    // would download 7.3 MB twice (213-RESEARCH.md Pitfall 4). Do not edit
-    // the vendored file. Feature-detect `MessageChannel` (some environments,
-    // and possibly a bare jsdom test env, may lack it) and skip the wiring
-    // rather than throwing out of createSlot() — a missing progress bar must
-    // never break engine spawn (T-213-07); the try/catch around this whole
-    // function call in `ensureSpawned()`/`replaceDeadSlot()` remains the
-    // graceful-degradation floor for everything else in this function.
-    if (typeof MessageChannel !== 'undefined') {
-      const { port1, port2 } = new MessageChannel();
-      port1.onmessage = (e: MessageEvent<{ loaded: number; total: number }>) => {
-        // T-213-01: discard the glue's own `percent`/`speedBytesPerSec`/
-        // `etaText` entirely and re-derive percent in the store, so Maia and
-        // Stockfish share one clamping/coercion path. `total` is a hardcoded
-        // constant in the glue today but the app must not assume that: the
-        // store's own coercion falls back to STOCKFISH_WASM_BYTES_FALLBACK
-        // when `total` is missing or non-positive.
-        const { loaded, total } = e.data;
-        reportEngineAssetProgress('stockfish-wasm', loaded, total);
-      };
-      worker.postMessage({ progressPort: port2 }, [port2]);
-    }
-
-    const slot: PoolWorkerSlot = {
-      worker,
-      state: 'idle',
-      stopPending: false,
-      isReady: false,
-      dead: false,
-      current: null,
-      accumulator: new Map(),
-      watchdogTimer: null,
-      armedAtMs: 0,
-      watchdogSuspendRearms: 0,
-      lastInfoAtMs: 0,
-      watchdogLivenessRearms: 0,
-    };
-    worker.onmessage = (e: MessageEvent<string>) => handleLine(slot, e.data);
-    // WR-03/WR-04: an async script-load failure (404, CSP block, syntax
-    // error) never throws a catchable JS exception on the main thread — it
-    // only surfaces here. Without this handler such a failure is completely
-    // silent and any in-flight/future request on this slot hangs forever.
-    worker.onerror = () => {
-      Sentry.captureException(new Error('Stockfish worker pool: worker load failure'), {
-        tags: { source: 'stockfish-worker-pool' },
-      });
-      // 195-06 review WR-01: this path settles the in-flight request but used
-      // to leave the D-06 watchdog armed — the only one of the exit paths that
-      // did. The stale 60s timer would later fire on an already-dead slot and
-      // report a second, misleading "grading watchdog timeout" to Sentry for a
-      // failure that was already correctly reported here.
-      clearSlotWatchdog(slot);
-      slot.isReady = false;
-      slot.dead = true;
-      slot.current?.resolve(new Map());
-      slot.current = null;
-      replaceDeadSlot(slot);
-    };
-    worker.postMessage('uci');
-    return slot;
-  }
-
-  /**
-   * Phase 213-08 (G-213-35): the construction loop, run once the shared
-   * `.wasm` URL has settled (either resolved or, via the defensive `.catch`
-   * below, treated as `null`). Verbatim continuation of the pre-Phase-213-08
-   * synchronous loop: same per-slot try/catch so a throwing constructor
-   * keeps the smaller live pool (Pitfall 1), same `markPoolFailed()` when
-   * the loop produced zero slots (CR-01) — plus `drainPending()` on that
-   * zero-slot path and `dispatchNext()` on the success path, because
-   * requests may have queued up while the fetch was in flight.
-   */
-  function runSpawnConstructionLoop(sharedUrl: string | null): void {
-    resolvedSharedUrl = sharedUrl;
-    const size = computePoolSize();
-    for (let i = 0; i < size; i++) {
-      // Graceful-degradation floor (Pitfall 1): if a worker fails to
-      // construct, keep whatever slots already succeeded and carry on with
-      // a smaller live pool rather than throwing out of grade().
-      try {
-        slots.push(createSlot(sharedUrl));
-      } catch (err) {
-        Sentry.captureException(err instanceof Error ? err : new Error(String(err)), {
-          tags: { source: 'stockfish-worker-pool' },
-        });
-        continue;
-      }
-    }
-    spawnInFlight = false;
-    if (slots.length === 0) {
-      // CR-01 (213-REVIEW.md): every construction attempt threw — no slot
-      // will ever report `readyok`, so nothing will dispatch a request and
-      // `whenReady()` would hang forever without this (mirrors
-      // `replaceDeadSlot()`'s equivalent guard below). Phase 213-08: also
-      // drains every request that queued up during the (now-finished) spawn
-      // window — `grade()`'s in-flight guard let them enqueue instead of
-      // resolving empty immediately, so this is where they finally settle.
-      markPoolFailed();
-      drainPending();
-    } else {
-      // Phase 213-08: a sibling may have queued requests while spawning.
-      dispatchNext();
-    }
-  }
-
-  function ensureSpawned(): void {
-    if (spawned) return;
-    spawned = true;
-    // CR-02 (213-REVIEW.md): register 'stockfish-wasm' as in-flight BEFORE
-    // any slot's async progress/ready message can arrive, so a concurrently
-    // spawning, still-downloading 'maia-model' can never be silently absent
-    // from `markEngineAssetReady`'s readiness check (see
-    // `markEngineAssetPending`'s doc comment for the full race). Still
-    // synchronous — Phase 213-08 only defers the WORKER CONSTRUCTION loop
-    // below, not this registration.
-    markEngineAssetPending('stockfish-wasm');
-    spawnInFlight = true;
-    // Captured BEFORE the await: a `terminate()` that runs while this fetch
-    // is in flight bumps `spawnGeneration`, and the continuation below
-    // compares against the (possibly stale) captured value to know its own
-    // spawn was invalidated.
-    const myGeneration = spawnGeneration;
-    ensureStockfishWorkerUrl()
-      .then((sharedUrl) => {
-        if (myGeneration !== spawnGeneration) return; // terminate() ran mid-fetch — construct nothing
-        runSpawnConstructionLoop(sharedUrl);
-      })
-      .catch(() => {
-        // Belt-and-braces (T-213-07): `ensureStockfishWorkerUrl()` is
-        // documented to NEVER reject — every failure mode resolves `null`
-        // instead. This defensive `.catch` exists only so a queued grade()
-        // can never hang if that guarantee ever stops holding; it runs the
-        // exact same construction loop with a null URL, degrading to
-        // today's direct construction.
-        if (myGeneration !== spawnGeneration) return;
-        runSpawnConstructionLoop(null);
-      });
-  }
-
+  // Delegates to the dispatch stage (Phase 215-02) — see
+  // `workerPoolDispatch.ts` for the full implementation. A local wrapper
+  // (rather than an inline arrow in the `ops`/return object) keeps this
+  // matching the original top-level `function grade(...)` declaration so the
+  // returned object's `grade,` shorthand below is unchanged.
   function grade(
     fen: string,
     candidateUcis: string[],
     signal?: AbortSignal,
     gradingDepth?: number,
   ): Promise<Map<string, MoveGrade>> {
-    const resolvedGradingDepth = gradingDepth ?? GRADING_ROOT_DEPTH;
-    // WR-05: an empty searchmoves list would make Stockfish search ALL moves
-    // and burn its full movetime budget on the public EngineProviders.grade
-    // surface — fail fast before spawning anything.
-    if (candidateUcis.length === 0) return Promise.resolve(new Map());
-    // WR-01: a listener added via signal.addEventListener('abort', ...) below
-    // never fires for a signal that is ALREADY aborted at call time — without
-    // this guard the search would run to completion unnecessarily.
-    if (signal?.aborted) return Promise.resolve(new Map());
-
-    // INJECT-05: gradeCache.read() is the shipped read gate — this call site
-    // is now IDENTICAL to what a Node harness sharing one createGradeCache()
-    // instance across a baseline and an injected mctsSearch pass exercises,
-    // so a measured hit rate (via cacheStats()) describes real cache
-    // behavior, not a mirror.
-    const hit = gradeCache.read(fen, candidateUcis, resolvedGradingDepth);
-    if (hit) return Promise.resolve(hit);
-
-    ensureSpawned();
-    // WR-03: if every slot construction attempt threw (0 live slots after the
-    // spawn loop), nothing will ever dispatch a queued request — resolve
-    // empty now rather than enqueuing into a queue nothing will service.
-    // Phase 213-08: gated on `!spawnInFlight` — an empty `slots` array DURING
-    // the shared-fetch/construction window is expected (nothing has been
-    // built yet), not a failure, so this must fall through to the enqueue
-    // path below rather than resolving empty. `spawnInFlight` is false again
-    // once the construction loop has actually run and either built slots or
-    // genuinely produced zero.
-    if (slots.length === 0 && !spawnInFlight) return Promise.resolve(new Map());
-    // Bug fix (quick 260731-s0z, FIX-3): the guard above only covers "no slot
-    // was ever constructed". Once every constructed slot has since died (via
-    // `worker.onerror`, `fireWatchdog`, or FIX-4's `fireStopWatchdog`), a NEW
-    // request enqueued here was reachable and unrecoverable — `dispatchNext`
-    // skips every non-`isReady` slot and `drainPending` only runs at a death
-    // TRANSITION, not for a request queued afterward, so `useBotGame.ts`'s
-    // signal-less `.grade(fen, [uci])` call hung unconditionally.
-    // `noLiveSlotRemains()`'s OWN precondition (`slots.length > 0`) is what
-    // makes this correct during the Phase 213-08 in-flight window too — it is
-    // vacuously `false` for the still-empty `slots` array while a spawn is in
-    // flight, so this guard does not fire before the guard above has settled
-    // that case; it does not rely on the guard above having already
-    // established a non-empty array.
-    if (noLiveSlotRemains()) return Promise.resolve(new Map());
-
-    return new Promise((resolve) => {
-      // Phase 194 code-review WR-02: `{ once: true }` only self-removes the
-      // listener if it FIRES. A request that settles normally would leave its
-      // listener (and the `req` closure it captures) attached for the signal's
-      // whole lifetime — and mctsSearch threads ONE signal through every grade
-      // of a search, so a 400-node analysis search accumulated ~400 of them.
-      // Settle through this wrapper so every exit path detaches.
-      let onAbort: (() => void) | null = null;
-      const settle = (grades: Map<string, MoveGrade>): void => {
-        if (onAbort && signal) signal.removeEventListener('abort', onAbort);
-        onAbort = null;
-        resolve(grades);
-      };
-
-      const req: QueuedGradeRequest = {
-        fen,
-        candidateUcis,
-        priority: 0,
-        depth: 0,
-        gradingDepth: resolvedGradingDepth,
-        resolve: settle,
-      };
-      enqueue(pending, req);
-
-      if (signal) {
-        onAbort = () => {
-          const idx = pending.indexOf(req);
-          if (idx >= 0) {
-            // Unstarted — just drop it from the queue.
-            pending.splice(idx, 1);
-            settle(new Map());
-            return;
-          }
-          // In-flight — send stop; the eventual bestmove is discarded by
-          // the same stopPending/FLAWCHESS-7V guard handleLine already
-          // uses for a superseded search.
-          for (const slot of slots) {
-            if (slot.current === req && slot.state === 'thinking') {
-              // Bug fix (quick 260731-s0z, FIX-4): a bare `clearSlotWatchdog`
-              // here left the slot parked in 'stopping' with no exit if the
-              // worker never answers `stop` with a terminating `bestmove` —
-              // arm the stop-bestmove watchdog instead so a genuinely hung
-              // worker is bounded and marked dead rather than lost silently.
-              armStopWatchdog(slot);
-              slot.worker.postMessage('stop');
-              slot.stopPending = true;
-              slot.state = 'stopping';
-              settle(new Map());
-              return;
-            }
-          }
-        };
-        signal.addEventListener('abort', onAbort, { once: true });
-      }
-
-      dispatchNext();
-    });
+    return dispatchGrade(state, ops, fen, candidateUcis, signal, gradingDepth);
   }
 
   function stopAll(): void {
-    for (const slot of slots) {
-      if (slot.state === 'thinking') {
-        // Bug fix (quick 260731-s0z, FIX-4): same re-arm as the abort path
-        // above — a bare clearSlotWatchdog left a never-answering `stop`
-        // unbounded.
-        armStopWatchdog(slot);
-        slot.worker.postMessage('stop');
-        slot.stopPending = true;
-        slot.state = 'stopping';
-        // CR-01: settle the DISPATCHED in-flight request now — its eventual
-        // bestmove will be discarded by the stopPending/FLAWCHESS-7V guard in
-        // handleLine (which already tolerates slot.current === null), so
-        // nothing will ever resolve this promise otherwise.
-        slot.current?.resolve(new Map());
-        slot.current = null;
-      }
-    }
-    // Resolve (empty) every still-pending request rather than leaving it to
-    // hang forever now that nothing will ever dispatch it.
-    while (pending.length > 0) {
-      const req = pending.pop();
-      req?.resolve(new Map());
-    }
+    lcStopAll(state, ops);
   }
 
   function terminate(): void {
-    for (const slot of slots) {
-      clearSlotWatchdog(slot);
-      slot.worker.postMessage('stop');
-      slot.worker.terminate();
-      // CR-02: worker.terminate() kills the worker outright — no bestmove
-      // will ever arrive to resolve an in-flight request, so settle it here
-      // (mirrors maiaQueue.terminate()'s folding of currentBatch into the
-      // settled set).
-      slot.current?.resolve(new Map());
-      slot.current = null;
-    }
-    while (pending.length > 0) {
-      const req = pending.pop();
-      req?.resolve(new Map());
-    }
-    slots.length = 0;
-    spawned = false;
-    // Phase 213-08 (G-213-35): invalidate any in-flight spawn continuation —
-    // a `terminate()` that lands while `ensureStockfishWorkerUrl()` is still
-    // pending must not let that continuation push slots into this (now torn
-    // down) pool once it finally resolves. `spawnInFlight` is cleared
-    // unconditionally too: even if no spawn was in flight, this keeps the
-    // flag's invariant ("true only between ensureSpawned() starting and its
-    // construction loop finishing") honest across a terminate/re-spawn cycle.
-    spawnGeneration++;
-    spawnInFlight = false;
-    slotRespawns = 0; // a re-spawned pool starts with a fresh respawn budget
-    // Phase 213 T-213-08: settle (never leave hanging) every waiter of a
-    // terminated pool — a re-spawned pool calls markPoolReady() again on its
-    // own first readyok, so a caller awaiting THIS pool's readiness must not
-    // be left dangling across the terminate/re-spawn boundary.
-    poolReady = false;
-    poolFailed = false; // a re-spawned pool gets a fresh chance at readyok
-    const waiters = poolReadyWaiters.splice(0, poolReadyWaiters.length);
-    poolReadyRejecters.length = 0; // paired rejecters for the same (now-resolved) promises
-    for (const resolve of waiters) resolve();
+    lcTerminate(state, ops);
   }
 
   /** Prewarm: spawn the pool without searching. See `WorkerPool.warm()`. */
   function warm(): void {
-    ensureSpawned();
+    lcWarm(state, ops);
   }
 
   /**
@@ -1428,24 +545,46 @@ export function createWorkerPool(): WorkerPool {
    * ever settle.
    */
   function whenReady(): Promise<void> {
-    if (poolReady) return Promise.resolve();
-    if (poolFailed) {
+    if (state.poolReady) return Promise.resolve();
+    if (state.poolFailed) {
       return Promise.reject(new Error('Stockfish worker pool: failed to become ready'));
     }
     return new Promise<void>((resolve, reject) => {
-      poolReadyWaiters.push(resolve);
-      poolReadyRejecters.push(reject);
-      ensureSpawned();
+      state.poolReadyWaiters.push(resolve);
+      state.poolReadyRejecters.push(reject);
+      ops.ensureSpawned();
     });
   }
+
+  // ─── Cross-stage dispatch table (Phase 215-02) ───────────────────────────
+  //
+  // See `workerPoolState.ts` for why this exists as one shared table rather
+  // than direct imports between sibling stage modules. Every field now
+  // delegates to its extracted stage module (`workerPoolWatchdog.ts`,
+  // `workerPoolDispatch.ts`, `workerPoolLifecycle.ts`) — `markPoolReady`/
+  // `markPoolFailed` are the only fields still backed by functions defined
+  // inline above, since those two (plus `whenReady`) deliberately stay
+  // inside `createWorkerPool` itself (see `workerPoolLifecycle.ts`'s header
+  // JSDoc for why).
+  const ops: PoolOps = {
+    markPoolReady,
+    markPoolFailed,
+    clearSlotWatchdog,
+    armStopWatchdog,
+    armInitWatchdog,
+    dispatchNext,
+    handleLine,
+    replaceDeadSlot: (slot) => lcReplaceDeadSlot(state, ops, slot),
+    ensureSpawned: () => lcEnsureSpawned(state, ops),
+  };
 
   return {
     grade,
     stopAll,
     terminate,
     warm,
-    cacheStats: () => gradeCache.stats(),
-    resetCacheStats: () => gradeCache.resetCacheStats(),
+    cacheStats: () => state.gradeCache.stats(),
+    resetCacheStats: () => state.gradeCache.resetCacheStats(),
     whenReady,
   };
 }

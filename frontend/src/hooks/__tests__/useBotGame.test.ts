@@ -2375,6 +2375,136 @@ describe('useBotGame', () => {
     });
   });
 
+  // ─── bot's own outgoing draw offer (Phase 183, D-07) ─────────────────────
+  //
+  // 215-03 Task 3 two-way mutation proof: applyDrawOfferUpdate
+  // (useBotGameDrawOffer.ts) left the pre-existing suite fully green when
+  // mutated to a no-op — no test anywhere asserted `botDrawOffer` becomes
+  // true. This block closes that gap. `wouldBotOfferDraw` requires
+  // `chess.moveNumber() >= BOT_DRAW_OFFER_MIN_FULLMOVE` (30) AND
+  // `movesSinceOwnOffer >= BOT_DRAW_OFFER_COOLDOWN_MOVES` (6), so the resume
+  // snapshot below seeds a real (non-repeating, engine-verified) 58-ply game
+  // reaching moveNumber 30, and the test then plays 7 further rounds — the
+  // 7th is the first whose `movesSinceOwnOffer` check (0-indexed, bumped
+  // once per bot turn) reads 6.
+  describe("bot's own outgoing draw offer (D-07)", () => {
+    /** Near-equal for BOTH colors (evalCp 0) — inside BOT_DRAW_OFFER_SCORE_BAND
+     * (0.05) of the contempt-0 drawValue (0.5), and safely above
+     * DRAW_OFFER_STYLE.threshold (0.3) so the resign check never fires. */
+    const NEUTRAL_GRADE: MoveGrade = { evalCp: 0, evalMate: null, depth: 12 };
+    const DRAW_OFFER_STYLE: BotStyleParams = {
+      featureMultipliers: {
+        isCheck: 1,
+        isCapture: 1,
+        isPawnAdvance: 1,
+        isPawnStorm: 1,
+        isExchange: 1,
+        isRetreat: 1,
+      },
+      scoreBonus: 0,
+      varianceBonus: 0,
+      contempt: 0,
+      threshold: 0.3,
+      hysteresisFloor: 2,
+      bookBoost: 1,
+    };
+    const DRAW_OFFER_SETTINGS: BotGameSettings = { ...DEFAULT_SETTINGS, style: DRAW_OFFER_STYLE };
+
+    /** Engine-verified (chess.js, this session) 58-ply non-repeating game
+     * reaching chess.moveNumber() === 30 with White (the user) to move next —
+     * BOT_DRAW_OFFER_MIN_FULLMOVE's exact boundary. */
+    const SANS_TO_MOVE_30: string[] = [
+      'Nh3', 'f6', 'f4', 'e6', 'e4', 'b5', 'Bc4', 'Nc6', 'e5', 'Nge7', 'Qf3', 'Nd5', 'g3', 'f5',
+      'Qf2', 'Ncb4', 'Qc5', 'Qh4', 'Qg1', 'Qxh3', 'a3', 'Nxc2+', 'Ke2', 'Qh4', 'Qd4', 'h5', 'a4',
+      'Be7', 'Kf1', 'Nce3+', 'Qxe3', 'Qh3+', 'Ke1', 'bxc4', 'b3', 'Bg5', 'Qxa7', 'Ke7', 'Qxc7',
+      'Rh7', 'Ba3+', 'Kf7', 'Qc6', 'd6', 'bxc4', 'g6', 'Bb4', 'Nc7', 'Qxa8', 'Kg7', 'Qe4', 'h4',
+      'Qa8', 'Rh8', 'Ra3', 'Nd5', 'Bxd6', 'Bd7',
+    ];
+    /** 7 further legal rounds (engine-verified, same session) continuing
+     * from the position above — never repeats a prior position, never hits
+     * an end condition. Round 7 is where movesSinceOwnOffer's pre-increment
+     * read reaches 6 for the first time. */
+    const DRAW_OFFER_ROUNDS: [white: string, black: string][] = [
+      ['a8b8', 'h8d8'],
+      ['a3b3', 'd7a4'],
+      ['d6f8', 'd8f8'],
+      ['e1e2', 'a4e8'],
+      ['e2d3', 'd5c3'],
+      ['b1c3', 'e8f7'],
+      ['b3a3', 'h3g4'],
+    ];
+
+    function setNeutralGrade(): void {
+      mockGrade.mockImplementation((_fen: string, ucis: string[]) => {
+        const map = new Map<string, MoveGrade>();
+        for (const uci of ucis) map.set(uci, NEUTRAL_GRADE);
+        return Promise.resolve(map);
+      });
+    }
+
+    async function playDrawOfferRound(
+      result: { current: ReturnType<typeof useBotGame> },
+      round: [string, string],
+    ): Promise<void> {
+      const [whiteUci, blackUci] = round;
+      mockSelectBotMove.mockResolvedValueOnce(blackUci);
+      act(() => {
+        result.current.attemptMove(whiteUci.slice(0, 2), whiteUci.slice(2, 4));
+      });
+      await advance(2000);
+    }
+
+    it('raises botDrawOffer once moveNumber >= 30 AND movesSinceOwnOffer >= 6 both hold, not before', async () => {
+      const resume = buildResumeSnapshot({ hasLeftBook: true }, SANS_TO_MOVE_30);
+      setNeutralGrade();
+      const { result } = renderHook(() => useBotGame(DRAW_OFFER_SETTINGS, resume));
+
+      act(() => {
+        result.current.confirmLive();
+      });
+
+      // Rounds 1-6: movesSinceOwnOffer's pre-increment read is 0..5 each
+      // time — below BOT_DRAW_OFFER_COOLDOWN_MOVES (6) — so no offer yet,
+      // even though moveNumber is already >= 30 and the score is near-equal
+      // throughout.
+      for (let r = 0; r < 6; r++) {
+        await playDrawOfferRound(result, DRAW_OFFER_ROUNDS[r]!);
+        expect(result.current.botDrawOffer).toBe(false);
+      }
+
+      // Round 7: movesSinceOwnOffer's pre-increment read is 6 — the cooldown
+      // has cleared, moveNumber is still >= 30, and the score is still
+      // near-equal. The bot raises its own outgoing draw offer.
+      await playDrawOfferRound(result, DRAW_OFFER_ROUNDS[6]!);
+      expect(result.current.botDrawOffer).toBe(true);
+      // REVERT PROOF (215-03-SUMMARY.md mutation record): replace
+      // applyDrawOfferUpdate's body (useBotGameDrawOffer.ts) with a no-op
+      // and this assertion goes RED — botDrawOffer stays false forever,
+      // proving this test genuinely exercises that function.
+    });
+
+    it('acceptBotDraw() ends the game as an agreed draw once the bot has raised its own offer', async () => {
+      const resume = buildResumeSnapshot({ hasLeftBook: true }, SANS_TO_MOVE_30);
+      setNeutralGrade();
+      const { result } = renderHook(() => useBotGame(DRAW_OFFER_SETTINGS, resume));
+
+      act(() => {
+        result.current.confirmLive();
+      });
+      for (const round of DRAW_OFFER_ROUNDS) {
+        await playDrawOfferRound(result, round);
+      }
+      expect(result.current.botDrawOffer).toBe(true);
+
+      act(() => {
+        result.current.acceptBotDraw();
+      });
+
+      expect(result.current.outcome).toEqual({ reason: 'draw', drawReason: 'agreement' });
+      expect(result.current.botDrawOffer).toBe(false);
+    });
+  });
+
   // ─── engine-ready-gate (Phase 213-01/213-06, D-04/D-05, G-213-19b) ─────────
   // G-213-19b (supersedes Phase 213-03's per-persona D-06 switch-on): the gate
   // and both warm() call sites are now UNCONDITIONAL — every persona is gated

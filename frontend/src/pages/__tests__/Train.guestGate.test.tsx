@@ -10,7 +10,7 @@
  * premature guest/non-guest assumption).
  */
 import { StrictMode } from 'react';
-import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import { act, cleanup, render, screen, waitFor, fireEvent } from '@testing-library/react';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { MemoryRouter } from 'react-router';
@@ -169,8 +169,22 @@ afterAll(() => {
 
 // ─── Render helper ──────────────────────────────────────────────────────────
 
+// Flake fix: the Train page module graph used to be imported inside
+// renderTrainPage(), so its one-time transform + evaluation (~3.5s even on an
+// idle box) was charged to whichever test rendered first and pushed it past
+// the per-test timeout under the full parallel `vitest run` on a loaded
+// machine; the later tests reused the cached module in ~20ms. A timed-out
+// first test also leaves its tree mounted past `cleanup()`, which cascaded
+// into a "Found multiple elements" failure in the second test. Load the module
+// once in beforeAll (hook timeout, not test timeout) so each test only pays
+// for its own render. The import stays dynamic so the ResizeObserver stub
+// above is installed before the page's module graph evaluates.
+let TrainPage: (typeof import('@/pages/Train'))['default'];
+beforeAll(async () => {
+  TrainPage = (await import('@/pages/Train')).default;
+});
+
 async function renderTrainPage({ strict = false }: { strict?: boolean } = {}) {
-  const TrainPage = (await import('@/pages/Train')).default;
   const queryClient = new QueryClient({
     defaultOptions: { queries: { retry: false }, mutations: { retry: false } },
   });
