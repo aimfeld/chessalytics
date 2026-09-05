@@ -220,6 +220,29 @@
     position: relative;
     z-index: 1;
   }
+  /* Bots persona card frame (quick 260905): border + glow in the persona's
+     own style accent, mirroring the homepage feature cards' bronze
+     `border-[rgba(…,0.85)] shadow-[0_0_24px_rgba(…,0.35)]`. The accent comes
+     in via `--persona-accent` (set inline per card from PERSONA_STYLE_ACCENT);
+     alphas + blur live here as custom properties so the rest/hover pair stays
+     one rule. Blur is half the homepage's 24px because these tiles sit in a
+     4-column grid with an 8px gap. Hover brightening is pointer-fine-gated so
+     it never latches on touch. */
+  .persona-accent-frame {
+    --frame-border-alpha: 85%;
+    --frame-glow-alpha: 35%;
+    --frame-glow-blur: 12px;
+    border-color: color-mix(in oklch, var(--persona-accent) var(--frame-border-alpha), transparent);
+    box-shadow: 0 0 var(--frame-glow-blur) color-mix(in oklch, var(--persona-accent) var(--frame-glow-alpha), transparent);
+    transition-property: color, background-color, border-color, box-shadow;
+  }
+  @media (pointer: fine) {
+    .persona-accent-frame:hover {
+      --frame-border-alpha: 100%;
+      --frame-glow-alpha: 60%;
+      --frame-glow-blur: 18px;
+    }
+  }
   .glass-overlay {
     background-image: linear-gradient(to bottom, rgba(255,255,255,0.35) 0%, rgba(255,255,255,0.05) 60%, rgba(0,0,0,0.05) 100%);
   }
