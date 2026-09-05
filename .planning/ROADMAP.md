@@ -181,7 +181,7 @@
 | 215. Frontend God-File Decomposition (CONCERNS.md, v2.15) | 8/8 | Complete    | 2026-09-04 |
 | 216. Audit Bugs and Quick Wins (SEED-161) | 7/7 | Complete    | 2026-09-04 |
 | 217. Frontend Major Bumps — Vitest 5 / jsdom 30 + onnxruntime-web 1.29 (SEED-162) | 2/2 | Complete    | 2026-09-05 |
-| 218. Backend onnxruntime Parity Spike → Python 3.14 Chain (SEED-162) | 0/0 | Not started | — |
+| 218. Backend onnxruntime Parity Spike → Python 3.14 Chain (SEED-162) | 3/3 | Complete    | 2026-09-05 |
 
 ## Active Phases
 
@@ -351,7 +351,7 @@ backend failure never share a branch. Plan when Phase 217 has merged.
 **Source**: `.planning/seeds/SEED-162-major-dependency-backlog.md` cluster 4;
 `.planning/notes/2026-07-10-flawchess-engine-self-execution-analysis.md` Pitfall 2.
 
-**Plans:** 3 plans
+**Plans:** 3/3 plans complete
 
 Plans:
 **Wave 1**
