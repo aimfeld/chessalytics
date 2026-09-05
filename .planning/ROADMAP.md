@@ -312,7 +312,7 @@ Plans:
 
 **Wave 2** *(blocked on Wave 1 completion)*
 
-- [ ] 217-02-PLAN.md — Cluster 2: onnxruntime-web 1.29.0, six vendored Maia runtime files re-vendored, byte constants + cache version, device UAT (wave 2)
+- [x] 217-02-PLAN.md — Cluster 2: onnxruntime-web 1.29.0, six vendored Maia runtime files re-vendored, byte constants + cache version, device UAT (wave 2)
 
 **Cross-cutting constraints:**
 

@@ -4,16 +4,16 @@ milestone: v2.15
 current_phase: 217
 current_phase_name: Frontend Major Bumps — Vitest 5 / jsdom 30 + onnxruntime-web 1.29
 status: executing
-stopped_at: "217-02 Tasks 1-4 complete on main@6f19e0567; paused at Task 5 checkpoint:human-verify (device UAT) awaiting operator"
-last_updated: "2026-09-05T03:40:11.968Z"
+stopped_at: Completed 217-02-PLAN.md (checkpoint resolved, device UAT recorded)
+last_updated: "2026-09-05T05:40:35.320Z"
 last_activity: 2026-09-05
 last_activity_desc: Phase 217 execution started
-state_head: 6f19e05678e9fdc47de91e2047775de80b1892e6
+state_head: 5bc823f902ee30587a7bcdfb2aaada1452cbd11b
 progress:
   total_phases: 2
   completed_phases: 1
   total_plans: 9
-  completed_plans: 8
+  completed_plans: 9
 milestone_name: God-File Decomposition & Complexity Gates
 ---
 
@@ -21,13 +21,17 @@ milestone_name: God-File Decomposition & Complexity Gates
 
 ## Current Position
 
-Phase: 217 (Frontend Major Bumps — Vitest 5 / jsdom 30 + onnxruntime-web 1.29) — EXECUTING
-Plans: 1 of 2 complete. Plan 01 (cluster 1 — vitest 4.x -> 5.x, jsdom 29.x -> 30.x, undici
+Phase: 217 (Frontend Major Bumps — Vitest 5 / jsdom 30 + onnxruntime-web 1.29) — COMPLETE
+Plans: 2 of 2 complete. Plan 01 (cluster 1 — vitest 4.x -> 5.x, jsdom 29.x -> 30.x, undici
 override deleted) squash-merged to `main` as `6ca0f8ecd`; full frontend suite green
 (251 files / 3894 tests) on the first run, no test edits needed; full CLAUDE.md pre-merge
 gate green. Plan 02 (cluster 2 — onnxruntime-web 1.27.0 -> 1.29.0, vendored Maia runtime
-re-vendor, D-07 device HUMAN-UAT) is next, on a fresh phase branch cut from this new `main`.
-Status: Executing Phase 217
+re-vendor, byte constants + cache version bump, device HUMAN-UAT) squash-merged to `main`
+as `6f19e0567`; the Task 5 device UAT checkpoint was resolved with the WASM-only-path leg
+passed (owner-confirmed) and the iOS<16.4/low-memory/WebGPU-adapter legs recorded as
+deferred for lack of available hardware (see 217-02-SUMMARY.md). Phase not yet deployed;
+`/deploy` remains a separate later action.
+Status: Phase 217 COMPLETE (both plans done, no deploy performed)
 Deferred follow-up (from Phase 216, still open): SC-4 CI after-median measurement — the
 first warm-cache runs are the next release PR and `production` deploy (caches saved
 2026-09-04 under stable keys, scoped per ref); run the median command in
@@ -835,6 +839,7 @@ v1.29 Live-Engine Analysis Page shipped 2026-06-29 — 5 phases (136–140), 14 
 - [Phase 216]: 216-02: Sentry security-report endpoint sourced from Sentry Client Keys (DSN) page via Sentry API/MCP, not repo contents or env files. — The DSN public key and org-ingest host are runtime secrets injected via VITE_SENTRY_DSN/SENTRY_DSN and exist nowhere in the repo; the value is safe to commit publicly (ingest-only credential, already ships in the frontend bundle).
 - [Phase 216]: CI test job now installs uv via cached astral-sh/setup-uv@v10 instead of pip install uv; npm store cached via actions/setup-node keyed on frontend/package-lock.json
 - [Phase 217]: 217-01: deleted overrides.undici rather than raising it, since jsdom 30 resolves undici@8.10.2 natively with no live advisory
+- [Phase 217]: onnxruntime-web 1.27.0 -> 1.29.0: six vendored Maia runtime files re-vendored and SHA-256-verified; ENGINE_ASSET_CACHE_VERSION bumped 1->2; device UAT recorded with WASM-only-path leg passed, iOS<16.4/low-memory/WebGPU-adapter legs deferred for lack of hardware
 
 ### Pending Todos
 
@@ -987,11 +992,11 @@ Items acknowledged and deferred at **v1.29 milestone close on 2026-06-29** (user
 
 ## Session Continuity
 
-**Stopped at:** 217-02 Tasks 1-4 complete on main@6f19e0567; paused at Task 5 checkpoint:human-verify (device UAT) awaiting operator
+**Stopped at:** Completed 217-02-PLAN.md (checkpoint resolved, device UAT recorded)
 
-**Last session:** 2026-09-05T03:40:11.860Z
+**Last session:** 2026-09-05T05:40:35.190Z
 
-**Resume file:** .planning/phases/217-frontend-major-bumps-vitest-5-jsdom-30-onnxruntime-web-1-29/217-02-PLAN.md
+**Resume file:** None
 
 ## Performance Metrics
 
@@ -1152,6 +1157,7 @@ Items acknowledged and deferred at **v1.29 milestone close on 2026-06-29** (user
 | Phase 216 P02 | 15min | 2 tasks | 2 files |
 | Phase 216 P04 | 10 min | 3 tasks | 1 files |
 | Phase 217 P01 | 20min | 3 tasks | 2 files |
+| Phase 217 P02 | ~15min+checkpoint | 5 tasks | 17 files |
 
 ## Performance Metrics
 
