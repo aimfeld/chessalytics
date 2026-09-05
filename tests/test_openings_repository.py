@@ -1761,9 +1761,9 @@ class TestDefaultPlatformExclusion:
             color=None,
             platform=["flawchess"],
         )
-        assert {
-            (result, user_color) for _played_at, result, user_color in time_series_rows
-        } == {("0-1", "white")}
+        assert {(result, user_color) for _played_at, result, user_color in time_series_rows} == {
+            ("0-1", "white")
+        }
 
     @pytest.mark.asyncio
     async def test_explicit_all_platforms_returns_all_three_rows(

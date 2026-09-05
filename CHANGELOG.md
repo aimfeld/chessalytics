@@ -8,6 +8,10 @@ in `YYYY-MM-DD` (Europe/Zurich).
 
 ## [Unreleased]
 
+### Fixed
+
+- Openings statistics and the bookmarked "Score over Time" chart no longer count FlawChess practice-bot games or pasted PGNs, which were already excluded from every other analytics surface.
+
 ## [v2.16] Audit Hardening & Dependency Currency — 2026-09-05
 
 ### Fixed
