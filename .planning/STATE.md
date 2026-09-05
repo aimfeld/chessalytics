@@ -6,9 +6,9 @@ current_phase: 218
 current_phase_name: backend-onnxruntime-parity-spike-python-3-14-chain
 status: milestone_complete
 stopped_at: v2.16 closed — phases 216–218 archived, tagged, released, deployed (releases #339, #341)
-last_updated: "2026-09-05T14:00:00.000Z"
+last_updated: "2026-09-05T14:22:52.000Z"
 last_activity: 2026-09-05
-last_activity_desc: v2.16 Audit Hardening & Dependency Currency closed (retroactive); production at 463b93de7
+last_activity_desc: Completed quick task 260905-mgx — SEED-163 group 1 openings filter drift fix (main at 80da14e49, unreleased)
 progress:
   total_phases: 3
   completed_phases: 3
@@ -802,6 +802,7 @@ None active.
 | 260901-oxh | Fast-forward stutter fix — three independent causes. (1) The 150ms cadence was half react-chessboard v5's 300ms default `animationDurationInMs`, so its `[position]`-keyed effect snapped to the pending `waitingForAnimationPosition` and restarted, aborting every slide at ~half travel (the "skipped moves"); cadence now 200ms with `FAST_FORWARD_ANIMATION_MS` DERIVED from the step constant and threaded through a new optional `ChessBoard` prop, run-scoped only so normal navigation keeps 300ms. (2) `start()` opened with a full step of dead time — first step now fires synchronously. (3) All four live engines (Stockfish free-run, Maia, FlawChess, Stockfish grading) carry a 150ms `RAPID_STEP_DEBOUNCE_MS` with a `sinceLast > window` fire-immediately branch; `setTimeout` is never early, so at 200ms that branch won on EVERY ply, deterministically — the per-ply engine storm delayed the replay's own timers and caused the uneven sound rhythm. Suppressed via `fen: null` ONLY, never `enabled` (which owns Worker lifecycle AND is the UI switch state). Gem sweep yields via `liveBusy`, not `enabled`, for the same lifecycle reason. Left eval bar holds its last live fraction through a run instead of dropping to the sigmoid midpoint (midpoint reads as "equal position", i.e. wrong information), with `terminalWhiteFraction` still first in the precedence chain. Follow-ons: the board animation gate was the real blocker on the reporter's machine — `showAnimations` tested `!('ontouchstart' in window)`, which Chrome sets on any touch-CAPABLE desktop, so animation was off for them entirely and cause (1) was inert; the Phase 19 mobile black-screen guard was then retired outright after real-device verification (react-chessboard still pinned at the 5.10.0 it was written against, and no 5.11–5.12.1 release touches the animation path, so the original diagnosis was most likely wrong about the cause). Cadence settled at 200ms after 250ms was tried and judged too slow. UAT: fast-forward and mobile animation both verified by the user | 2026-09-01 | 819f8dd9d | [260901-oxh-fast-forward-cadence-animation-and-engin](./quick/260901-oxh-fast-forward-cadence-animation-and-engin/) |
 | 260902-qf7 | Show the white arrow and move-quality icon for the "played in game" move on the Train reveal board (plus: suppress "played in game" entirely for cross-user herring puzzles) | 2026-09-02 | 2012df6f | [260902-qf7-when-showing-the-train-puzzle-solution-a](./quick/260902-qf7-when-showing-the-train-puzzle-solution-a/) |
 | 260902-rmn | Implement missing Sentry captures in app/services and app/routers except blocks (CONCERNS.md L7-11): 7 silent swallow sites fixed (engine respawn/crash, stored-PGN parse at 4 eval sites, played-move SAN) | 2026-09-02 | 7fc994cf7 | [260902-rmn-implement-missing-sentry-captures-in-app](./quick/260902-rmn-implement-missing-sentry-captures-in-app/) |
+| 260905-mgx | SEED-163 group 1: route openings_repository `_build_base_query` + `query_time_series` through `apply_game_filters` so DEFAULT_EXCLUDED_PLATFORMS (flawchess/pgn) applies to Openings WDL and the bookmark score-over-time chart; regression test + changelog | 2026-09-05 | 80da14e4 | [260905-mgx-seed-163-group-1-openings-filter-drift-f](./quick/260905-mgx-seed-163-group-1-openings-filter-drift-f/) |
 
 ## Deferred Items
 
