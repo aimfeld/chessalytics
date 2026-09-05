@@ -43,7 +43,18 @@ const PAGE_SIZE = 20;
 // Filter-independent probe for "does the user have ANY engine-analyzed games":
 // no date/TC/platform restriction, both opponent types, no flaw filter. Module
 // level so the TanStack query key stays stable across renders.
-const UNFILTERED_PROBE_FILTERS: FilterState = { ...DEFAULT_FILTERS, opponentType: 'both' };
+//
+// SEED-163 2a made DEFAULT_FILTERS narrowing (rated: true, opponentType:
+// 'human'), so this override must neutralise EVERY narrowing default field,
+// not just opponentType — leaving `rated` at its new true default would
+// silently turn this "ANY engine-analyzed game" probe into "ANY RATED
+// engine-analyzed game" and show the no-analysis empty state to a user whose
+// analysed games are unrated.
+const UNFILTERED_PROBE_FILTERS: FilterState = {
+  ...DEFAULT_FILTERS,
+  opponentType: 'both',
+  rated: null,
+};
 const NO_FLAW_FILTER: FlawFilterState = { ...DEFAULT_FLAW_FILTER, severity: [], tags: [], tacticFamilies: [] };
 
 // ─── Component ────────────────────────────────────────────────────────────────

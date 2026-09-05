@@ -89,6 +89,13 @@ describe('Pasted chip (Phase 208, D-11/D-14)', () => {
       );
       expect(screen.queryByTestId('filter-platform-pasted')).toBeNull();
     });
+
+    // SEED-163 2c: the disclosure hint is gated on the same showPastedChip
+    // flag as the Pasted chip — absent from a bare FilterPanel.
+    it('renders no native-games disclosure hint by default (no showPastedChip prop)', () => {
+      render(<FilterPanel filters={DEFAULT_FILTERS} onChange={vi.fn()} visibleFilters={['platform']} />);
+      expect(screen.queryByTestId('filter-native-games-hint')).toBeNull();
+    });
   });
 
   describe('LibraryFilterPanel', () => {
@@ -121,6 +128,18 @@ describe('Pasted chip (Phase 208, D-11/D-14)', () => {
       expect(screen.getByTestId('filter-platform-pasted').getAttribute('aria-pressed')).toBe('true');
       expect(screen.getByTestId('filter-platform-chess-com').getAttribute('aria-pressed')).toBe('false');
       expect(screen.getByTestId('filter-platform-lichess').getAttribute('aria-pressed')).toBe('false');
+    });
+
+    // SEED-163 2c: LibraryFilterPanel is the only caller that sets
+    // showPastedChip, so it is the only surface that renders the hint.
+    it('renders the native-games disclosure hint with the exact copy', () => {
+      render(
+        <LibraryFilterPanel filters={DEFAULT_FILTERS} onChange={vi.fn()} onApply={vi.fn()} />,
+      );
+      const hint = screen.getByTestId('filter-native-games-hint');
+      expect(hint.textContent).toBe(
+        'FlawChess bot games and pasted games are always shown here.',
+      );
     });
   });
 
@@ -180,6 +199,12 @@ describe('Pasted chip (Phase 208, D-11/D-14)', () => {
   describe('DEFAULT_FILTERS / resetFilterState', () => {
     it("DEFAULT_FILTERS.pasted is 'off'", () => {
       expect(DEFAULT_FILTERS.pasted).toBe('off');
+    });
+
+    // SEED-163 2a: analytics default population is Human + Rated.
+    it('DEFAULT_FILTERS.rated is true and opponentType is human', () => {
+      expect(DEFAULT_FILTERS.rated).toBe(true);
+      expect(DEFAULT_FILTERS.opponentType).toBe('human');
     });
 
     it("resetFilterState clears pasted to 'off'", () => {

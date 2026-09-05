@@ -42,8 +42,8 @@ export interface FilterState {
   matchSide: MatchSide;
   timeControls: TimeControl[] | null; // null = all
   platforms: Platform[] | null; // null = all
-  rated: boolean | null; // null = all
-  opponentType: OpponentType; // default both = human + computer games included
+  rated: boolean | null; // null = all; default true = rated games only (SEED-163 2a)
+  opponentType: OpponentType; // default 'human' = human opponents only (SEED-163 2a)
   /**
    * Opponent strength as a (gap_min, gap_max) range over opponent_rating - user_rating.
    * Default `{ min: null, max: null }` = no filter (Any preset).
@@ -84,12 +84,20 @@ export interface FilterState {
  */
 export type PastedFilter = 'off' | 'with' | 'only';
 
+// SEED-163 2a: the analytics default population is Human + Rated (rated:
+// true, opponentType: 'human') so it matches the percentile benchmark cohort
+// (`g.rated AND NOT g.is_computer_game`). The store is module memory (no
+// localStorage — useFilterStore.ts), so this reaches every user on next load
+// with no migration. The filter stays visible (Opponent/Rated controls read
+// Human/Rated) and reversible (switching back to Both/All restores the old
+// population); the Library keeps native games reachable regardless via the
+// backend's native_games_bypass_opponent_and_rated flag (SEED-163 2b).
 export const DEFAULT_FILTERS: FilterState = {
   matchSide: 'both',
   timeControls: null,
   platforms: null,
-  rated: null,
-  opponentType: 'both',
+  rated: true,
+  opponentType: 'human',
   opponentStrength: ANY_RANGE,
   recency: null,
   customRange: null,
@@ -232,6 +240,33 @@ const PLATFORM_LABELS: Record<Platform, string> = {
   'chess.com': 'Chess.com',
   lichess: 'Lichess',
 };
+
+/**
+ * SEED-163 2c: the Library-only disclosure line below the Platform chip grid.
+ * Extracted to its own component (rather than an inline `{show && (...)}` in
+ * FilterPanel) so the added branch doesn't push FilterPanel's cyclomatic
+ * complexity past the eslint `complexity` gate (frontend/CLAUDE.md).
+ *
+ * Gated on the same `showPastedChip` flag as the Pasted chip above —
+ * LibraryFilterPanel is the only caller that sets it, so Openings, Endgames
+ * and GlobalStats never render this hint, and the same component instance
+ * covers both the desktop sidebar and the mobile drawer (see the
+ * showPastedChip containment comment in LibraryFilterPanel.tsx). Discloses
+ * the backend's native_games_bypass_opponent_and_rated exemption (SEED-163
+ * 2b): flawchess/pgn rows ignore the Opponent and Rated filters here.
+ */
+function NativeGamesHint({ show }: { show: boolean }) {
+  if (!show) return null;
+  return (
+    // frontend/CLAUDE.md: text-sm is the floor for new UI copy (the text-xs
+    // tooltip exception does not apply — this is a static disclosure line,
+    // not a hover/tap popover), so this deviates from the plan's "text-xs
+    // variant is fine" suggestion.
+    <p data-testid="filter-native-games-hint" className="mt-1 text-sm text-muted-foreground">
+      FlawChess bot games and pasted games are always shown here.
+    </p>
+  );
+}
 
 export function FilterPanel({
   filters,
@@ -533,6 +568,7 @@ export function FilterPanel({
               </ToggleChipButton>
             )}
           </div>
+          <NativeGamesHint show={showPastedChip} />
         </div>
       )}
 
