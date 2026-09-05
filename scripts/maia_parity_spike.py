@@ -19,8 +19,10 @@ genuine cross-check, not a self-comparison.
 Exit code: 0 iff every entry passes BOTH checks; non-zero otherwise (printing which
 plies failed which check). This script is COMMITTED (not throwaway) as a standing
 regression guard against future onnxruntime/model bumps — per Pitfall 2, any bump
-past onnxruntime==1.20.1 must re-run this gate before merging (>=1.22 segfaults the
-vendored model).
+of the pinned onnxruntime version must re-run this gate before merging. History:
+>=1.22 segfaulted the vendored model in July 2026 at the 1.20.1 pin; Phase 218
+re-measured 1.29.0 clean in September 2026 and raised the pin (see PARITY_EPSILON
+block below for the dated series).
 
 D-02 fail path: if this gate CANNOT pass legitimately, the phase PAUSES for re-scope.
 Do NOT loosen PARITY_EPSILON to force a pass, do NOT switch to Maia-on-workers without
