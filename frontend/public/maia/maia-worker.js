@@ -11,7 +11,7 @@
  *
  * Message protocol (structured objects, not UCI text — this is not Stockfish):
  *   in:  { type: 'init', backend: 'webgpu' | 'wasm', runtimeBuffer?: ArrayBuffer,
- *          assetCacheName?: string }
+ *          assetCacheName?: string, assetVersionQuery?: string }
  *                                              // Phase 213-09 (G-213-35): `backend` is now
  *                                              // REQUIRED — the main thread (`maiaWorkerHost.ts`,
  *                                              // via `ortRuntimeSource.ts`'s WebGPU adapter
@@ -40,6 +40,16 @@
  *                                              // guarantees) costs zero network. Absent, or
  *                                              // `caches` undefined, means byte-for-byte today's
  *                                              // plain-fetch behavior.
+ *                                              // Quick 260905-rhc: `assetVersionQuery` is the
+ *                                              // shared `?v=<n>` suffix derived from
+ *                                              // `ENGINE_ASSET_CACHE_VERSION`
+ *                                              // (`maiaWorkerHost.ts` cannot let this worker
+ *                                              // import that TS constant, so it arrives on this
+ *                                              // message instead). Applied via `versionedAssetUrl`
+ *                                              // to the model fetch/cache key, both
+ *                                              // `importScripts` calls, and both `wasmPaths`
+ *                                              // assignments. Absent means unversioned URLs — a
+ *                                              // degrade, never a crash.
  *        { type: 'analyze', fen: string, eloInputs: number[] }
  *        { type: 'terminate' }
  *   out: { type: 'ready', backend: 'webgpu' | 'wasm' }
@@ -117,8 +127,19 @@ const WASM_ONLY_RUNTIME_PATH = '/maia/ort.wasm.min.js';
  *  onnxruntime-web docs reference for older/different bundle combinations). */
 const WEBGPU_RUNTIME_PATH = '/maia/ort.webgpu.min.js';
 
-/** Prefix onnxruntime-web appends its build-specific .wasm/.mjs filename to. */
-const WASM_ASSET_PREFIX = '/maia/';
+/**
+ * Quick 260905-rhc: onnxruntime-web's runtime binary/loader pair, one
+ * constant per file, used to build the OBJECT form of `ort.env.wasm.wasmPaths`
+ * — a bare string prefix (the previous `WASM_ASSET_PREFIX`, deleted) cannot
+ * carry a `?v=` query, since ORT concatenates a bare filename onto it. Pairs
+ * with `WASM_ONLY_RUNTIME_PATH` (`ort.wasm.min.js`).
+ */
+const ORT_WASM_ONLY_MJS_PATH = '/maia/ort-wasm-simd-threaded.mjs';
+const ORT_WASM_ONLY_WASM_PATH = '/maia/ort-wasm-simd-threaded.wasm';
+
+/** Pairs with `WEBGPU_RUNTIME_PATH` (`ort.webgpu.min.js`) — see the constants above. */
+const ORT_ASYNCIFY_MJS_PATH = '/maia/ort-wasm-simd-threaded.asyncify.mjs';
+const ORT_ASYNCIFY_WASM_PATH = '/maia/ort-wasm-simd-threaded.asyncify.wasm';
 
 /**
  * onnxruntime-web log threshold, applied BOTH globally (`ort.env.logLevel`,
@@ -211,6 +232,19 @@ function encodeBoardTokens(fen) {
 let session = null;
 /** @type {'webgpu' | 'wasm' | null} */
 let backend = null;
+/**
+ * Quick 260905-rhc: the shared `?v=<n>` suffix from the init message's
+ * `assetVersionQuery` field (empty string when absent — coerced in
+ * `self.onmessage` BEFORE `initSession` is called). Applied by
+ * `versionedAssetUrl` below to every asset URL this worker builds.
+ * @type {string}
+ */
+let assetVersionQuery = '';
+
+/** Appends the shared version suffix to `path` — the single call site every asset URL this worker builds must go through. */
+function versionedAssetUrl(path) {
+  return `${path}${assetVersionQuery}`;
+}
 
 /**
  * Streams the ONNX model bytes and counts them as they arrive (Phase 213
@@ -247,12 +281,15 @@ let backend = null;
  * completed miss writes the body back so the NEXT spawn is the hit.
  */
 async function fetchModelBuffer(onProgress, assetCacheName) {
+  // Computed once per call (quick 260905-rhc) so the cache key and the fetch
+  // URL below can never drift apart.
+  const versionedModelUrl = versionedAssetUrl(MODEL_PATH);
   const cacheUsable = Boolean(assetCacheName) && typeof caches !== 'undefined';
   let cache = null;
   if (cacheUsable) {
     try {
       cache = await caches.open(assetCacheName);
-      const match = await cache.match(MODEL_PATH);
+      const match = await cache.match(versionedModelUrl);
       if (match) {
         const cached = new Uint8Array(await match.arrayBuffer());
         if (cached.length > 0) {
@@ -274,7 +311,7 @@ async function fetchModelBuffer(onProgress, assetCacheName) {
 
   for (let attempt = 1; attempt <= MODEL_FETCH_ATTEMPTS; attempt++) {
     try {
-      const response = await fetch(MODEL_PATH);
+      const response = await fetch(versionedModelUrl);
       if (!response.ok || !response.body) {
         throw new Error(`maia-worker: model fetch failed (status ${response.status})`);
       }
@@ -318,7 +355,7 @@ async function fetchModelBuffer(onProgress, assetCacheName) {
       // never cached.
       if (cache && lengthTrustworthy) {
         try {
-          await cache.put(MODEL_PATH, new Response(buffer));
+          await cache.put(versionedModelUrl, new Response(buffer));
         } catch {
           // A quota / storage-pressure write failure must never strand
           // startup — the already-downloaded bytes are returned below
@@ -369,9 +406,14 @@ async function fetchModelBuffer(onProgress, assetCacheName) {
  * produced `G-213-36`).
  */
 async function initWasmOnlySession(onProgress, runtimeBuffer, assetCacheName) {
-  importScripts(WASM_ONLY_RUNTIME_PATH);
+  importScripts(versionedAssetUrl(WASM_ONLY_RUNTIME_PATH));
   ort.env.wasm.numThreads = 1; // NEVER > 1 — no cross-origin isolation (Phase 136 D-3)
-  ort.env.wasm.wasmPaths = WASM_ASSET_PREFIX;
+  // Object form (quick 260905-rhc) — a bare string prefix cannot carry a
+  // `?v=` query, since ORT concatenates a bare filename onto it.
+  ort.env.wasm.wasmPaths = {
+    mjs: versionedAssetUrl(ORT_WASM_ONLY_MJS_PATH),
+    wasm: versionedAssetUrl(ORT_WASM_ONLY_WASM_PATH),
+  };
   ort.env.logLevel = ORT_LOG_LEVEL;
   if (runtimeBuffer) {
     ort.env.wasm.wasmBinary = new Uint8Array(runtimeBuffer);
@@ -421,9 +463,13 @@ async function initSession(chosenBackend, onProgress, runtimeBuffer, assetCacheN
     return { ok: true };
   }
 
-  importScripts(WEBGPU_RUNTIME_PATH);
+  importScripts(versionedAssetUrl(WEBGPU_RUNTIME_PATH));
   ort.env.wasm.numThreads = 1;
-  ort.env.wasm.wasmPaths = WASM_ASSET_PREFIX;
+  // Object form (quick 260905-rhc) — see initWasmOnlySession's comment.
+  ort.env.wasm.wasmPaths = {
+    mjs: versionedAssetUrl(ORT_ASYNCIFY_MJS_PATH),
+    wasm: versionedAssetUrl(ORT_ASYNCIFY_WASM_PATH),
+  };
   ort.env.logLevel = ORT_LOG_LEVEL;
   if (runtimeBuffer) {
     ort.env.wasm.wasmBinary = new Uint8Array(runtimeBuffer);
@@ -560,6 +606,11 @@ self.onmessage = async (e) => {
       const onProgress = (loaded, total) => {
         self.postMessage({ type: 'progress', loaded, total });
       };
+      // Quick 260905-rhc: set BEFORE initSession is called — every asset URL
+      // this worker builds during init reads this module-level variable via
+      // versionedAssetUrl(). Coerces a non-string to '' (unversioned URLs, a
+      // degrade rather than a crash).
+      assetVersionQuery = typeof msg.assetVersionQuery === 'string' ? msg.assetVersionQuery : '';
       // Phase 213-09: `msg.backend` is always sent by the host now, but a
       // defensive fallback to 'wasm' on any unexpected value matches D-13's
       // fail-safe-toward-wasm philosophy — the wasm path always works.

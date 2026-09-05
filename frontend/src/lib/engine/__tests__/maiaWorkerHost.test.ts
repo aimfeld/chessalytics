@@ -18,7 +18,7 @@ import * as Sentry from '@sentry/react';
 import { acquireMaiaWorker, resetMaiaWorkerHostForTests, ENGINE_PATH } from '../maiaWorkerHost';
 import { getEngineAssetsSnapshot, resetEngineAssetsForTests } from '../engineAssetProgress';
 import { ensureOrtRuntime, fetchWasmOnlyOrtRuntime } from '../ortRuntimeSource';
-import { ENGINE_ASSET_CACHE_NAME } from '../engineAssetCache';
+import { ENGINE_ASSET_CACHE_NAME, ENGINE_ASSET_VERSION_QUERY } from '../engineAssetCache';
 
 vi.mock('@sentry/react', () => ({ captureException: vi.fn(), addBreadcrumb: vi.fn() }));
 
@@ -830,6 +830,9 @@ describe('maiaWorkerHost', () => {
 
     const init = createdWorkers[0]!.messages.find((m) => m.type === 'init')!;
     expect(init.assetCacheName).toBe(ENGINE_ASSET_CACHE_NAME);
+    // Quick 260905-rhc: the same object literal that sets assetCacheName also
+    // sets assetVersionQuery — one assignment covers both.
+    expect(init.assetVersionQuery).toBe(ENGINE_ASSET_VERSION_QUERY);
   });
 
   it("G-213-37: the init message carries assetCacheName on the wasm-pinned respawn branch too", () => {
@@ -842,6 +845,8 @@ describe('maiaWorkerHost', () => {
     const replacement = createdWorkers[1]!;
     const init = replacement.messages.find((m) => m.type === 'init')!;
     expect(init.assetCacheName).toBe(ENGINE_ASSET_CACHE_NAME);
+    // Quick 260905-rhc: also asserted on the wasm-pinned respawn branch.
+    expect(init.assetVersionQuery).toBe(ENGINE_ASSET_VERSION_QUERY);
   });
 
   it('G-213-37: a second spawn after resetModuleState() teardown still delivers an init message the worker RECEIVES — asserted on the received message, not the absence of a throw', () => {
