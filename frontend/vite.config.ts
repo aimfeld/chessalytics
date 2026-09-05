@@ -120,7 +120,16 @@ export default defineConfig({
         // The Maia ONNX model (public/maia/*.onnx, ~44 MB) is likewise excluded from the
         // precache manifest — it alone exceeds the iOS Cache API limit; the onnxruntime-web
         // runtime (ort-wasm-simd-threaded.wasm) is already covered by the **/*.wasm entry.
-        globIgnores: ['**/*.wasm', '**/*.html', '**/*.onnx'],
+        // maia/** and engine/** (quick 260905-rhc): every vendored engine asset under these
+        // two prefixes is now requested through a `?v=<n>` query (versionedEngineAssetUrl,
+        // see engineAssetCache.ts), but Workbox's precache route only strips utm_*/fbclid
+        // when MATCHING a request against the manifest — it never matches a versioned
+        // request against a manifest entry keyed on the bare path. Precaching those
+        // ~245 KB of *.js/*.mjs entries under their unversioned URLs would therefore add
+        // install cost for entries nothing can ever request again; there is no
+        // runtimeCaching route matching these prefixes either, so the versioned requests
+        // simply go to the network instead.
+        globIgnores: ['**/*.wasm', '**/*.html', '**/*.onnx', 'maia/**', 'engine/**'],
         runtimeCaching: [
           {
             // Backend: never cached, always network. Registered FIRST so /api/*

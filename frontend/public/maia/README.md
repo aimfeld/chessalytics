@@ -200,10 +200,23 @@ files (this model, either `ort-wasm-simd-threaded*.wasm` binary, or the
 Stockfish `.wasm`) without bumping `ENGINE_ASSET_CACHE_VERSION` in
 `engineAssetCache.ts` would leave every visiting browser reading the STALE
 bytes out of CacheStorage indefinitely — worse than the HTTP cache below,
-which self-heals after its 30-day `max-age`. **Bump
-`ENGINE_ASSET_CACHE_VERSION` in the same commit as replacing any of these
-files.** The next page load's cache-open sweeps every differently-versioned
-`flawchess-engine-assets-*` cache away automatically.
+which self-heals after its 30-day `max-age`.
+
+**Quick 260905-rhc: that one constant now invalidates all THREE cache
+layers at once, not just CacheStorage.** `ENGINE_ASSET_CACHE_VERSION` also
+feeds `ENGINE_ASSET_VERSION_QUERY` / `versionedEngineAssetUrl()`
+(`engineAssetCache.ts`), which every runtime-fetched `/maia/*` and
+`/engine/*` URL is built through — including this worker's own asset
+fetches, via `versionedAssetUrl()` and the init message's
+`assetVersionQuery` field, since a classic Worker cannot `import` that TS
+constant. A CDN edge (Cloudflare) and the browser's HTTP cache both key a
+cached response on the FULL URL including its query string, so bumping the
+version makes every URL the app requests one no cache layer has ever seen —
+a stale entry at any of the three layers becomes structurally unservable,
+not just eventually swept. **Bump `ENGINE_ASSET_CACHE_VERSION` in the same
+commit as replacing any of these files.** The next page load's cache-open
+sweep also deletes every differently-versioned `flawchess-engine-assets-*`
+CacheStorage entry automatically.
 
 ## Cache headers
 
@@ -211,11 +224,14 @@ files.** The next page load's cache-open sweeps every differently-versioned
 `ort.webgpu.min.js`, and the `ort-wasm-simd-threaded*` `.mjs`/`.wasm` pairs) at
 `Cache-Control: public, max-age=2592000` (30 days) — long enough that a returning mobile
 visitor never re-downloads the 43.6 MB model on a slow link, short enough that bumping
-`onnxruntime-web` here is picked up within 30 days with **no rename required**. This is
-deliberately NOT `immutable`: these filenames are not content-hashed, and onnxruntime-web
-resolves its own `.wasm`/`.mjs` filenames by appending them to `ort.env.wasm.wasmPaths =
-'/maia/'` (`maia-worker.js`), so renaming a file without also versioning the directory would
-break asset resolution.
+`onnxruntime-web` here is picked up within 30 days even if the version bump below were
+somehow missed. This is deliberately NOT `immutable`: even though every URL is now
+version-pinned by a `?v=<n>` query (quick 260905-rhc — `ort.env.wasm.wasmPaths` in
+`maia-worker.js` is the OBJECT form, `{ mjs, wasm }`, of full versioned URLs per backend, not
+the bare string prefix this note used to describe), the 30-day policy is retained
+deliberately rather than switched to `immutable`; a version bump is the invalidation path
+either way, and the shorter policy is a second line of defense that costs nothing on the
+happy path.
 
 `maia-worker.js` itself is the one exception: it is `Cache-Control: no-cache`, not 30-day
 cached, because it is OUR source (not vendored) and its message protocol changes alongside
@@ -230,3 +246,10 @@ for the exact rule (quick 260729-sod, FIX 4).
 model nor the ort runtime is Workbox-precached (they are served/cached via the HTTP cache instead;
 the model alone would blow past the iOS Cache API ~50 MB limit). `optimizeDeps.exclude` includes
 `onnxruntime-web` so esbuild never relocates its runtime and breaks the fixed asset path.
+
+`globIgnores` also excludes `maia/**` and `engine/**` in full (quick 260905-rhc): every asset
+under these two directories is now requested through a `?v=<n>` query, and Workbox's precache
+route only strips `utm_*`/`fbclid` when matching a request against the manifest — it never
+matches a versioned request against an entry keyed on the bare path. Precaching the remaining
+`*.js`/`*.mjs` glue/loader files under their unversioned URLs would therefore add install cost
+for entries nothing can ever request again.

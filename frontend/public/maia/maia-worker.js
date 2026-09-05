@@ -281,8 +281,12 @@ function versionedAssetUrl(path) {
  * completed miss writes the body back so the NEXT spawn is the hit.
  */
 async function fetchModelBuffer(onProgress, assetCacheName) {
-  // Computed once per call (quick 260905-rhc) so the cache key and the fetch
-  // URL below can never drift apart.
+  // Computed once per call (quick 260905-rhc) — `versionedAssetUrl` is a pure
+  // function of the module-level `assetVersionQuery` (fixed for the whole
+  // init cycle) and the constant `MODEL_PATH`, so this local and the
+  // `fetch(versionedAssetUrl(MODEL_PATH))` call below can never resolve to
+  // different URLs; both are the SAME cache key the `cache.match`/`cache.put`
+  // calls read and write.
   const versionedModelUrl = versionedAssetUrl(MODEL_PATH);
   const cacheUsable = Boolean(assetCacheName) && typeof caches !== 'undefined';
   let cache = null;
@@ -311,7 +315,7 @@ async function fetchModelBuffer(onProgress, assetCacheName) {
 
   for (let attempt = 1; attempt <= MODEL_FETCH_ATTEMPTS; attempt++) {
     try {
-      const response = await fetch(versionedModelUrl);
+      const response = await fetch(versionedAssetUrl(MODEL_PATH));
       if (!response.ok || !response.body) {
         throw new Error(`maia-worker: model fetch failed (status ${response.status})`);
       }
