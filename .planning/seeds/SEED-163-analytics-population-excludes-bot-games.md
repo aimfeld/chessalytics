@@ -100,7 +100,11 @@ With the panel reading "Human, Rated" and bot games in the list, the list is wro
 it says why. `LibraryFilterPanel` is already the only caller rendering the pasted chip
 (`showPastedChip`, D-14); render a one-line hint in the same slot:
 
-> FlawChess bot games and pasted games are always shown here.
+> Opponent and Rated filters don't apply to FlawChess bot games or pasted games.
+
+(Copy corrected at ship time: the earlier "always shown here" wording was false, since
+pasted games stay opt-in via the Pasted chip (D-11) and bot games are absent from the
+Flaws tab. The hint describes the opponent/rated exemption only.)
 
 Rows already carry a platform badge, so each exempt row is visually identifiable. No new
 store state.

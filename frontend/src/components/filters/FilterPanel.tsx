@@ -263,7 +263,7 @@ function NativeGamesHint({ show }: { show: boolean }) {
     // not a hover/tap popover), so this deviates from the plan's "text-xs
     // variant is fine" suggestion.
     <p data-testid="filter-native-games-hint" className="mt-1 text-sm text-muted-foreground">
-      FlawChess bot games and pasted games are always shown here.
+      Opponent and Rated filters don&apos;t apply to FlawChess bot games or pasted games.
     </p>
   );
 }

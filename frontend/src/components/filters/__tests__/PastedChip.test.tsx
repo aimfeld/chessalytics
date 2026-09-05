@@ -138,7 +138,7 @@ describe('Pasted chip (Phase 208, D-11/D-14)', () => {
       );
       const hint = screen.getByTestId('filter-native-games-hint');
       expect(hint.textContent).toBe(
-        'FlawChess bot games and pasted games are always shown here.',
+        "Opponent and Rated filters don't apply to FlawChess bot games or pasted games.",
       );
     });
   });
