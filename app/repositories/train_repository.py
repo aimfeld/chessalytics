@@ -3106,7 +3106,7 @@ async def reveal_for_puzzle(
         try:
             board = chess.Board(fen)
             played_in_game_move_uci = board.parse_san(played_in_game_san).uci()
-        except (ValueError, chess.IllegalMoveError, AssertionError):
+        except ValueError, chess.IllegalMoveError, AssertionError:
             played_in_game_move_uci = None  # never raise on an unparseable move_san
 
     motif: str | None = None

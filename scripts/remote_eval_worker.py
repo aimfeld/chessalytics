@@ -834,7 +834,7 @@ async def _run_loop(
                     loop,
                     sleep_when_idle=is_last,
                 )
-            except (KeyboardInterrupt, asyncio.CancelledError):
+            except KeyboardInterrupt, asyncio.CancelledError:
                 raise
             except Exception as exc:
                 if _is_expected_transient(exc):

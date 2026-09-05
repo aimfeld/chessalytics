@@ -143,7 +143,7 @@ def local_today(tz_name: str, now_utc: datetime.datetime) -> datetime.date:
     """
     try:
         zone = ZoneInfo(tz_name)
-    except (ZoneInfoNotFoundError, ValueError):
+    except ZoneInfoNotFoundError, ValueError:
         zone = ZoneInfo(DEFAULT_TIMEZONE)
     return now_utc.astimezone(zone).date()
 
@@ -167,7 +167,7 @@ def local_hour(tz_name: str, now_utc: datetime.datetime) -> int:
     """
     try:
         zone = ZoneInfo(tz_name)
-    except (ZoneInfoNotFoundError, ValueError):
+    except ZoneInfoNotFoundError, ValueError:
         zone = ZoneInfo(DEFAULT_TIMEZONE)
     return now_utc.astimezone(zone).hour
 
@@ -214,7 +214,7 @@ def seconds_until_end_of_local_day(tz_name: str, now_utc: datetime.datetime) -> 
     """
     try:
         zone = ZoneInfo(tz_name)
-    except (ZoneInfoNotFoundError, ValueError):
+    except ZoneInfoNotFoundError, ValueError:
         zone = ZoneInfo(DEFAULT_TIMEZONE)
     local_now = now_utc.astimezone(zone)
     end_of_day = local_now.replace(

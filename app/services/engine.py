@@ -456,7 +456,7 @@ class EnginePool:
                 continue
             try:
                 await protocol.quit()
-            except (chess.engine.EngineError, chess.engine.EngineTerminatedError, RuntimeError):
+            except chess.engine.EngineError, chess.engine.EngineTerminatedError, RuntimeError:
                 # RuntimeError: quit() on an already-dead engine writes to a closed
                 # uvloop transport ("the handler is closed") — FLAWCHESS-59.
                 pass
@@ -476,7 +476,7 @@ class EnginePool:
         if old_protocol is not None:
             try:
                 await old_protocol.quit()
-            except (chess.engine.EngineError, chess.engine.EngineTerminatedError, RuntimeError):
+            except chess.engine.EngineError, chess.engine.EngineTerminatedError, RuntimeError:
                 # RuntimeError: when the engine process died (e.g. SIGINT from dev
                 # reload), quit() writes to a closed uvloop transport and raises
                 # "the handler is closed" — not an EngineError subclass. Letting it

@@ -2,7 +2,7 @@
 name = "flawchess"
 version = "0.1.0"
 description = "Multi-user chess analysis platform with Zobrist hash position matching"
-requires-python = ">=3.13"
+requires-python = ">=3.14"
 dependencies = [
     "fastapi[standard]>=0.115.0",
     "uvicorn[standard]>=0.30.0",
@@ -39,11 +39,22 @@ dev = [
 # image (Dockerfile.worker), which must never pull onnxruntime/numpy. Only the backend
 # Dockerfile opts in via `uv sync --group maia-inference`.
 maia-inference = [
-    # PIN EXACTLY 1.20.1 — never a range. onnxruntime>=1.22 SEGFAULTS on the vendored
-    # maia3_simplified.onnx model (verified repro in
+    # PIN EXACTLY 1.29.0 — never a range. onnxruntime>=1.22 SEGFAULTED on the vendored
+    # maia3_simplified.onnx model at older versions (verified repro in
     # .planning/notes/2026-07-10-flawchess-engine-self-execution-analysis.md, Pitfall 2).
     # Any future bump MUST re-run scripts/maia_parity_spike.py before merging.
-    "onnxruntime==1.20.1",
+    #
+    # History: 2026-07-16 measured onnxruntime 1.20.1 as the last known-safe version
+    # (max per-ply drift 0.003844, evidence in
+    # scripts/maia_parity_spike.py's PARITY_EPSILON comment block).
+    #
+    # Phase 218 measured onnxruntime 1.29.0 in an isolated `uv run --no-project`
+    # environment (2026-09-05): PASS, no segfault, max per-ply drift 0.004237
+    # (within PARITY_EPSILON=0.010). Evidence:
+    # .planning/phases/218-backend-onnxruntime-parity-spike-python-3-14-chain/
+    # 218-evidence-onnxruntime-1.29.0-python.txt. Pin raised to 1.29.0 to unblock the
+    # Python 3.14 chain (218-02).
+    "onnxruntime==1.29.0",
     "numpy",
 ]
 # Isolated group for the backend Web Push send path (Phase 201, PUSH-05). Kept OUT

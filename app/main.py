@@ -130,7 +130,7 @@ async def lifespan(_app: FastAPI) -> AsyncIterator[None]:
     assert_secret_key_configured()
     # D-22: validate insights Agent FIRST — startup failure is a deploy-blocker.
     # Orphan cleanup is best-effort and must not run if the app can't serve
-    # the insights endpoint. Any pydantic-ai UserError / ValueError
+    # the insights endpoint. Any pydantic-ai UserError
     # propagates, aborting uvicorn startup (D-36).
     get_insights_agent()
     await cleanup_orphaned_jobs()

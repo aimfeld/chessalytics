@@ -105,7 +105,7 @@ async def _fetch_chesscom_player_joined(
         if joined is None:
             return None
         return datetime.fromtimestamp(int(joined), tz=timezone.utc)
-    except (ValueError, TypeError):
+    except ValueError, TypeError:
         return None
 
 

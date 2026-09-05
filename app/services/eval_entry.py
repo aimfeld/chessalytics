@@ -502,8 +502,6 @@ async def _collect_eval_targets_from_db(
     PGN parse + one mainline walk per game) instead of routing through the
     two public wrappers (which would walk the mainline twice).
     """
-    from app.services.zobrist import PlyData
-
     result = await session.execute(
         select(
             GamePosition.game_id,

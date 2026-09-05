@@ -1550,7 +1550,7 @@ def _walk_pv_boards(
             next_board = boards[-1].copy()
             next_board.push(move)
             boards.append(next_board)
-        except (ValueError, AssertionError):
+        except ValueError, AssertionError:
             break
     return boards
 
@@ -2065,7 +2065,7 @@ def _assemble_flaw_blobs_from_submit(
     for e in submit_evals:
         try:
             key = _parse_token(e.token)
-        except (ValueError, IndexError):
+        except ValueError, IndexError:
             # Malformed token: skip silently; endpoint validates tokens upstream.
             continue
         node_results[key] = e

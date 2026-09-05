@@ -46,7 +46,7 @@ npm package so the Worker can load it from a fixed path without bundler processi
 
 | Field | Value |
 |-------|-------|
-| Package | `onnxruntime-web` v1.27.0 (MIT, Microsoft — github.com/microsoft/onnxruntime) |
+| Package | `onnxruntime-web` v1.29.0 (MIT, Microsoft — github.com/microsoft/onnxruntime) |
 | Vendored files | `ort.wasm.min.js` (API bundle), `ort-wasm-simd-threaded.mjs`, `ort-wasm-simd-threaded.wasm` |
 | Source | `node_modules/onnxruntime-web/dist/` |
 
@@ -61,7 +61,7 @@ fallback path for browsers without WebGPU (D-09).
 
 | Field | Value |
 |-------|-------|
-| Package | `onnxruntime-web` v1.27.0 (MIT, Microsoft) |
+| Package | `onnxruntime-web` v1.29.0 (MIT, Microsoft) |
 | Vendored files | `ort.webgpu.min.js` (API bundle), `ort-wasm-simd-threaded.asyncify.mjs`, `ort-wasm-simd-threaded.asyncify.wasm` |
 | Source | `node_modules/onnxruntime-web/dist/` |
 
@@ -99,8 +99,42 @@ above):**
 
 | API bundle | `.wasm` filename it requests | Size |
 |---|---|---|
-| `ort.wasm.min.js` (WASM-CPU-only) | `ort-wasm-simd-threaded.wasm` | 13,479,978 bytes |
-| `ort.webgpu.min.js` (WebGPU-preferred) | `ort-wasm-simd-threaded.asyncify.wasm` | 24,254,953 bytes |
+| `ort.wasm.min.js` (WASM-CPU-only) | `ort-wasm-simd-threaded.wasm` | 13,961,845 bytes |
+| `ort.webgpu.min.js` (WebGPU-preferred) | `ort-wasm-simd-threaded.asyncify.wasm` | 25,749,873 bytes |
+
+**v1.29.0 re-vendor (Phase 217-02, 2026-09-05):** `onnxruntime-web` moved
+1.27.0 -> 1.29.0. The pairing above was re-verified by grepping the freshly
+installed 1.29.0 bundles for the literal `.wasm`/`.mjs` filename each
+requests — `ort.wasm.min.js` still greps to exactly `ort-wasm-simd-threaded.mjs`
+and `ort.webgpu.min.js` still greps to exactly
+`ort-wasm-simd-threaded.asyncify.mjs`. Pairing is UNCHANGED at 1.29.0; only
+the byte sizes moved (table above reflects the new sizes). The
+`ENGINE_ASSET_CACHE_VERSION` bump accompanying this re-vendor (1 -> 2, see
+`engineAssetCache.ts`) is what invalidates the old 1.27.0 bytes sitting in a
+returning browser's CacheStorage.
+
+**Re-vendoring command used (run from `frontend/` after `npm install`):**
+
+```bash
+cp node_modules/onnxruntime-web/dist/{ort.wasm.min.js,ort.webgpu.min.js,ort-wasm-simd-threaded.mjs,ort-wasm-simd-threaded.wasm,ort-wasm-simd-threaded.asyncify.mjs,ort-wasm-simd-threaded.asyncify.wasm} public/maia/
+```
+
+**SHA-256 of the six vendored runtime files at v1.29.0** (same discipline as
+the model artifact table above; reproduce with `sha256sum frontend/public/maia/<file>`):
+
+| File | SHA-256 | Size |
+|------|---------|------|
+| `ort.wasm.min.js` | `f87630372da0668a72b4304e062365117cbe432d6060ca146799b1c1888460ae` | 50,196 bytes |
+| `ort.webgpu.min.js` | `2d0bac4406b97d87c2ee2f279a0e6ad089567e62283d41e7e535a40e5c03d2f5` | 66,416 bytes |
+| `ort-wasm-simd-threaded.mjs` | `5a15f1fd086b3f6c2baf1f35105b8f502653b567e165cef80028870b39748747` | 24,218 bytes |
+| `ort-wasm-simd-threaded.wasm` | `ec8580a9d7b9476ceee52e10a7f94124e4dc71a019d666ed6d4726697c109a4d` | 13,961,845 bytes |
+| `ort-wasm-simd-threaded.asyncify.mjs` | `5d25483158d53d8f34d0e9c06a654d56c8dca4ebdf370ea0982ef11315a00e0e` | 51,407 bytes |
+| `ort-wasm-simd-threaded.asyncify.wasm` | `503d17cb7411b79781b9fad1cf0978f03cf06b050c7d399c730e914f473bf549` | 25,749,873 bytes |
+
+Each hash was cross-checked against `sha256sum` of the corresponding file
+under `frontend/node_modules/onnxruntime-web/dist/` at the moment of vendoring
+(identical) — the copy command above was run once, from `node_modules/` only,
+never from a download or CDN.
 
 **Empirical `wasmBinary` suppression gate (213-09-PLAN.md Task 1 — verified
 headlessly in Node, not by reading docs):** both vendored `.mjs` loaders
@@ -128,6 +162,27 @@ WebGPU path on `wasmPaths` resolution.
 The `.mjs` loader itself (24-47 KB) is still resolved by onnxruntime-web via
 `ort.env.wasm.wasmPaths` inside the worker — expected and negligible, not a
 defect this change needs to prevent.
+
+**v1.29.0 re-check (2026-09-05, Phase 217-02):** re-ran the same headless
+method against the freshly re-vendored 1.29.0 `.mjs` loaders and `.wasm`
+binaries, copied into an isolated scratchpad directory (not committed —
+same throwaway-script precedent as 213-09). One fix was needed vs. the
+original script: the loader's factory is async and performs its actual wasm
+read in a later microtask, so the `fs.readFileSync` instrumentation must stay
+installed until the factory's returned promise settles, not just for the
+duration of the synchronous call — reverting it immediately produced a false
+zero-read baseline on the first attempt (caught by the "a zero-read baseline
+is inconclusive, not a pass" rule). Result for BOTH 1.29.0 builds, matching
+the 1.27.0 baseline above exactly:
+
+- **Without `wasmBinary` set:** exactly ONE read of the real `.wasm` file (4
+  runs total: 2 builds x with/without).
+- **With `wasmBinary` set to the real bytes:** ZERO reads of the `.wasm` file
+  for either build.
+
+The `wasmBinary` handoff still suppresses the runtime's own `.wasm` read on
+both 1.29.0 loaders — the Phase 213-09 byte-ownership contract holds across
+this version bump.
 
 ## Engine-asset CacheStorage layer (Phase 213-12, D-20)
 

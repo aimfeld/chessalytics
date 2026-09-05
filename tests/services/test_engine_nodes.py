@@ -364,6 +364,6 @@ class TestEvaluateNodesRealEngine:
         finally:
             try:
                 await protocol.quit()
-            except (chess.engine.EngineError, chess.engine.EngineTerminatedError, RuntimeError):
+            except chess.engine.EngineError, chess.engine.EngineTerminatedError, RuntimeError:
                 pass
             transport.close()

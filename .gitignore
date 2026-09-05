@@ -266,3 +266,6 @@ scripts/engine_disagreement_study/data/prealigned-run/seed153_scan_shard-*.ndjso
 # Analysis notebook chart exports (analysis/README.md, "Sharing charts with Claude")
 analysis/out/*
 !analysis/out/.gitkeep
+
+# GSD per-session phase lock (written by gsd-tools state.begin-phase)
+.planning/milestone.lock

@@ -41,8 +41,13 @@ import type { EngineAssetId } from './engineAssetProgress';
  * differently-versioned engine-asset cache away). Deliberately NOT exported
  * (knip): nothing outside this module needs the raw number, only the derived
  * name below.
+ *
+ * Bumped 1 -> 2 (Phase 217-02, 2026-09-05): the six vendored onnxruntime-web
+ * runtime files under `public/maia/` were replaced at 1.29.0 (different
+ * bytes, same filenames), so every returning browser must discard its
+ * cached 1.27.0-era bytes rather than keep serving them indefinitely.
  */
-const ENGINE_ASSET_CACHE_VERSION = 1;
+const ENGINE_ASSET_CACHE_VERSION = 2;
 
 /**
  * The stale-cache sweep filters on this prefix — never anything broader.
@@ -74,7 +79,7 @@ let cacheOpenPromise: Promise<Cache | null> | null = null;
  * Set once a `cache.put` rejects (quota, storage pressure, an opaque-write
  * refusal). After that, every later write is skipped for the rest of the
  * page session so an over-quota device (iOS's ~50 MB Cache API limit against
- * 66.5 MB of assets — the same limit `vite.config.ts`'s `globIgnores`
+ * 66.9 MB of assets — the same limit `vite.config.ts`'s `globIgnores`
  * comment records) does not thrash write-evict-write on every start; it
  * simply degrades to today's HTTP-cache behavior after the first refusal.
  */

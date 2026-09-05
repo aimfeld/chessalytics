@@ -151,7 +151,7 @@ def _board_after_flaw(fen: str, first_move_uci: str) -> chess.Board | None:
         move = chess.Move.from_uci(first_move_uci)
         board.push(move)
         return board
-    except (ValueError, AssertionError):
+    except ValueError, AssertionError:
         return None
 
 

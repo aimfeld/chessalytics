@@ -16,7 +16,7 @@ These tests prove that invariant WITHOUT building a Docker image:
 
 * the worker's exact install shape (`uv export --no-dev`, no group) resolves a set
   that excludes onnxruntime and numpy;
-* the backend's shape (`--group maia-inference`) DOES include onnxruntime==1.20.1;
+* the backend's shape (`--group maia-inference`) DOES include onnxruntime==1.29.0;
 * NO third-party web-push package resolves in either shape -- the push crypto is
   vendored in `app/services/push_crypto.py`, so PUSH-05 is satisfied by absence
   rather than by isolation (see that module's docstring);
@@ -46,8 +46,11 @@ WORKER_DOCKERFILE = REPO_ROOT / "Dockerfile.worker"
 INFERENCE_GROUP = "maia-inference"
 # Packages that must stay isolated to the backend (never in the worker image).
 ISOLATED_PACKAGES = ("onnxruntime", "numpy")
-# The exact pin required by the vendored model (>=1.22 segfaults it — see Plan 01).
-ONNXRUNTIME_PIN = "onnxruntime==1.20.1"
+# The exact pin the vendored model is measured against. 1.20.1 was the original
+# pin (>=1.22 segfaulted it at the time, see Plan 01); Phase 218 re-measured 1.29.0
+# clean (218-evidence-onnxruntime-1.29.0-python.txt) and raised the pin. Any bump
+# must re-run scripts/maia_parity_spike.py first, then update this constant.
+ONNXRUNTIME_PIN = "onnxruntime==1.29.0"
 
 # Phase 201 (PUSH-05). The push send stack no longer contains ANY third-party
 # web-push package: `app/services/push_crypto.py` vendors the ~110 lines we need
@@ -140,7 +143,7 @@ def test_inference_packages_present_only_in_maia_group() -> None:
     joined = " ".join(group_deps).lower()
     assert ONNXRUNTIME_PIN in joined, (
         f"expected {ONNXRUNTIME_PIN!r} pinned in the {INFERENCE_GROUP} group "
-        "(>=1.22 segfaults the vendored model — see Plan 01)."
+        "(exact pin guarded by the parity spike, see Phase 218)."
     )
     assert "numpy" in joined, f"expected numpy in the {INFERENCE_GROUP} group"
 

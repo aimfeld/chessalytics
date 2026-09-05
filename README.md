@@ -17,7 +17,7 @@
   <a href="https://github.com/flawchess/flawchess/actions/workflows/github-code-scanning/codeql"><img alt="CodeQL" src="https://github.com/flawchess/flawchess/actions/workflows/github-code-scanning/codeql/badge.svg" /></a>
   <a href="https://docs.renovatebot.com"><img alt="Renovate" src="https://img.shields.io/badge/renovate-enabled-brightgreen?logo=renovatebot" /></a>
   <img alt="License" src="https://img.shields.io/badge/license-AGPL--3.0-blue" />
-  <img alt="Python" src="https://img.shields.io/badge/python-3.13-blue" />
+  <img alt="Python" src="https://img.shields.io/badge/python-3.14-blue" />
   <img alt="React" src="https://img.shields.io/badge/react-19-blue" />
   <img alt="FastAPI" src="https://img.shields.io/badge/fastapi-0.115-green" />
   <img alt="PostgreSQL" src="https://img.shields.io/badge/postgresql-18-blue" />
@@ -48,7 +48,7 @@ A free, open-source chess analysis platform. Import your games from chess.com an
 
 | Layer | Technology |
 |-------|------------|
-| Backend | FastAPI, Python 3.13, SQLAlchemy 2.x, Alembic |
+| Backend | FastAPI, Python 3.14, SQLAlchemy 2.x, Alembic |
 | Frontend | React 19, TypeScript, Vite 5, Tailwind CSS |
 | Database | PostgreSQL 18 |
 | Chess | python-chess (Zobrist hashing), chess.js, react-chessboard |
@@ -218,7 +218,7 @@ that file's **Exceptions (non-free)** section, so it must not be vendored.
 
 ### Prerequisites
 
-- Python 3.13 + [uv](https://docs.astral.sh/uv/)
+- Python 3.14 + [uv](https://docs.astral.sh/uv/)
 - Node.js 20+
 - Docker
 

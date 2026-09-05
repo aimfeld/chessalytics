@@ -627,7 +627,7 @@ describe('ensureOrtRuntime — cache provenance (Phase 213-12, D-20)', () => {
 // This is a recorded proof, not an automated mutation harness: the assertion
 // below documents that forcing `probeOrtBackend()`'s predicate to always
 // report the feature present (simulating a broken/removed guard) makes the
-// no-f16 case request the asyncify URL — the exact 24.3 MB defect this
+// no-f16 case request the asyncify URL — the exact 25.7 MB defect this
 // module exists to prevent. Verified by temporarily editing
 // `probeOrtBackend()`'s `features.has(REQUIRED_WEBGPU_FEATURE)` line to a
 // literal `true` and re-running this file: the "an adapter NOT reporting

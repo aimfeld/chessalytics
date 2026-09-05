@@ -1,4 +1,4 @@
-import { useEffect } from 'react';
+import { useEffect, useRef } from 'react';
 import { useNavigate } from 'react-router';
 import { toast } from 'sonner';
 
@@ -16,8 +16,16 @@ import { useAuth } from '@/hooks/useAuth';
 export function OAuthCallbackPage() {
   const navigate = useNavigate();
   const { loginWithToken } = useAuth();
+  const handledRef = useRef(false);
 
   useEffect(() => {
+    // Bug fix: under <StrictMode> (dev) React replays this effect once. The first run's
+    // navigate('/') has already stripped the #token fragment from window.location, so the
+    // replay saw no token and fired "Google sign-in failed" even though login succeeded.
+    // Refs survive the StrictMode replay, so this makes the callback handling run once.
+    if (handledRef.current) return;
+    handledRef.current = true;
+
     const hash = window.location.hash;
     const params = new URLSearchParams(hash.slice(1)); // strip leading #
     const token = params.get('token');

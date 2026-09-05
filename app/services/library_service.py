@@ -137,7 +137,7 @@ def _best_move_identity_plies(positions: list[GamePosition]) -> set[int]:
             if pos.best_move is not None and played_move == chess.Move.from_uci(pos.best_move):
                 identity_plies.add(pos.ply)
             board.push(played_move)
-    except (ValueError, chess.IllegalMoveError):
+    except ValueError, chess.IllegalMoveError:
         return identity_plies
     return identity_plies
 

@@ -87,7 +87,7 @@ def build_detector_board(row: PuzzleRow) -> chess.Board:
             board = chess.Board(pre)
             board.push(chess.Move.from_uci(first_move))
             return board
-        except (ValueError, chess.IllegalMoveError, AssertionError):
+        except ValueError, chess.IllegalMoveError, AssertionError:
             pass
     return chess.Board(row["fen"])
 

@@ -1,19 +1,18 @@
 ---
 gsd_state_version: 1.0
 milestone: v2.15
-current_phase: 216
-current_phase_name: Audit Bugs and Quick Wins
-status: executing
-stopped_at: Completed 216-06-PLAN.md
-last_updated: "2026-09-04T19:33:44.000Z"
-last_activity: 2026-09-04
-last_activity_desc: "Phase 216 plan 06 complete: all eight D-13 nesting-depth breaches fixed via zero-behavior-change extraction (lichess_client.py fetch_lichess_games 7->3, user_benchmark_percentiles_service.py compute_stage_a/b 6/7->4, position_bookmarks.py get_suggestions and openings_service.py get_time_series 5->3, chesscom_client.py/import_service.py/library_service.py 5->4); scripts/check_function_size.py gated as a CI step and a CLAUDE.md pre-merge gate line (D-14); full pre-merge gate green (backend 4506 passed/19 skipped, frontend 3894/3894 tests). Phase 216 is now 7 of 7 plans complete."
-state_head: 7debdfc00
+current_phase: 218
+status: completed
+stopped_at: Phase 218 complete — all phases complete
+last_updated: "2026-09-05T09:00:35.809Z"
+last_activity: 2026-09-05
+last_activity_desc: Phase 218 complete
+state_head: 1f5c52bfb24d4834cf55d292a621af8b445efc13
 progress:
-  total_phases: 1
-  completed_phases: 0
-  total_plans: 7
-  completed_plans: 7
+  total_phases: 3
+  completed_phases: 3
+  total_plans: 12
+  completed_plans: 12
 milestone_name: God-File Decomposition & Complexity Gates
 ---
 
@@ -21,41 +20,29 @@ milestone_name: God-File Decomposition & Complexity Gates
 
 ## Current Position
 
-Phase: 216 (Audit Bugs and Quick Wins) — ALL PLANS COMPLETE (7 of 7)
-Plans: 7 of 7 complete. 216-06 done (last plan) — all eight D-13 nesting-depth breaches
-fixed via zero-behavior-change extraction: `lichess_client.py::fetch_lichess_games` 7->3
-(three helpers: `_raise_for_status`, `_normalize_line`, `_stream_one_attempt`),
-`user_benchmark_percentiles_service.py::compute_stage_a`/`compute_stage_b` 6/7->4 (shared
-`_compute_and_upsert_cell` helper + `itertools.product` double-loop flattening for stage B),
-`position_bookmarks.py::get_suggestions` and `openings_service.py::get_time_series` 5->3
-(`_build_position_suggestion`, `_build_bookmark_time_series`), and the three import/library
-breaches in `chesscom_client.py`/`import_service.py`/`library_service.py` 5->4
-(`_yield_games_from_archive`, `_resolve_lichess_since_ms`, `_build_tactic_by_ply_entry`).
-`scripts/check_function_size.py` now gated as a CI step (`Function-size gate`) and a
-`CLAUDE.md` pre-merge gate line (D-14), scoped to `app/`. Full pre-merge gate green: ruff
-format/check clean, ty clean (app+tests+scripts and analysis project), backend suite 4506
-passed/19 skipped, frontend lint clean, frontend tests 3894/3894 passed. No test file
-rewritten, no `check-function-size` pragma added. 216-04 done — CI test job swaps
-`pip install uv` for the cached `astral-sh/setup-uv@v10` action and adds npm store caching to
-`actions/setup-node` keyed on `frontend/package-lock.json`; before-median CI wall-clock
-recorded at 567s/n=7, after-median deferred to the next release PR since ci.yml only triggers
-on `pull_request`/`workflow_dispatch`. 216-05 done — `/api/health` now round-trips Postgres
-under a named timeout and returns 503 with a fixed detail-free body on failure/timeout; SC-5
-covered by tests/test_health.py, full backend gate green 4502 passed/19 skipped. 216-01 done —
-Caddy global `servers{}` block trusts exactly the published Cloudflare ranges and resolves
-`Cf-Connecting-Ip`; Task 2 checkpoint resolved as option A (accept-logged-ip: keep the real
-client IP in the access log, correct the stale comment); `bin/check_cloudflare_ips.sh` drift
-check + docs added; SC-1's post-deploy `worker_heartbeats.last_ip` check is recorded as
-HUMAN-UAT, pending the next `/deploy`. 216-03 (Renovate: app was installed all along, Mend
-Silent mode was the blocker, dashboard #338) and 216-07 (.env.example + orphan worktree) are
-complete too. 216-02 done — `deploy/Caddyfile` ships an unconditioned `header{}` block on
-the `flawchess.com` site body (HSTS no-preload, X-Content-Type-Options, Referrer-Policy,
-Permissions-Policy, report-only CSP reporting to Sentry via report-uri + Reporting-Endpoints);
-`.github/workflows/ci.yml` gained a `Caddyfile validate` step (test job) and the deploy job's
-Health check now asserts all five headers post-deploy; SC-2's post-deploy `curl -I` check and
-Sentry violation monitoring are recorded as HUMAN-UAT, pending the next `/deploy`.
-Status: Phase 216 all 7 plans executed. Ready for the full pre-merge gate + squash-merge to
-`main` (already re-verified green as part of 216-06's Task 5), then `/gsd-verify-work 216`.
+Phase: 218
+Plans: 2 of 2 complete. Plan 01 (cluster 1 — vitest 4.x -> 5.x, jsdom 29.x -> 30.x, undici
+override deleted) squash-merged to `main` as `6ca0f8ecd`; full frontend suite green
+(251 files / 3894 tests) on the first run, no test edits needed; full CLAUDE.md pre-merge
+gate green. Plan 02 (cluster 2 — onnxruntime-web 1.27.0 -> 1.29.0, vendored Maia runtime
+re-vendor, byte constants + cache version bump, device HUMAN-UAT) squash-merged to `main`
+as `6f19e0567`; the Task 5 device UAT checkpoint was resolved with the WASM-only-path leg
+passed (owner-confirmed) and the iOS<16.4/low-memory/WebGPU-adapter legs recorded as
+deferred for lack of available hardware (see 217-02-SUMMARY.md). Phase not yet deployed;
+`/deploy` remains a separate later action.
+Status: All phases complete
+
+**Phase 218 actual plan status (the paragraph above is stale Phase 217 carryover left
+in place from before 218 started executing):** 218-01 (native onnxruntime parity spike,
+checkpoint answered `proceed`) complete. 218-02 (raise both native onnxruntime pins to
+1.29.0 + move the backend to Python 3.14 everywhere, both base images re-pinned by
+digest, both container images built locally) complete — commits `1fbdec558` (pin raise)
+and `9832617c9` (Python 3.14 chain). 218-03 (full pre-merge gate, CHANGELOG, squash-merge,
+deploy) remains.
+Deferred follow-up (from Phase 216, still open): SC-4 CI after-median measurement — the
+first warm-cache runs are the next release PR and `production` deploy (caches saved
+2026-09-04 under stable keys, scoped per ref); run the median command in
+216-04-SUMMARY.md after two or three of them.
 
 **Phase 215 is COMPLETE as of 2026-09-04** (8/8 plans, 215-01 through 215-07 plus 215-08
 phase-wide closeout — all six ROADMAP success criteria (0-5) measured against the merged
@@ -173,7 +160,7 @@ Cloudflare nameservers, `maia3_simplified.onnx` and `stockfish-18-lite-single.wa
 return `cf-cache-status: HIT` while still carrying the origin's `max-age=2592000`, and
 `maia-worker.js` still returns `cache-control: no-cache`.
 
-Last activity: 2026-09-04 — Phase 216 execution started
+Last activity: 2026-09-05 — Phase 218 complete
 
 Prior: Phase 213 complete
 `games.initial_fen` added and backfilled in-migration, the opening-transition sample
@@ -196,9 +183,9 @@ Both deployed to production via releases #295 and #296; `main` and `origin/produ
 
 ## Project Reference
 
-See: .planning/PROJECT.md (updated 2026-09-04 after Phase 215)
+See: .planning/PROJECT.md (updated 2026-09-04 after Phase 216)
 Core value: Position-precise WDL across openings + endgames + time pressure on top of users' actual chess.com / lichess games, with personalized LLM commentary and an auto-generated opening-strengths/weaknesses report.
-Current focus: **Phase 215 (Frontend God-File Decomposition) complete 2026-09-04 on its phase branch (verified 6/6, code review 0 critical / 7 warnings in 215-REVIEW.md). Next: optionally `/gsd-code-review 215 --fix` for the warnings (facade<->stage import cycle in workerPool, three never-called `PoolOps` fields, `forkPlyForOrientation`/`flawKey` duplicated across files), then squash-merge `gsd/phase-215-frontend-god-file-decomposition` to `main` (full pre-merge gate; note `analysis/tilt_study/probes/` from the user's own tilt-study commit currently fails ruff/format and rides on this branch). No open milestone: `/gsd-new-milestone` or a seed.** Before that: Milestone v2.13 (Ways In & Honest Answers) 100% complete 2026-08-29 — Phases 212 and 213 both done; squash-merge `gsd/phase-213-*` to `main` (full pre-merge gate), then close the milestone. Previously: v2.12 closed Train's two silent-failure surfaces: push reminders that fail to arrive now recover themselves (device re-sync without spending the one-shot permission, local-day-bounded TTL, VAPID mismatch repair on gesture, claim released on a no-delivery fan-out — Phase 204, SEED-135), and a Train puzzle can no longer contradict itself (free-play root ply graded from the mount search's own ranks, plus a dead band excluding items whose top-two margin sits inside browser-search noise at a measured 34.80% pool cost — Phase 205, SEED-137). Still open and carried forward: SEED-136 (verify the iOS push path on real hardware — no iPhone available, BrowserStack unused), SEED-138 (push-prune log noise + Sentry scope bleed), SEED-130 (uncleared browser Stockfish TT, the reason the dead band is 0.05 wide).
+Current focus: **Phase 216 (Audit Bugs and Quick Wins, SEED-161) complete and deployed 2026-09-04** (PR #339, production 3c64c0371, UAT 4/4). No active phase. Next: pick the next milestone via `/gsd-new-milestone`, or measure the deferred SC-4 CI median after the next release.
 
 ### Superseded: focus after the v2.11 close
 
@@ -858,6 +845,9 @@ v1.29 Live-Engine Analysis Page shipped 2026-06-29 — 5 phases (136–140), 14 
 - [Phase 216]: BENCHMARK_SELECTION_GATE_ENABLED / BENCHMARK_HOMOGENIZE_EVAL_SOURCE stay out of .env.example on purpose (command-line-only per the file's own note); only OAUTH_TUNNEL_ORIGINS and BEST_MOVE_BACKFILL_ENABLED were added
 - [Phase 216]: 216-02: Sentry security-report endpoint sourced from Sentry Client Keys (DSN) page via Sentry API/MCP, not repo contents or env files. — The DSN public key and org-ingest host are runtime secrets injected via VITE_SENTRY_DSN/SENTRY_DSN and exist nowhere in the repo; the value is safe to commit publicly (ingest-only credential, already ships in the frontend bundle).
 - [Phase 216]: CI test job now installs uv via cached astral-sh/setup-uv@v10 instead of pip install uv; npm store cached via actions/setup-node keyed on frontend/package-lock.json
+- [Phase 217]: 217-01: deleted overrides.undici rather than raising it, since jsdom 30 resolves undici@8.10.2 natively with no live advisory
+- [Phase 217]: onnxruntime-web 1.27.0 -> 1.29.0: six vendored Maia runtime files re-vendored and SHA-256-verified; ENGINE_ASSET_CACHE_VERSION bumped 1->2; device UAT recorded with WASM-only-path leg passed, iOS<16.4/low-memory/WebGPU-adapter legs deferred for lack of hardware
+- [Phase 218]: Checkpoint answered proceed: native onnxruntime 1.29.0 clean pass on both Python and Node, phase continues to 218-02/218-03
 
 ### Pending Todos
 
@@ -869,7 +859,7 @@ None active.
 - ⚠️ [Phase 215] `src/pages/__tests__/Train.guestGate.test.tsx`: 2 tests intermittently fail in the full vitest run (bare `waitFor` ceiling under load), pass in isolation, pre-existing on main. See `215-.../deferred-items.md`.
 
 - [Phase 214 review, 214-REVIEW.md] Two BLOCKER findings in the new `scripts/check_function_size.py` gate, neither flipping a verdict for the six in-scope files but both load-bearing for the tool going forward: CR-01 `_depth_of_try` undercounts depth by one when a block sits directly inside a `try` body/handler (false negative; reproduced: `try` + four nested `if`s passes `--fail-over-depth 4`), and CR-02 `logic_loc` counts multi-line signature continuation lines as body (overcounts 201/283 functions, conservative direction). Fix via `/gsd-code-review 214 --fix` before the squash-merge to `main`.
-- [Phase 214] `check_function_size.py` over all of `app/` still reports six pre-existing out-of-scope depth breaches (`lichess_client.py` `fetch_lichess_games` depth 6, `openings_service.py` `get_time_series`, `user_benchmark_percentiles_service.py` `compute_stage_b`, `chesscom_client.py:375`, `import_service.py:1010`, `library_service.py:478`) and 31 baselined ruff complexity findings remain outside the six files; the script gates per file, not app-wide. The four frontend god files (`Analysis.tsx` 4,370, `useBotGame.ts`, `workerPool.ts`, `Openings.tsx`) are untouched and need their own phase with eslint `complexity`/`max-depth`.
+- [Phase 214, resolved by Phase 216] The six out-of-scope depth breaches are fixed (216-06) and `check_function_size.py` now gates all of `app/` in CI and the pre-merge block with zero breaches; the 31 baselined ruff complexity findings outside the six files remain baselined, not fixed.
 - active. (v1.31 and v1.32 are both deployed to production.)
 - [Phase 194] CACHE-01's "a 400-node search evicts none of its own working set" remains inferred, not measured — `GRADE_CACHE_MAX = 1024` against a 352-386 distinct-FEN ceiling measured *before* the change. Accepted as an acknowledged gap at UAT (2026-07-30); risk is extra Stockfish grading work, not wrong results. Closeable cheaply by counting distinct FENs reaching `providers.grade` in a 400-node run through the existing `mctsSearch` test harness. Worth doing if Phase 196's cache-replay design ends up depending on residency.
 
@@ -1010,9 +1000,9 @@ Items acknowledged and deferred at **v1.29 milestone close on 2026-06-29** (user
 
 ## Session Continuity
 
-**Stopped at:** Completed 216-06-PLAN.md
+**Stopped at:** Phase 218 complete — all phases complete
 
-**Last session:** 2026-09-04T19:33:44.000Z
+**Last session:** 2026-09-05T07:58:41.000Z
 
 **Resume file:** None
 
@@ -1174,6 +1164,9 @@ Items acknowledged and deferred at **v1.29 milestone close on 2026-06-29** (user
 | Phase 216 P01 | 85min | 4 tasks | 4 files |
 | Phase 216 P02 | 15min | 2 tasks | 2 files |
 | Phase 216 P04 | 10 min | 3 tasks | 1 files |
+| Phase 217 P01 | 20min | 3 tasks | 2 files |
+| Phase 217 P02 | ~15min+checkpoint | 5 tasks | 17 files |
+| Phase 218 P01 | 8min | 3 tasks | 7 files |
 
 ## Performance Metrics
 

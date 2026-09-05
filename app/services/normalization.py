@@ -92,7 +92,7 @@ def parse_time_control(tc_str: str) -> tuple[TimeControlBucket | None, int | Non
         else:
             base = float(tc_str)
             increment = 0.0
-    except (ValueError, AttributeError):
+    except ValueError, AttributeError:
         return None, None
 
     estimated = int(base + increment * 40)
@@ -139,7 +139,7 @@ def parse_base_and_increment(tc_str: str) -> tuple[int | None, float | None]:
         else:
             base = float(tc_str)
             increment = 0.0
-    except (ValueError, AttributeError):
+    except ValueError, AttributeError:
         return None, None
 
     return int(round(base)), increment

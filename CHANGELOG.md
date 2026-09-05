@@ -21,6 +21,8 @@ in `YYYY-MM-DD` (Europe/Zurich).
 ### Changed
 
 - Internal: Renovate dependency PRs are live again (the Mend app was in Silent mode); in-range Python and npm dependencies caught up with no major bumps; CI caches the uv and npm stores; the function-size gate (nesting depth and logic LOC) now runs in CI and the pre-merge block with all eight remaining breaches fixed; Alembic compares column types and irreversible migrations document their no-op downgrade; frontend Docker bases are digest-pinned. (Phase 216)
+- Internal: the in-browser Maia runtime (onnxruntime-web) moved from 1.27.0 to 1.29.0. Returning devices download the engine runtime once more (about 14 MB on the WASM path, 26 MB on the WebGPU path) because the engine asset cache version was bumped. (Phase 217)
+- Internal: the backend's native Maia runtime (onnxruntime) moved from 1.20.1 to 1.29.0, and the backend now runs on Python 3.14, with container images and CI updated to match. No user-visible behavior change. (Phase 218)
 
 ## [v2.15] God-File Decomposition & Complexity Gates — 2026-09-04
 

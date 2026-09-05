@@ -414,7 +414,7 @@ async def run_stress_test(
         stop_event.set()
         try:
             peak_mem_bytes, peak_conn_count = await asyncio.wait_for(sampler_task, timeout=15.0)
-        except (asyncio.TimeoutError, asyncio.CancelledError):
+        except asyncio.TimeoutError, asyncio.CancelledError:
             sampler_task.cancel()
             peak_mem_bytes = 0
             peak_conn_count = 0
