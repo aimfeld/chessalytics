@@ -20,6 +20,8 @@ import {
   resetEngineAssetCacheForTests,
   ENGINE_ASSET_CACHE_NAME,
   ENGINE_ASSET_CACHE_NAME_PREFIX,
+  ENGINE_ASSET_VERSION_QUERY,
+  versionedEngineAssetUrl,
 } from '../engineAssetCache';
 
 vi.mock('@sentry/react', () => ({ captureException: vi.fn() }));
@@ -459,5 +461,29 @@ describe('getEngineAsset — stale-cache sweep on open', () => {
     expect(caches_.stores.has('workbox-precache-v2-x')).toBe(true);
     expect(caches_.stores.has('html-shell')).toBe(true);
     expect(caches_.stores.has(ENGINE_ASSET_CACHE_NAME)).toBe(true);
+  });
+});
+
+// ─── One-knob invariant (quick 260905-rhc) ─────────────────────────────────
+//
+// `ENGINE_ASSET_CACHE_VERSION` must be the SOLE source feeding both the
+// CacheStorage name and the URL query suffix — a second independent version
+// source is exactly the failure mode this task exists to remove (D-01).
+// Both assertions below use a regex, never a hardcoded version number, so a
+// future bump does not require editing this test.
+
+describe('versionedEngineAssetUrl / ENGINE_ASSET_VERSION_QUERY — one-knob invariant', () => {
+  it('versionedEngineAssetUrl appends the path with a ?v=<digits> suffix', () => {
+    const url = versionedEngineAssetUrl('/maia/some-arbitrary-path.mjs');
+    expect(url).toMatch(/^\/maia\/some-arbitrary-path\.mjs\?v=\d+$/);
+  });
+
+  it('ENGINE_ASSET_VERSION_QUERY and the version embedded in ENGINE_ASSET_CACHE_NAME are the SAME digits', () => {
+    const queryDigits = ENGINE_ASSET_VERSION_QUERY.match(/^\?v=(\d+)$/)?.[1];
+    const cacheNameDigits = ENGINE_ASSET_CACHE_NAME.match(/v(\d+)$/)?.[1];
+
+    expect(queryDigits).toBeDefined();
+    expect(cacheNameDigits).toBeDefined();
+    expect(queryDigits).toBe(cacheNameDigits);
   });
 });

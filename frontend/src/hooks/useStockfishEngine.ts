@@ -379,8 +379,9 @@ export function useStockfishEngine({
       // rather than a bare `new Worker(ENGINE_PATH)` — a non-null `sharedUrl`
       // routes this worker to the already-fetched-once `.wasm` via the
       // glue's own location-hash override; a null `sharedUrl` (shared fetch
-      // never started or failed) constructs against the served path exactly
-      // as before this fix (T-213-07).
+      // never started or failed) still passes the versioned wasm path
+      // through that same override (D-05, quick 260905-rhc) rather than
+      // falling back to an unversioned URL (T-213-07).
       const worker = createStockfishWorker(sharedUrl);
       workerRef.current = worker;
 
