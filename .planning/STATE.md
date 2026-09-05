@@ -4,16 +4,16 @@ milestone: v2.15
 current_phase: 217
 current_phase_name: Frontend Major Bumps — Vitest 5 / jsdom 30 + onnxruntime-web 1.29
 status: executing
-stopped_at: Phase 216 complete — all phases complete
-last_updated: "2026-09-05T03:05:25.510Z"
+stopped_at: Completed 217-01-PLAN.md (cluster 1 squash-merged to main as 6ca0f8ecd)
+last_updated: "2026-09-05T03:17:03.509Z"
 last_activity: 2026-09-05
 last_activity_desc: Phase 217 execution started
-state_head: 067c8564ffa7589f0e14fc8bf047c991bbbff230
+state_head: 6ca0f8ecd713dde22d34f5f6c5e12b8271c295d6
 progress:
   total_phases: 2
   completed_phases: 1
   total_plans: 9
-  completed_plans: 7
+  completed_plans: 8
 milestone_name: God-File Decomposition & Complexity Gates
 ---
 
@@ -22,19 +22,16 @@ milestone_name: God-File Decomposition & Complexity Gates
 ## Current Position
 
 Phase: 217 (Frontend Major Bumps — Vitest 5 / jsdom 30 + onnxruntime-web 1.29) — EXECUTING
-Plans: 7 of 7 complete. Squash-merged to `main` as 907812f82, released to production as
-3c64c0371 (PR #339), UAT 4/4 passed (worker_heartbeats.last_ip now real Hetzner/ISP
-addresses; all five security headers live on `/` and `/api/health`, no COOP/COEP; no CSP
-violation reports in Sentry in the first hour; CI cache deliverable accepted). Three CI
-fixes landed on `main` during the release: `setup-uv` pinned to `v10.0.1` (no floating v10
-tag), conftest routes the `get_engine` dependency to the per-run test DB (serial CI hit 503
-on `/api/health` from the middleware test), and seven dead re-exports left by Phase 215
-removed after the phase's `npm update` moved knip 6.15 -> 6.34.
+Plans: 1 of 2 complete. Plan 01 (cluster 1 — vitest 4.x -> 5.x, jsdom 29.x -> 30.x, undici
+override deleted) squash-merged to `main` as `6ca0f8ecd`; full frontend suite green
+(251 files / 3894 tests) on the first run, no test edits needed; full CLAUDE.md pre-merge
+gate green. Plan 02 (cluster 2 — onnxruntime-web 1.27.0 -> 1.29.0, vendored Maia runtime
+re-vendor, D-07 device HUMAN-UAT) is next, on a fresh phase branch cut from this new `main`.
 Status: Executing Phase 217
-milestone or a standalone phase written by hand (see [[project_phase_insert_split_roadmap]]).
-Deferred follow-up: SC-4 CI after-median measurement — the first warm-cache runs are the
-next release PR and `production` deploy (caches saved 2026-09-04 under stable keys, scoped
-per ref); run the median command in 216-04-SUMMARY.md after two or three of them.
+Deferred follow-up (from Phase 216, still open): SC-4 CI after-median measurement — the
+first warm-cache runs are the next release PR and `production` deploy (caches saved
+2026-09-04 under stable keys, scoped per ref); run the median command in
+216-04-SUMMARY.md after two or three of them.
 
 **Phase 215 is COMPLETE as of 2026-09-04** (8/8 plans, 215-01 through 215-07 plus 215-08
 phase-wide closeout — all six ROADMAP success criteria (0-5) measured against the merged
@@ -837,6 +834,7 @@ v1.29 Live-Engine Analysis Page shipped 2026-06-29 — 5 phases (136–140), 14 
 - [Phase 216]: BENCHMARK_SELECTION_GATE_ENABLED / BENCHMARK_HOMOGENIZE_EVAL_SOURCE stay out of .env.example on purpose (command-line-only per the file's own note); only OAUTH_TUNNEL_ORIGINS and BEST_MOVE_BACKFILL_ENABLED were added
 - [Phase 216]: 216-02: Sentry security-report endpoint sourced from Sentry Client Keys (DSN) page via Sentry API/MCP, not repo contents or env files. — The DSN public key and org-ingest host are runtime secrets injected via VITE_SENTRY_DSN/SENTRY_DSN and exist nowhere in the repo; the value is safe to commit publicly (ingest-only credential, already ships in the frontend bundle).
 - [Phase 216]: CI test job now installs uv via cached astral-sh/setup-uv@v10 instead of pip install uv; npm store cached via actions/setup-node keyed on frontend/package-lock.json
+- [Phase 217]: 217-01: deleted overrides.undici rather than raising it, since jsdom 30 resolves undici@8.10.2 natively with no live advisory
 
 ### Pending Todos
 
@@ -989,9 +987,9 @@ Items acknowledged and deferred at **v1.29 milestone close on 2026-06-29** (user
 
 ## Session Continuity
 
-**Stopped at:** Phase 216 complete — all phases complete
+**Stopped at:** Completed 217-01-PLAN.md (cluster 1 squash-merged to main as 6ca0f8ecd)
 
-**Last session:** 2026-09-04T20:20:00.000Z
+**Last session:** 2026-09-05T03:17:03.362Z
 
 **Resume file:** None
 
@@ -1153,6 +1151,7 @@ Items acknowledged and deferred at **v1.29 milestone close on 2026-06-29** (user
 | Phase 216 P01 | 85min | 4 tasks | 4 files |
 | Phase 216 P02 | 15min | 2 tasks | 2 files |
 | Phase 216 P04 | 10 min | 3 tasks | 1 files |
+| Phase 217 P01 | 20min | 3 tasks | 2 files |
 
 ## Performance Metrics
 

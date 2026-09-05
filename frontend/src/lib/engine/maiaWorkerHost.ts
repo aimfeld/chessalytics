@@ -348,7 +348,7 @@ function spawn(source: MaiaErrorSource, mode: 'auto' | 'wasm'): void {
  * Constructs a fresh Worker and wires its handlers, once the backend
  * decision and the runtime buffer are both already resolved. `runtimeBuffer`
  * is TRANSFERRED, not copied — a zero-copy pointer handoff rather than a
- * structured clone of 13.5-24.3 MB (213-RESEARCH.md Pitfall 2).
+ * structured clone of 14.0-25.7 MB (213-RESEARCH.md Pitfall 2).
  *
  * Buffer-safety audit (G-213-36, Phase 213-11; mechanism moved in Phase
  * 213-12, D-20): transferring — and thereby detaching — `runtimeBuffer` here

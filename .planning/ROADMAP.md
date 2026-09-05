@@ -308,7 +308,7 @@ Renovate Dependency Dashboard #338.
 Plans:
 **Wave 1**
 
-- [ ] 217-01-PLAN.md — Cluster 1: vitest/@vitest-* 5.x + jsdom 30.x in one commit, undici override resolved, own squash-merge (wave 1)
+- [x] 217-01-PLAN.md — Cluster 1: vitest/@vitest-* 5.x + jsdom 30.x in one commit, undici override resolved, own squash-merge (wave 1)
 
 **Wave 2** *(blocked on Wave 1 completion)*
 
