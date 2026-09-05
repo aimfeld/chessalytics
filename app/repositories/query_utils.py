@@ -4,7 +4,7 @@ import datetime
 from collections.abc import Sequence
 from typing import Any, Literal, cast, get_args
 
-from sqlalchemy import case, literal
+from sqlalchemy import and_, case, literal, or_
 from sqlalchemy.sql.elements import ColumnElement
 
 from app.models.game import Game
@@ -159,6 +159,10 @@ def apply_game_filters(
     to_date: datetime.date | None,
     color: str | None = None,
     *,
+    # SEED-163 2b: keyword-only, default-False so every existing caller keeps
+    # today's behavior unchanged; only library_repository's two Library-surface
+    # query functions set it True.
+    native_games_bypass_opponent_and_rated: bool = False,
     opponent_gap_min: int | None = None,
     opponent_gap_max: int | None = None,
     flaw_severity: Sequence[str] | None = None,
@@ -205,6 +209,18 @@ def apply_game_filters(
                  None = no upper bound.
         color: Filter by user's piece color ("white"/"black"). None = no color filter
                (used by endgame and stats repos where color is not applicable).
+        native_games_bypass_opponent_and_rated: Only the Library Games and Flaws
+                 surfaces set this flag. When True, rows whose platform is in
+                 DEFAULT_EXCLUDED_PLATFORMS ignore the Opponent and Rated filters
+                 unconditionally (including an explicit user selection), because
+                 those games are stored rated=False and, for "flawchess",
+                 is_computer_game=True — so the new Human+Rated analytics
+                 defaults would otherwise hide a game the user just finished
+                 from the only place it is browsable. Those rows remain
+                 governed by the Platform filter and, for "pgn", by the
+                 Library "pasted" control (D-14). This extends Phase 167
+                 D-03's "always here" guarantee from the platform axis to the
+                 opponent/rated axes. Default False = today's behavior.
         opponent_gap_min: Lower bound (inclusive) on opponent_rating - user_rating.
                          None = unbounded below.
         opponent_gap_max: Upper bound (inclusive) on opponent_rating - user_rating.
@@ -284,12 +300,30 @@ def apply_game_filters(
         # RESEARCH Pitfall 1). Callers that want flawchess must pass it
         # explicitly in `platform` (e.g. library_service.get_library_games).
         stmt = stmt.where(Game.platform.notin_(DEFAULT_EXCLUDED_PLATFORMS))
+    # SEED-163 2b: opponent_type and rated are composed into ONE predicate (rather
+    # than independent .where() calls) so native_games_bypass_opponent_and_rated
+    # can wrap the whole thing in a platform-exemption OR. When the flag is False
+    # the AND of active conditions is equivalent to the old one-where-per-predicate
+    # shape — same observable row set.
+    opponent_rated_conditions: list[ColumnElement[bool]] = []
     if rated is not None:
-        stmt = stmt.where(Game.rated == rated)  # noqa: E712
+        opponent_rated_conditions.append(Game.rated == rated)  # noqa: E712
     if opponent_type == "human":
-        stmt = stmt.where(Game.is_computer_game == False)  # noqa: E712
+        opponent_rated_conditions.append(Game.is_computer_game == False)  # noqa: E712
     elif opponent_type == "bot":
-        stmt = stmt.where(Game.is_computer_game == True)  # noqa: E712
+        opponent_rated_conditions.append(Game.is_computer_game == True)  # noqa: E712
+    if opponent_rated_conditions:
+        combined_condition = and_(*opponent_rated_conditions)
+        if native_games_bypass_opponent_and_rated:
+            # Library-only exemption (SEED-163 2b): flawchess/pgn rows are stored
+            # rated=False (and flawchess is_computer_game=True), so a Human+Rated
+            # default would otherwise hide a game from the only surface that
+            # browses it. The Platform filter above still governs these rows.
+            stmt = stmt.where(
+                or_(Game.platform.in_(DEFAULT_EXCLUDED_PLATFORMS), combined_condition)
+            )
+        else:
+            stmt = stmt.where(combined_condition)
     # D-10: apply date bounds only when set. to_date is shifted +1 day so the
     # comparison ``played_at < to_date + 1 day`` covers the full to_date day.
     if from_date is not None:

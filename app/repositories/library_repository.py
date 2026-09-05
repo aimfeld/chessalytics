@@ -1200,6 +1200,10 @@ async def query_flaws(
         to_date=to_date,
         color=color,
         user_id=user_id,
+        # SEED-163 2b: the Flaws tab is a Library surface, so flawchess/pgn rows
+        # must stay reachable regardless of the new Human+Rated analytics
+        # defaults (they are always rated=False / bot-flagged).
+        native_games_bypass_opponent_and_rated=True,
     )
     base_stmt = base_stmt.where(GameFlaw.game_id.in_(game_filter_stmt))
 
@@ -1822,6 +1826,10 @@ async def query_filtered_games(
         user_id=user_id,
         has_gem=has_gem,
         has_great=has_great,
+        # SEED-163 2b: the Library Games tab is the one surface that must keep
+        # showing flawchess/pgn rows under the new Human+Rated analytics
+        # defaults (they are always rated=False / bot-flagged).
+        native_games_bypass_opponent_and_rated=True,
     )
 
     # Count total matching games (before pagination).
