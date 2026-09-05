@@ -1,19 +1,20 @@
 ---
 gsd_state_version: 1.0
 milestone: v2.16
-milestone_name: Audit Hardening & Dependency Currency
-current_phase: 218
-current_phase_name: backend-onnxruntime-parity-spike-python-3-14-chain
 status: milestone_complete
-stopped_at: v2.16 closed — phases 216–218 archived, tagged, released, deployed (releases #339, #341)
-last_updated: "2026-09-05T17:05:00.000Z"
-last_activity: 2026-09-05
-last_activity_desc: Completed quick task 260905-p0t — SEED-163 group 2 analytics defaults Human+Rated + Library native-game bypass (main at 599cedfd7, unreleased)
+stopped_at: v2.16 closed — phases 216–218 archived, tagged, released, deployed (releases
+last_updated: "2026-09-05T21:23:59.570Z"
+state_head: c6e957ff1e80a6149d39c53b42d32bc1e6d59ef1
 progress:
   total_phases: 3
   completed_phases: 3
   total_plans: 12
   completed_plans: 12
+milestone_name: Audit Hardening & Dependency Currency
+last_activity: 2026-09-05
+current_phase: 218
+current_phase_name: backend-onnxruntime-parity-spike-python-3-14-chain
+last_activity_desc: Completed quick task 260905-p0t — SEED-163 group 2 analytics defaults Human+Rated + Library native-game bypass (main at 599cedfd7, unreleased)
 ---
 
 # Project State: FlawChess
@@ -28,6 +29,7 @@ Phase: none active. **v2.16 Audit Hardening & Dependency Currency closed 2026-09
 Status: Milestone complete, deployed, nothing pending.
 
 Open threads carried forward (not blockers):
+
 - SEED-162 cluster 3 (TypeScript 7) blocked upstream until a `typescript-eslint` release accepts it.
 - Phase 217 device legs (iOS <16.4 no-SIMD, low-memory OOM, WebGPU adapter) deferred for lack of hardware (`v2.16-phases/217-.../217-UAT.md`).
 - Phase 215's `Train.guestGate.test.tsx` full-run flake still deferred (`v2.15-phases/215-.../deferred-items.md`).
@@ -805,6 +807,7 @@ None active.
 | 260905-mgx | SEED-163 group 1: route openings_repository `_build_base_query` + `query_time_series` through `apply_game_filters` so DEFAULT_EXCLUDED_PLATFORMS (flawchess/pgn) applies to Openings WDL and the bookmark score-over-time chart; regression test + changelog | 2026-09-05 | 80da14e4 | [260905-mgx-seed-163-group-1-openings-filter-drift-f](./quick/260905-mgx-seed-163-group-1-openings-filter-drift-f/) |
 | 260905-rhc | Version every vendored engine runtime URL (/maia/*, /engine/*, Maia model) with a ?v= query derived from ENGINE_ASSET_CACHE_VERSION so a stale Cloudflare edge entry can never be served after an onnxruntime-web/Stockfish bump; wasmPaths object form, Stockfish degraded path, Workbox precache, source-gate test, changelog | 2026-09-05 | ad9a8f33 | [260905-rhc-version-the-vendored-engine-runtime-urls](./quick/260905-rhc-version-the-vendored-engine-runtime-urls/) |
 | 260905-p0t | SEED-163 group 2: analytics defaults flip to Human + Rated (matches benchmark cohort); `apply_game_filters` gains a Library-only `native_games_bypass_opponent_and_rated` flag so flawchess/pgn games stay browsable in Library Games/Flaws; Library disclosure hint; named "no rated games against humans" empty state on Openings/Endgames/Stats; changelog | 2026-09-05 | 599cedfd7 | [260905-p0t-seed-163-group-2-analytics-default-human](./quick/260905-p0t-seed-163-group-2-analytics-default-human/) |
+| 85 | bot cards: per-style border + glow, brighter on hover | 2026-09-05 | c6e957ff1 | — |
 
 ## Deferred Items
 
