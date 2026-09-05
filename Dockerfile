@@ -23,6 +23,11 @@ FROM python:3.14-slim@sha256:cad9a2c871761c413caa6fdd6441c783451e740a48aaeba60ae
 WORKDIR /app
 COPY --from=builder /app /app
 ENV PATH="/app/.venv/bin:$PATH"
+# Strip pip from the runtime image. The app runs from the uv-managed venv and
+# never invokes pip, but the base image's pip vendors msgpack/setuptools copies
+# that Trivy flags as HIGH (GHSA-6v7p-g79w-8964, CVE-2025-47273) and that no
+# base-image update fixes on our schedule. Removing pip removes the finding.
+RUN rm -rf /usr/local/lib/python3.14/site-packages/pip* /usr/local/bin/pip*
 
 # Stockfish (pinned official release sf_18) — supply-chain integrity via SHA-256
 # See .planning/milestones/v1.15-phases/78-stockfish-eval-cutover-for-endgame-classification/78-CONTEXT.md D-06

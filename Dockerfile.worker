@@ -70,6 +70,11 @@ WORKDIR /app
 COPY --from=builder /app /app
 COPY --from=stockfish /usr/local/bin/stockfish /usr/local/bin/stockfish
 ENV PATH="/app/.venv/bin:$PATH"
+# Strip pip from the runtime image. The app runs from the uv-managed venv and
+# never invokes pip, but the base image's pip vendors msgpack/setuptools copies
+# that Trivy flags as HIGH (GHSA-6v7p-g79w-8964, CVE-2025-47273) and that no
+# base-image update fixes on our schedule. Removing pip removes the finding.
+RUN rm -rf /usr/local/lib/python3.14/site-packages/pip* /usr/local/bin/pip*
 ENV STOCKFISH_PATH=/usr/local/bin/stockfish
 # Stream the worker's print() logs to `docker logs` in real time. Without this,
 # Python block-buffers stdout when it isn't a TTY (the Docker case), so log lines
