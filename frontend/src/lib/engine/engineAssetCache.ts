@@ -46,8 +46,43 @@ import type { EngineAssetId } from './engineAssetProgress';
  * runtime files under `public/maia/` were replaced at 1.29.0 (different
  * bytes, same filenames), so every returning browser must discard its
  * cached 1.27.0-era bytes rather than keep serving them indefinitely.
+ *
+ * Bumped 2 -> 3 (quick 260905-rhc, 2026-09-05): the URLs built from this
+ * constant now carry a `?v=<n>` query (see `ENGINE_ASSET_VERSION_QUERY` /
+ * `versionedEngineAssetUrl` below), so every existing `...-v2` CacheStorage
+ * entry keys on a URL nothing will ever request again. Bumping makes the
+ * next open/sweep delete those orphans rather than retain ~67 MB
+ * unreachable forever.
  */
-const ENGINE_ASSET_CACHE_VERSION = 2;
+const ENGINE_ASSET_CACHE_VERSION = 3;
+
+/**
+ * The shared `?v=<n>` query suffix, derived from `ENGINE_ASSET_CACHE_VERSION`
+ * — appended to every runtime-fetched `/maia/*` and `/engine/*` URL via
+ * `versionedEngineAssetUrl()` below. `public/` engine assets are not
+ * content-hashed, and a CDN (Cloudflare) and the browser's HTTP cache both
+ * key a cached response on the FULL URL including its query string, so this
+ * suffix is what makes a stale edge or HTTP-cache entry structurally
+ * unservable the moment the version bumps: after a bump, every URL the app
+ * asks for is one no cache layer has ever seen. One bump of
+ * `ENGINE_ASSET_CACHE_VERSION` therefore invalidates all three cache layers
+ * at once (CacheStorage name, browser HTTP cache, CDN edge) — see
+ * `public/maia/README.md`'s matching note. Sent to `maia-worker.js` in the
+ * init message (`assetVersionQuery`) since that classic Worker script cannot
+ * import this TS module.
+ */
+export const ENGINE_ASSET_VERSION_QUERY = `?v=${ENGINE_ASSET_CACHE_VERSION}`;
+
+/**
+ * Appends the shared version query to `path`. The single call site every
+ * versioned engine-asset URL constant must be built through — never
+ * construct a `?v=` suffix by hand, and never export the raw
+ * `ENGINE_ASSET_CACHE_VERSION` number for a call site to concatenate itself
+ * (that would be a second, driftable source of the same suffix).
+ */
+export function versionedEngineAssetUrl(path: string): string {
+  return `${path}${ENGINE_ASSET_VERSION_QUERY}`;
+}
 
 /**
  * The stale-cache sweep filters on this prefix — never anything broader.

@@ -169,8 +169,8 @@ describe('createMaiaQueue', () => {
     );
   });
 
-  it('ENGINE_PATH now lives on maiaWorkerHost (D-04 reversal)', () => {
-    expect(ENGINE_PATH).toBe('/maia/maia-worker.js');
+  it('ENGINE_PATH now lives on maiaWorkerHost (D-04 reversal) and carries a ?v=<digits> version suffix', () => {
+    expect(ENGINE_PATH).toMatch(/^\/maia\/maia-worker\.js\?v=\d+$/);
   });
 
   // ─── Prewarm (Phase 169.5, SC5) ────────────────────────────────────────
