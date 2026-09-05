@@ -1,6 +1,6 @@
 # SEED-162: Major-version dependency backlog (clustered, one blocked upstream)
 
-**Status:** Scheduled 2026-09-04 as Phase 217 (clusters 1–2) and Phase 218 (cluster 4); cluster 3 stays blocked upstream. Cluster 4 step 1 spike passed 2026-09-05, evidence at `.planning/phases/218-backend-onnxruntime-parity-spike-python-3-14-chain/218-evidence-onnxruntime-1.29.0-python.txt`, version bump proceeding in 218-02.
+**Status:** Scheduled 2026-09-04 as Phase 217 (clusters 1–2) and Phase 218 (cluster 4); cluster 3 stays blocked upstream. Cluster 4 step 1 spike passed 2026-09-05 (evidence at `.planning/phases/218-backend-onnxruntime-parity-spike-python-3-14-chain/218-evidence-onnxruntime-1.29.0-python.txt`); steps 1 and 2 merged to `main` 2026-09-05 as `55e1c0151` (onnxruntime 1.29.0, Python 3.14, both images digest-pinned). Release HELD on `main` by user decision at the 218-03 checkpoint; cluster 4 closes with the deployed SHA at the next release.
 **Created:** 2026-09-04
 **Source:** Renovate Dependency Dashboard (#338) after Phase 216 installed the app. Phase 216 explicitly scoped out "major-version dependency bumps"; Tier A (Action majors + in-range lockfile refresh) landed on `main` 2026-09-04 as `0c4d0a1bb..d1693e05f` (PR #340). What remains is the majors that need real migration work.
 **Related:** SEED-032 / Phase 101 (the v1.22 precedent — same clustered, sequential, bisectable shape); `.planning/notes/2026-07-10-flawchess-engine-self-execution-analysis.md` (Pitfall 2, the onnxruntime pin); `pyproject.toml` `[dependency-groups] maia-inference`; `frontend/package.json`; `Dockerfile`, `Dockerfile.worker`, `.python-version`, `.github/workflows/ci.yml`.
@@ -78,6 +78,8 @@ So the chain is:
 2. **Only if step 1 passes:** Python 3.13 → 3.14 across `.python-version`, `pyproject.toml` `requires-python`, `analysis/pyproject.toml`, `Dockerfile` (3 stages), `Dockerfile.worker` (4 stages), and `ci.yml`'s `python-version`. Bump `ghcr.io/astral-sh/uv` 0.10.9 → 0.12.9 in both Dockerfiles at the same time (both are digest-pinned — re-pin the digests, per Phase 216 §7).
 
 Wheel availability for the rest of the backend, checked 2026-09-04: `asyncpg` 0.31.0 ships cp314; `pydantic-ai-slim` is pure-python (`py3`). onnxruntime is the only blocker found.
+
+   **Result (2026-09-05, Phase 218 Plans 02 and 03):** both pins raised to 1.29.0, backend on Python 3.14 everywhere, `uv` 0.12.10 re-pinned by index digest in both Dockerfiles, both images built locally. Full pre-merge gate green under 3.14 with the parity tests observed running (17/17). Squash-merged to `main` as `55e1c0151`. **Not yet released:** the deploy was held at the 218-03 checkpoint; `origin/production` is still `3c64c0371`. The remote Stockfish worker fleet image is deployed manually outside `bin/deploy.sh` and is an operator rebuild once the release ships.
 
 **Do not** take the tempting shortcut of moving `Dockerfile.worker` to 3.14 alone because the lean worker image deliberately excludes onnxruntime. Splitting the runtime across the fleet buys nothing and costs a debugging dimension.
 

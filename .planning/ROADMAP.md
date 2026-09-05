@@ -364,7 +364,7 @@ Plans:
 
 **Wave 3** *(blocked on Wave 2 completion)*
 
-- [ ] 218-03-PLAN.md — PASS branch only: full pre-merge gate on the 3.14 tree, CHANGELOG entry, squash-merge to `main`, release go/no-go, `bin/deploy.sh` verified on flawchess.com, forward-port, SEED-162 cluster 4 closed
+- [x] 218-03-PLAN.md — PASS branch only: full pre-merge gate on the 3.14 tree, CHANGELOG entry, squash-merge to `main`, release go/no-go, `bin/deploy.sh` verified on flawchess.com, forward-port, SEED-162 cluster 4 closed
 
 **Cross-cutting constraints:**
 
