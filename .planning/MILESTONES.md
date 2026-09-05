@@ -1,6 +1,29 @@
 # Milestones: FlawChess
 
-## v2.15 God-File Decomposition & Complexity Gates (Merged to main: 2026-09-04, deploy pending)
+## v2.16 Audit Hardening & Dependency Currency (Shipped: 2026-09-05)
+
+**Phases completed:** 3 phases (216–218), 12 plans, 35 commits on `main` (94 non-planning files, +6,399 / −4,783 since `v2.15`; the range also carries the Tier A dependency work that preceded Phase 217 — GitHub Action majors and in-range lockfile refreshes, PR #340 — plus a dev-only Google OAuth callback fix and the CI pip-strip fix that rode along with release #341)
+
+**Delivered:** The 2026-09-04 quality audit's live production defects are closed and the dependency tree is current on every unblocked major. Behind Cloudflare the app sees real client addresses again (guest limiter, worker heartbeats); flawchess.com sends HSTS, nosniff, Referrer-Policy and Permissions-Policy plus a report-only CSP reporting to Sentry; `/api/health` proves the database instead of the process; Renovate runs; CI caches the uv and npm stores and enforces the function-size gate with all eight nesting breaches fixed. The frontend test stack moved to vitest 5 / jsdom 30 and the in-browser Maia runtime to onnxruntime-web 1.29; a measured parity spike cleared the long-standing native onnxruntime 1.20.1 pin, so the backend now runs onnxruntime 1.29 on Python 3.14 in both container images. No product behavior change anywhere in the milestone.
+
+**Closeout:** Retroactive lightweight close, no `/gsd-new-milestone` requirements cycle (same pattern as v2.14/v2.15). Phase 216 was sourced from SEED-161 (the audit follow-up seed), Phases 217–218 from SEED-162 (clusters 1, 2 and 4; cluster 3, TypeScript 7, stays blocked upstream). **Deployed throughout, not at close**: Phase 216 as release #339 (2026-09-04), Phases 217–218 as release #341 (2026-09-05); `main` and `origin/production` are byte-identical outside `.planning/` at the `v2.16` tag. SEED-161 closed; SEED-162 stays open for cluster 3.
+
+**Key accomplishments:**
+
+- **Phase 216 — Audit Bugs and Quick Wins (SEED-161, 7 plans).** Caddy trusts the published Cloudflare ranges and reads `Cf-Connecting-Ip`, with a `bin/` script that diffs the inline list against cloudflare.com; five security headers and a report-only CSP validated by `caddy validate` in CI and asserted by the deploy health step; the Mend Silent-mode diagnosis that brought Renovate back (Dependency Dashboard #338); `/api/health` with a two-second DB round-trip and 503 on failure; uv + npm CI caches; `check_function_size.py` gated in CI and the pre-merge block; limiter key eviction, digest-pinned frontend image bases, Alembic `compare_type`, `.env.example` gaps. UAT 4/4, VERIFICATION 7/7. SC-4's after-median was accepted unmeasured at phase close and measured here: the first two warm-cache PR runs took 517 s and 523 s against a 567 s whole-run before-median (n=7) — a small gain, n=2, not conclusive.
+- **Phase 217 — Frontend Major Bumps (SEED-162 clusters 1–2, 2 plans).** vitest/@vitest-* 5.x + jsdom 30 landed in one commit with the full 3,894-test suite green on the first run and no test edits; the `undici` override was deleted because jsdom 30 resolves 8.10.2 natively. onnxruntime-web 1.29.0 re-vendored (six Maia runtime files, byte constants, cache version bump so returning devices re-download once). Device UAT: WASM-only leg passed against a 1.27.0 control; the three hardware-unavailable legs are recorded as deferred and the owner ruled the matrix passed on that basis. VERIFICATION 5/5.
+- **Phase 218 — Backend onnxruntime Parity Spike → Python 3.14 Chain (SEED-162 cluster 4, 3 plans).** The spike measured first: `onnxruntime==1.29.0` and `onnxruntime-node@1.29.0` against the vendored `maia3_simplified.onnx` with a same-environment 1.20.1 control — no segfault, no gem/great tier flip, max per-ply drift 0.004237 vs a 0.010 tolerance, evidence committed and the verdict written into all four pin-rationale sites. Then both pins rose and Python 3.13 → 3.14 landed everywhere in one commit (`.python-version`, both `requires-python`, five Dockerfile stages, CI, both lockfiles, `uv` re-pinned by digest), both images built locally, full gate green. The release was held on `main` by explicit human answer at the 218-03 checkpoint and shipped the next session as #341, where Trivy flagged the new base image's vendored pip copies of msgpack/setuptools; fixed by stripping pip from both runtime stages. VERIFICATION 8/8.
+
+**Known gaps, recorded rather than smoothed over:**
+
+- **Three Phase 217 device legs never ran on hardware** (iOS <16.4 no-SIMD fallback, low-memory OOM state, WebGPU adapter path). They are deferred in `217-UAT.md`, not passed.
+- **SEED-162 cluster 3 (TypeScript 7) is still blocked** — no `typescript-eslint` release accepts TS 7; Renovate's branch stays unmerged.
+- **The Trivy fix removes pip rather than updating the base**; if pip is ever reinstalled in a runtime stage the finding returns. `**/.venv` is now Docker-ignored because CI's `analysis/.venv` had been copied into the backend image.
+- **CI cache effect is measured but not proven** (n=2 warm runs).
+
+---
+
+## v2.15 God-File Decomposition & Complexity Gates (Shipped: 2026-09-04; deployed the same day via release #337, after this entry was written)
 
 **Phases completed:** 2 phases (214–215), 16 plans, 17 commits on `main` (73 non-planning files, +13,887 / −6,622 since `v2.14`; the range also carries the `analysis/tilt_study` probes and the lint-scope chore that excludes them from ruff and ty)
 

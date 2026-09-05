@@ -1,7 +1,7 @@
 {
   "contract": "1.0.0",
   "flavor": "core",
-  "milestone": "v2.15",
+  "milestone": "v2.16",
   "phases": [
     {
       "number": "1",
@@ -620,17 +620,17 @@
     },
     {
       "number": "216",
-      "name": "Audit Bugs and Quick Wins (SEED-161)",
+      "name": "Audit Bugs and Quick Wins (SEED-161, v2.16)",
       "status": "complete"
     },
     {
       "number": "217",
-      "name": "Frontend Major Bumps — Vitest 5 / jsdom 30 + onnxruntime-web 1.29 (SEED-162)",
+      "name": "Frontend Major Bumps — Vitest 5 / jsdom 30 + onnxruntime-web 1.29 (SEED-162, v2.16)",
       "status": "complete"
     },
     {
       "number": "218",
-      "name": "Backend onnxruntime Parity Spike → Python 3.14 Chain (SEED-162)",
+      "name": "Backend onnxruntime Parity Spike → Python 3.14 Chain (SEED-162, v2.16)",
       "status": "complete"
     }
   ],

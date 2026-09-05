@@ -50,7 +50,8 @@
 - ✅ **v2.12 Train Reliability & Grading Agreement** — Phases 204, 205 (shipped 2026-08-05; deployed to production, releases #295/#296) — stop Train's two silent-failure surfaces from lying to the user: a push reminder that never arrives now recovers itself (a pruned device re-registers on app load without spending the one-shot permission, a message survives a phone that is briefly unreachable, a VAPID rotation is detected and repaired on the next gesture, and a fan-out that reached nobody no longer burns the day's claim), and a Train puzzle can no longer contradict itself (the free-play root ply is graded from the mount search's own rank lines, and puzzles whose top-two margin sits inside browser-search noise are no longer served) (SEED-135, SEED-137) — see [milestones/v2.12-ROADMAP.md](milestones/v2.12-ROADMAP.md)
 - ✅ **v2.13 Ways In & Honest Answers** — Phases 206–211 (shipped 2026-08-22; deployed to production throughout, releases #297–#318) — two doors into the product that did not exist (self-serve password reset by email, and pasting a FEN or full PGN onto the analysis board), while Train stopped contradicting its own answer key (a session with none of your own blunders is labeled a warm-up and topped up from a sharp CC0 tactics pool instead of a full deck of red herrings; every "Also fine" alternative is now server-vetted and graded from the server's deep evals). Underneath: traffic-surge hardening (import concurrency cap with a queued state, a backing-off readiness poll, guest promotion and percentile compute off the event loop, Cloudflare CDN cutover) and custom-start games no longer crashing `/analysis` or silently evicting an opening line from insights (SEED-140, SEED-143, SEED-144, SEED-146, SEED-042, SEED-150) — see [milestones/v2.13-ROADMAP.md](milestones/v2.13-ROADMAP.md)
 - ✅ **v2.14 Engine Cold Start & Benchmark Analysis Lane** — Phases 212–213 (shipped 2026-09-02; deployed to production throughout, releases #319–#335) — a first-time visitor no longer watches a bot burn its clock on a silent 45.7 MB model download: every engine consumer now checks device capability and asset availability, downloads behind a progress UI, caches the three engine assets in the browser, and bot play gates the game start on readiness (SEED-155); and the benchmark DB stops being eval-only — a capped, randomly selected classical tranche (50,682 analyzable games, both arms 100%) has been through the real FlawChess pipeline on the existing worker fleet against a local backend, so best moves, PVs, flaw blobs and gem/great tiers exist on a benchmark population for the first time (SEED-152). The range also carries twelve quick tasks: the Activity Pulse dashboard hosted at `/activity` with a time-range filter, the analysis-board fast-forward button and steady replay, board animation on every device, the Import-tab paste entry, Train leech parking, the Train reveal played-in-game arrow with ownership gating, a Maia out-of-memory state, and an eval-write deadlock fix — see [milestones/v2.14-ROADMAP.md](milestones/v2.14-ROADMAP.md)
-- ✅ **v2.15 God-File Decomposition & Complexity Gates** — Phases 214–215 (merged to `main` 2026-09-04; deploy pending at close) — the six largest backend modules and the four largest frontend modules stop breaching the CLAUDE.md function-size rules with zero behavior change, and both stacks get an automated complexity gate: the six backend files lost their `per-file-ignores` entries with `check_function_size.py` reporting zero breaches across 283 functions (Phase 214), and the frontend eslint `complexity`/`max-depth`/`max-statements` rules now run at `error`, baselined per pre-existing breach, with `Analysis()` and `OpeningsPage()` recorded as accepted page-component residuals (Phase 215). Sourced from CONCERNS.md, not a seed — see [milestones/v2.15-ROADMAP.md](milestones/v2.15-ROADMAP.md)
+- ✅ **v2.15 God-File Decomposition & Complexity Gates** — Phases 214–215 (shipped 2026-09-04; deployed to production the same day via release #337) — the six largest backend modules and the four largest frontend modules stop breaching the CLAUDE.md function-size rules with zero behavior change, and both stacks get an automated complexity gate: the six backend files lost their `per-file-ignores` entries with `check_function_size.py` reporting zero breaches across 283 functions (Phase 214), and the frontend eslint `complexity`/`max-depth`/`max-statements` rules now run at `error`, baselined per pre-existing breach, with `Analysis()` and `OpeningsPage()` recorded as accepted page-component residuals (Phase 215). Sourced from CONCERNS.md, not a seed — see [milestones/v2.15-ROADMAP.md](milestones/v2.15-ROADMAP.md)
+- ✅ **v2.16 Audit Hardening & Dependency Currency** — Phases 216–218 (shipped 2026-09-05; deployed to production throughout, releases #339 and #341) — the 2026-09-04 quality-audit follow-up (Cloudflare client IPs restored behind the proxy, HSTS/nosniff/Referrer-Policy/Permissions-Policy plus a report-only CSP, a DB-backed `/api/health`, Renovate live again, CI dependency caching, the function-size gate in CI with all eight nesting breaches fixed, and a housekeeping bundle; Phase 216, SEED-161), then the two unblocked clusters of the major-version dependency backlog: vitest 5 / jsdom 30 and onnxruntime-web 1.29 re-vendored with a device UAT (Phase 217), and a measured native-onnxruntime parity spike that cleared the 1.20.1 pin so the backend moved to onnxruntime 1.29 and Python 3.14 in one chain (Phase 218, SEED-162 clusters 1, 2, 4). No product behavior change — see [milestones/v2.16-ROADMAP.md](milestones/v2.16-ROADMAP.md)
 
 ## Progress
 
@@ -179,196 +180,13 @@
 | 213. First-Run Engine Cold Start — Asset-Check Gate & Download Progress UI (SEED-155, v2.14) | 12/12 | Complete    | 2026-08-29 |
 | 214. Backend God-File Decomposition (CONCERNS.md, v2.15) | 8/8 | Complete    | 2026-09-03 |
 | 215. Frontend God-File Decomposition (CONCERNS.md, v2.15) | 8/8 | Complete    | 2026-09-04 |
-| 216. Audit Bugs and Quick Wins (SEED-161) | 7/7 | Complete    | 2026-09-04 |
-| 217. Frontend Major Bumps — Vitest 5 / jsdom 30 + onnxruntime-web 1.29 (SEED-162) | 2/2 | Complete    | 2026-09-05 |
-| 218. Backend onnxruntime Parity Spike → Python 3.14 Chain (SEED-162) | 3/3 | Complete    | 2026-09-05 |
+| 216. Audit Bugs and Quick Wins (SEED-161, v2.16) | 7/7 | Complete    | 2026-09-04 |
+| 217. Frontend Major Bumps — Vitest 5 / jsdom 30 + onnxruntime-web 1.29 (SEED-162, v2.16) | 2/2 | Complete    | 2026-09-05 |
+| 218. Backend onnxruntime Parity Spike → Python 3.14 Chain (SEED-162, v2.16) | 3/3 | Complete    | 2026-09-05 |
 
 ## Active Phases
 
-Standalone phases outside any milestone (v2.14/v2.15 closed 2026-09-04). Fold into the
-next milestone on close, or ship as their own patch releases. Phases 217–218 are the
-SEED-162 major-version dependency backlog, split so a frontend failure and a backend
-failure never share a branch; 218 is planned only after 217 merges.
-
-### Phase 216: Audit Bugs and Quick Wins
-
-**Goal**: Close the seven groups in SEED-161, the follow-up to the 2026-09-04 quality
-audit: the three verified live production defects (Caddy forwards Cloudflare edge IPs as
-the client IP, so the guest limiter and `worker_heartbeats.last_ip` are wrong; the site
-sends no HSTS / CSP / nosniff / Referrer-Policy / Permissions-Policy; Renovate never ran
-because the GitHub App was never installed), two CI/ops quick wins (CI dependency caching;
-`/api/health` proves the database with a `SELECT 1`), the function-size gate in CI and the
-pre-merge list with its eight nesting-depth breaches fixed rather than baselined, and the
-housekeeping bundle (digest-pin the frontend image bases, rate-limiter key eviction,
-`.env.example` gaps, four hex literals, no-op downgrade docstrings + `compare_type`, one
-orphan worktree). No product behavior change; each group independently shippable.
-
-**Success criteria**:
-
-1. `deploy/Caddyfile` trusts the Cloudflare ranges and reads `Cf-Connecting-Ip`; a `bin/`
-   script diffs the inline ranges against cloudflare.com/ips-v4 + ips-v6. Post-deploy
-   (HUMAN-UAT): new `worker_heartbeats.last_ip` rows are no longer Cloudflare addresses.
-2. `curl -I https://flawchess.com/` shows HSTS (1 y, includeSubDomains, no preload),
-   `X-Content-Type-Options`, `Referrer-Policy`, `Permissions-Policy`, and a
-   `Content-Security-Policy-Report-Only` reporting to Sentry; no COOP/COEP. CI runs
-   `caddy validate`; the deploy job's health step asserts the headers.
-3. Renovate GitHub App installed (HUMAN-UAT), Dependency Dashboard issue open,
-   `renovate.json` unchanged; in-range `npm update` + `uv lock --upgrade` landed with the
-   full gate green; no major bumps.
-4. `astral-sh/setup-uv` cache + `setup-node` npm cache in CI; before/after median run
-   time recorded.
-5. `/api/health` returns 503 when the DB round-trip fails or exceeds its timeout, `200
-   {"status": "ok"}` otherwise; the deploy curl loop is unchanged.
-6. `scripts/check_function_size.py app/ --fail-over-depth 4 --fail-over-loc 200` passes
-   with zero breaches (the eight listed in `216-CONTEXT.md` D-13 fixed, tests untouched or
-   added) and runs as a CI step and a `CLAUDE.md` pre-merge gate line.
-7. Housekeeping bullets from SEED-161 §7 applied.
-
-**Out of scope**: SEED-161 "Not in this seed" list (F-04, F-05/F-13, F-06/F-07, F-10,
-F-11, F-14, F-15); major-version dependency bumps; enforcing CSP; COOP/COEP.
-
-**Depends on**: nothing. Branches from `main` at or after `3703b4bbc`.
-
-**Source**: `.planning/seeds/SEED-161-audit-2026-09-04-bugs-and-quick-wins.md`;
-`reports/quality-assessment/flawchess_quality_assessment_2026-09-04.md` §5/§6/§8.
-
-**Canonical refs:** `.planning/phases/216-audit-bugs-and-quick-wins/216-CONTEXT.md`.
-
-**Plans:** 7/7 plans complete
-
-Plans:
-**Wave 1**
-
-- [x] 216-01-PLAN.md — Caddy trusts the Cloudflare ranges and reads `Cf-Connecting-Ip`, plus a range-drift script and docs (wave 1)
-- [x] 216-03-PLAN.md — in-range dependency catch-up with no major bumps, then the Renovate GitHub App install (wave 1)
-- [x] 216-05-PLAN.md — `/api/health` proves the database under a named timeout and answers 503 on failure (wave 1)
-- [x] 216-07-PLAN.md — housekeeping bundle: limiter key eviction, digest pins, colour literals, alembic, `.env.example`, orphan worktree (wave 1)
-
-**Wave 2** *(blocked on Wave 1 completion)*
-
-- [x] 216-02-PLAN.md — five security headers and a report-only CSP on the site block, asserted by `caddy validate` in CI and by the deploy health step (wave 2)
-
-**Wave 3** *(blocked on Wave 2 completion)*
-
-- [x] 216-04-PLAN.md — cached `astral-sh/setup-uv` and npm store in CI, with the before-median run time recorded (wave 3)
-
-**Wave 4** *(blocked on Wave 3 completion)*
-
-- [x] 216-06-PLAN.md — fix all eight nesting-depth breaches, then gate the function-size rule in CI and the pre-merge block (wave 4)
-
-**Cross-cutting constraints:**
-
-- Spec-less probe fallback: skipped visibly — this phase has no requirement IDs and no SPEC.md/UI-SPEC.md/AI-SPEC.md, so no probe predicates were generated.
-
-### Phase 217: Frontend Major Bumps — Vitest 5 / jsdom 30 + onnxruntime-web 1.29
-
-**Goal**: Land the two unblocked frontend clusters of SEED-162 as bisectable, sequential
-plans, each squash-merged to `main` with the full pre-merge gate green (including `npm run
-build`, the only real frontend type check). Cluster 1: `vitest` / `@vitest/coverage-v8` /
-`@vitest/ui` 4.x → 5.x together with `jsdom` 29 → 30 (jsdom's only consumer is the vitest
-environment; the `undici ^8` override Renovate proposes is a jsdom-30 transitive and lives
-here or nowhere). Cluster 2: `onnxruntime-web` 1.27.0 → 1.29.0, the runtime behind the
-Maia inference path and its two live failure populations (iOS <16.4 no WASM SIMD; low-memory
-OOM), so done means a real-device pass, not green CI. No product behavior change.
-
-**Success criteria**:
-
-1. `frontend/package.json` resolves `vitest@5.x`, `@vitest/coverage-v8@5.x`,
-   `@vitest/ui@5.x`, `jsdom@30.x`; `npm test -- --run` passes the full suite under jsdom 30;
-   the project-wide timeout config in `vite.config.ts` + `src/vitest.setup.ts` is still the
-   only timeout source (no per-file timeouts re-added).
-2. The `undici` override in `frontend/package.json` is either raised to the range jsdom 30
-   declares or deleted because the advisory no longer resolves in the tree; whichever, the
-   reason is recorded in the plan summary.
-3. `frontend/package.json` resolves `onnxruntime-web@1.29.0`; `npm run build` passes;
-   the vendored WASM/JS assets the engine loader references match the new package (no
-   stale 1.27 artifact paths).
-4. HUMAN-UAT on real devices for cluster 2: an iOS <16.4 device reaches the no-SIMD
-   fallback state (not a crash) and a low-memory device reaches the OOM state; a modern
-   device completes a Maia inference. Recorded in the plan summary.
-5. Each cluster is its own squash-merge to `main` with the full CLAUDE.md pre-merge gate
-   plus `npm run build` green; if a package cannot be made green it is pinned back with
-   the reason recorded (the Phase 101 escape hatch).
-
-**Out of scope**: TypeScript 7 (blocked upstream — no `typescript-eslint` release accepts
-TS 7; leave Renovate's `typescript-7.x` branch unmerged); `@types/node` 26 (tracks the
-Node runtime line, CI and `frontend/Dockerfile` are on Node 24); the three remaining
-`overrides` majors (`fast-uri`, `js-yaml`, `@babel/...modules-systemjs` — security floors,
-parents still declare the current major); `scripts/package.json` `onnxruntime-node` (its
-pin comment says >=1.22 segfaults on the vendored Maia model, so it belongs to the
-Phase 218 parity spike, not here); anything backend.
-
-**Depends on**: nothing. Branches from `main` at or after `d9acb12f8`.
-
-**Source**: `.planning/seeds/SEED-162-major-dependency-backlog.md` clusters 1–2;
-Renovate Dependency Dashboard #338.
-
-**Plans:** 2/2 plans complete
-
-Plans:
-**Wave 1**
-
-- [x] 217-01-PLAN.md — Cluster 1: vitest/@vitest-* 5.x + jsdom 30.x in one commit, undici override resolved, own squash-merge (wave 1)
-
-**Wave 2** *(blocked on Wave 1 completion)*
-
-- [x] 217-02-PLAN.md — Cluster 2: onnxruntime-web 1.29.0, six vendored Maia runtime files re-vendored, byte constants + cache version, device UAT (wave 2)
-
-**Cross-cutting constraints:**
-
-- Spec-less probe fallback: skipped visibly — this phase has no requirement IDs and no SPEC.md/UI-SPEC.md/AI-SPEC.md, so no probe predicates were generated.
-
-### Phase 218: Backend onnxruntime Parity Spike → Python 3.14 Chain
-
-**Goal**: Resolve SEED-162 cluster 4 as a strict chain. Step 1 is a measurement, not a
-bump: re-run `scripts/maia_parity_spike.py` against `onnxruntime==1.29.0` (and the matching
-`onnxruntime-node` in `scripts/package.json`, which shares the same native core and pin
-rationale) and compare against the committed 1.20.1 baseline. If the segfault is gone and
-outputs match, step 2 moves Python 3.13 → 3.14 everywhere at once (`.python-version`,
-`pyproject.toml` `requires-python`, `analysis/pyproject.toml`, all `Dockerfile` and
-`Dockerfile.worker` stages, `ci.yml`) and re-pins `ghcr.io/astral-sh/uv` to 0.12.x by
-digest in both Dockerfiles. If step 1 fails, the phase stops there: the pin comment gains
-the second datapoint, Python 3.14 is recorded as deferred, and nothing else changes.
-
-**Success criteria**:
-
-1. `scripts/maia_parity_spike.py` output under onnxruntime 1.29.0 is committed as evidence
-   (pass or fail), diffed against the 1.20.1 baseline; `pyproject.toml`'s pin comment is
-   updated with the result either way.
-2. If parity passes: `onnxruntime` and `onnxruntime-node` pins raised; `.python-version`,
-   `requires-python`, `analysis/pyproject.toml`, every Dockerfile stage, and CI all say
-   3.14; `uv` base image re-pinned by digest in both Dockerfiles; full pre-merge gate green;
-   `bin/deploy.sh` release verified on flawchess.com.
-3. If parity fails: no version file changes; SEED-162 cluster 4 status updated to
-   "deferred — onnxruntime 1.29 still segfaults / diverges" with the evidence path.
-4. `Dockerfile.worker` is never moved to 3.14 independently of `Dockerfile`.
-
-**Out of scope**: anything frontend (Phase 217); TypeScript 7; `@types/node` 26.
-
-**Depends on**: nothing in code. Sequenced after Phase 217 so a frontend failure and a
-backend failure never share a branch. Plan when Phase 217 has merged.
-
-**Source**: `.planning/seeds/SEED-162-major-dependency-backlog.md` cluster 4;
-`.planning/notes/2026-07-10-flawchess-engine-self-execution-analysis.md` Pitfall 2.
-
-**Plans:** 3/3 plans complete
-
-Plans:
-**Wave 1**
-
-- [x] 218-01-PLAN.md — Measure the native onnxruntime core at 1.29.0 (Python spike + Node value-head harness) in throwaway environments, commit the evidence with a same-environment 1.20.1 control, write the verdict into every pin-rationale site, and stop at a human go/no-go
-
-**Wave 2** *(blocked on Wave 1 completion)*
-
-- [x] 218-02-PLAN.md — PASS branch only: raise both onnxruntime pins to 1.29.0, then move the backend to Python 3.14 in one commit (both `requires-python`, all five Dockerfile stages, CI, both lockfiles) with `uv` re-pinned by index digest in both images and both images built locally
-
-**Wave 3** *(blocked on Wave 2 completion)*
-
-- [x] 218-03-PLAN.md — PASS branch only: full pre-merge gate on the 3.14 tree, CHANGELOG entry, squash-merge to `main`, release go/no-go, `bin/deploy.sh` verified on flawchess.com, forward-port, SEED-162 cluster 4 closed
-
-**Cross-cutting constraints:**
-
-- Spec-less probe fallback: skipped visibly — this phase has no requirement IDs and no SPEC.md/UI-SPEC.md/AI-SPEC.md exists, so no probe predicates were generated this run.
+None. v2.16 closed 2026-09-05; the next phase or `/gsd-new-milestone` starts here.
 
 ## Backlog
 
@@ -1045,7 +863,7 @@ See [milestones/v2.14-ROADMAP.md](milestones/v2.14-ROADMAP.md) for full phase de
 </details>
 
 <details>
-<summary>✅ v2.15 God-File Decomposition & Complexity Gates (Phases 214–215) — MERGED TO MAIN 2026-09-04 (deploy pending at close)</summary>
+<summary>✅ v2.15 God-File Decomposition & Complexity Gates (Phases 214–215) — SHIPPED 2026-09-04 (deployed to production the same day, release #337)</summary>
 
 Ten files that had been growing for a year stop breaching the CLAUDE.md function-size rules, and both stacks get an automated gate so they cannot grow back. Zero behavior change is the contract: public signatures, SQL emitted, Sentry capture sites, rendered DOM (`data-testid`, `data-umami-event`), hook dependency arrays and the engine message protocol are unchanged, the existing suites are the oracle, and tests were added where a split exposed an untested seam but never rewritten. Sourced from CONCERNS.md's "Large God files" entry rather than a seed. Assembled retroactively at close, no `/gsd-new-milestone` requirements cycle.
 
@@ -1054,8 +872,27 @@ Ten files that had been growing for a year stop breaching the CLAUDE.md function
 
 **Requirements:** 2 phases, 16 plans. No `REQUIREMENTS.md`.
 
-**Not deployed at close.** Production is at release #335, the `v2.14` content. This milestone's 17 commits (+13,887/−6,622 across 73 non-planning files, including the `analysis/tilt_study` probes and the lint-scope chore that excludes them) are the undeployed tail; `bin/deploy.sh` (or `/deploy`) is the next step. One pre-existing defect was found and deferred, not fixed: `Train.guestGate.test.tsx` fails 2 of 6 only under the full vitest run (cross-test contamination, `215/deferred-items.md`).
+**Not deployed at close; deployed the same day.** At close production was at release #335, the `v2.14` content; release #337 (`d8f506752`) shipped this milestone thirteen minutes later, before Phase 216 merged. This milestone's 17 commits (+13,887/−6,622 across 73 non-planning files, including the `analysis/tilt_study` probes and the lint-scope chore that excludes them) are the undeployed tail; `bin/deploy.sh` (or `/deploy`) is the next step. One pre-existing defect was found and deferred, not fixed: `Train.guestGate.test.tsx` fails 2 of 6 only under the full vitest run (cross-test contamination, `215/deferred-items.md`).
 
 See [milestones/v2.15-ROADMAP.md](milestones/v2.15-ROADMAP.md) for full phase detail.
+
+</details>
+
+<details>
+<summary>✅ v2.16 Audit Hardening & Dependency Currency (Phases 216–218) — SHIPPED 2026-09-05 (deployed to production throughout, releases #339 and #341)</summary>
+
+Three ops/dependency phases with no product behavior change, assembled retroactively at close with no `/gsd-new-milestone` requirements cycle (same pattern as v2.14/v2.15). Phase 216 is the follow-up to the 2026-09-04 quality audit; Phases 217 and 218 are the two unblocked halves of the major-version dependency backlog, split so a frontend failure and a backend failure never share a branch and sequenced so 218 planned only after 217 merged.
+
+- [x] Phase 216: Audit Bugs and Quick Wins (SEED-161) (7/7 plans) — three verified live production defects fixed: Caddy now trusts the published Cloudflare ranges and reads `Cf-Connecting-Ip`, so the guest limiter and `worker_heartbeats.last_ip` see real client addresses again (with `bin/` range-drift script); flawchess.com sends HSTS, `X-Content-Type-Options`, `Referrer-Policy`, `Permissions-Policy` and a report-only CSP reporting to Sentry, validated by `caddy validate` in CI and asserted by the deploy health step; Renovate runs again (the Mend app was in Silent mode, Dependency Dashboard #338). Two CI/ops wins: `/api/health` round-trips Postgres under a two-second timeout and answers 503 on failure; the uv and npm stores are cached in CI. The function-size gate (`check_function_size.py --fail-over-depth 4 --fail-over-loc 200`) runs in CI and the pre-merge block with all eight nesting-depth breaches fixed rather than baselined. Housekeeping: rate-limiter key eviction, digest-pinned frontend image bases, colour literals, Alembic `compare_type` + no-op downgrade docstrings, `.env.example` gaps, one orphan worktree. UAT 4/4 (SC-4 CI after-median accepted at close and measured at milestone close: whole-run PR time 517 s / 523 s on the first two warm-cache runs vs a 567 s before-median, n=2, inconclusive), VERIFICATION 7/7. Deployed as release #339 — completed 2026-09-04
+- [x] Phase 217: Frontend Major Bumps — Vitest 5 / jsdom 30 + onnxruntime-web 1.29 (SEED-162) (2/2 plans) — cluster 1: vitest / `@vitest/coverage-v8` / `@vitest/ui` 4.x → 5.x with jsdom 29 → 30 in one commit; the full suite (251 files / 3,894 tests) passed on the first run with no test edits, and the `undici` override was deleted rather than raised because jsdom 30 resolves `undici@8.10.2` on its own declared range. Cluster 2: onnxruntime-web 1.27.0 → 1.29.0 with the six vendored Maia runtime files re-vendored, byte constants updated and the engine asset cache version bumped (returning devices re-download about 14 MB on the WASM path, 26 MB on WebGPU). Device UAT: the WASM-only leg passed on the 1.29.0 build against a 1.27.0 control; the iOS <16.4 no-SIMD, low-memory OOM and WebGPU-adapter legs are recorded as **deferred for lack of hardware**, and the project owner ruled the matrix passed on that basis (`override_note` in 217-VERIFICATION.md). VERIFICATION 5/5 — completed 2026-09-05
+- [x] Phase 218: Backend onnxruntime Parity Spike → Python 3.14 Chain (SEED-162) (3/3 plans) — a measurement before a bump: `scripts/maia_parity_spike.py` re-run against `onnxruntime==1.29.0` (Python) and `onnxruntime-node@1.29.0` in throwaway environments with a same-environment 1.20.1 control. **Clean pass**: no segfault, no tier flip, max per-ply drift 0.004237 against a 0.010 tolerance, evidence committed in the phase dir and the verdict written into every pin-rationale site. On the human `proceed`, both native pins rose to 1.29.0 and the backend moved to Python 3.14 in one commit (`.python-version`, both `requires-python`, all five Dockerfile stages, CI, both lockfiles, `uv` re-pinned by digest in both images, both images built locally). Full gate green, squash-merged as `55e1c0151`; the release was **held on `main` by explicit human answer** at the 218-03 checkpoint and shipped the next session as release #341. VERIFICATION 8/8 — completed 2026-09-05
+
+**Requirements:** 3 phases, 12 plans. No `REQUIREMENTS.md`, same convention as v2.6/v2.8/v2.12–v2.15.
+
+**Deployed throughout, not at close.** Phase 216 went out as release #339 (`3c64c0371`, 2026-09-04) and Phases 217–218 as release #341 (`463b93de7`, 2026-09-05); `main` and `origin/production` are byte-identical outside `.planning/` at the `v2.16` tag. Release #341 also carried a dev-only fix for the Google OAuth callback double-firing under StrictMode (`c3f9aa73c`) and a CI fix that strips pip from both runtime images because Trivy flagged the `python:3.14-slim` base's vendored msgpack/setuptools copies (`fc4d1cfd9`). The 35 commits and +6,399/−4,783 across 94 non-planning files also carry the Tier A dependency work that preceded Phase 217 (GitHub Action majors, in-range lockfile refreshes, PR #340) and the SEED-163 capture.
+
+**Known gaps, recorded rather than smoothed over.** Three of the four Phase 217 device legs (iOS <16.4, low-memory OOM, WebGPU adapter) were never run on hardware. SEED-162 cluster 3 (TypeScript 7) stays blocked upstream. Trivy's finding was resolved by removing pip, not by a base-image update; the vendored copies return if pip is ever reinstalled in the runtime stage.
+
+See [milestones/v2.16-ROADMAP.md](milestones/v2.16-ROADMAP.md) for full phase detail.
 
 </details>
