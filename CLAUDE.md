@@ -21,7 +21,7 @@ Full feature list: see `README.md`.
 
 ## Tech Stack
 
-- **Backend**: FastAPI 0.115.x, Python 3.13, uv, Uvicorn
+- **Backend**: FastAPI 0.115.x, Python 3.14, uv, Uvicorn
 - **Frontend**: React 19 + TypeScript + Vite 8, react-chessboard 5.x, chess.js, TanStack Query, Tailwind CSS
 - **Database**: PostgreSQL (asyncpg). No SQLite.
 - **ORM**: SQLAlchemy 2.x async (`select()` API, not legacy 1.x) + Alembic + asyncpg

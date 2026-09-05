@@ -416,7 +416,7 @@ def _same_dest_as_best_line(board_before: chess.Board, flaw_san: str, pv: str) -
             return False
         best_first_move = chess.Move.from_uci(pv_moves[0])
         return flaw_move.to_square == best_first_move.to_square
-    except (ValueError, chess.IllegalMoveError):
+    except ValueError, chess.IllegalMoveError:
         return False  # malformed SAN or UCI → fall through to normal detection
 
 
@@ -535,7 +535,7 @@ def _detect_tactic_for_flaw(
         return detect_tactic_motif(
             board_after_flaw, pv_allowed, has_forced_mate=has_forced_mate_allowed
         )
-    except (ValueError, chess.IllegalMoveError):
+    except ValueError, chess.IllegalMoveError:
         # Malformed move_san or FEN — leave all four as None (Pitfall 6)
         return None, None, None, None
 

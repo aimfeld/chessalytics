@@ -160,8 +160,6 @@ class TestFlawRecordToRow:
         The FlawRecord TypedDict still carries them for internal kernel use
         (Pitfall 6 in 112-CONTEXT.md) — this test guards the write-path.
         """
-        from app.services.flaws_service import FlawRecord
-
         flaw: FlawRecord = {
             "ply": 4,
             "fen": "rnbqkb1r/pppp1ppp/4pn2/8/2PP4/8/PP2PPPP/RNBQKBNR",

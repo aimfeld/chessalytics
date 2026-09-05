@@ -20,6 +20,15 @@
  * softmax/expectedScore code via the `@/` alias) remains a manual Gate 0
  * spot-check; this script covers everything checkable without a browser.
  *
+ * Bug fix (Phase 218 Task 1): this script is the required gate named in
+ * `scripts/package.json`'s `onnxruntime-node` pin description ("Any bump must
+ * survive `node scripts/engine_disagreement_study/verify_value_head.mjs`
+ * first"), but it called `createMaiaSession()` with no options — which
+ * defaults to the `wasm` (onnxruntime-web) backend, per that function's own
+ * doc comment. The gate was silently never exercising `onnxruntime-node` at
+ * all. Explicitly request `backend: 'native'` so this gate actually tests the
+ * native core it exists to protect.
+ *
  * Usage: node --import ./scripts/lib/frontend-alias-hook.mjs scripts/engine_disagreement_study/verify_value_head.mjs
  */
 import { createMaiaSession } from '../lib/node-engine-providers.mjs';
@@ -58,7 +67,7 @@ const OPPO_MIN_EFFECT = 1e-6;
 const fmt = (x) => x.toFixed(4);
 
 async function main() {
-  const { ort, session } = await createMaiaSession();
+  const { ort, session } = await createMaiaSession({ backend: 'native' });
   const value = (fen, eloSelf, eloOppo) => nodeValueHead(session, ort, fen, eloSelf, eloOppo);
   const failures = [];
   const check = (label, ok, detail) => {

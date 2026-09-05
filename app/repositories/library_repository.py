@@ -2511,7 +2511,7 @@ async def fetch_tactic_lines(
             allowed_raw = pv_to_san_list(board_after_flaw, allowed_pv)
             if allowed_raw is not None:
                 allowed_sans = [flaw_move_san] + allowed_raw
-        except (ValueError, chess.InvalidMoveError):
+        except ValueError, chess.InvalidMoveError:
             # parse_san failed on a stored move_san — graceful fallback, no Sentry capture
             allowed_sans = None
 

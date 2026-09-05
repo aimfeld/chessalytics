@@ -710,7 +710,7 @@ def _archive_prior_report(report_path: Path) -> Path | None:
         head = report_path.read_text().splitlines()[0]
         m = re.search(r"\(Phase (\d+(?:\.\d+)*)\)", head)
         phase_tag = m.group(1) if m else "prior"
-    except (OSError, IndexError):
+    except OSError, IndexError:
         phase_tag = "prior"
     archive_path = ARCHIVE_DIR / f"{report_path.stem}-{today.isoformat()}-phase-{phase_tag}.md"
     if archive_path.exists():

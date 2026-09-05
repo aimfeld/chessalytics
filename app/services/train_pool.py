@@ -1258,7 +1258,7 @@ def fen_and_last_move_at_ply(pgn: str, ply: int) -> tuple[str, str | None] | Non
             board.push(move)
         last_move_uci = moves[ply - 1].uci() if ply > 0 else None
         return board.fen(), last_move_uci
-    except (ValueError, IndexError, AttributeError):
+    except ValueError, IndexError, AttributeError:
         return None
 
 

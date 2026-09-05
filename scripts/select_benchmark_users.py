@@ -120,7 +120,7 @@ def _log(msg: str = "") -> None:
 def _parse_elo(s: str) -> int | None:
     try:
         return int(s)
-    except (ValueError, TypeError):
+    except ValueError, TypeError:
         return None
 
 
@@ -150,7 +150,7 @@ def compute_tc_bucket(time_control: str) -> str | None:
         else:
             base = int(time_control)
             inc = 0
-    except (ValueError, AttributeError):
+    except ValueError, AttributeError:
         return None
     est = base + TC_INCREMENT_WEIGHT * inc
     if est < 180:

@@ -1,0 +1,25 @@
+$ uv run --no-project --with onnxruntime==1.29.0 --with numpy --with chess python scripts/maia_parity_spike.py
+# run date: 2026-09-05T06:50:51Z
+Downloading onnxruntime (22.1MiB)
+ Downloaded onnxruntime
+Installed 6 packages in 29ms
+maia_parity_spike: 11 fixture plies, PARITY_EPSILON=0.01
+
+ played   elo  expected    python    drift  tier(exp/py)
+  Qxh2+  2600  0.449442  0.449455 0.000013  great/great OK 
+   Rxd1  2600  0.422212  0.422224 0.000012  great/great OK 
+    Nf6  2000  0.424277  0.424505 0.000228  great/great OK 
+    Nf3  1500  0.467380  0.468219 0.000839  great/great OK 
+     e4  1500  0.616417  0.616528 0.000111  neither/neither OK 
+   Qxd5  1000  0.772958  0.768721 0.004237  neither/neither OK 
+   Qxd5  1500  0.634996  0.638505 0.003509  neither/neither OK 
+     a3  1500  0.000668  0.000662 0.000006  gem/gem OK 
+    Nh3  1500  0.000102  0.000102 0.000000  gem/gem OK 
+    O-O  1200  0.081512  0.082172 0.000660  gem/gem OK 
+     e4  1500  0.002194  0.002228 0.000034  gem/gem OK 
+
+measured max per-ply drift: 0.004237
+PARITY_EPSILON:             0.010000
+
+PARITY GATE PASSED — every ply tier-matches and is within PARITY_EPSILON.
+exit_code=0

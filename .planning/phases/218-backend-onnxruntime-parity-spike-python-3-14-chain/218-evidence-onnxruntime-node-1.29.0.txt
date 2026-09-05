@@ -1,0 +1,20 @@
+$ node --import ./scripts/lib/frontend-alias-hook.mjs scripts/engine_disagreement_study/verify_value_head.mjs
+# run date: 2026-09-05T06:53:10Z (backend='native' fix applied — see Deviations)
+PASS  KQK strong side to move scores high  expectedScore=0.9819 (need > 0.8)
+PASS  KQK weak side to move scores low  expectedScore=0.0319 (need < 0.35)
+PASS  color-mirror encodes identically  |delta|=0.00e+0 (need < 0.000001)
+PASS  elo_oppo affects output  score(oppo=800)=0.8784 vs score(oppo=2400)=0.0781
+PASS  stronger opponent lowers expected score  0.0781 < 0.8784
+
+Observation: expected score by (elo_self = elo_oppo)
+elo   start-pos   KQK-strong-to-move
+800   0.5294      0.6974
+1200  0.5249      0.8920
+1600  0.5185      0.9628
+2000  0.5197      0.9847
+2400  0.5285      0.9880
+
+start pos @1500/1500: W=0.5070 D=0.0259 L=0.4671 expectedScore=0.5200
+
+All value-head checks passed.
+exit_code=0

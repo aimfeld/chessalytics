@@ -351,11 +351,24 @@ backend failure never share a branch. Plan when Phase 217 has merged.
 **Source**: `.planning/seeds/SEED-162-major-dependency-backlog.md` cluster 4;
 `.planning/notes/2026-07-10-flawchess-engine-self-execution-analysis.md` Pitfall 2.
 
-**Plans:** 0 plans
+**Plans:** 3 plans
 
 Plans:
+**Wave 1**
 
-- [ ] TBD
+- [x] 218-01-PLAN.md — Measure the native onnxruntime core at 1.29.0 (Python spike + Node value-head harness) in throwaway environments, commit the evidence with a same-environment 1.20.1 control, write the verdict into every pin-rationale site, and stop at a human go/no-go
+
+**Wave 2** *(blocked on Wave 1 completion)*
+
+- [x] 218-02-PLAN.md — PASS branch only: raise both onnxruntime pins to 1.29.0, then move the backend to Python 3.14 in one commit (both `requires-python`, all five Dockerfile stages, CI, both lockfiles) with `uv` re-pinned by index digest in both images and both images built locally
+
+**Wave 3** *(blocked on Wave 2 completion)*
+
+- [ ] 218-03-PLAN.md — PASS branch only: full pre-merge gate on the 3.14 tree, CHANGELOG entry, squash-merge to `main`, release go/no-go, `bin/deploy.sh` verified on flawchess.com, forward-port, SEED-162 cluster 4 closed
+
+**Cross-cutting constraints:**
+
+- Spec-less probe fallback: skipped visibly — this phase has no requirement IDs and no SPEC.md/UI-SPEC.md/AI-SPEC.md exists, so no probe predicates were generated this run.
 
 ## Backlog
 

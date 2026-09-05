@@ -1,18 +1,19 @@
 ---
 gsd_state_version: 1.0
 milestone: v2.15
-current_phase: 217
-status: completed
-stopped_at: Phase 217 complete — all phases complete
-last_updated: "2026-09-05T05:48:12.130Z"
+current_phase: 218
+current_phase_name: Backend onnxruntime Parity Spike → Python 3.14 Chain
+status: executing
+stopped_at: Completed 218-02-PLAN.md
+last_updated: "2026-09-05T07:58:41.000Z"
 last_activity: 2026-09-05
-last_activity_desc: Phase 217 complete
-state_head: b9bb59bf729d8d986fe9395df8fbfe999a7dc4c2
+last_activity_desc: Phase 218 plan 02 complete (onnxruntime 1.29.0 pins + Python 3.14 chain)
+state_head: 9832617c9fcd1e3f5d3e7f44ad73a47deeca5a63
 progress:
-  total_phases: 2
+  total_phases: 3
   completed_phases: 2
-  total_plans: 9
-  completed_plans: 9
+  total_plans: 12
+  completed_plans: 11
 milestone_name: God-File Decomposition & Complexity Gates
 ---
 
@@ -20,7 +21,7 @@ milestone_name: God-File Decomposition & Complexity Gates
 
 ## Current Position
 
-Phase: 217
+Phase: 218 (Backend onnxruntime Parity Spike → Python 3.14 Chain) — EXECUTING
 Plans: 2 of 2 complete. Plan 01 (cluster 1 — vitest 4.x -> 5.x, jsdom 29.x -> 30.x, undici
 override deleted) squash-merged to `main` as `6ca0f8ecd`; full frontend suite green
 (251 files / 3894 tests) on the first run, no test edits needed; full CLAUDE.md pre-merge
@@ -30,7 +31,15 @@ as `6f19e0567`; the Task 5 device UAT checkpoint was resolved with the WASM-only
 passed (owner-confirmed) and the iOS<16.4/low-memory/WebGPU-adapter legs recorded as
 deferred for lack of available hardware (see 217-02-SUMMARY.md). Phase not yet deployed;
 `/deploy` remains a separate later action.
-Status: All phases complete
+Status: Executing Phase 218
+
+**Phase 218 actual plan status (the paragraph above is stale Phase 217 carryover left
+in place from before 218 started executing):** 218-01 (native onnxruntime parity spike,
+checkpoint answered `proceed`) complete. 218-02 (raise both native onnxruntime pins to
+1.29.0 + move the backend to Python 3.14 everywhere, both base images re-pinned by
+digest, both container images built locally) complete — commits `1fbdec558` (pin raise)
+and `9832617c9` (Python 3.14 chain). 218-03 (full pre-merge gate, CHANGELOG, squash-merge,
+deploy) remains.
 Deferred follow-up (from Phase 216, still open): SC-4 CI after-median measurement — the
 first warm-cache runs are the next release PR and `production` deploy (caches saved
 2026-09-04 under stable keys, scoped per ref); run the median command in
@@ -152,7 +161,7 @@ Cloudflare nameservers, `maia3_simplified.onnx` and `stockfish-18-lite-single.wa
 return `cf-cache-status: HIT` while still carrying the origin's `max-age=2592000`, and
 `maia-worker.js` still returns `cache-control: no-cache`.
 
-Last activity: 2026-09-05 — Phase 217 complete
+Last activity: 2026-09-05 — Phase 218 execution started
 
 Prior: Phase 213 complete
 `games.initial_fen` added and backfilled in-migration, the opening-transition sample
@@ -839,6 +848,7 @@ v1.29 Live-Engine Analysis Page shipped 2026-06-29 — 5 phases (136–140), 14 
 - [Phase 216]: CI test job now installs uv via cached astral-sh/setup-uv@v10 instead of pip install uv; npm store cached via actions/setup-node keyed on frontend/package-lock.json
 - [Phase 217]: 217-01: deleted overrides.undici rather than raising it, since jsdom 30 resolves undici@8.10.2 natively with no live advisory
 - [Phase 217]: onnxruntime-web 1.27.0 -> 1.29.0: six vendored Maia runtime files re-vendored and SHA-256-verified; ENGINE_ASSET_CACHE_VERSION bumped 1->2; device UAT recorded with WASM-only-path leg passed, iOS<16.4/low-memory/WebGPU-adapter legs deferred for lack of hardware
+- [Phase 218]: Checkpoint answered proceed: native onnxruntime 1.29.0 clean pass on both Python and Node, phase continues to 218-02/218-03
 
 ### Pending Todos
 
@@ -991,9 +1001,9 @@ Items acknowledged and deferred at **v1.29 milestone close on 2026-06-29** (user
 
 ## Session Continuity
 
-**Stopped at:** Phase 217 complete — all phases complete
+**Stopped at:** Completed 218-02-PLAN.md
 
-**Last session:** 2026-09-05T05:40:35.190Z
+**Last session:** 2026-09-05T07:58:41.000Z
 
 **Resume file:** None
 
@@ -1157,6 +1167,7 @@ Items acknowledged and deferred at **v1.29 milestone close on 2026-06-29** (user
 | Phase 216 P04 | 10 min | 3 tasks | 1 files |
 | Phase 217 P01 | 20min | 3 tasks | 2 files |
 | Phase 217 P02 | ~15min+checkpoint | 5 tasks | 17 files |
+| Phase 218 P01 | 8min | 3 tasks | 7 files |
 
 ## Performance Metrics
 

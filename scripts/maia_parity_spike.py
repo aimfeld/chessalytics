@@ -68,6 +68,17 @@ from app.services.maia_encoding import (  # noqa: E402
 #   can never hide inside the epsilon band. This TIGHTENS the ~0.02 research
 #   placeholder (CONTEXT.md D-01) to the actual CPU-vs-WASM float drift this model
 #   exhibits, with room for benign cross-environment re-capture noise.
+#
+#   Re-measured (2026-09-05, onnxruntime 1.29.0, same 11-entry corpus, isolated
+#   `uv run --no-project` environment — see Phase 218): max per-ply drift 0.004237
+#   on Qxd5 @1000 (vs 0.003844 above) — PASS against the 1.20.1 baseline, no
+#   segfault observed, every ply still tier-matches. Evidence:
+#     .planning/phases/218-backend-onnxruntime-parity-spike-python-3-14-chain/
+#       218-evidence-onnxruntime-1.29.0-python.txt (candidate)
+#       218-evidence-onnxruntime-1.20.1-control.txt (same-environment control)
+#   The Node side (onnxruntime-node 1.29.0, verify_value_head.mjs, native
+#   backend) also PASSED with no crash — see
+#   218-evidence-onnxruntime-node-1.29.0.txt in the same directory.
 PARITY_EPSILON: float = 0.010
 
 # The gem/great tier edges (frontend/src/lib/gemMove.ts GEM_MAIA_MAX_PROB=0.20 +
