@@ -6,9 +6,9 @@ current_phase: 218
 current_phase_name: backend-onnxruntime-parity-spike-python-3-14-chain
 status: milestone_complete
 stopped_at: v2.16 closed — phases 216–218 archived, tagged, released, deployed (releases #339, #341)
-last_updated: "2026-09-05T14:22:52.000Z"
+last_updated: "2026-09-05T17:05:00.000Z"
 last_activity: 2026-09-05
-last_activity_desc: Completed quick task 260905-mgx — SEED-163 group 1 openings filter drift fix (main at 80da14e49, unreleased)
+last_activity_desc: Completed quick task 260905-p0t — SEED-163 group 2 analytics defaults Human+Rated + Library native-game bypass (main at 599cedfd7, unreleased)
 progress:
   total_phases: 3
   completed_phases: 3
@@ -803,6 +803,7 @@ None active.
 | 260902-qf7 | Show the white arrow and move-quality icon for the "played in game" move on the Train reveal board (plus: suppress "played in game" entirely for cross-user herring puzzles) | 2026-09-02 | 2012df6f | [260902-qf7-when-showing-the-train-puzzle-solution-a](./quick/260902-qf7-when-showing-the-train-puzzle-solution-a/) |
 | 260902-rmn | Implement missing Sentry captures in app/services and app/routers except blocks (CONCERNS.md L7-11): 7 silent swallow sites fixed (engine respawn/crash, stored-PGN parse at 4 eval sites, played-move SAN) | 2026-09-02 | 7fc994cf7 | [260902-rmn-implement-missing-sentry-captures-in-app](./quick/260902-rmn-implement-missing-sentry-captures-in-app/) |
 | 260905-mgx | SEED-163 group 1: route openings_repository `_build_base_query` + `query_time_series` through `apply_game_filters` so DEFAULT_EXCLUDED_PLATFORMS (flawchess/pgn) applies to Openings WDL and the bookmark score-over-time chart; regression test + changelog | 2026-09-05 | 80da14e4 | [260905-mgx-seed-163-group-1-openings-filter-drift-f](./quick/260905-mgx-seed-163-group-1-openings-filter-drift-f/) |
+| 260905-p0t | SEED-163 group 2: analytics defaults flip to Human + Rated (matches benchmark cohort); `apply_game_filters` gains a Library-only `native_games_bypass_opponent_and_rated` flag so flawchess/pgn games stay browsable in Library Games/Flaws; Library disclosure hint; named "no rated games against humans" empty state on Openings/Endgames/Stats; changelog | 2026-09-05 | 599cedfd7 | [260905-p0t-seed-163-group-2-analytics-default-human](./quick/260905-p0t-seed-163-group-2-analytics-default-human/) |
 
 ## Deferred Items
 
