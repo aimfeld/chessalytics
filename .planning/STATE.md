@@ -2,16 +2,15 @@
 gsd_state_version: 1.0
 milestone: v2.15
 current_phase: 217
-current_phase_name: Frontend Major Bumps — Vitest 5 / jsdom 30 + onnxruntime-web 1.29
-status: executing
-stopped_at: Completed 217-02-PLAN.md (checkpoint resolved, device UAT recorded)
-last_updated: "2026-09-05T05:40:35.320Z"
+status: completed
+stopped_at: Phase 217 complete — all phases complete
+last_updated: "2026-09-05T05:48:12.130Z"
 last_activity: 2026-09-05
-last_activity_desc: Phase 217 execution started
-state_head: 5bc823f902ee30587a7bcdfb2aaada1452cbd11b
+last_activity_desc: Phase 217 complete
+state_head: b9bb59bf729d8d986fe9395df8fbfe999a7dc4c2
 progress:
   total_phases: 2
-  completed_phases: 1
+  completed_phases: 2
   total_plans: 9
   completed_plans: 9
 milestone_name: God-File Decomposition & Complexity Gates
@@ -21,7 +20,7 @@ milestone_name: God-File Decomposition & Complexity Gates
 
 ## Current Position
 
-Phase: 217 (Frontend Major Bumps — Vitest 5 / jsdom 30 + onnxruntime-web 1.29) — COMPLETE
+Phase: 217
 Plans: 2 of 2 complete. Plan 01 (cluster 1 — vitest 4.x -> 5.x, jsdom 29.x -> 30.x, undici
 override deleted) squash-merged to `main` as `6ca0f8ecd`; full frontend suite green
 (251 files / 3894 tests) on the first run, no test edits needed; full CLAUDE.md pre-merge
@@ -31,7 +30,7 @@ as `6f19e0567`; the Task 5 device UAT checkpoint was resolved with the WASM-only
 passed (owner-confirmed) and the iOS<16.4/low-memory/WebGPU-adapter legs recorded as
 deferred for lack of available hardware (see 217-02-SUMMARY.md). Phase not yet deployed;
 `/deploy` remains a separate later action.
-Status: Phase 217 COMPLETE (both plans done, no deploy performed)
+Status: All phases complete
 Deferred follow-up (from Phase 216, still open): SC-4 CI after-median measurement — the
 first warm-cache runs are the next release PR and `production` deploy (caches saved
 2026-09-04 under stable keys, scoped per ref); run the median command in
@@ -153,7 +152,7 @@ Cloudflare nameservers, `maia3_simplified.onnx` and `stockfish-18-lite-single.wa
 return `cf-cache-status: HIT` while still carrying the origin's `max-age=2592000`, and
 `maia-worker.js` still returns `cache-control: no-cache`.
 
-Last activity: 2026-09-05 — Phase 217 execution started
+Last activity: 2026-09-05 — Phase 217 complete
 
 Prior: Phase 213 complete
 `games.initial_fen` added and backfilled in-migration, the opening-transition sample
@@ -992,7 +991,7 @@ Items acknowledged and deferred at **v1.29 milestone close on 2026-06-29** (user
 
 ## Session Continuity
 
-**Stopped at:** Completed 217-02-PLAN.md (checkpoint resolved, device UAT recorded)
+**Stopped at:** Phase 217 complete — all phases complete
 
 **Last session:** 2026-09-05T05:40:35.190Z
 

@@ -1,10 +1,11 @@
 ---
 phase: 217-frontend-major-bumps-vitest-5-jsdom-30-onnxruntime-web-1-29
 verified: 2026-09-05T08:00:00Z
-status: human_needed
+status: passed
 score: 5/5 must-haves verified
 behavior_unverified: 0
-overrides_applied: 0
+overrides_applied: 1
+override_note: "2026-09-05: project owner ruled the cluster-2 device matrix passed after checking the Maia panel on the 1.29.0 build and a 1.27.0 control build; the three hardware-unavailable legs below stay recorded as deferred in 217-UAT.md (skipped: 3), not as passed."
 human_verification:
   - test: "Leg 1 — iOS <16.4 device (no WASM SIMD): open the analysis page and trigger Maia"
     expected: "Existing engine-unavailable / no-SIMD fallback state, not a crash"
@@ -27,7 +28,7 @@ runtime assets matching the package, and a real-device pass recorded. No product
 change.
 
 **Verified:** 2026-09-05
-**Status:** human_needed
+**Status:** passed (owner override, see frontmatter `override_note`; three device legs deferred in 217-UAT.md)
 **Re-verification:** No — initial verification
 
 ## Goal Achievement

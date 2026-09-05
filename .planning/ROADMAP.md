@@ -180,7 +180,7 @@
 | 214. Backend God-File Decomposition (CONCERNS.md, v2.15) | 8/8 | Complete    | 2026-09-03 |
 | 215. Frontend God-File Decomposition (CONCERNS.md, v2.15) | 8/8 | Complete    | 2026-09-04 |
 | 216. Audit Bugs and Quick Wins (SEED-161) | 7/7 | Complete    | 2026-09-04 |
-| 217. Frontend Major Bumps — Vitest 5 / jsdom 30 + onnxruntime-web 1.29 (SEED-162) | 0/0 | Not started | — |
+| 217. Frontend Major Bumps — Vitest 5 / jsdom 30 + onnxruntime-web 1.29 (SEED-162) | 2/2 | Complete    | 2026-09-05 |
 | 218. Backend onnxruntime Parity Spike → Python 3.14 Chain (SEED-162) | 0/0 | Not started | — |
 
 ## Active Phases
@@ -303,7 +303,7 @@ Phase 218 parity spike, not here); anything backend.
 **Source**: `.planning/seeds/SEED-162-major-dependency-backlog.md` clusters 1–2;
 Renovate Dependency Dashboard #338.
 
-**Plans:** 2 plans
+**Plans:** 2/2 plans complete
 
 Plans:
 **Wave 1**

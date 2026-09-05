@@ -626,7 +626,7 @@
     {
       "number": "217",
       "name": "Frontend Major Bumps — Vitest 5 / jsdom 30 + onnxruntime-web 1.29 (SEED-162)",
-      "status": "pending"
+      "status": "complete"
     },
     {
       "number": "218",
@@ -635,9 +635,9 @@
     }
   ],
   "next": {
-    "command": "/gsd:progress --next",
-    "label": "Advance to the next step",
-    "reason": "Phase 217 of 2 · executing"
+    "command": "/gsd:progress",
+    "label": "Show progress",
+    "reason": "Unsure of state — showing progress"
   },
-  "updated_at": "2026-09-05T03:05:25.564Z"
+  "updated_at": "2026-09-05T05:48:12.177Z"
 }
