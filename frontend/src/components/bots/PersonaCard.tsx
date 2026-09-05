@@ -14,10 +14,14 @@
  * so every card currently renders the emoji branch.
  */
 
-import type { ReactElement } from 'react';
+import type { CSSProperties, ReactElement } from 'react';
 import { Star } from 'lucide-react';
 import type { Persona } from '@/lib/personas/personaRegistry';
-import { placeholderAvatarFor, resolveAvatarSrc } from '@/lib/personas/personaAvatars';
+import {
+  PERSONA_STYLE_ACCENT,
+  placeholderAvatarFor,
+  resolveAvatarSrc,
+} from '@/lib/personas/personaAvatars';
 import { STAR_FILLED, STAR_EMPTY } from '@/lib/theme';
 
 export interface PersonaCardProps {
@@ -40,6 +44,10 @@ const AVATAR_SIZE_PX = 58;
 
 /** Icon size (px) for each star glyph in the win-stars row (185-UI-SPEC.md). */
 const STAR_SIZE_PX = 14;
+
+/** Per-style border + glow: the `.persona-accent-frame` rule in `index.css`
+ * reads this custom property (rest + hover brightening live there). */
+const ACCENT_CSS_VAR = '--persona-accent';
 
 /** Cap on the number of gold-filled stars — a raw win count above this still
  * renders exactly 3 filled stars, never a 4th star or a "+N" badge this
@@ -116,7 +124,8 @@ export function PersonaCard({ persona, onSelect, winsForPersona }: PersonaCardPr
          surface as the intro Card above the grid — one material for the whole
          page. It is an @layer components rule, so the utility-layer hover
          background below still overrides it on pointer-fine devices. */
-      className="charcoal-texture flex flex-col items-center gap-1 rounded border border-border px-0.5 py-2 text-center transition-colors sm:px-2 pointer-fine:hover:bg-inactive-bg-hover"
+      className="charcoal-texture persona-accent-frame flex flex-col items-center gap-1 rounded border px-0.5 py-2 text-center transition-colors sm:px-2 pointer-fine:hover:bg-inactive-bg-hover"
+      style={{ [ACCENT_CSS_VAR]: PERSONA_STYLE_ACCENT[persona.style] } as CSSProperties}
     >
       <span
         aria-hidden="true"

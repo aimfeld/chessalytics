@@ -17,11 +17,24 @@
 import type { Persona } from './personaRegistry';
 import type { Style } from '@/lib/engine/styleOpeningLines';
 import {
+  ATTACKER_ACCENT,
   ATTACKER_ACCENT_BG,
+  TRICKSTER_ACCENT,
   TRICKSTER_ACCENT_BG,
+  GRINDER_ACCENT,
   GRINDER_ACCENT_BG,
+  WALL_ACCENT,
   WALL_ACCENT_BG,
 } from '@/lib/theme';
+
+/** Full-strength per-style accent — the `PersonaCard` border + glow color
+ * (quick 260905). Same hue as `PERSONA_STYLE_TINT`, minus the 14% wash. */
+export const PERSONA_STYLE_ACCENT: Record<Style, string> = {
+  Attacker: ATTACKER_ACCENT,
+  Trickster: TRICKSTER_ACCENT,
+  Grinder: GRINDER_ACCENT,
+  Wall: WALL_ACCENT,
+};
 
 /** Per-style placeholder-avatar background tint (D-18), keyed by `Style` so
  * TypeScript enforces all 4 styles stay present — mirrors
