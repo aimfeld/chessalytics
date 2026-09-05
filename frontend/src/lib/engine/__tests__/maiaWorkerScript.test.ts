@@ -411,3 +411,65 @@ describe('maiaWorkerScript — asset cache (Phase 213-12, D-20, closing G-213-37
     expect(handle.postMessages.some((m) => m.type === 'error')).toBe(false);
   });
 });
+
+// ─── Asset versioning (quick 260905-rhc) ───────────────────────────────────
+//
+// Reads the URLs the sandboxed worker ACTUALLY passed to importScripts,
+// fetch, cache.put, and ort.env.wasm.wasmPaths — behavioral evidence, not a
+// grep for `versionedAssetUrl` in the worker source (Proof obligation).
+
+const TEST_VERSION_QUERY = '?v=42';
+
+describe('maiaWorkerScript — asset versioning (quick 260905-rhc)', () => {
+  it('wasm backend: importScripts, the model fetch/cache key, and wasmPaths (wasm-only pair) all carry the version suffix', async () => {
+    const bytes = new Uint8Array([1, 2, 3]);
+    const handle = setupSandbox({ withCaches: true, modelFetchBytes: bytes });
+
+    await sendInit(handle, {
+      backend: 'wasm',
+      assetCacheName: TEST_ASSET_CACHE_NAME,
+      assetVersionQuery: TEST_VERSION_QUERY,
+    });
+
+    expect(handle.importScriptsCalls).toEqual([`${WASM_ONLY_GLUE_PATH}${TEST_VERSION_QUERY}`]);
+    expect(handle.fetchCalls).toEqual([`${MODEL_PATH}${TEST_VERSION_QUERY}`]);
+    expect(handle.cacheStore.has(`${MODEL_PATH}${TEST_VERSION_QUERY}`)).toBe(true);
+    expect(handle.cacheStore.has(MODEL_PATH)).toBe(false);
+
+    const wasmPaths = handle.sandbox.ort?.env.wasm.wasmPaths as { mjs: string; wasm: string };
+    expect(wasmPaths.mjs.endsWith(TEST_VERSION_QUERY)).toBe(true);
+    expect(wasmPaths.wasm.endsWith(TEST_VERSION_QUERY)).toBe(true);
+    expect(wasmPaths.mjs).toContain('ort-wasm-simd-threaded.mjs');
+    expect(wasmPaths.wasm).toContain('ort-wasm-simd-threaded.wasm');
+    expect(wasmPaths.mjs).not.toContain('asyncify');
+  });
+
+  it('webgpu backend: importScripts and wasmPaths (asyncify pair) carry the version suffix', async () => {
+    const handle = setupSandbox();
+
+    await sendInit(handle, { backend: 'webgpu', assetVersionQuery: TEST_VERSION_QUERY });
+
+    expect(handle.importScriptsCalls).toEqual([`${WEBGPU_GLUE_PATH}${TEST_VERSION_QUERY}`]);
+
+    const wasmPaths = handle.sandbox.ort?.env.wasm.wasmPaths as { mjs: string; wasm: string };
+    expect(wasmPaths.mjs.endsWith(TEST_VERSION_QUERY)).toBe(true);
+    expect(wasmPaths.wasm.endsWith(TEST_VERSION_QUERY)).toBe(true);
+    expect(wasmPaths.mjs).toContain('ort-wasm-simd-threaded.asyncify.mjs');
+    expect(wasmPaths.wasm).toContain('ort-wasm-simd-threaded.asyncify.wasm');
+  });
+
+  it('an absent assetVersionQuery degrades to unversioned URLs on every one of those surfaces — the worker still initialises', async () => {
+    const bytes = new Uint8Array([1, 2, 3]);
+    const handle = setupSandbox({ withCaches: true, modelFetchBytes: bytes });
+
+    await sendInit(handle, { backend: 'wasm', assetCacheName: TEST_ASSET_CACHE_NAME });
+
+    expect(handle.importScriptsCalls).toEqual([WASM_ONLY_GLUE_PATH]);
+    expect(handle.fetchCalls).toEqual([MODEL_PATH]);
+    expect(handle.cacheStore.has(MODEL_PATH)).toBe(true);
+    const wasmPaths = handle.sandbox.ort?.env.wasm.wasmPaths as { mjs: string; wasm: string };
+    expect(wasmPaths.mjs).toBe('/maia/ort-wasm-simd-threaded.mjs');
+    expect(wasmPaths.wasm).toBe('/maia/ort-wasm-simd-threaded.wasm');
+    expect(handle.postMessages).toContainEqual({ type: 'ready', backend: 'wasm' });
+  });
+});

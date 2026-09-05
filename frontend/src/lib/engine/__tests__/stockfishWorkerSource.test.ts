@@ -475,9 +475,16 @@ describe('createStockfishWorker — construction contract', () => {
     stubWorkerCtor();
   });
 
-  it('a null shared URL constructs against the served path, unchanged from today', () => {
+  it('a null shared URL appends STOCKFISH_ENGINE_WASM_PATH as an encoded location hash (D-05)', () => {
     const worker = createStockfishWorker(null) as unknown as MockWorker;
-    expect(worker.url).toBe(STOCKFISH_ENGINE_GLUE_PATH);
+
+    expect(worker.url).toBe(
+      `${STOCKFISH_ENGINE_GLUE_PATH}#${encodeURIComponent(STOCKFISH_ENGINE_WASM_PATH)}`,
+    );
+    const [gluePart, hash] = worker.url.split('#');
+    expect(gluePart).toMatch(/\?v=\d+$/);
+    expect(hash).toBeDefined();
+    expect(decodeURIComponent(hash ?? '')).toBe(STOCKFISH_ENGINE_WASM_PATH);
   });
 
   it('a non-null shared URL appends it as an encoded location hash with no comma', () => {
@@ -485,7 +492,8 @@ describe('createStockfishWorker — construction contract', () => {
     const worker = createStockfishWorker(sharedUrl) as unknown as MockWorker;
 
     expect(worker.url).toBe(`${STOCKFISH_ENGINE_GLUE_PATH}#${encodeURIComponent(sharedUrl)}`);
-    const hash = worker.url.split('#')[1];
+    const [gluePart, hash] = worker.url.split('#');
+    expect(gluePart).toMatch(/\?v=\d+$/);
     expect(hash).toBeDefined();
     expect(hash).not.toContain(',');
   });

@@ -54,12 +54,17 @@ import {
   resetEngineAssetForRefetch,
 } from './engineAssetProgress';
 import { ensureOrtRuntime, fetchWasmOnlyOrtRuntime, type OrtBackend } from './ortRuntimeSource';
-import { ENGINE_ASSET_CACHE_NAME } from './engineAssetCache';
+import { ENGINE_ASSET_CACHE_NAME, ENGINE_ASSET_VERSION_QUERY, versionedEngineAssetUrl } from './engineAssetCache';
 
 // ─── Constants ───────────────────────────────────────────────────────────────
 
-/** Path to the vendored Maia Worker served from public/maia/ — moved here from maiaQueue.ts (D-04's "SEPARATE Worker() instance" is reversed by this task; see file headers there). */
-export const ENGINE_PATH = '/maia/maia-worker.js';
+/**
+ * Versioned URL (path plus the shared `?v=<n>` query — quick 260905-rhc) to
+ * the vendored Maia Worker served from public/maia/ — moved here from
+ * maiaQueue.ts (D-04's "SEPARATE Worker() instance" is reversed by this
+ * task; see file headers there).
+ */
+export const ENGINE_PATH = versionedEngineAssetUrl('/maia/maia-worker.js');
 
 // ─── Types ──────────────────────────────────────────────────────────────────
 
@@ -137,12 +142,22 @@ type WorkerMessage =
  * zero network whenever the model was already downloaded, without keeping a
  * second transferable in this message (the exact shape that produced
  * `G-213-36`).
+ *
+ * Quick 260905-rhc: `assetVersionQuery` is the shared `?v=<n>` suffix
+ * (`ENGINE_ASSET_VERSION_QUERY`, derived from `ENGINE_ASSET_CACHE_VERSION`)
+ * — set on EVERY spawn in `constructWorker`, the same object literal that
+ * already sets `assetCacheName`, covering both the normal spawn and the
+ * wasm-pinned respawn with one assignment. The worker cannot `import` this
+ * TS module, so the suffix arrives on the message instead of being
+ * duplicated there as a literal. Absent means unversioned URLs inside the
+ * worker (a degrade, never a crash).
  */
 interface InitMessage {
   type: 'init';
   backend: OrtBackend;
   runtimeBuffer?: ArrayBuffer;
   assetCacheName?: string;
+  assetVersionQuery?: string;
 }
 
 /** One `analyze()` call awaiting dispatch or resolution. */
@@ -405,7 +420,12 @@ function constructWorker(
   // Phase 213-12 (D-20, G-213-37): sent on EVERY spawn — this single
   // assignment covers both the 'auto' spawn and the 'wasm' respawn branch,
   // since both funnel through this one function.
-  const initMsg: InitMessage = { type: 'init', backend: chosenBackend, assetCacheName: ENGINE_ASSET_CACHE_NAME };
+  const initMsg: InitMessage = {
+    type: 'init',
+    backend: chosenBackend,
+    assetCacheName: ENGINE_ASSET_CACHE_NAME,
+    assetVersionQuery: ENGINE_ASSET_VERSION_QUERY,
+  };
   const transfer: Transferable[] = [];
   if (runtimeBuffer) {
     initMsg.runtimeBuffer = runtimeBuffer;

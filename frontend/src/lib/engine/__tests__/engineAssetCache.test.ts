@@ -15,11 +15,19 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { waitFor } from '@testing-library/react';
 import * as Sentry from '@sentry/react';
+import { readFileSync, readdirSync } from 'node:fs';
+// Named import (not the global `URL`) — `@vitest-environment jsdom` shadows
+// the global `URL` with jsdom's own constructor, which `fileURLToPath` below
+// rejects as not a real Node URL instance (mirrors stockfishWorkerSource.test.ts).
+import { fileURLToPath, URL as NodeURL } from 'node:url';
+import { join } from 'node:path';
 import {
   getEngineAsset,
   resetEngineAssetCacheForTests,
   ENGINE_ASSET_CACHE_NAME,
   ENGINE_ASSET_CACHE_NAME_PREFIX,
+  ENGINE_ASSET_VERSION_QUERY,
+  versionedEngineAssetUrl,
 } from '../engineAssetCache';
 
 vi.mock('@sentry/react', () => ({ captureException: vi.fn() }));
@@ -459,5 +467,97 @@ describe('getEngineAsset — stale-cache sweep on open', () => {
     expect(caches_.stores.has('workbox-precache-v2-x')).toBe(true);
     expect(caches_.stores.has('html-shell')).toBe(true);
     expect(caches_.stores.has(ENGINE_ASSET_CACHE_NAME)).toBe(true);
+  });
+});
+
+// ─── One-knob invariant (quick 260905-rhc) ─────────────────────────────────
+//
+// `ENGINE_ASSET_CACHE_VERSION` must be the SOLE source feeding both the
+// CacheStorage name and the URL query suffix — a second independent version
+// source is exactly the failure mode this task exists to remove (D-01).
+// Both assertions below use a regex, never a hardcoded version number, so a
+// future bump does not require editing this test.
+
+describe('versionedEngineAssetUrl / ENGINE_ASSET_VERSION_QUERY — one-knob invariant', () => {
+  it('versionedEngineAssetUrl appends the path with a ?v=<digits> suffix', () => {
+    const url = versionedEngineAssetUrl('/maia/some-arbitrary-path.mjs');
+    expect(url).toMatch(/^\/maia\/some-arbitrary-path\.mjs\?v=\d+$/);
+  });
+
+  it('ENGINE_ASSET_VERSION_QUERY and the version embedded in ENGINE_ASSET_CACHE_NAME are the SAME digits', () => {
+    const queryDigits = ENGINE_ASSET_VERSION_QUERY.match(/^\?v=(\d+)$/)?.[1];
+    const cacheNameDigits = ENGINE_ASSET_CACHE_NAME.match(/v(\d+)$/)?.[1];
+
+    expect(queryDigits).toBeDefined();
+    expect(cacheNameDigits).toBeDefined();
+    expect(queryDigits).toBe(cacheNameDigits);
+  });
+});
+
+// ─── Source gate: no unwrapped engine-asset URL literal (Task 3, quick 260905-rhc) ──
+//
+// Proves the sole legitimate way to reference a `/maia/` or `/engine/` URL
+// literal under `frontend/src` is to wrap it in `versionedEngineAssetUrl()`.
+// A symbol-presence check (grepping a file for the string
+// `versionedEngineAssetUrl`) would NOT catch this: a file could import the
+// helper for one call site while still hand-rolling a second, unwrapped
+// literal elsewhere. An unwrapped literal is exactly how a future edit
+// could silently reintroduce an un-versioned, indefinitely-cacheable URL —
+// a stale CDN edge or the browser's own HTTP cache could then serve it
+// forever, precisely the incident this whole task exists to prevent.
+// Modelled on stockfishWorkerSource.test.ts's own source gate —
+// `listSourceFiles`/`stripCommentLines` copied verbatim, not reinvented.
+
+/** Recursively lists every `.ts`/`.tsx` file under `dir`, skipping `__tests__` directories entirely. */
+function listSourceFiles(dir: string): string[] {
+  const files: string[] = [];
+  for (const entry of readdirSync(dir, { withFileTypes: true })) {
+    if (entry.name === '__tests__') continue;
+    const full = join(dir, entry.name);
+    if (entry.isDirectory()) {
+      files.push(...listSourceFiles(full));
+      continue;
+    }
+    if (/\.(ts|tsx)$/.test(entry.name)) files.push(full);
+  }
+  return files;
+}
+
+/** Strips comment-only lines (mirrors a `grep -v` on lines starting with optional whitespace then `*` or a slash) so a doc comment cannot satisfy or break the gate. */
+function stripCommentLines(source: string): string {
+  return source
+    .split('\n')
+    .filter((line) => !/^\s*[*/]/.test(line))
+    .join('\n');
+}
+
+/**
+ * Alternation whose FIRST branch matches a `versionedEngineAssetUrl(...)`
+ * call wrapping a quoted `/maia/...` or `/engine/...` literal. Because the
+ * wrapped branch is tried FIRST at every position, it consumes every
+ * legitimate occurrence before the second, bare-literal branch ever gets a
+ * chance at the same text — so any match whose full text does not start
+ * with the helper name is, by construction, an offender: an engine-asset
+ * URL literal that is NOT wrapped.
+ */
+const ENGINE_ASSET_URL_PATTERN =
+  /versionedEngineAssetUrl\(\s*(['"])(\/(?:maia|engine)\/[^'"]*)\1\s*\)|(['"])(\/(?:maia|engine)\/[^'"]*)\3/g;
+
+describe('source gate: every /maia/ or /engine/ URL literal under frontend/src is wrapped in versionedEngineAssetUrl()', () => {
+  it('no non-test source file contains an unwrapped engine-asset URL literal', () => {
+    // frontend/src/lib/engine/__tests__/engineAssetCache.test.ts -> frontend/src
+    const srcRoot = fileURLToPath(new NodeURL('../../../', import.meta.url));
+
+    const offenders: { file: string; match: string }[] = [];
+    for (const file of listSourceFiles(srcRoot)) {
+      const codeOnly = stripCommentLines(readFileSync(file, 'utf-8'));
+      for (const match of codeOnly.matchAll(new RegExp(ENGINE_ASSET_URL_PATTERN))) {
+        if (!match[0].startsWith('versionedEngineAssetUrl(')) {
+          offenders.push({ file, match: match[0] });
+        }
+      }
+    }
+
+    expect(offenders).toEqual([]);
   });
 });

@@ -3,10 +3,12 @@
  * runtime `.wasm` binary (Phase 213-09, G-213-35 second half).
  *
  * Bug fix: today onnxruntime-web fetches its own runtime binary INSIDE
- * `InferenceSession.create()`, resolved off `ort.env.wasm.wasmPaths =
- * '/maia/'` in the worker. That fetch never touches a streaming reader, posts
- * no progress, and has no asset id — 14.0 MB (wasm-only) or 25.7 MB
- * (WebGPU/asyncify) transfers with the gate's bar showing nothing. Worse, on
+ * `InferenceSession.create()`, resolved off `ort.env.wasm.wasmPaths` in the
+ * worker — an object of versioned per-backend `.mjs`/`.wasm` URLs (quick
+ * 260905-rhc; a bare string prefix cannot carry a `?v=` query — see
+ * `maia-worker.js`'s file header). That fetch never touches a streaming
+ * reader, posts no progress, and has no asset id — 14.0 MB (wasm-only) or
+ * 25.7 MB (WebGPU/asyncify) transfers with the gate's bar showing nothing. Worse, on
  * a device whose WebGPU adapter lacks the `shader-f16` feature the worker
  * used to fetch the WebGPU build, fail its D-14 warmup `analyze()`, and THEN
  * fetch the wasm-only build too — 39.7 MB to end up exactly where a straight
@@ -48,15 +50,26 @@
 
 import * as Sentry from '@sentry/react';
 import { markEngineAssetPending, reportEngineAssetProgress } from './engineAssetProgress';
-import { getEngineAsset } from './engineAssetCache';
+import { getEngineAsset, versionedEngineAssetUrl } from './engineAssetCache';
 
 // ─── Named constants (CLAUDE.md no-magic-numbers) ──────────────────────────
 
-/** Path to the WASM-CPU-only runtime binary served from public/maia/ — pairs with `ort.wasm.min.js` (confirmed by grepping the vendored bundle for the literal filename it requests; see the vendored README). */
-export const ORT_RUNTIME_WASM_ONLY_PATH = '/maia/ort-wasm-simd-threaded.wasm';
+/**
+ * Versioned URL (path plus the shared `?v=<n>` query — quick 260905-rhc) to
+ * the WASM-CPU-only runtime binary served from public/maia/ — pairs with
+ * `ort.wasm.min.js` (confirmed by grepping the vendored bundle for the
+ * literal filename it requests; see the vendored README).
+ */
+export const ORT_RUNTIME_WASM_ONLY_PATH = versionedEngineAssetUrl('/maia/ort-wasm-simd-threaded.wasm');
 
-/** Path to the WebGPU/asyncify runtime binary served from public/maia/ — pairs with `ort.webgpu.min.js`, NOT the `.jsep` pair some onnxruntime-web docs reference for other bundle combinations (confirmed the same way; see the vendored README's "Filename correction" note). */
-export const ORT_RUNTIME_ASYNCIFY_PATH = '/maia/ort-wasm-simd-threaded.asyncify.wasm';
+/**
+ * Versioned URL (path plus the shared `?v=<n>` query — quick 260905-rhc) to
+ * the WebGPU/asyncify runtime binary served from public/maia/ — pairs with
+ * `ort.webgpu.min.js`, NOT the `.jsep` pair some onnxruntime-web docs
+ * reference for other bundle combinations (confirmed the same way; see the
+ * vendored README's "Filename correction" note).
+ */
+export const ORT_RUNTIME_ASYNCIFY_PATH = versionedEngineAssetUrl('/maia/ort-wasm-simd-threaded.asyncify.wasm');
 
 /** Raw byte size of the wasm-only runtime binary, verified live 2026-09-05 (onnxruntime-web 1.29.0). Defense-in-depth fallback for a missing/garbage `Content-Length`, mirroring `engineAssetProgress.ts`'s existing fallback constants. */
 export const ORT_RUNTIME_WASM_ONLY_BYTES_FALLBACK = 13_961_845;

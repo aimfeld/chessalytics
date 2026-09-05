@@ -28,8 +28,13 @@
  * `ensureStockfishWorkerUrl()` NEVER rejects; every failure mode (network
  * rejection, non-ok response, absent `response.body`, absent
  * `URL.createObjectURL`/`Blob`) is caught, reported once to Sentry, and
- * resolves `null`. A `null` shared URL makes `createStockfishWorker()`
- * construct against the served path, byte-for-byte today's pre-fix behavior.
+ * resolves `null`. A `null` shared URL (quick 260905-rhc, D-05) still passes
+ * `STOCKFISH_ENGINE_WASM_PATH` through the glue's location-hash override —
+ * NOT the pre-fix "construct against the served path alone" behavior,
+ * because the vendored glue's OWN fallback derives an unversioned `.wasm`
+ * URL from `location.pathname` (which drops the query string), and that
+ * would be the one unversioned runtime URL left in the system after this
+ * fix. See `createStockfishWorker()`'s own doc comment.
  *
  * `ensureStockfishWorkerUrl()` stays memoised for the WHOLE page session
  * (unlike `ortRuntimeSource.ts`'s per-call `getEngineAsset()` routing) — the
@@ -45,15 +50,21 @@ import {
   reportEngineAssetProgress,
   STOCKFISH_WASM_BYTES_FALLBACK,
 } from './engineAssetProgress';
-import { getEngineAsset } from './engineAssetCache';
+import { getEngineAsset, versionedEngineAssetUrl } from './engineAssetCache';
 
 // ─── Named constants (CLAUDE.md no-magic-numbers) ──────────────────────────
 
-/** Path to the vendored Stockfish engine glue served from public/engine/. */
-export const STOCKFISH_ENGINE_GLUE_PATH = '/engine/stockfish-18-lite-single.js';
+/**
+ * Versioned URL (path plus the shared `?v=<n>` query — quick 260905-rhc) to
+ * the vendored Stockfish engine glue served from public/engine/.
+ */
+export const STOCKFISH_ENGINE_GLUE_PATH = versionedEngineAssetUrl('/engine/stockfish-18-lite-single.js');
 
-/** Path to the vendored Stockfish `.wasm` binary served from public/engine/. */
-export const STOCKFISH_ENGINE_WASM_PATH = '/engine/stockfish-18-lite-single.wasm';
+/**
+ * Versioned URL (path plus the shared `?v=<n>` query — quick 260905-rhc) to
+ * the vendored Stockfish `.wasm` binary served from public/engine/.
+ */
+export const STOCKFISH_ENGINE_WASM_PATH = versionedEngineAssetUrl('/engine/stockfish-18-lite-single.wasm');
 
 // ─── Module-level singleton state ──────────────────────────────────────────
 
@@ -123,22 +134,26 @@ export function ensureStockfishWorkerUrl(): Promise<string | null> {
 }
 
 /**
- * Constructs a Stockfish Worker. `sharedUrl === null` (never fetched yet, or
- * the shared fetch failed) constructs against the served glue path exactly
- * as every call site did before this module existed. A non-null `sharedUrl`
- * appends it as a `#`-encoded location hash — the vendored glue reads its
- * wasm URL out of `self.location.hash` and streams from exactly that URL
- * (see this file's header comment), so this is the glue's own supported
- * override, not a patch of a vendored file. `encodeURIComponent` never
- * emits a raw comma, which matters because the glue's pthread guard tests
- * `self.location.hash.split(',')[1] === 'worker'` — a comma in the hash
- * would collide with that split.
+ * Constructs a Stockfish Worker, always appending a `#`-encoded location
+ * hash — the vendored glue reads its wasm URL out of `self.location.hash`
+ * and streams from exactly that URL (see this file's header comment), so
+ * this is the glue's own supported override, not a patch of a vendored file.
+ * `encodeURIComponent` never emits a raw comma, which matters because the
+ * glue's pthread guard tests `self.location.hash.split(',')[1] === 'worker'`
+ * — a comma in the hash would collide with that split.
+ *
+ * `sharedUrl === null` (never fetched yet, or the shared fetch failed) hands
+ * the glue `STOCKFISH_ENGINE_WASM_PATH` explicitly (D-05, quick 260905-rhc)
+ * rather than letting the glue's OWN fallback derive one — that fallback
+ * reads `location.origin + location.pathname`, and `pathname` excludes the
+ * query string, so an un-hinted degraded spawn would fetch the one
+ * unversioned runtime URL left in the system. A non-null `sharedUrl` (the
+ * Blob object URL published by `ensureStockfishWorkerUrl()`) is passed the
+ * same way.
  */
 export function createStockfishWorker(sharedUrl: string | null): Worker {
-  if (sharedUrl === null) {
-    return new Worker(STOCKFISH_ENGINE_GLUE_PATH);
-  }
-  return new Worker(`${STOCKFISH_ENGINE_GLUE_PATH}#${encodeURIComponent(sharedUrl)}`);
+  const wasmHashUrl = sharedUrl ?? STOCKFISH_ENGINE_WASM_PATH;
+  return new Worker(`${STOCKFISH_ENGINE_GLUE_PATH}#${encodeURIComponent(wasmHashUrl)}`);
 }
 
 /**
