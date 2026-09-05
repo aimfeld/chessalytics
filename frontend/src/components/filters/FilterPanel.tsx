@@ -242,7 +242,8 @@ const PLATFORM_LABELS: Record<Platform, string> = {
 };
 
 /**
- * SEED-163 2c: the Library-only disclosure line below the Platform chip grid.
+ * SEED-163 2c: the Library-only disclosure line below the Rated toggle (the last
+ * of the two filters it describes; Opponent Type sits directly above it).
  * Extracted to its own component (rather than an inline `{show && (...)}` in
  * FilterPanel) so the added branch doesn't push FilterPanel's cyclomatic
  * complexity past the eslint `complexity` gate (frontend/CLAUDE.md).
@@ -568,7 +569,6 @@ export function FilterPanel({
               </ToggleChipButton>
             )}
           </div>
-          <NativeGamesHint show={showPastedChip} />
         </div>
       )}
 
@@ -623,6 +623,7 @@ export function FilterPanel({
             <ToggleGroupItem value="rated" data-testid="filter-rated-rated" className="min-h-11 sm:min-h-0 flex-1 text-sm">Rated</ToggleGroupItem>
             <ToggleGroupItem value="casual" data-testid="filter-rated-casual" className="min-h-11 sm:min-h-0 flex-1 text-sm">Casual</ToggleGroupItem>
           </ToggleGroup>
+          <NativeGamesHint show={showPastedChip} />
         </div>
       )}
 

@@ -104,7 +104,8 @@ it says why. `LibraryFilterPanel` is already the only caller rendering the paste
 
 (Copy corrected at ship time: the earlier "always shown here" wording was false, since
 pasted games stay opt-in via the Pasted chip (D-11) and bot games are absent from the
-Flaws tab. The hint describes the opponent/rated exemption only.)
+Flaws tab. The hint describes the opponent/rated exemption only, and
+is rendered below the Rated toggle rather than in the Platform chip slot.)
 
 Rows already carry a platform badge, so each exempt row is visually identifiable. No new
 store state.
