@@ -1,107 +1,132 @@
 ---
 id: SEED-163
-status: active
+status: complete
 planted: 2026-09-04
-planted_during: /gsd-explore session (Openings stats include bot games), branch gsd/phase-216-audit-bugs-and-quick-wins
-trigger_when: next product milestone; group 1 is a live correctness defect and can ship alone as a /gsd-quick ahead of the rest
-scope: backend repositories + frontend filter visibility + one empty-state string; group 1 is a bugfix with no behavior change beyond correctness, group 2 is a deliberate product behavior change
+updated: 2026-09-05
+planted_during: /gsd-explore session (Openings stats include bot games), branch gsd/phase-216-audit-bugs-and-quick-wins; group 2 refined in a second /gsd-explore session 2026-09-05
+trigger_when: next product milestone (group 1 shipped 2026-09-05 as quick task 260905-mgx)
+scope: one frontend default flip + one Library-only server-side exemption + one disclosure chip + one empty state; deliberate product behavior change, no new store state
 ---
 
-# SEED-163: Analytics populations exclude bot games
+# SEED-163: Analytics defaults exclude bot and unrated games; Library keeps the archive
 
-Two separable items, found together. Group 1 is a bug — the Openings surfaces bypass a
-documented population rule. Group 2 is the product decision that follows from it: imported
-chess.com/lichess bot games should be excluded from analytics server-side, not left to a
-filter the user has to remember to flip.
+Two separable items, found together. Group 1 was a bug and has shipped. Group 2 is the
+product decision that follows from it, refined on 2026-09-05 after a second exploration
+that reversed two earlier calls (see "Decisions" below).
 
-Decision taken during exploration: **server-side population rule + bugfix** (over
-per-surface filter defaults, a global default flip, or bugfix-only).
+## 1. `openings_repository.py` bypassed `DEFAULT_EXCLUDED_PLATFORMS` — SHIPPED
 
-## 1. `openings_repository.py` bypasses `DEFAULT_EXCLUDED_PLATFORMS` (bug, ≈1h)
+Quick task `260905-mgx` (2026-09-05) routed `_build_base_query` and `query_time_series`
+through `apply_game_filters`, with `TestDefaultPlatformExclusion` as the regression guard.
+Kept here only for provenance; nothing left to do.
 
-`app/repositories/openings_repository.py` has two hand-rolled filter blocks that were never
-migrated to `apply_game_filters` when D-02 landed in Phase 167:
+## 2. Analytics default = Human + Rated; Library always shows FlawChess-native games — SHIPPED
 
-- `_build_filtered_query` — `openings_repository.py:105-120`
-- `query_time_series` — `openings_repository.py:180-190`
+Quick task `260905-p0t` (2026-09-05) shipped all four sub-items below (2a-2d).
 
-Both do `if platform is not None: ... Game.platform.in_(platform)` with **no `else` branch**,
-so `DEFAULT_EXCLUDED_PLATFORMS = ("flawchess", "pgn")` is never applied on the default
-population. `apply_game_filters` (`app/repositories/query_utils.py:277-286`) has the `else`;
-every other repository goes through it. Direct violation of CLAUDE.md's "Never duplicate
-filter logic in individual repositories."
+### Decisions (2026-09-05 exploration)
 
-Effect: FlawChess practice-bot games (`platform='flawchess'`, STORE-07) and pasted PGNs
-(`platform='pgn'`, PASTE-05) reach the Openings WDL query **and** the "Bookmarked Openings:
-Score over Time" chart. `_build_filtered_query` feeds the main page query, not just the
-chart, so the whole Openings surface is affected.
+- **Default filter flip, not a server-side population rule.** The 2026-09-04 seed chose a
+  server-side rule. Reversed: the shared filter store is module memory, not localStorage
+  (`frontend/src/hooks/useFilterStore.ts`), so changing `DEFAULT_FILTERS` reaches every
+  user on next load with no migration and no untouched-vs-user-set tracking. The filter
+  stays visible and reversible, which covers "show me my bot / casual stats" for free.
+- **Rated defaults to Rated.** The 2026-09-04 seed said "no case to make" based on the
+  planter's own 76 unrated games. Reversed on population data (prod 2026-09-05, paired per
+  user, 94 users with >=30 rated AND >=30 unrated human games): users score **+5.6 pp mean
+  / +6.6 pp median higher in unrated games**. Unrated share is only 5.1% pooled (lichess
+  7.7%, chess.com 3.8%) but it inflates scores, so it is a legitimate exclusion.
+- **Alignment with benchmarks.** The percentile benchmark cohort is
+  `g.rated AND NOT g.is_computer_game` (`scripts/benchmarks/sql.py:354`). Human + Rated
+  makes the user's default population the same composition the chips compare against.
+  Today the default population differs from the benchmark's.
+- **One shared filter store, carry-over preserved.** Two stores (archive vs analytics)
+  were considered and rejected: loses "set blitz once, see it everywhere" and is bug-prone.
+- **Consistency on the Openings page is intended.** WDL stats, Score-over-Time and the
+  matching-games list share `_build_base_query` and must keep describing the same
+  population. No decoupled "games list with bots" on Openings.
+- **The Library is the only place FlawChess bot games are browsable.** No list on the
+  Bots page or elsewhere.
 
-Verified in prod (2026-09-04), user `aimfeld80@gmail.com`, per bookmark:
+### 2a. Frontend default flip
 
-| Bookmark | clean games | leaked (flawchess/pgn) |
-|---|---|---|
-| Caro-Kann Defense (B10) | 1443 | 16 |
-| Caro-Kann: Advance Variation | 299 | 7 |
-| Scandinavian Defense (B01) | 75 | 2 |
-| Caro-Kann: Hillbilly Attack | 80 | 1 |
-| Slav Defense (D10) | 210 | 1 |
+`frontend/src/components/filters/FilterPanel.tsx:91-92`:
 
-Every leaked game is a bot game — so "Opponent: Human" is currently the only thing masking
-the defect, not a legitimate preference. Population-wide: 302 leaked games across 33 users
-(of 252 with ≥100 games).
-
-Fix: route both blocks through `apply_game_filters`. Add a regression test asserting that a
-`platform='flawchess'` game never reaches either function with `platform=None`.
-
-**Containment is proven, not assumed.** `openings_repository.py` is the only file outside
-`query_utils.py` matching either `Game.platform.in_(` or `Game.is_computer_game ==`:
-
-```
-grep -rn "Game.platform.in_(\|is_computer_game ==" app/repositories app/services | grep -v query_utils
+```ts
+rated: true,            // was null (All)
+opponentType: 'human',  // was 'both'
 ```
 
-Single-file drift. No wider audit needed.
+No other frontend code changes for analytics. `FILTER_DOT_FIELDS` compares against
+`DEFAULT_FILTERS`, so the modified-dot stays off at the new defaults. Backend routers
+already default `opponent_type="human"`; the `rated` query param stays `None`-default on
+the API (the frontend sends `true`), so the API contract does not change.
 
-## 2. Imported bot games excluded from analytics populations (product change)
+### 2b. Library-only exemption for FlawChess-native games (server-side)
 
-Backend routers already default to `opponent_type="human"` (`app/routers/stats.py`,
-`openings.py`, `endgames.py`, `library.py`). The frontend overrides it:
-`DEFAULT_FILTERS.opponentType = 'both'` (`frontend/src/components/filters/FilterPanel.tsx:92`).
+Problem: FlawChess bot games are stored `rated=False, is_computer_game=True`
+(`app/services/normalization.py:612`) and pasted PGNs are `rated=False`
+(`normalization.py:991`). With 2a, BOTH new defaults hide them from the Library Games and
+Flaws tabs, and a user who just finished a bot game cannot find it.
 
-Change: make human-only the analytics *population*, not a filter default — chess.com and
-lichess bot games get the same treatment `flawchess`/`pgn` already get. Library keeps the
-full archive and keeps its Opponent Type control.
+Rule: in the Library Games and Flaws tabs, games whose `platform` is in
+`DEFAULT_EXCLUDED_PLATFORMS` (`flawchess`, `pgn`) **bypass the Opponent and Rated filters
+unconditionally**, including when the user explicitly picks "Human" or "Rated". They stay
+governed by the Platform filter and, for `pgn`, the Library-only `pasted` control (D-14),
+which remains the sole authority over pasted-game visibility.
 
-**The per-surface seam already exists — no shared-store trickery needed.** `visibleFilters`
-(`FilterPanel.tsx:344`) is the existing control. Drop `'opponent'` from the three analytics
-arrays and Library is unaffected:
+Why unconditional: exempting only "at default" needs untouched-tracking in the store,
+which is ruled out. Precedent: Phase 167 D-03 already opts `flawchess` back into the
+Library population via `resolve_library_platforms`
+(`app/services/library_service.py:863-895`); this extends "always here" from the platform
+axis to the opponent/rated axes.
 
-- `frontend/src/pages/openings/OpeningsFilterFields.tsx:88`
-- `frontend/src/pages/Endgames.tsx:866` and `:963`
-- `frontend/src/pages/GlobalStats.tsx:232` and `:287`
-- `frontend/src/components/filters/LibraryFilterPanel.tsx:115` — **unchanged**, keeps the control
+Implementation constraint: extend `apply_game_filters` (`app/repositories/query_utils.py`)
+with one flag (e.g. `native_games_bypass_opponent_and_rated: bool = False`) that wraps
+the opponent + rated predicates as
+`OR(Game.platform.in_(DEFAULT_EXCLUDED_PLATFORMS), <predicates>)`. Only the Library
+games/flaws call sites set it. Do NOT add a second predicate block in `library_service`;
+CLAUDE.md's single-seam rule applies. Regression test: a `flawchess` game with
+`is_computer_game=True, rated=False` appears in the Library games list under
+`opponent_type='human', rated=True`, and does NOT appear in any analytics query under the
+same filters.
 
-This avoids the `pasted`-style "shared field, one page honors it" pattern (D-14,
-`FilterPanel.tsx:131-138`) and avoids teaching `useFilterStore` to distinguish "untouched"
-from "user-set" per field.
+Analytics surfaces are unaffected: native games are already excluded there by the
+`platform=None` default, so there is nothing to exempt.
 
-Scale (prod, 2026-09-04, 252 users with ≥100 games): 4,350 imported bot games; 45 users at
-≥2% bot share; one user at 98%.
+### 2c. Disclosure chip (Library only)
 
-**Blast radius — needs an empty state.** Excluding imported bots drops 3 of 252 users below
-100 human games, 2 below 30, and **1 to exactly zero**. That user's Openings, Endgames and
-Stats pages render completely blank, which reads as broken rather than filtered. Ship a
-named empty state ("You have N games, all against bots — FlawChess analytics covers human
-games only") rather than an empty page.
+With the panel reading "Human, Rated" and bot games in the list, the list is wrong unless
+it says why. `LibraryFilterPanel` is already the only caller rendering the pasted chip
+(`showPastedChip`, D-14); render a one-line hint in the same slot:
 
-**Open decision for the planning phase:** whether `opponent_type` stays on the analytics
-endpoints as a now-unreachable parameter, or is removed. Leaving it invites silent
-reintroduction; removing it is an internal-API break with no external consumers.
+> Opponent and Rated filters don't apply to FlawChess bot games or pasted games.
+
+(Copy corrected at ship time: the earlier "always shown here" wording was false, since
+pasted games stay opt-in via the Pasted chip (D-11) and bot games are absent from the
+Flaws tab. The hint describes the opponent/rated exemption only, and
+is rendered below the Rated toggle rather than in the Platform chip slot.)
+
+Rows already carry a platform badge, so each exempt row is visually identifiable. No new
+store state.
+
+### 2d. Empty state for users left with zero games
+
+Blast radius of Human + Rated together (prod 2026-09-05, 253 users with >=100 games of any
+kind): 10 users drop below 100 games, 5 below 30, **2 to exactly zero**. Those two see
+blank Openings / Endgames / Stats pages that read as broken. Ship a named empty state whose
+copy names both conditions, e.g. "You have N games, but none are rated games against
+humans. Change the Opponent or Rated filter to include them." Not a generic "no games".
+
+### Open item for planning
+
+Whether `opponent_type` / `rated` stay on the analytics endpoints as plain parameters
+(they do, under this design: the frontend can still send `both` / `null`). The earlier
+question of removing `opponent_type` is moot because the filter remains user-reachable.
 
 ## Explicitly not in this seed
 
-- **The `rated` filter.** `DEFAULT_FILTERS.rated = null` stays. Unrated is not a proxy for
-  bot: `maia5` lichess games are stored `rated=true, is_computer_game=true`, and the user's
-  own unrated population is 76 games with no material score skew. No case to make.
-- Any change to `DEFAULT_EXCLUDED_PLATFORMS` itself — `flawchess`/`pgn` handling is correct,
-  it was simply not being called.
+- Any change to `DEFAULT_EXCLUDED_PLATFORMS` itself.
+- A second filter store, per-field untouched tracking, or per-page default overrides.
+- A FlawChess-bot-games list anywhere outside the Library.
+- Decoupling the Openings matching-games list from the WDL population.

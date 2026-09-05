@@ -1,185 +1,37 @@
 ---
 gsd_state_version: 1.0
-milestone: v2.15
+milestone: v2.16
+milestone_name: Audit Hardening & Dependency Currency
 current_phase: 218
-status: completed
-stopped_at: Phase 218 complete — all phases complete
-last_updated: "2026-09-05T09:00:35.809Z"
+current_phase_name: backend-onnxruntime-parity-spike-python-3-14-chain
+status: milestone_complete
+stopped_at: v2.16 closed — phases 216–218 archived, tagged, released, deployed (releases #339, #341)
+last_updated: "2026-09-05T17:05:00.000Z"
 last_activity: 2026-09-05
-last_activity_desc: Phase 218 complete
-state_head: 1f5c52bfb24d4834cf55d292a621af8b445efc13
+last_activity_desc: Completed quick task 260905-p0t — SEED-163 group 2 analytics defaults Human+Rated + Library native-game bypass (main at 599cedfd7, unreleased)
 progress:
   total_phases: 3
   completed_phases: 3
   total_plans: 12
   completed_plans: 12
-milestone_name: God-File Decomposition & Complexity Gates
 ---
 
 # Project State: FlawChess
 
 ## Current Position
 
-Phase: 218
-Plans: 2 of 2 complete. Plan 01 (cluster 1 — vitest 4.x -> 5.x, jsdom 29.x -> 30.x, undici
-override deleted) squash-merged to `main` as `6ca0f8ecd`; full frontend suite green
-(251 files / 3894 tests) on the first run, no test edits needed; full CLAUDE.md pre-merge
-gate green. Plan 02 (cluster 2 — onnxruntime-web 1.27.0 -> 1.29.0, vendored Maia runtime
-re-vendor, byte constants + cache version bump, device HUMAN-UAT) squash-merged to `main`
-as `6f19e0567`; the Task 5 device UAT checkpoint was resolved with the WASM-only-path leg
-passed (owner-confirmed) and the iOS<16.4/low-memory/WebGPU-adapter legs recorded as
-deferred for lack of available hardware (see 217-02-SUMMARY.md). Phase not yet deployed;
-`/deploy` remains a separate later action.
-Status: All phases complete
+Phase: none active. **v2.16 Audit Hardening & Dependency Currency closed 2026-09-05** (Phases 216–218,
+12/12 plans). Production is at release #341 (`463b93de7`) and `main` is byte-identical to
+`origin/production` outside `.planning/`. `.planning/phases/` is empty; the next phase or
+`/gsd-new-milestone` starts from a clean trunk.
 
-**Phase 218 actual plan status (the paragraph above is stale Phase 217 carryover left
-in place from before 218 started executing):** 218-01 (native onnxruntime parity spike,
-checkpoint answered `proceed`) complete. 218-02 (raise both native onnxruntime pins to
-1.29.0 + move the backend to Python 3.14 everywhere, both base images re-pinned by
-digest, both container images built locally) complete — commits `1fbdec558` (pin raise)
-and `9832617c9` (Python 3.14 chain). 218-03 (full pre-merge gate, CHANGELOG, squash-merge,
-deploy) remains.
-Deferred follow-up (from Phase 216, still open): SC-4 CI after-median measurement — the
-first warm-cache runs are the next release PR and `production` deploy (caches saved
-2026-09-04 under stable keys, scoped per ref); run the median command in
-216-04-SUMMARY.md after two or three of them.
+Status: Milestone complete, deployed, nothing pending.
 
-**Phase 215 is COMPLETE as of 2026-09-04** (8/8 plans, 215-01 through 215-07 plus 215-08
-phase-wide closeout — all six ROADMAP success criteria (0-5) measured against the merged
-trunk (05c8a38fc) with recorded commands and numbers: lint green with exactly the two
-documented page-component residuals (Analysis complexity 132/statements 152, OpeningsPage
-complexity 48); full frontend gate green (lint/build/knip/test, 3894/3894 tests, 251/251
-files); full backend gate green (ruff/ty/pytest, 4499 passed/19 skipped, scoped away from an
-unrelated concurrent session's own commit in analysis/tilt_study/probes/); aggregate test
-diff additions-only (0 deletions); app-wide react-hooks/exhaustive-deps+refs count exactly
-30, unchanged; per-file testid/umami inventories byte-identical to phase base; both
-215-06/215-07 HUMAN-UAT records collected; CONCERNS.md "Large God files" entry narrowed to
-the six next-tier files (TrainReveal.tsx, EvalChart.tsx, LibraryGameCard.tsx,
-TrainSolveScreen.tsx, VariationTree.tsx, App.tsx) with a Phase 215 history line appended)
-
-**Phase 214 is COMPLETE as of 2026-09-03** (8/8 plans, verification 9/9 passed, full backend
-suite 4497 passed / 19 skipped, ruff/ty/format clean). All six in-scope backend files lost their
-`per-file-ignores` entries; `check_function_size.py` reports zero breaches across them (283
-functions); complexipy app-wide 97 -> 89; `tests/` diff additions-only; CONCERNS.md "Large God
-files" now lists only the four frontend files. Ran sequentially on the main tree (all wave-2
-plans share one `pyproject.toml` line); 214-05 was interrupted by a session usage limit after
-Task 1 and completed by a continuation executor. Phase branch
-`gsd/phase-214-backend-god-file-decomposition` NOT yet squash-merged to `main` (run the full
-pre-merge gate, add a CHANGELOG bullet under Unreleased, then squash-merge).
-
-**Phase 213 is COMPLETE as of 2026-08-29** (12/12 plans, UAT 34 passed / 0 issues,
-verification 39/39). The cold-start UX shipped through five UAT-driven gap-closure
-rounds: unified always-both-assets download (213-06, G-213-19b), the analysis board
-gated behind the same non-dismissible EngineReadyGate as Bots (213-07, G-213-34
-reversal), single shared Stockfish fetch (213-08), main-thread ORT runtime ownership
-(213-09), progress-notify coalescing + narrowed Analysis subscription (213-10),
-DataCloneError fix (213-11, G-213-36), and the D-20 CacheStorage single
-byte-ownership layer for all three engine assets (213-12, G-213-37) with the
-CR-01 truncation guard. Final test-35 re-verification passed 2026-08-29.
-Phase branch `gsd/phase-213-first-run-engine-cold-start-ux` NOT yet squash-merged
-to `main` — pre-merge gate still required before integration.
-
-All phase-212 code is squash-merged to `main` (`4cf72842d`, 26 files / ~5,300 insertions)
-and the phase branch `gsd/phase-212-benchmark-full-game-analysis-lane` is deleted after
-confirming `main` contained everything it held. Follow-on fixes landed on `main` after
-the merge (worker target logging, `EVAL_FALLBACK_OPERATOR_TOKEN` /
-`EVAL_BENCHMARK_OPERATOR_TOKEN`, transient-failure diagnostics,
-`bin/run_benchmark_backend.sh`). Full pre-merge gate was green: backend 4437 passed /
-19 skipped, frontend 3563 passed, ruff/ty/eslint clean.
-
-**Phase 212 is COMPLETE as of 2026-08-29** (10/10 plans). The classical tranche ran
-2026-08-23 → 2026-08-29 and **completed** — it was not stopped at the TC boundary, so
-this is SC6's completion branch and nothing is labelled partial. Lichess arm
-**27,020 / 27,020** on every axis (full evals, PV, best moves, blobs); never-analyzed arm
-**23,662 / 23,717**, where all 55 remaining games have **zero movetext** (forfeit/no-show
-tournament games, so zero `game_positions` and nothing any lane can evaluate). Against
-the analyzable denominator of 50,682 the tranche is 100% done.
-
-212-10 Task 3 ran 2026-08-29: `reports/benchmark-lane/benchmark-lane-classical-2026-08-29.md`
-records the tranche and downstream counts (3,266,036 `best_move` cells, 520,613 `pv`,
-309,213 `game_flaws`, 384,885 `game_best_moves`), and `VACUUM (ANALYZE)` on the four
-churned tables took dead tuples to 0. The on-disk size moved +96 KB, which is the
-expected result for plain `VACUUM` (free space map, not the filesystem) and is explained
-in the report rather than dressed up as a reclaim.
-
-**All three invariants proved.** The gate held across the full multi-day fleet run:
-`stamped_but_unselected` **1,805,063 against a 1,805,063 baseline, delta zero**. The
-homogenized overwrite happened and D-04 held: 1,736,689 of 1,924,579 snapshot plies
-(90.2%) now differ from their preserved lichess value across all 27,020 games, while
-**27,020 / 27,020** still carry `lichess_evals_at`, so the paired same-position
-comparison works. TC ordering intact — `benchmark_selection` holds classical only.
-
-`212-VERIFICATION.md` now reads **verified, 7/7**; its three 2026-08-22 gaps are marked
-resolved with a re-verification section, and the runbook's record-of-what-was-done
-section is filled in for this run.
-
-**The rapid tranche is RUNNING** as of 2026-08-29 04:48 UTC (post-phase operational
-work, not part of the closed Phase 212). Selection 95,623 games (34,777 lichess arm /
-60,846 never-analyzed) — nearly double classical — snapshotted at coverage gap 0, and
-the leak baseline is **re-based to 1,735,048** (it dropped from 1,805,063 because 70,015
-already-stamped rapid games moved into the selection; a leak is an increase). Blitz and
-bullet remain unselected, so the program still sits at a clean boundary after rapid. Two operational notes
-for whoever runs it: the fleet's Stockfish binary is `~/.local/stockfish/sf` (so
-`pgrep stockfish` reads as a dead fleet when it is at full tilt), and the `/dev/shm` fix in
-`docker-compose.benchmark.yml` is **already live** — the container was recreated
-2026-08-25 and carries 256 MB `/dev/shm`, with the compose config hash matching the
-container label, so no recreate is pending and `SET max_parallel_workers_per_gather = 0`
-is no longer needed on analytic queries.
-
-The blocker that forced the first checkpoint to defer: 212-08's finding that the tier-3
-branch (b) lane stamped a game complete after ONE analyzed ply. Root-caused and fixed in
-`d7b40e30a` — two SEED-076-era read-path heuristics misread homogenization's forced-False
-`is_lichess_eval_game` as proof that import-populated evals were prior-round engine work.
-Proven on a real drain: nine lichess-arm games at **98.3%** mean `best_move` coverage
-against 1 cell per game before. Production was never affected
-(`BENCHMARK_HOMOGENIZE_EVAL_SOURCE` defaults False and is set in no dotfile). Debug
-session archived at `.planning/debug/resolved/tier3-branch-b-one-ply-stamp.md`.
-
-**Two things a later reader must not get wrong:**
-
-1. **The leak abort criterion changed.** The frozen "corpus-wide `evals_completed_at`
-   must equal 1,846,458" predicate is RETIRED — it predates 212-07's gating of the
-   entry-ply lane and now fires on correct behavior (it tripped +9,342 during the smoke
-   run with every one of those games inside `benchmark_selection`). Monitor
-   **`stamped_but_unselected`** instead, baseline **1,805,063**.
-
-2. **212-06 must not be run.** Its Tasks 2/3 are fully superseded by 212-08/09/10; it
-   should be retired with a note at phase close.
-
-Also inert until acted on: the `shm_size: "256m"` fix in
-`docker-compose.benchmark.yml` needs the benchmark DB container recreated (a bare
-`restart` will not apply it) — do it at a boundary, not mid-tranche. Until then prefix
-analytic queries with `SET max_parallel_workers_per_gather = 0`.
-
-Next: when the tranche ends, run 212-10 Task 3, write `212-10-SUMMARY.md`, retire 212-06,
-then close the phase.
-
-Previous phase: 209 (traffic-surge-quick-wins) — COMPLETE 2026-08-15. The last open plan
-(209-04, the Cloudflare CDN cutover) was operator work; verified live: flawchess.com is on
-Cloudflare nameservers, `maia3_simplified.onnx` and `stockfish-18-lite-single.wasm` both
-return `cf-cache-status: HIT` while still carrying the origin's `max-age=2592000`, and
-`maia-worker.js` still returns `cache-control: no-cache`.
-
-Last activity: 2026-09-05 — Phase 218 complete
-
-Prior: Phase 213 complete
-`games.initial_fen` added and backfilled in-migration, the opening-transition sample
-representative filtered to standard-start games, four unguarded `chess.move()` replay sites
-contained, and `/analysis` game mode seeded from the game's real root. Every production
-change mutation-tested. See `phases/210-custom-start-games/210-SUMMARY.md`.
-
-Phase 208 shipped with the full pre-merge gate green (backend 4252 passed, frontend
-3411 passed, ruff/ty/eslint/tsc/knip clean). Verification is `human_needed`: 5 UAT
-items (4 viewport backstops at 375px + the CR-01 same-page-switch browser
-confirmation) are still `[pending]` in 208-UAT.md, shipped on the operator's explicit
-instruction. Deploy deliberately deferred.
-
-**v2.12 closed 2026-08-05** retroactively over two already-shipped, already-deployed phases (lightweight close, no `/gsd-new-milestone` requirements cycle — same pattern as v2.6 and v2.8):
-
-- Phase 204 (push-reminder-delivery-reliability, SEED-135) shipped 2026-08-03 (3/3 plans, squash-merged to main), verification `passed` 6/6.
-- Phase 205 (train-grading-oracle-agreement, SEED-137) shipped 2026-08-04 (2/2 plans, squash-merged to main as 278054955), verification `passed` 6/6, browser-only UAT item operator-confirmed.
-
-Both deployed to production via releases #295 and #296; `main` and `origin/production` are identical at close. Phase dirs archived to `.planning/milestones/v2.12-phases/`; SEED-135 and SEED-137 both in `seeds/closed/`. Next: `/gsd-new-milestone`, or promote Phase 999.1 (Password Reset) from the backlog.
+Open threads carried forward (not blockers):
+- SEED-162 cluster 3 (TypeScript 7) blocked upstream until a `typescript-eslint` release accepts it.
+- Phase 217 device legs (iOS <16.4 no-SIMD, low-memory OOM, WebGPU adapter) deferred for lack of hardware (`v2.16-phases/217-.../217-UAT.md`).
+- Phase 215's `Train.guestGate.test.tsx` full-run flake still deferred (`v2.15-phases/215-.../deferred-items.md`).
+- SEED-163 (analytics population excludes bot games) captured 2026-09-04, unscheduled.
 
 ## Project Reference
 
@@ -239,9 +91,11 @@ No v2.7 milestone audit doc was generated (`/gsd-audit-milestone` not run): the 
 
 ## Milestone Progress
 
-Forty-eight milestones complete (v1.0–v2.15). **v2.14 Engine Cold Start & Benchmark Analysis Lane and v2.15 God-File Decomposition & Complexity Gates both closed 2026-09-04.**
+Forty-nine milestones complete (v1.0–v2.16). **v2.16 Audit Hardening & Dependency Currency closed 2026-09-05.**
 
-v2.15 God-File Decomposition & Complexity Gates closed 2026-09-04 — 2 phases (214, 215), 16 plans, 17 commits on `main` since the `v2.14` tag (73 non-planning files, +13,887/−6,622; the range also carries the `analysis/tilt_study` probes and the lint-scope chore excluding them). A **retroactive lightweight close** sourced from CONCERNS.md rather than a seed. **Phase 214** split the six largest backend modules (`endgame_service.py`, `train_repository.py`, `eval_apply.py`, `library_repository.py`, `insights_llm.py`, `tactic_detector.py`) with zero behavior change: all six lost their `per-file-ignores`, `check_function_size.py` reports zero breaches across 283 functions, complexipy app-wide 97 → 89, `tests/` diff additions-only, 4,497 passed / 19 skipped, VERIFICATION 9/9. **Phase 215** did the same for `Analysis.tsx`, `useBotGame.ts`, `workerPool.ts` and `Openings.tsx` and put the frontend eslint `complexity`/`max-depth`/`max-statements` rules at `error`, baselined per pre-existing breach; `Analysis()` (132 / 152 statements) and `OpeningsPage()` (48) are **accepted page-component residuals**, gate stays 15 for new code, real seam is SEED-160; 3,894/3,894 tests, testid/umami inventories byte-identical, `react-hooks` warnings unchanged at 30, VERIFICATION 6/6. Archived to `milestones/v2.15-ROADMAP.md`, phases to `milestones/v2.15-phases/`, CHANGELOG promoted, tagged v2.15, GitHub release published. **NOT deployed at close** — `origin/production` is at release #335 (the v2.14 content); this milestone is the undeployed tail. Deferred, not fixed: the pre-existing `Train.guestGate.test.tsx` full-run flake (`215/deferred-items.md`).
+v2.16 Audit Hardening & Dependency Currency closed 2026-09-05 — 3 phases (216, 217, 218), 12 plans, 35 commits on `main` since the `v2.15` tag (94 non-planning files, +6,399/−4,783; the range also carries the Tier A dependency work of PR #340, a dev-only Google OAuth callback fix and the CI pip-strip fix). A **retroactive lightweight close** sourced from SEED-161 (Phase 216) and SEED-162 clusters 1/2/4 (Phases 217–218). **Phase 216**: Cloudflare client IPs restored (`Cf-Connecting-Ip` + range-drift script), five security headers + report-only CSP asserted in CI and at deploy, Renovate un-silenced (#338), DB-backed `/api/health` with 503, uv/npm CI caches, function-size gate in CI with eight nesting breaches fixed, housekeeping bundle; UAT 4/4, VERIFICATION 7/7, released as #339. **Phase 217**: vitest 5 / jsdom 30 (3,894 tests green first run, `undici` override deleted), onnxruntime-web 1.29 re-vendored with cache-version bump; WASM leg passed on device, three legs deferred for hardware and owner-overridden; VERIFICATION 5/5. **Phase 218**: parity spike clean at onnxruntime 1.29.0 (max drift 0.004237 < 0.010, no tier flip), both native pins raised, Python 3.14 everywhere in one commit, held on `main` by human choice then released as #341 after stripping pip from the runtime images for Trivy; VERIFICATION 8/8. SC-4 CI after-median measured at close: 517 s / 523 s vs 567 s before (n=2, inconclusive). Archived to `milestones/v2.16-ROADMAP.md`, phases to `milestones/v2.16-phases/`, CHANGELOG promoted, tagged v2.16, GitHub release published; SEED-161 closed, SEED-162 open for cluster 3 only. **Deployed throughout** via releases #339 and #341.
+
+v2.15 God-File Decomposition & Complexity Gates closed 2026-09-04 — 2 phases (214, 215), 16 plans, 17 commits on `main` since the `v2.14` tag (73 non-planning files, +13,887/−6,622; the range also carries the `analysis/tilt_study` probes and the lint-scope chore excluding them). A **retroactive lightweight close** sourced from CONCERNS.md rather than a seed. **Phase 214** split the six largest backend modules (`endgame_service.py`, `train_repository.py`, `eval_apply.py`, `library_repository.py`, `insights_llm.py`, `tactic_detector.py`) with zero behavior change: all six lost their `per-file-ignores`, `check_function_size.py` reports zero breaches across 283 functions, complexipy app-wide 97 → 89, `tests/` diff additions-only, 4,497 passed / 19 skipped, VERIFICATION 9/9. **Phase 215** did the same for `Analysis.tsx`, `useBotGame.ts`, `workerPool.ts` and `Openings.tsx` and put the frontend eslint `complexity`/`max-depth`/`max-statements` rules at `error`, baselined per pre-existing breach; `Analysis()` (132 / 152 statements) and `OpeningsPage()` (48) are **accepted page-component residuals**, gate stays 15 for new code, real seam is SEED-160; 3,894/3,894 tests, testid/umami inventories byte-identical, `react-hooks` warnings unchanged at 30, VERIFICATION 6/6. Archived to `milestones/v2.15-ROADMAP.md`, phases to `milestones/v2.15-phases/`, CHANGELOG promoted, tagged v2.15, GitHub release published. Not deployed at close, but release #337 shipped it the same day, thirteen minutes after the close commit. Deferred, not fixed: the pre-existing `Train.guestGate.test.tsx` full-run flake (`215/deferred-items.md`).
 
 v2.14 Engine Cold Start & Benchmark Analysis Lane closed 2026-09-04 (shipped 2026-09-02) — 2 phases (212, 213), 22 plans, 171 commits on `main` since the `v2.13` tag (355 non-planning files, +47,121/−1,641; the range also carries twelve quick tasks: `/activity` dashboard hosting, time-range filter and mobile layout, `users.promoted_at`, the per-game advisory lock in `apply_full_eval`, Train leech parking, the Import-tab paste entry, the Maia OOM terminal state, the fast-forward button and its cadence/animation rework, board animation on every device, player-side-first game card headers, the Bots intro card, the Train reveal played-in-game arrow with ownership gating and analysis link, and missing Sentry captures). A **retroactive lightweight close** of two unrelated, already-deployed phases bundled by window; requirement IDs minted per-phase at planning time. **Phase 212 (SEED-152)**: the classical benchmark tranche **completed** (not stopped at the boundary) — 27,020/27,020 lichess arm and 23,662/23,717 never-analyzed on every axis, the 55 remaining having zero movetext, so 50,682/50,682 analyzable; 3,266,036 `best_move` cells, 520,613 PVs, 309,213 `game_flaws`, 384,885 `game_best_moves`; `stamped_but_unselected` delta zero against 1,805,063, D-04 held (90.2% of snapshot plies differ, all 27,020 still carry `lichess_evals_at`); the tier-3 branch (b) one-ply stamp was root-caused and fixed in `d7b40e30a` (production never affected); first VERIFICATION `gaps_found` because the deliverable had not run, re-verified 7/7 on 2026-08-29. The rapid tranche is running as post-phase operational work; blitz/bullet unselected. **Phase 213 (SEED-155)**: asset-check-then-download-with-progress for every engine consumer, bot play gated on the worker's own `ready` message with no warmup inference (D-02), the analysis board behind the same non-dismissible `EngineReadyGate` after G-213-34 reversed the no-gate decision, single shared Stockfish fetch, main-thread ORT ownership, D-20 CacheStorage byte-ownership for all three assets with the CR-01 truncation guard, 128px WebP lazy avatars; UAT 34/0, VERIFICATION 39/39; `ui.safety-gate` overridden by the user 2026-08-28 (no UI-SPEC, gate left active, `213-GATE-OVERRIDE.md`). Archived to `milestones/v2.14-ROADMAP.md`, phases to `milestones/v2.14-phases/`, CHANGELOG promoted, tagged v2.14 at `77c6ee865` (the last `main` commit before Phase 214 merged, byte-identical to `origin/production` outside `.planning/`), GitHub release published; SEED-152 and SEED-155 closed. **Deployed throughout** via releases #319–#335.
 
@@ -948,6 +802,8 @@ None active.
 | 260901-oxh | Fast-forward stutter fix — three independent causes. (1) The 150ms cadence was half react-chessboard v5's 300ms default `animationDurationInMs`, so its `[position]`-keyed effect snapped to the pending `waitingForAnimationPosition` and restarted, aborting every slide at ~half travel (the "skipped moves"); cadence now 200ms with `FAST_FORWARD_ANIMATION_MS` DERIVED from the step constant and threaded through a new optional `ChessBoard` prop, run-scoped only so normal navigation keeps 300ms. (2) `start()` opened with a full step of dead time — first step now fires synchronously. (3) All four live engines (Stockfish free-run, Maia, FlawChess, Stockfish grading) carry a 150ms `RAPID_STEP_DEBOUNCE_MS` with a `sinceLast > window` fire-immediately branch; `setTimeout` is never early, so at 200ms that branch won on EVERY ply, deterministically — the per-ply engine storm delayed the replay's own timers and caused the uneven sound rhythm. Suppressed via `fen: null` ONLY, never `enabled` (which owns Worker lifecycle AND is the UI switch state). Gem sweep yields via `liveBusy`, not `enabled`, for the same lifecycle reason. Left eval bar holds its last live fraction through a run instead of dropping to the sigmoid midpoint (midpoint reads as "equal position", i.e. wrong information), with `terminalWhiteFraction` still first in the precedence chain. Follow-ons: the board animation gate was the real blocker on the reporter's machine — `showAnimations` tested `!('ontouchstart' in window)`, which Chrome sets on any touch-CAPABLE desktop, so animation was off for them entirely and cause (1) was inert; the Phase 19 mobile black-screen guard was then retired outright after real-device verification (react-chessboard still pinned at the 5.10.0 it was written against, and no 5.11–5.12.1 release touches the animation path, so the original diagnosis was most likely wrong about the cause). Cadence settled at 200ms after 250ms was tried and judged too slow. UAT: fast-forward and mobile animation both verified by the user | 2026-09-01 | 819f8dd9d | [260901-oxh-fast-forward-cadence-animation-and-engin](./quick/260901-oxh-fast-forward-cadence-animation-and-engin/) |
 | 260902-qf7 | Show the white arrow and move-quality icon for the "played in game" move on the Train reveal board (plus: suppress "played in game" entirely for cross-user herring puzzles) | 2026-09-02 | 2012df6f | [260902-qf7-when-showing-the-train-puzzle-solution-a](./quick/260902-qf7-when-showing-the-train-puzzle-solution-a/) |
 | 260902-rmn | Implement missing Sentry captures in app/services and app/routers except blocks (CONCERNS.md L7-11): 7 silent swallow sites fixed (engine respawn/crash, stored-PGN parse at 4 eval sites, played-move SAN) | 2026-09-02 | 7fc994cf7 | [260902-rmn-implement-missing-sentry-captures-in-app](./quick/260902-rmn-implement-missing-sentry-captures-in-app/) |
+| 260905-mgx | SEED-163 group 1: route openings_repository `_build_base_query` + `query_time_series` through `apply_game_filters` so DEFAULT_EXCLUDED_PLATFORMS (flawchess/pgn) applies to Openings WDL and the bookmark score-over-time chart; regression test + changelog | 2026-09-05 | 80da14e4 | [260905-mgx-seed-163-group-1-openings-filter-drift-f](./quick/260905-mgx-seed-163-group-1-openings-filter-drift-f/) |
+| 260905-p0t | SEED-163 group 2: analytics defaults flip to Human + Rated (matches benchmark cohort); `apply_game_filters` gains a Library-only `native_games_bypass_opponent_and_rated` flag so flawchess/pgn games stay browsable in Library Games/Flaws; Library disclosure hint; named "no rated games against humans" empty state on Openings/Endgames/Stats; changelog | 2026-09-05 | 599cedfd7 | [260905-p0t-seed-163-group-2-analytics-default-human](./quick/260905-p0t-seed-163-group-2-analytics-default-human/) |
 
 ## Deferred Items
 

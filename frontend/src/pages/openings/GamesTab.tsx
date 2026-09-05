@@ -3,6 +3,7 @@ import type { UseQueryResult } from '@tanstack/react-query';
 import { Button } from '@/components/ui/button';
 import { LoadError } from '@/components/ui/load-error';
 import { EmptyState } from '@/components/ui/empty-state';
+import { NoHumanRatedGamesState } from '@/components/ui/no-human-rated-games-state';
 import { PositionResultsPanel } from '@/components/charts/PositionResultsPanel';
 import { GameCardList } from '@/components/results/GameCardList';
 import type { OpeningsResponse } from '@/types/api';
@@ -12,6 +13,8 @@ type GamesTabProps = {
   gamesQuery: UseQueryResult<OpeningsResponse>;
   hasNoGames: boolean;
   filtersMatchNothing: boolean;
+  /** SEED-163 2d: true when the Human+Rated defaults alone emptied the population. */
+  noHumanRatedGames: boolean;
   gameCount: number | null;
   positionResultsLabel: ReactNode;
   colorIconSquare: ReactNode;
@@ -27,6 +30,7 @@ export function GamesTab({
   gamesQuery,
   hasNoGames,
   filtersMatchNothing,
+  noHumanRatedGames,
   gameCount,
   positionResultsLabel,
   colorIconSquare,
@@ -56,11 +60,15 @@ export function GamesTab({
           }
         />
       ) : filtersMatchNothing ? (
-        <EmptyState
-          layout="page"
-          title="No games matched"
-          subtitle="Try adjusting the time control, opponent, rated, or recency filters."
-        />
+        noHumanRatedGames ? (
+          <NoHumanRatedGamesState totalGames={gameCount} />
+        ) : (
+          <EmptyState
+            layout="page"
+            title="No games matched"
+            subtitle="Try adjusting the time control, opponent, rated, or recency filters."
+          />
+        )
       ) : gamesQuery.isError ? (
         <LoadError variant="centered" resource="games" />
       ) : gamesData ? (

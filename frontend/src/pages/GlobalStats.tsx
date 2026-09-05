@@ -9,6 +9,8 @@ import { FilterPanel, DEFAULT_FILTERS, areFiltersEqual, FILTER_DOT_FIELDS, reset
 import { FilterActions } from '@/components/filters/FilterActions';
 import { usePulseOnChange, ModifiedDot } from '@/components/filters/FilterModifiedDot';
 import { useFilterStore } from '@/hooks/useFilterStore';
+import { useGameCountValue } from '@/hooks/useGameCount';
+import { NoHumanRatedGamesState, shouldShowNoHumanRatedGames } from '@/components/ui/no-human-rated-games-state';
 import { useGlobalStats, useRatingHistory } from '@/hooks/useStats';
 import { useLibraryFlawStats } from '@/hooks/useLibrary';
 import { DEFAULT_FLAW_FILTER } from '@/hooks/useFlawFilterStore';
@@ -19,7 +21,39 @@ import { EvalCoverageHeader } from '@/components/EvalCoverageHeader';
 import { useEvalCoverage } from '@/hooks/useEvalCoverage';
 import { RatingChart } from '@/components/stats/RatingChart';
 import { useUserProfile } from '@/hooks/useUserProfile';
+import type { ReactNode } from 'react';
 import type { FilterState } from '@/components/filters/FilterPanel';
+import type { GlobalStatsResponse } from '@/types/stats';
+
+// SEED-163 2d: extracted to a standalone function (rather than inlined
+// booleans in GlobalStatsPage) so its branches count toward THIS function's
+// complexity, not GlobalStatsPage's — that page is already at the eslint
+// `complexity` per-file baseline (frontend/CLAUDE.md: fix new breaches, don't
+// widen the baseline).
+function computeGlobalStatsNoHumanRatedGames(
+  globalStats: GlobalStatsResponse | undefined,
+  filters: FilterState,
+  gameCount: number | null,
+): boolean {
+  if (!globalStats) return false;
+  const hasAnyRows = globalStats.by_time_control.length > 0 || globalStats.by_color.length > 0;
+  if (hasAnyRows) return false;
+  return shouldShowNoHumanRatedGames(filters, gameCount);
+}
+
+// Same rationale as computeGlobalStatsNoHumanRatedGames above: moves the
+// loading/empty/content branching out of GlobalStatsPage's own complexity
+// count.
+function renderGlobalStatsContent(
+  isLoading: boolean,
+  noHumanRatedGames: boolean,
+  gameCount: number | null,
+  sectionsContent: ReactNode,
+): ReactNode {
+  if (isLoading) return <div className="text-muted-foreground">Loading...</div>;
+  if (noHumanRatedGames) return <NoHumanRatedGamesState totalGames={gameCount} />;
+  return sectionsContent;
+}
 
 export function GlobalStatsPage() {
   // Filter state shared across pages — full filter set exposed on the Stats tab.
@@ -43,6 +77,10 @@ export function GlobalStatsPage() {
   );
 
   const isLoading = ratingLoading || statsLoading;
+
+  // SEED-163 2d: total imported-game count (all platforms), used to detect
+  // when the Human+Rated defaults alone emptied the Stats population.
+  const gameCount = useGameCountValue();
 
   // ── Flaw stats (empty severity — severity scoped to Games tab only) ────────
   const {
@@ -126,9 +164,11 @@ export function GlobalStatsPage() {
     />
   );
 
-  const content = isLoading ? (
-    <div className="text-muted-foreground">Loading...</div>
-  ) : (
+  const noHumanRatedGamesGlobalStats = computeGlobalStatsNoHumanRatedGames(
+    globalStats, filters, gameCount,
+  );
+
+  const sectionsContent = (
     <div className="space-y-8">
       {/* ── Flaw Statistics (top of page, UAT) ── */}
       <section data-testid="flaw-stats-section">
@@ -202,6 +242,10 @@ export function GlobalStatsPage() {
         </div>
       </section>
     </div>
+  );
+
+  const content = renderGlobalStatsContent(
+    isLoading, noHumanRatedGamesGlobalStats, gameCount, sectionsContent,
   );
 
   return (

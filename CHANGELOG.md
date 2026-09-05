@@ -10,9 +10,20 @@ in `YYYY-MM-DD` (Europe/Zurich).
 
 ### Fixed
 
+- Openings statistics and the bookmarked "Score over Time" chart no longer count FlawChess practice-bot games or pasted PGNs, which were already excluded from every other analytics surface.
+
+### Changed
+
+- Openings, Endgames and Stats now default to rated games against human opponents on a fresh load, matching the population the percentile benchmarks compare against — the Opponent and Rated filters still switch it back to any opponent or any rated status. The Library keeps showing FlawChess practice-bot games and pasted PGNs regardless of those two filters.
+
+## [v2.16] Audit Hardening & Dependency Currency — 2026-09-05
+
+### Fixed
+
 - Worker heartbeats and access logs record the real client address again instead of a Cloudflare edge IP: the reverse proxy now trusts the published Cloudflare ranges and reads `Cf-Connecting-Ip`, with a drift-check script for the range list. (Phase 216)
 - `/api/health` now round-trips a query to Postgres under a two-second timeout and answers 503 when the database is unreachable, so a degraded backend fails the deploy health check instead of passing it. (Phase 216)
 - The guest-creation, feedback and password-reset rate limiters no longer retain an empty entry per IP forever. (Phase 216)
+- Internal: the dev build no longer shows "Google sign-in failed" after a successful Google login (React StrictMode replayed the callback effect after the token fragment was already consumed). Production builds were unaffected.
 
 ### Security
 
@@ -23,6 +34,7 @@ in `YYYY-MM-DD` (Europe/Zurich).
 - Internal: Renovate dependency PRs are live again (the Mend app was in Silent mode); in-range Python and npm dependencies caught up with no major bumps; CI caches the uv and npm stores; the function-size gate (nesting depth and logic LOC) now runs in CI and the pre-merge block with all eight remaining breaches fixed; Alembic compares column types and irreversible migrations document their no-op downgrade; frontend Docker bases are digest-pinned. (Phase 216)
 - Internal: the in-browser Maia runtime (onnxruntime-web) moved from 1.27.0 to 1.29.0. Returning devices download the engine runtime once more (about 14 MB on the WASM path, 26 MB on the WebGPU path) because the engine asset cache version was bumped. (Phase 217)
 - Internal: the backend's native Maia runtime (onnxruntime) moved from 1.20.1 to 1.29.0, and the backend now runs on Python 3.14, with container images and CI updated to match. No user-visible behavior change. (Phase 218)
+- Internal: pip is removed from both runtime container images. The app runs from the uv-managed venv and never used it, and the base image's vendored pip copies of msgpack and setuptools were tripping the container vulnerability scan in CI.
 
 ## [v2.15] God-File Decomposition & Complexity Gates — 2026-09-04
 
@@ -1411,7 +1423,8 @@ bookmarks, game cards, and rating / stats pages.
 - Rating history, global stats, openings W/D/L charts.
 - Multi-user auth with data isolation.
 
-[Unreleased]: https://github.com/flawchess/flawchess/compare/v2.15...HEAD
+[Unreleased]: https://github.com/flawchess/flawchess/compare/v2.16...HEAD
+[v2.16]: https://github.com/flawchess/flawchess/compare/v2.15...v2.16
 [v2.15]: https://github.com/flawchess/flawchess/compare/v2.14...v2.15
 [v2.14]: https://github.com/flawchess/flawchess/compare/v2.13...v2.14
 [v2.13]: https://github.com/flawchess/flawchess/compare/v2.12...v2.13

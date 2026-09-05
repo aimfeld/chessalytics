@@ -6,6 +6,7 @@ import { Accordion, AccordionItem, AccordionTrigger, AccordionContent } from '@/
 import { Button } from '@/components/ui/button';
 import { LoadError } from '@/components/ui/load-error';
 import { EmptyState } from '@/components/ui/empty-state';
+import { NoHumanRatedGamesState, shouldShowNoHumanRatedGames } from '@/components/ui/no-human-rated-games-state';
 import { MobileFilterDrawer } from '@/components/filters/MobileFilterDrawer';
 import {
   Select,
@@ -19,6 +20,7 @@ import { InfoPopover } from '@/components/ui/info-popover';
 import { FilterPanel, DEFAULT_FILTERS, areFiltersEqual, FILTER_DOT_FIELDS, resetFilterState } from '@/components/filters/FilterPanel';
 import { FilterActions } from '@/components/filters/FilterActions';
 import { useFilterStore } from '@/hooks/useFilterStore';
+import { useGameCountValue } from '@/hooks/useGameCount';
 import { EndgameOverallPerformanceSection } from '@/components/charts/EndgameOverallPerformanceSection';
 import { EndgameScoreOverTimeChart } from '@/components/charts/EndgameScoreOverTimeChart';
 import { EndgameMetricsByTcSection } from '@/components/charts/EndgameMetricsByTcSection';
@@ -42,10 +44,73 @@ import { useActiveJobs } from '@/hooks/useImport';
 import { useReadiness } from '@/hooks/useReadiness';
 import { EndgamesProcessingState } from '@/components/EndgamesProcessingState';
 import type { FilterState } from '@/components/filters/FilterPanel';
-import type { EndgameClass } from '@/types/endgames';
+import type { EndgameClass, EndgameStatsResponse } from '@/types/endgames';
 import type { EndgameInsightsResponse, SectionId } from '@/types/insights';
 
 const PAGE_SIZE = 20;
+
+// SEED-163 2d: extracted to a standalone function (rather than inlined
+// booleans in EndgamesPage) so its branches count toward THIS function's
+// complexity, not EndgamesPage's — that page is already at the eslint
+// `complexity` per-file baseline (frontend/CLAUDE.md: fix new breaches,
+// don't widen the baseline). total_games is "games matching current
+// filters" — the correct signal here. categories.length === 0 (checked
+// separately below) is NOT: a user can have games but no endgames, which
+// is a different message.
+function shouldShowEndgamesNoHumanRatedGames(
+  statsData: EndgameStatsResponse | undefined,
+  appliedFilters: FilterState,
+  gameCount: number | null,
+): boolean {
+  if (!statsData || statsData.total_games !== 0) return false;
+  return shouldShowNoHumanRatedGames(appliedFilters, gameCount);
+}
+
+interface EndgamesTailEmptyStateProps {
+  statsData: EndgameStatsResponse | undefined;
+  appliedFilters: FilterState;
+  gameCount: number | null;
+}
+
+/**
+ * The three mutually-exclusive tail states once overview data has loaded
+ * without error and without any categories to render: the new SEED-163 2d
+ * Human+Rated empty state, the pre-existing "no endgames reached" state, and
+ * the pre-existing "no games imported" state. Extracted (rather than a 3-way
+ * inline ternary chain) so its branches count toward THIS component's
+ * complexity, not EndgamesPage's — that page is already at the eslint
+ * `complexity` per-file baseline (frontend/CLAUDE.md).
+ */
+function EndgamesTailEmptyState({
+  statsData,
+  appliedFilters,
+  gameCount,
+}: EndgamesTailEmptyStateProps) {
+  if (shouldShowEndgamesNoHumanRatedGames(statsData, appliedFilters, gameCount)) {
+    return <NoHumanRatedGamesState totalGames={gameCount} />;
+  }
+  if (statsData && statsData.categories.length === 0) {
+    return (
+      <EmptyState
+        layout="page"
+        title="No endgame data yet"
+        subtitle="No games have reached an Endgame Phase yet with the current filters. Try adjusting the time control or recency filters."
+      />
+    );
+  }
+  return (
+    <EmptyState
+      layout="page"
+      title="No games imported yet"
+      subtitle="Import your games from chess.com or lichess to see endgame analysis."
+      action={
+        <Button variant="outline" size="sm" asChild>
+          <Link to="/library/import">Import Games</Link>
+        </Button>
+      }
+    />
+  );
+}
 
 const ENDGAME_CLASS_LABELS: Record<EndgameClass, string> = {
   mixed: 'Mixed',
@@ -104,6 +169,10 @@ export function EndgamesPage() {
   // Queries only fire when the sidebar/drawer closes and commits pending -> applied.
   const [appliedFilters, setAppliedFilters] = useFilterStore();
   const [pendingFilters, setPendingFilters] = useState<FilterState>(appliedFilters);
+
+  // SEED-163 2d: total imported-game count (all platforms), used to detect
+  // when the Human+Rated defaults alone emptied the endgame population.
+  const gameCount = useGameCountValue();
 
   // ── Endgame Insights ────────────────────────────────────────────────────────
   // Mutation state lifted here so per-section slots in each H2 can observe the
@@ -701,22 +770,11 @@ export function EndgamesPage() {
         </>
       ) : overviewError ? (
         <LoadError variant="centered" resource="endgame data" />
-      ) : statsData && statsData.categories.length === 0 ? (
-        <EmptyState
-          layout="page"
-          title="No endgame data yet"
-          subtitle="No games have reached an Endgame Phase yet with the current filters. Try adjusting the time control or recency filters."
-        />
       ) : (
-        <EmptyState
-          layout="page"
-          title="No games imported yet"
-          subtitle="Import your games from chess.com or lichess to see endgame analysis."
-          action={
-            <Button variant="outline" size="sm" asChild>
-              <Link to="/library/import">Import Games</Link>
-            </Button>
-          }
+        <EndgamesTailEmptyState
+          statsData={statsData}
+          appliedFilters={appliedFilters}
+          gameCount={gameCount}
         />
       )}
     </div>

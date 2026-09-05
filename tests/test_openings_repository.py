@@ -1630,3 +1630,164 @@ class TestQueryTranspositionWdl:
             color=None,
         )
         assert wdl == {}
+
+
+# ---------------------------------------------------------------------------
+# TestDefaultPlatformExclusion — SEED-163 §1
+# ---------------------------------------------------------------------------
+
+# Dedicated hash so this class cannot collide with TS_HASH or any other fixed
+# hash constant in this file.
+PLATFORM_EXCL_HASH = 44444444
+
+
+class TestDefaultPlatformExclusion:
+    """_build_base_query and query_time_series must exclude DEFAULT_EXCLUDED_PLATFORMS
+    by default, mirroring apply_game_filters (query_utils.py:276-316).
+
+    Data isolation: uses the rollback-scoped ``db_session`` fixture only, and
+    nothing is committed. The tier-3 eval lottery reads only committed rows,
+    so it never observes these rows and no ``finally`` cleanup block is
+    needed (mirrors tests/repositories/test_pasted_platform_exclusion.py).
+    """
+
+    async def _seed_three_platforms(self, db_session: AsyncSession) -> None:
+        # Each seeded game keeps is_computer_game at the model default (False,
+        # app/models/game.py:169). The platform exclusion must be the SOLE
+        # discriminator here: if the flawchess row were flagged as a computer
+        # game, the default opponent_type="human" filter would hide the leak,
+        # which is exactly the accident that has been masking this defect in
+        # production (SEED-163 §1).
+        await _seed_game(
+            db_session,
+            platform="chess.com",
+            result="1-0",
+            full_hash=PLATFORM_EXCL_HASH,
+        )
+        await _seed_game(
+            db_session,
+            platform="flawchess",
+            result="0-1",
+            full_hash=PLATFORM_EXCL_HASH,
+        )
+        await _seed_game(
+            db_session,
+            platform="pgn",
+            result="1/2-1/2",
+            full_hash=PLATFORM_EXCL_HASH,
+        )
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("opponent_type", ["human", "all"])
+    async def test_query_all_results_default_excludes_flawchess_and_pgn(
+        self, db_session: AsyncSession, opponent_type: str
+    ) -> None:
+        """platform=None: query_all_results returns only the chess.com row.
+
+        Parametrized over opponent_type to rule out the human-filter masking
+        the leak (every seeded game is a non-computer game).
+        """
+        await self._seed_three_platforms(db_session)
+
+        rows = await query_all_results(
+            db_session,
+            user_id=1,
+            hash_column=HASH_COLUMN_MAP["full"],
+            target_hash=PLATFORM_EXCL_HASH,
+            time_control=None,
+            platform=None,
+            rated=None,
+            opponent_type=opponent_type,
+            from_date=None,
+            to_date=None,
+            color=None,
+        )
+
+        assert {(result, user_color) for result, user_color in rows} == {("1-0", "white")}
+
+    @pytest.mark.asyncio
+    async def test_query_time_series_default_excludes_flawchess_and_pgn(
+        self, db_session: AsyncSession
+    ) -> None:
+        """platform=None: query_time_series returns only the chess.com row."""
+        from app.repositories.openings_repository import query_time_series
+
+        await self._seed_three_platforms(db_session)
+
+        rows = await query_time_series(
+            db_session,
+            user_id=1,
+            hash_column=HASH_COLUMN_MAP["full"],
+            target_hash=PLATFORM_EXCL_HASH,
+            color=None,
+            platform=None,
+        )
+
+        assert {(result, user_color) for _played_at, result, user_color in rows} == {
+            ("1-0", "white")
+        }
+
+    @pytest.mark.asyncio
+    async def test_explicit_flawchess_opt_in_reaches_excluded_rows_both_functions(
+        self, db_session: AsyncSession
+    ) -> None:
+        """platform=["flawchess"]: only the flawchess row, through both functions (D-03)."""
+        from app.repositories.openings_repository import query_time_series
+
+        await self._seed_three_platforms(db_session)
+
+        all_results_rows = await query_all_results(
+            db_session,
+            user_id=1,
+            hash_column=HASH_COLUMN_MAP["full"],
+            target_hash=PLATFORM_EXCL_HASH,
+            time_control=None,
+            platform=["flawchess"],
+            rated=None,
+            opponent_type="all",
+            from_date=None,
+            to_date=None,
+            color=None,
+        )
+        assert {(result, user_color) for result, user_color in all_results_rows} == {
+            ("0-1", "white")
+        }
+
+        time_series_rows = await query_time_series(
+            db_session,
+            user_id=1,
+            hash_column=HASH_COLUMN_MAP["full"],
+            target_hash=PLATFORM_EXCL_HASH,
+            color=None,
+            platform=["flawchess"],
+        )
+        assert {(result, user_color) for _played_at, result, user_color in time_series_rows} == {
+            ("0-1", "white")
+        }
+
+    @pytest.mark.asyncio
+    async def test_explicit_all_platforms_returns_all_three_rows(
+        self, db_session: AsyncSession
+    ) -> None:
+        """platform=["chess.com", "flawchess", "pgn"]: all three rows via query_all_results."""
+        await self._seed_three_platforms(db_session)
+
+        rows = await query_all_results(
+            db_session,
+            user_id=1,
+            hash_column=HASH_COLUMN_MAP["full"],
+            target_hash=PLATFORM_EXCL_HASH,
+            time_control=None,
+            platform=["chess.com", "flawchess", "pgn"],
+            rated=None,
+            opponent_type="all",
+            from_date=None,
+            to_date=None,
+            color=None,
+        )
+
+        assert {(result, user_color) for result, user_color in rows} == {
+            ("1-0", "white"),
+            ("0-1", "white"),
+            ("1/2-1/2", "white"),
+        }
