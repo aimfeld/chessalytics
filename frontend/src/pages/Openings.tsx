@@ -9,7 +9,6 @@ function setChartEnabledStorage(bookmarkId: number, enabled: boolean): void {
 }
 import { useNavigate, useLocation, Navigate } from 'react-router';
 import { useUserProfile } from '@/hooks/useUserProfile';
-import { useQuery } from '@tanstack/react-query';
 import { ArrowRightLeft, Swords, BarChart2, Lightbulb, SlidersHorizontal } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
@@ -40,8 +39,11 @@ import { MoveList } from '@/components/board/MoveList';
 import { BoardControls } from '@/components/board/BoardControls';
 import { DEFAULT_FILTERS, areFiltersEqual, FILTER_DOT_FIELDS } from '@/components/filters/FilterPanel';
 import { useFilterStore } from '@/hooks/useFilterStore';
+import { useGameCount } from '@/hooks/useGameCount';
+import {
+  shouldShowNoHumanRatedGames,
+} from '@/components/ui/no-human-rated-games-state';
 import { SuggestionsModal } from '@/components/position-bookmarks/SuggestionsModal';
-import { apiClient } from '@/api/client';
 import { getBoardContainerClassName } from '@/lib/openingsBoardLayout';
 import { buildAnalysisLineUrl } from '@/lib/analysisUrl';
 import type { FilterState } from '@/components/filters/FilterPanel';
@@ -207,14 +209,7 @@ export function OpeningsPage() {
   });
 
   // Total game count — fetched on load to drive empty-state messaging
-  const { data: gameCountData } = useQuery<{ count: number }>({
-    queryKey: ['gameCount'],
-    queryFn: async () => {
-      const response = await apiClient.get<{ count: number }>('/users/games/count');
-      return response.data;
-    },
-    staleTime: 30_000,
-  });
+  const { data: gameCountData } = useGameCount();
   const gameCount = gameCountData?.count ?? null;
 
   // ── Stats tab data ─────────────────────────────────────────────────────────────
@@ -455,6 +450,9 @@ export function OpeningsPage() {
   const hasNoGames = gameCount !== null && gameCount === 0;
   const gamesData = gamesQuery.data;
   const filtersMatchNothing = gamesData !== undefined && gamesData.matched_count === 0 && !hasNoGames;
+  // SEED-163 2d: true only when the Human+Rated defaults alone (no other
+  // filter) are what emptied the population.
+  const noHumanRatedGames = shouldShowNoHumanRatedGames(filters, gameCount);
 
   // Color icon + name reused in Position Results labels and the matched-games summary
   const colorIconSquare = (
@@ -494,6 +492,7 @@ export function OpeningsPage() {
       gamesQuery={gamesQuery}
       hasNoGames={hasNoGames}
       filtersMatchNothing={filtersMatchNothing}
+      noHumanRatedGames={noHumanRatedGames}
       gameCount={gameCount}
       positionResultsLabel={positionResultsLabel}
       colorIconSquare={colorIconSquare}

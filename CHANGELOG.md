@@ -12,6 +12,10 @@ in `YYYY-MM-DD` (Europe/Zurich).
 
 - Openings statistics and the bookmarked "Score over Time" chart no longer count FlawChess practice-bot games or pasted PGNs, which were already excluded from every other analytics surface.
 
+### Changed
+
+- Openings, Endgames and Stats now default to rated games against human opponents on a fresh load, matching the population the percentile benchmarks compare against — the Opponent and Rated filters still switch it back to any opponent or any rated status. The Library keeps showing FlawChess practice-bot games and pasted PGNs regardless of those two filters.
+
 ## [v2.16] Audit Hardening & Dependency Currency — 2026-09-05
 
 ### Fixed

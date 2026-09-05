@@ -66,6 +66,12 @@ vi.mock('@/hooks/useEvalCoverage', () => ({
   }),
 }));
 
+// SEED-163 2d: Endgames page now reads useGameCountValue for the Human+Rated
+// empty state. Mock it so the test does not need a QueryClientProvider.
+vi.mock('@/hooks/useGameCount', () => ({
+  useGameCountValue: () => 10,
+}));
+
 vi.mock('@/hooks/useFilterStore', () => ({
   useFilterStore: () => [
     {

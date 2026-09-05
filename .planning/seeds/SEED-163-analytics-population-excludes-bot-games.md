@@ -1,6 +1,6 @@
 ---
 id: SEED-163
-status: active
+status: complete
 planted: 2026-09-04
 updated: 2026-09-05
 planted_during: /gsd-explore session (Openings stats include bot games), branch gsd/phase-216-audit-bugs-and-quick-wins; group 2 refined in a second /gsd-explore session 2026-09-05
@@ -20,7 +20,9 @@ Quick task `260905-mgx` (2026-09-05) routed `_build_base_query` and `query_time_
 through `apply_game_filters`, with `TestDefaultPlatformExclusion` as the regression guard.
 Kept here only for provenance; nothing left to do.
 
-## 2. Analytics default = Human + Rated; Library always shows FlawChess-native games
+## 2. Analytics default = Human + Rated; Library always shows FlawChess-native games — SHIPPED
+
+Quick task `260905-p0t` (2026-09-05) shipped all four sub-items below (2a-2d).
 
 ### Decisions (2026-09-05 exploration)
 

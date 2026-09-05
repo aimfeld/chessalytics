@@ -132,6 +132,12 @@ vi.mock('@/hooks/useReadiness', () => ({
   }),
 }));
 
+// SEED-163 2d: Endgames page now reads useGameCountValue for the Human+Rated
+// empty state. Mock it so the test does not need a QueryClientProvider.
+vi.mock('@/hooks/useGameCount', () => ({
+  useGameCountValue: () => 10,
+}));
+
 // jsdom shims required by the existing component.
 beforeAll(() => {
   Object.defineProperty(window, 'matchMedia', {
