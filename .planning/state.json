@@ -622,12 +622,22 @@
       "number": "216",
       "name": "Audit Bugs and Quick Wins (SEED-161)",
       "status": "complete"
+    },
+    {
+      "number": "217",
+      "name": "Frontend Major Bumps — Vitest 5 / jsdom 30 + onnxruntime-web 1.29 (SEED-162)",
+      "status": "pending"
+    },
+    {
+      "number": "218",
+      "name": "Backend onnxruntime Parity Spike → Python 3.14 Chain (SEED-162)",
+      "status": "pending"
     }
   ],
   "next": {
-    "command": "/gsd:progress",
-    "label": "Show progress",
-    "reason": "Unsure of state — showing progress"
+    "command": "/gsd:progress --next",
+    "label": "Advance to the next step",
+    "reason": "Phase 217 of 2 · executing"
   },
-  "updated_at": "2026-09-04T20:16:40.592Z"
+  "updated_at": "2026-09-05T03:05:25.564Z"
 }

@@ -1,6 +1,6 @@
 # SEED-162: Major-version dependency backlog (clustered, one blocked upstream)
 
-**Status:** Open — not scheduled
+**Status:** Scheduled 2026-09-04 as Phase 217 (clusters 1–2) and Phase 218 (cluster 4); cluster 3 stays blocked upstream
 **Created:** 2026-09-04
 **Source:** Renovate Dependency Dashboard (#338) after Phase 216 installed the app. Phase 216 explicitly scoped out "major-version dependency bumps"; Tier A (Action majors + in-range lockfile refresh) landed on `main` 2026-09-04 as `0c4d0a1bb..d1693e05f` (PR #340). What remains is the majors that need real migration work.
 **Related:** SEED-032 / Phase 101 (the v1.22 precedent — same clustered, sequential, bisectable shape); `.planning/notes/2026-07-10-flawchess-engine-self-execution-analysis.md` (Pitfall 2, the onnxruntime pin); `pyproject.toml` `[dependency-groups] maia-inference`; `frontend/package.json`; `Dockerfile`, `Dockerfile.worker`, `.python-version`, `.github/workflows/ci.yml`.

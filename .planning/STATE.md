@@ -1,18 +1,18 @@
 ---
 gsd_state_version: 1.0
 milestone: v2.15
-current_phase: 216
-current_phase_name: Audit Bugs and Quick Wins
-status: completed
+current_phase: 217
+current_phase_name: Frontend Major Bumps — Vitest 5 / jsdom 30 + onnxruntime-web 1.29
+status: executing
 stopped_at: Phase 216 complete — all phases complete
-last_updated: "2026-09-04T20:16:40.542Z"
-last_activity: 2026-09-04
-last_activity_desc: Phase 216 complete
-state_head: 14a91fe6234d16f761061fba51a54dc6e492f8fc
+last_updated: "2026-09-05T03:05:25.510Z"
+last_activity: 2026-09-05
+last_activity_desc: Phase 217 execution started
+state_head: 067c8564ffa7589f0e14fc8bf047c991bbbff230
 progress:
-  total_phases: 1
+  total_phases: 2
   completed_phases: 1
-  total_plans: 7
+  total_plans: 9
   completed_plans: 7
 milestone_name: God-File Decomposition & Complexity Gates
 ---
@@ -21,7 +21,7 @@ milestone_name: God-File Decomposition & Complexity Gates
 
 ## Current Position
 
-Phase: 216 (Audit Bugs and Quick Wins) — COMPLETE 2026-09-04, standalone phase (no open milestone)
+Phase: 217 (Frontend Major Bumps — Vitest 5 / jsdom 30 + onnxruntime-web 1.29) — EXECUTING
 Plans: 7 of 7 complete. Squash-merged to `main` as 907812f82, released to production as
 3c64c0371 (PR #339), UAT 4/4 passed (worker_heartbeats.last_ip now real Hetzner/ISP
 addresses; all five security headers live on `/` and `/api/health`, no COOP/COEP; no CSP
@@ -30,7 +30,7 @@ fixes landed on `main` during the release: `setup-uv` pinned to `v10.0.1` (no fl
 tag), conftest routes the `get_engine` dependency to the per-run test DB (serial CI hit 503
 on `/api/health` from the middleware test), and seven dead re-exports left by Phase 215
 removed after the phase's `npm update` moved knip 6.15 -> 6.34.
-Status: Phase 216 complete and deployed. No active phase; next work starts from a new
+Status: Executing Phase 217
 milestone or a standalone phase written by hand (see [[project_phase_insert_split_roadmap]]).
 Deferred follow-up: SC-4 CI after-median measurement — the first warm-cache runs are the
 next release PR and `production` deploy (caches saved 2026-09-04 under stable keys, scoped
@@ -152,7 +152,7 @@ Cloudflare nameservers, `maia3_simplified.onnx` and `stockfish-18-lite-single.wa
 return `cf-cache-status: HIT` while still carrying the origin's `max-age=2592000`, and
 `maia-worker.js` still returns `cache-control: no-cache`.
 
-Last activity: 2026-09-04 — Phase 216 complete
+Last activity: 2026-09-05 — Phase 217 execution started
 
 Prior: Phase 213 complete
 `games.initial_fen` added and backfilled in-migration, the opening-transition sample

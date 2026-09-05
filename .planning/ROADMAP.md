@@ -180,11 +180,15 @@
 | 214. Backend God-File Decomposition (CONCERNS.md, v2.15) | 8/8 | Complete    | 2026-09-03 |
 | 215. Frontend God-File Decomposition (CONCERNS.md, v2.15) | 8/8 | Complete    | 2026-09-04 |
 | 216. Audit Bugs and Quick Wins (SEED-161) | 7/7 | Complete    | 2026-09-04 |
+| 217. Frontend Major Bumps — Vitest 5 / jsdom 30 + onnxruntime-web 1.29 (SEED-162) | 0/0 | Not started | — |
+| 218. Backend onnxruntime Parity Spike → Python 3.14 Chain (SEED-162) | 0/0 | Not started | — |
 
 ## Active Phases
 
-Standalone phase outside any milestone (v2.14/v2.15 closed 2026-09-04). Fold into the
-next milestone on close, or ship as its own patch release.
+Standalone phases outside any milestone (v2.14/v2.15 closed 2026-09-04). Fold into the
+next milestone on close, or ship as their own patch releases. Phases 217–218 are the
+SEED-162 major-version dependency backlog, split so a frontend failure and a backend
+failure never share a branch; 218 is planned only after 217 merges.
 
 ### Phase 216: Audit Bugs and Quick Wins
 
@@ -255,6 +259,103 @@ Plans:
 **Cross-cutting constraints:**
 
 - Spec-less probe fallback: skipped visibly — this phase has no requirement IDs and no SPEC.md/UI-SPEC.md/AI-SPEC.md, so no probe predicates were generated.
+
+### Phase 217: Frontend Major Bumps — Vitest 5 / jsdom 30 + onnxruntime-web 1.29
+
+**Goal**: Land the two unblocked frontend clusters of SEED-162 as bisectable, sequential
+plans, each squash-merged to `main` with the full pre-merge gate green (including `npm run
+build`, the only real frontend type check). Cluster 1: `vitest` / `@vitest/coverage-v8` /
+`@vitest/ui` 4.x → 5.x together with `jsdom` 29 → 30 (jsdom's only consumer is the vitest
+environment; the `undici ^8` override Renovate proposes is a jsdom-30 transitive and lives
+here or nowhere). Cluster 2: `onnxruntime-web` 1.27.0 → 1.29.0, the runtime behind the
+Maia inference path and its two live failure populations (iOS <16.4 no WASM SIMD; low-memory
+OOM), so done means a real-device pass, not green CI. No product behavior change.
+
+**Success criteria**:
+
+1. `frontend/package.json` resolves `vitest@5.x`, `@vitest/coverage-v8@5.x`,
+   `@vitest/ui@5.x`, `jsdom@30.x`; `npm test -- --run` passes the full suite under jsdom 30;
+   the project-wide timeout config in `vite.config.ts` + `src/vitest.setup.ts` is still the
+   only timeout source (no per-file timeouts re-added).
+2. The `undici` override in `frontend/package.json` is either raised to the range jsdom 30
+   declares or deleted because the advisory no longer resolves in the tree; whichever, the
+   reason is recorded in the plan summary.
+3. `frontend/package.json` resolves `onnxruntime-web@1.29.0`; `npm run build` passes;
+   the vendored WASM/JS assets the engine loader references match the new package (no
+   stale 1.27 artifact paths).
+4. HUMAN-UAT on real devices for cluster 2: an iOS <16.4 device reaches the no-SIMD
+   fallback state (not a crash) and a low-memory device reaches the OOM state; a modern
+   device completes a Maia inference. Recorded in the plan summary.
+5. Each cluster is its own squash-merge to `main` with the full CLAUDE.md pre-merge gate
+   plus `npm run build` green; if a package cannot be made green it is pinned back with
+   the reason recorded (the Phase 101 escape hatch).
+
+**Out of scope**: TypeScript 7 (blocked upstream — no `typescript-eslint` release accepts
+TS 7; leave Renovate's `typescript-7.x` branch unmerged); `@types/node` 26 (tracks the
+Node runtime line, CI and `frontend/Dockerfile` are on Node 24); the three remaining
+`overrides` majors (`fast-uri`, `js-yaml`, `@babel/...modules-systemjs` — security floors,
+parents still declare the current major); `scripts/package.json` `onnxruntime-node` (its
+pin comment says >=1.22 segfaults on the vendored Maia model, so it belongs to the
+Phase 218 parity spike, not here); anything backend.
+
+**Depends on**: nothing. Branches from `main` at or after `d9acb12f8`.
+
+**Source**: `.planning/seeds/SEED-162-major-dependency-backlog.md` clusters 1–2;
+Renovate Dependency Dashboard #338.
+
+**Plans:** 2 plans
+
+Plans:
+**Wave 1**
+
+- [ ] 217-01-PLAN.md — Cluster 1: vitest/@vitest-* 5.x + jsdom 30.x in one commit, undici override resolved, own squash-merge (wave 1)
+
+**Wave 2** *(blocked on Wave 1 completion)*
+
+- [ ] 217-02-PLAN.md — Cluster 2: onnxruntime-web 1.29.0, six vendored Maia runtime files re-vendored, byte constants + cache version, device UAT (wave 2)
+
+**Cross-cutting constraints:**
+
+- Spec-less probe fallback: skipped visibly — this phase has no requirement IDs and no SPEC.md/UI-SPEC.md/AI-SPEC.md, so no probe predicates were generated.
+
+### Phase 218: Backend onnxruntime Parity Spike → Python 3.14 Chain
+
+**Goal**: Resolve SEED-162 cluster 4 as a strict chain. Step 1 is a measurement, not a
+bump: re-run `scripts/maia_parity_spike.py` against `onnxruntime==1.29.0` (and the matching
+`onnxruntime-node` in `scripts/package.json`, which shares the same native core and pin
+rationale) and compare against the committed 1.20.1 baseline. If the segfault is gone and
+outputs match, step 2 moves Python 3.13 → 3.14 everywhere at once (`.python-version`,
+`pyproject.toml` `requires-python`, `analysis/pyproject.toml`, all `Dockerfile` and
+`Dockerfile.worker` stages, `ci.yml`) and re-pins `ghcr.io/astral-sh/uv` to 0.12.x by
+digest in both Dockerfiles. If step 1 fails, the phase stops there: the pin comment gains
+the second datapoint, Python 3.14 is recorded as deferred, and nothing else changes.
+
+**Success criteria**:
+
+1. `scripts/maia_parity_spike.py` output under onnxruntime 1.29.0 is committed as evidence
+   (pass or fail), diffed against the 1.20.1 baseline; `pyproject.toml`'s pin comment is
+   updated with the result either way.
+2. If parity passes: `onnxruntime` and `onnxruntime-node` pins raised; `.python-version`,
+   `requires-python`, `analysis/pyproject.toml`, every Dockerfile stage, and CI all say
+   3.14; `uv` base image re-pinned by digest in both Dockerfiles; full pre-merge gate green;
+   `bin/deploy.sh` release verified on flawchess.com.
+3. If parity fails: no version file changes; SEED-162 cluster 4 status updated to
+   "deferred — onnxruntime 1.29 still segfaults / diverges" with the evidence path.
+4. `Dockerfile.worker` is never moved to 3.14 independently of `Dockerfile`.
+
+**Out of scope**: anything frontend (Phase 217); TypeScript 7; `@types/node` 26.
+
+**Depends on**: nothing in code. Sequenced after Phase 217 so a frontend failure and a
+backend failure never share a branch. Plan when Phase 217 has merged.
+
+**Source**: `.planning/seeds/SEED-162-major-dependency-backlog.md` cluster 4;
+`.planning/notes/2026-07-10-flawchess-engine-self-execution-analysis.md` Pitfall 2.
+
+**Plans:** 0 plans
+
+Plans:
+
+- [ ] TBD
 
 ## Backlog
 
