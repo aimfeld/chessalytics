@@ -102,38 +102,22 @@ def _build_base_query(
         # All-games query: no position filter, query games table directly
         base = select(*entities).where(Game.user_id == user_id)
 
-    if time_control is not None:
-        base = base.where(Game.time_control_bucket.in_(time_control))
-    if platform is not None:
-        base = base.where(Game.platform.in_(platform))
-    if rated is not None:
-        base = base.where(Game.rated == rated)
-    if opponent_type == "human":
-        base = base.where(Game.is_computer_game == False)  # noqa: E712
-    elif opponent_type == "bot":
-        base = base.where(Game.is_computer_game == True)  # noqa: E712
-    # "both" = no filter
-    if from_date is not None:
-        base = base.where(Game.played_at >= from_date)
-    if to_date is not None:
-        base = base.where(Game.played_at < to_date + datetime.timedelta(days=1))
-    if color is not None:
-        base = base.where(Game.user_color == color)
-    if opponent_gap_min is not None or opponent_gap_max is not None:
-        user_rating = case(
-            (Game.user_color == "white", Game.white_rating),
-            else_=Game.black_rating,
-        )
-        opp_rating = case(
-            (Game.user_color == "white", Game.black_rating),
-            else_=Game.white_rating,
-        )
-        base = base.where(Game.white_rating.isnot(None), Game.black_rating.isnot(None))
-        gap = opp_rating - user_rating
-        if opponent_gap_min is not None:
-            base = base.where(gap >= opponent_gap_min)
-        if opponent_gap_max is not None:
-            base = base.where(gap <= opponent_gap_max)
+    # Routes through the single documented filter seam (query_utils.py) instead
+    # of a hand-rolled block, which restores the default-population exclusion
+    # of "flawchess" / "pgn" (SEED-163 §1) — this call site previously had no
+    # `else` branch and never excluded them when platform=None.
+    base = apply_game_filters(
+        base,
+        time_control=time_control,
+        platform=platform,
+        rated=rated,
+        opponent_type=opponent_type,
+        from_date=from_date,
+        to_date=to_date,
+        color=color,
+        opponent_gap_min=opponent_gap_min,
+        opponent_gap_max=opponent_gap_max,
+    )
 
     return base
 
@@ -176,33 +160,23 @@ async def query_time_series(
         .distinct(Game.id)
         .order_by(Game.id, Game.played_at)
     )
-    if color is not None:
-        stmt = stmt.where(Game.user_color == color)
-    if time_control is not None:
-        stmt = stmt.where(Game.time_control_bucket.in_(time_control))
-    if platform is not None:
-        stmt = stmt.where(Game.platform.in_(platform))
-    if rated is not None:
-        stmt = stmt.where(Game.rated == rated)
-    if opponent_type == "human":
-        stmt = stmt.where(Game.is_computer_game == False)  # noqa: E712
-    elif opponent_type == "bot":
-        stmt = stmt.where(Game.is_computer_game == True)  # noqa: E712
-    if opponent_gap_min is not None or opponent_gap_max is not None:
-        user_rating = case(
-            (Game.user_color == "white", Game.white_rating),
-            else_=Game.black_rating,
-        )
-        opp_rating = case(
-            (Game.user_color == "white", Game.black_rating),
-            else_=Game.white_rating,
-        )
-        stmt = stmt.where(Game.white_rating.isnot(None), Game.black_rating.isnot(None))
-        gap = opp_rating - user_rating
-        if opponent_gap_min is not None:
-            stmt = stmt.where(gap >= opponent_gap_min)
-        if opponent_gap_max is not None:
-            stmt = stmt.where(gap <= opponent_gap_max)
+    # Routes through the single documented filter seam (query_utils.py) instead
+    # of a hand-rolled block, which restores the default-population exclusion
+    # of "flawchess" / "pgn" (SEED-163 §1). from_date/to_date are pinned to
+    # None: D-19 — this path intentionally has no date bounds so the
+    # rolling-window chart has context games from before its anchor.
+    stmt = apply_game_filters(
+        stmt,
+        time_control=time_control,
+        platform=platform,
+        rated=rated,
+        opponent_type=opponent_type,
+        from_date=None,
+        to_date=None,
+        color=color,
+        opponent_gap_min=opponent_gap_min,
+        opponent_gap_max=opponent_gap_max,
+    )
 
     # Wrap in subquery so outer query can order by played_at ASC after DISTINCT ON Game.id
     subq = stmt.subquery()
