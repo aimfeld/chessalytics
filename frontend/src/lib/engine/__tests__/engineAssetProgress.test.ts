@@ -573,3 +573,50 @@ describe('unsupportedReason', () => {
     expect(first.unsupportedReason).toBe('no-wasm-simd');
   });
 });
+
+// ─── Hotfix 2026-09-06 (SEED-158 follow-up): unsupported is sticky ───────────
+
+describe('unsupported status survives other assets\' traffic', () => {
+  beforeEach(() => {
+    resetEngineAssetsForTests();
+  });
+
+  // Prod repro (Chrome on iPhone, /analysis): the Maia gate marks the store
+  // unsupported without ever registering maia-model/ort-runtime; Stockfish
+  // then downloads normally. Every one of its store calls must leave the
+  // terminal status alone, or the analysis gate un-suppresses and sits at
+  // the Stockfish share (~11%) forever.
+  it('a Stockfish progress report does NOT flip unsupported to downloading', () => {
+    markEngineAssetsUnsupported('ios-webkit');
+    markEngineAssetPending('stockfish-wasm');
+    reportEngineAssetProgress('stockfish-wasm', 1_000_000, STOCKFISH_WASM_BYTES_FALLBACK);
+
+    expect(getEngineAssetsSnapshot().status).toBe('unsupported');
+    expect(getEngineAssetsSnapshot().unsupportedReason).toBe('ios-webkit');
+  });
+
+  it('a Stockfish ready (the only registered asset) does NOT flip unsupported to ready', () => {
+    markEngineAssetsUnsupported('ios-webkit');
+    markEngineAssetPending('stockfish-wasm');
+    markEngineAssetReady('stockfish-wasm');
+
+    expect(getEngineAssetsSnapshot().status).toBe('unsupported');
+    // The asset itself is still recorded as done — only the aggregate status is protected.
+    expect(getEngineAssetsSnapshot().assets['stockfish-wasm']?.done).toBe(true);
+  });
+
+  it('a Stockfish failure does NOT downgrade unsupported to failed (Retry could never help)', () => {
+    markEngineAssetsUnsupported('no-wasm-simd');
+    markEngineAssetFailed('stockfish-wasm');
+
+    expect(getEngineAssetsSnapshot().status).toBe('unsupported');
+  });
+
+  it('the same calls without a prior unsupported still drive downloading -> ready (guard is not always-on)', () => {
+    markEngineAssetPending('stockfish-wasm');
+    reportEngineAssetProgress('stockfish-wasm', 1_000_000, STOCKFISH_WASM_BYTES_FALLBACK);
+    expect(getEngineAssetsSnapshot().status).toBe('downloading');
+    markEngineAssetReady('stockfish-wasm');
+    expect(getEngineAssetsSnapshot().status).toBe('ready');
+  });
+});
