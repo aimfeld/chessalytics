@@ -5,8 +5,9 @@
  *
  *  - `maiaQueue.ts`'s `policy()` provider (the engine's root-position Maia
  *    call, one rung per FEN via `budget.elo[leaf.side]`).
- *  - `useMaiaEngine.ts`'s Moves-by-Rating chart write-through (all 21
- *    `MAIA_ELO_LADDER` rungs per navigated position).
+ *  - `useMaiaEngine.ts`'s write-through: the exact selected-ELO rung first
+ *    (quick 260906-gu2 — the rung the engine's root call needs), then all 21
+ *    `MAIA_ELO_LADDER` rungs per navigated position.
  *
  * Module-scoped by design: it outlives any single `createMaiaQueue()`
  * instance, so a position the chart already inferred stays available to the
@@ -32,6 +33,24 @@
 export const MAIA_POLICY_CACHE_MAX = 2048;
 
 const cache = new Map<string, Record<string, number>>();
+
+/**
+ * Quick 260906-gu2: in-flight registry. `useMaiaEngine` marks `(fen, elo)`
+ * pending the moment it issues a worker request for it; `maiaQueue.policy()`
+ * awaits that entry instead of issuing a SECOND inference for the same key.
+ * Before this, every navigation cost the engine a duplicate ~200 ms root
+ * inference on wasm — the chart's request was already queued ahead of it on
+ * the shared worker, but the engine's `policy()` checked the cache before
+ * that result landed. `setCachedPolicy` settles the entry; a failed request
+ * must call `failPolicyPending` so waiters fall back to their own request.
+ */
+interface PendingPolicy {
+  promise: Promise<Record<string, number>>;
+  resolve: (policy: Record<string, number>) => void;
+  reject: (err: Error) => void;
+}
+
+const pending = new Map<string, PendingPolicy>();
 
 function cacheKey(fen: string, elo: number): string {
   return `${fen}|${elo}`;
@@ -66,9 +85,51 @@ export function setCachedPolicy(fen: string, elo: number, policy: Record<string,
     const oldest = cache.keys().next().value;
     if (oldest !== undefined) cache.delete(oldest);
   }
+  const waiter = pending.get(key);
+  if (waiter) {
+    pending.delete(key);
+    waiter.resolve(policy);
+  }
 }
 
-/** Empties the shared cache — for test isolation across a module-scoped singleton. */
+/**
+ * Registers `(fen, elo)` as in flight so a concurrent `getPendingPolicy`
+ * reader can await it. No-op when the key is already cached or pending.
+ */
+export function markPolicyPending(fen: string, elo: number): void {
+  const key = cacheKey(fen, elo);
+  if (cache.has(key) || pending.has(key)) return;
+  let resolve: PendingPolicy['resolve'] = () => undefined;
+  let reject: PendingPolicy['reject'] = () => undefined;
+  const promise = new Promise<Record<string, number>>((res, rej) => {
+    resolve = res;
+    reject = rej;
+  });
+  // A pending entry nobody awaits must not surface as an unhandled rejection
+  // when its request fails — readers attach their own handlers via
+  // `getPendingPolicy`.
+  promise.catch(() => undefined);
+  pending.set(key, { promise, resolve, reject });
+}
+
+/** The in-flight promise for `(fen, elo)`, if a producer has marked it pending and not yet settled it. */
+export function getPendingPolicy(fen: string, elo: number): Promise<Record<string, number>> | undefined {
+  return pending.get(cacheKey(fen, elo))?.promise;
+}
+
+/** Settles a pending `(fen, elo)` with a rejection (the producing request failed); no-op if not pending. */
+export function failPolicyPending(fen: string, elo: number, err: Error): void {
+  const key = cacheKey(fen, elo);
+  const waiter = pending.get(key);
+  if (!waiter) return;
+  pending.delete(key);
+  waiter.reject(err);
+}
+
+/** Empties the shared cache and the pending registry — for test isolation across a module-scoped singleton. */
 export function clearMaiaPolicyCache(): void {
   cache.clear();
+  const abandoned = Array.from(pending.values());
+  pending.clear();
+  for (const entry of abandoned) entry.reject(new Error('maiaPolicyCache cleared'));
 }

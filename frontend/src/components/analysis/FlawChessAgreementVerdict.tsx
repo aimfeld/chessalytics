@@ -54,11 +54,9 @@ import type { HoveredQualityMove } from '@/components/analysis/MaiaMoveQualityBa
  *  MaiaMoveQualityBar's PROSE_POPOVER_OPEN_DELAY_MS / InfoPopover precedent. */
 const PROSE_POPOVER_OPEN_DELAY_MS = 100;
 
-/** Shown in the fixed-height slot whenever there's nothing to narrate yet:
- *  Stockfish off (D-03), a partial snapshot mid-search (D-06), or an
- *  unresolvable UCI->SAN conversion (Pitfall 2 — never fall through to a
- *  raw-UCI render). */
-const MUTED_PROMPT_TEXT = 'Turn on Stockfish to compare picks.';
+/** Shown in the fixed-height slot when Stockfish is off (D-03): the only
+ *  state where the user can act to get a verdict. */
+const STOCKFISH_OFF_PROMPT_TEXT = 'Turn on Stockfish to compare picks.';
 
 export interface FlawChessAgreementVerdictProps {
   /** FlawChess's practical #1 pick (`flawChessEngine.rankedLines[0]`), or null pre-snapshot. */
@@ -335,12 +333,18 @@ export function FlawChessAgreementVerdict({
   // `flawChessLine` is redundant with `!verdict` here (computeFlawChessVerdict
   // only ever returns non-null when flawChessLine is non-null) but keeps this
   // narrowing sound for TypeScript without an `as` cast below.
+  // With Stockfish on but nothing to narrate yet (partial snapshot mid-search,
+  // unresolvable UCI->SAN), the slot stays EMPTY: it used to reuse the
+  // "Turn on Stockfish" prompt, which told users to enable an engine that was
+  // already running.
   if (!engineEnabled || !verdict || !fcSan || !sfSan || !flawChessLine) {
     return (
       <div className="min-h-[3.75rem] px-2 text-sm" data-testid="flawchess-verdict-slot">
-        <span className="text-muted-foreground" data-testid="flawchess-verdict-prompt">
-          {MUTED_PROMPT_TEXT}
-        </span>
+        {!engineEnabled && (
+          <span className="text-muted-foreground" data-testid="flawchess-verdict-prompt">
+            {STOCKFISH_OFF_PROMPT_TEXT}
+          </span>
+        )}
       </div>
     );
   }

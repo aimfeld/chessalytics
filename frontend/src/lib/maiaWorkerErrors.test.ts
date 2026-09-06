@@ -8,7 +8,12 @@
 
 import { describe, it, expect, vi, afterEach } from 'vitest';
 import * as Sentry from '@sentry/react';
-import { classifyMaiaWorkerError, captureMaiaWorkerError } from './maiaWorkerErrors';
+import {
+  classifyMaiaWorkerError,
+  captureMaiaWorkerError,
+  MaiaWorkerError,
+  isReportedMaiaWorkerError,
+} from './maiaWorkerErrors';
 
 vi.mock('@sentry/react', () => ({ captureException: vi.fn() }));
 
@@ -36,6 +41,11 @@ describe('classifyMaiaWorkerError', () => {
 
   it('classifies a memory-access-out-of-bounds message as oom', () => {
     expect(classifyMaiaWorkerError('memory access out of bounds')).toBe('oom');
+  });
+
+  it('classifies the real FLAWCHESS-9D Android session-create allocation failure as oom', () => {
+    const raw = "Can't create a session. failed to allocate a buffer of size 45683686.";
+    expect(classifyMaiaWorkerError(raw)).toBe('oom');
   });
 });
 
@@ -67,5 +77,28 @@ describe('captureMaiaWorkerError', () => {
     const [err1] = calls[0]!;
     const [err2] = calls[1]!;
     expect((err1 as Error).message).toBe((err2 as Error).message);
+  });
+
+  it('attaches engine_device context so the canonical capture keeps the triage data the gate used to add', () => {
+    captureMaiaWorkerError('Load failed', { source: 'maia-worker', backend: null });
+
+    const [, opts] = vi.mocked(Sentry.captureException).mock.calls[0]!;
+    expect(opts).toEqual(
+      expect.objectContaining({
+        contexts: expect.objectContaining({ engine_device: expect.any(Object) }),
+      }),
+    );
+  });
+
+  it('returns a MaiaWorkerError carrying the raw message and kind, recognised by isReportedMaiaWorkerError', () => {
+    const raw = "Can't create a session. failed to allocate a buffer of size 45683686.";
+    const err = captureMaiaWorkerError(raw, { source: 'maia-worker', backend: 'wasm' });
+
+    expect(err).toBeInstanceOf(MaiaWorkerError);
+    expect(err.kind).toBe('oom');
+    // Downstream `String(reason)` contract: the raw text is still the message.
+    expect(err.message).toBe(raw);
+    expect(isReportedMaiaWorkerError(err)).toBe(true);
+    expect(isReportedMaiaWorkerError(new Error(raw))).toBe(false);
   });
 });

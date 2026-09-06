@@ -82,7 +82,9 @@ describe('FlawChessAgreementVerdict', () => {
         shownSans={[]}
       />,
     );
-    expect(screen.getByTestId('flawchess-verdict-prompt').textContent).toBe('Turn on Stockfish to compare picks.');
+    // Stockfish IS on here, so the slot must not tell the user to turn it on: it stays empty.
+    expect(screen.getByTestId('flawchess-verdict-slot').textContent).toBe('');
+    expect(screen.queryByTestId('flawchess-verdict-prompt')).toBeNull();
     expect(screen.queryByTestId('flawchess-verdict-sentence')).toBeNull();
   });
 

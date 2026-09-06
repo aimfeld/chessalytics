@@ -37,7 +37,17 @@ export type MaiaErrorSource = 'maia-worker' | 'maia-queue-worker';
  * matches BOTH the memory patterns below AND the load patterns further down —
  * the memory signal is the true cause, so it must win the classification.
  */
-const OOM_PATTERNS = [/out of memory/i, /memory access out of bounds/i, /rangeerror/i];
+const OOM_PATTERNS = [
+  /out of memory/i,
+  /memory access out of bounds/i,
+  /rangeerror/i,
+  // Bug fix (FLAWCHESS-9D, 2026-09): onnxruntime-web's session-create OOM on
+  // low-RAM Android reads `Can't create a session. failed to allocate a
+  // buffer of size 45683686.` — no "out of memory" wording, so it fell
+  // through to `inference` and the gate showed the generic download-failure
+  // copy (and a `download` tag) to a device that was simply out of memory.
+  /failed to allocate/i,
+];
 
 /** Asset/script delivery failure signatures. Checked SECOND, after OOM. */
 const LOAD_PATTERNS = [
@@ -58,6 +68,74 @@ export function classifyMaiaWorkerError(rawMessage: string): MaiaFailureKind {
   return 'inference';
 }
 
+// ─── Reported-error marker ──────────────────────────────────────────────────
+
+/**
+ * The rejection reason handed downstream after `captureMaiaWorkerError()`
+ * has ALREADY reported the failure to Sentry. `message` is the raw worker
+ * text (unchanged downstream contract: `String(reason)` still shows it), and
+ * `kind` is the classified bucket.
+ *
+ * Why a class: one Maia cold-start failure used to reach Sentry THREE times
+ * — the worker host (`Maia worker inference error (oom)`, FLAWCHESS-9V), then
+ * `useFlawChessEngine`'s `whenReady()` rejection handler (`a provider failed
+ * to become ready`, FLAWCHESS-A3), then `EngineReadyGate`'s terminal-state
+ * effect (`Engine cold start: ...`, FLAWCHESS-A5). The host capture is the
+ * canonical one (it alone has the raw text and the active backend); the
+ * other two use `isReportedMaiaWorkerError()` / a non-null `failureKind` to
+ * stay silent for a failure that is already on the dashboard.
+ */
+export class MaiaWorkerError extends Error {
+  /**
+   * The classified bucket, or `'unsupported'` for the WASM-SIMD probe
+   * failure — that one is reported by `EngineReadyGate`'s `unsupported`
+   * capture (which carries the device context) rather than by the host, but
+   * it is reported, so downstream waiters must stay silent for it too.
+   */
+  readonly kind: MaiaFailureKind | 'unsupported';
+
+  constructor(rawMessage: string, kind: MaiaFailureKind | 'unsupported') {
+    super(rawMessage);
+    this.name = 'MaiaWorkerError';
+    this.kind = kind;
+  }
+}
+
+/** True when `reason` is a Maia failure the worker host already sent to Sentry. */
+export function isReportedMaiaWorkerError(reason: unknown): reason is MaiaWorkerError {
+  return reason instanceof MaiaWorkerError;
+}
+
+// ─── Device context ─────────────────────────────────────────────────────────
+
+/**
+ * Best-effort device snapshot for memory-related failure triage. Read
+ * defensively — `navigator.deviceMemory` is missing in Firefox/Safari and this
+ * must never throw regardless of which fields a given browser omits. Lived in
+ * `EngineReadyGate` until the gate stopped re-reporting worker failures; it
+ * now rides on the canonical worker capture so no triage data is lost.
+ */
+export function readDeviceContext(): Record<string, string | number> {
+  const context: Record<string, string | number> = {};
+  try {
+    context.userAgent = navigator.userAgent;
+  } catch {
+    // best-effort only
+  }
+  try {
+    context.hardwareConcurrency = navigator.hardwareConcurrency;
+  } catch {
+    // best-effort only
+  }
+  try {
+    const deviceMemory = (navigator as Navigator & { deviceMemory?: number }).deviceMemory;
+    if (deviceMemory !== undefined) context.deviceMemory = deviceMemory;
+  } catch {
+    // best-effort only
+  }
+  return context;
+}
+
 // ─── Capture ────────────────────────────────────────────────────────────────
 
 export interface CaptureMaiaWorkerErrorOptions {
@@ -71,11 +149,18 @@ export interface CaptureMaiaWorkerErrorOptions {
  * Reports a Maia Worker `type: 'error'` message to Sentry with a stable,
  * classification-only message (never containing the raw worker text — that
  * lives in `contexts.maia` instead) and a `maia_failure` tag for filtering.
+ *
+ * Returns the `MaiaWorkerError` the caller should reject downstream waiters
+ * with, so the hook and the gate can recognise an already-reported failure.
  */
-export function captureMaiaWorkerError(rawMessage: string, opts: CaptureMaiaWorkerErrorOptions): void {
+export function captureMaiaWorkerError(
+  rawMessage: string,
+  opts: CaptureMaiaWorkerErrorOptions,
+): MaiaWorkerError {
   const kind = classifyMaiaWorkerError(rawMessage);
   Sentry.captureException(new Error(`Maia worker inference error (${kind})`), {
     tags: { source: opts.source, backend: opts.backend ?? 'unknown', maia_failure: kind },
-    contexts: { maia: { rawMessage } },
+    contexts: { maia: { rawMessage }, engine_device: readDeviceContext() },
   });
+  return new MaiaWorkerError(rawMessage, kind);
 }

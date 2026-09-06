@@ -49,7 +49,7 @@ import { maskAndSoftmaxUci } from '@/lib/maiaEncoding';
 import { acquireMaiaWorker } from './maiaWorkerHost';
 import type { MaiaAnalyzeResult, MaiaWorkerLease } from './maiaWorkerHost';
 import type { Side } from './types';
-import { getCachedPolicy, setCachedPolicy } from './maiaPolicyCache';
+import { getCachedPolicy, getPendingPolicy, setCachedPolicy } from './maiaPolicyCache';
 
 // ─── Types ──────────────────────────────────────────────────────────────────
 
@@ -240,16 +240,27 @@ export function createMaiaQueue(): MaiaQueue {
     return lease;
   }
 
-  function policy(fen: string, elo: number, side: Side): Promise<Record<string, number>> {
-    void side; // side is implicit in fen's own 'w'/'b' field (D-08); accepted for contract shape only.
-    const cached = getCachedPolicy(fen, elo);
-    if (cached) return Promise.resolve(cached);
-
+  function requestPolicy(fen: string, elo: number): Promise<Record<string, number>> {
     return new Promise<Record<string, number>>((resolve) => {
       pending.push({ fen, elo, resolve });
       ensureLease();
       processQueue();
     });
+  }
+
+  function policy(fen: string, elo: number, side: Side): Promise<Record<string, number>> {
+    void side; // side is implicit in fen's own 'w'/'b' field (D-08); accepted for contract shape only.
+    const cached = getCachedPolicy(fen, elo);
+    if (cached) return Promise.resolve(cached);
+    // Quick 260906-gu2: the chart hook (`useMaiaEngine`) already has this exact
+    // `(fen, elo)` in flight on the shared worker (its priority request is
+    // queued AHEAD of anything this lease would add) — await that result
+    // instead of paying a duplicate ~200 ms wasm inference. If the producer's
+    // request fails, fall back to a request of our own.
+    const inFlight = getPendingPolicy(fen, elo);
+    if (inFlight) return inFlight.catch(() => requestPolicy(fen, elo));
+
+    return requestPolicy(fen, elo);
   }
 
   function terminate(): void {
