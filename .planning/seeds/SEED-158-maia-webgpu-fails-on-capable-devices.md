@@ -2,7 +2,7 @@
 id: SEED-158
 status: active
 planted: 2026-08-29
-updated: 2026-09-06 (evening: wasm path kills the iOS page, see the iOS section)
+updated: 2026-09-06 (night: iOS gate hotfixed, see the iOS section)
 planted_during: Sentry triage of the 2026-08-29 18:54 UTC iPad OOM cascade
   (FLAWCHESS-9V regression + new FLAWCHESS-A2/A3), same session as quick task
   260829-tku (oom terminal variant in EngineReadyGate)
@@ -112,11 +112,19 @@ functions in the background with a footprint far above the heap; the ~10 s delay
 controllable from the page.
 
 Consequence for the release carrying quick task 260906-p54: before the cap, iOS users got a
-graceful `oom` terminal state; after it they get a dead analysis tab. Until either WebGPU
-works on iOS 26 or the wasm kill is understood, the wasm Maia path should be gated off on iOS
-Safari (a `unsupported`-style terminal state with honest copy), which is the only lever that
-keeps `/analysis` usable there. Collecting the WebGPU failure reason on the phone is the first
-step of the plan above and would remove the need for the gate.
+graceful `oom` terminal state; after it they get a dead analysis tab.
+
+**Hotfix shipped 2026-09-06 (`hotfix/ios-maia-gate`):** Maia is gated off ENTIRELY on
+iOS/iPadOS WebKit at the D-13 choke point (`maiaWorkerHost.ts` `ensureSpawned()`, predicate in
+`frontend/src/lib/engine/iosWebKit.ts`, iPadOS desktop-mode UA detected via `MacIntel` +
+`maxTouchPoints > 1`). The store carries `unsupportedReason: 'ios-webkit'`, the bots gate shows
+iOS-specific copy (`engine-gate-unsupported-ios`), Sentry's unsupported capture is tagged
+`unsupported_reason`. Not a wasm-only ban: WebGPU also fails on the reference device, so trying
+it first would only cost the 25.7 MB asyncify download before landing in the same state. When
+WebGPU is made to work on iOS, NARROW the gate (allow the `'auto'` spawn when the probe picks
+`webgpu`, and turn both `respawnPinnedToWasm` call sites into the `unsupported` terminal on
+iOS instead of the fatal wasm respawn). Collecting the WebGPU failure reason on the phone is the
+first step of the plan above.
 
 Prior art from the ORT tracker: microsoft/onnxruntime#22776 ("Support iOS devices") and
 #22086 (wasm load failures on iOS 17) are open with no maintainer guidance; WebGPU on iOS was

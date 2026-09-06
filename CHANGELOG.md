@@ -16,6 +16,7 @@ in `YYYY-MM-DD` (Europe/Zurich).
 - Generate Insights on the Endgames tab works again. The rated-games default introduced with the new analytics population was rejected by the insights endpoint itself, so the button was enabled but every click failed with "Couldn't generate insights." Reports now cover your rated games against human opponents, matching the numbers on the rest of the tab, and cached reports written under the old population are regenerated once.
 - The "Try again" button on a failed insights report is now disabled while a filter blocks generation, like the Generate Insights button already was.
 - Maia analysis no longer fails with an out-of-memory error on iPhones. The browser inference runtime was reserving four times more memory address space than iOS Safari allows a page to hold alongside the Stockfish engine workers.
+- Hotfix: the analysis board no longer crashes the whole tab on iPhone and iPad. The previous fix let the Maia engine start on iOS for the first time, and Safari then killed the page within seconds of stepping through moves. Maia (the Human Move Probability chart, FlawChess Engine and the practice bots) is now switched off on iOS with a clear message on the bots page; the analysis board, Stockfish evaluation and game imports keep working there.
 
 ### Changed
 

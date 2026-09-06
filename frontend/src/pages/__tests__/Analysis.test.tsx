@@ -626,7 +626,7 @@ describe('Analysis page: engine readiness gate (G-213-34)', () => {
   });
 
   it('an unsupported store status mounts no gate, and the page and board containers are both present', () => {
-    markEngineAssetsUnsupported();
+    markEngineAssetsUnsupported('no-wasm-simd');
 
     renderAnalysis();
 
@@ -727,7 +727,7 @@ describe('Analysis page: engine readiness gate (G-213-34)', () => {
 
     // A real status transition — must re-render.
     act(() => {
-      markEngineAssetsUnsupported();
+      markEngineAssetsUnsupported('no-wasm-simd');
     });
     expect(renderCount).toBeGreaterThan(0);
   });

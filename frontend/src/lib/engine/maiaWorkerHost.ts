@@ -49,6 +49,7 @@ import {
   type MaiaErrorSource,
 } from '@/lib/maiaWorkerErrors';
 import { supportsWasmSimd } from './wasmSimd';
+import { isIosWebKit } from './iosWebKit';
 import {
   getEngineAssetsSnapshot,
   markEngineAssetFailed,
@@ -327,11 +328,29 @@ function ensureSpawned(source: MaiaErrorSource): void {
     simdSupported = supportsWasmSimd();
   }
   if (!simdSupported) {
-    markEngineAssetsUnsupported();
+    markEngineAssetsUnsupported('no-wasm-simd');
     // Reported by EngineReadyGate's `unsupported` capture (D-17), not here —
     // the MaiaWorkerError marker keeps useFlawChessEngine from reporting the
     // same rejection a second time as "a provider failed to become ready".
     failAllLeasesAndDropWorker(new MaiaWorkerError('Maia worker: device lacks WASM SIMD', 'unsupported'));
+    return;
+  }
+  // Hotfix 2026-09-06 (SEED-158): on iOS/iPadOS WebKit the wasm inference
+  // path kills the whole page (Safari's silent per-page memory-limit
+  // termination, measured on an iPhone 14 Pro after the 1 GB memory cap made
+  // Maia start there at all), and WebGPU fails on the same device before it
+  // can help — so Maia is gated off entirely on iOS, at this same choke
+  // point, BEFORE the 45.7 MB model or either runtime binary is fetched.
+  // Same terminal shape as the SIMD case above (no Retry: a reload runs into
+  // the same kill). Stockfish is unaffected: it lives in `workerPool.ts` and
+  // never reaches this host. See `iosWebKit.ts` for the evidence and for
+  // when to narrow this to a wasm-only ban.
+  if (isIosWebKit()) {
+    console.info('[maia-worker] iOS WebKit detected — Maia gated off (wasm inference kills the page, SEED-158)');
+    markEngineAssetsUnsupported('ios-webkit');
+    failAllLeasesAndDropWorker(
+      new MaiaWorkerError('Maia worker: gated off on iOS WebKit (wasm inference kills the page)', 'unsupported'),
+    );
     return;
   }
   spawn(source, webgpuFailed ? 'wasm' : 'auto');

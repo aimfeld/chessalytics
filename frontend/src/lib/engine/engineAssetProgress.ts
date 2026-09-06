@@ -28,6 +28,16 @@ export type EngineAssetId = 'maia-model' | 'stockfish-wasm' | 'ort-runtime';
  */
 export type EngineAssetStatus = 'idle' | 'unsupported' | 'downloading' | 'ready' | 'failed';
 
+/**
+ * Why the store reports `'unsupported'` (hotfix 2026-09-06, SEED-158):
+ * `'no-wasm-simd'` is the D-13 probe (the device can never run the model);
+ * `'ios-webkit'` is the iOS/iPadOS gate (the device COULD run it, but Safari
+ * kills the page when it does — see `iosWebKit.ts`). `EngineReadyGate` shows
+ * different copy for each, so the iOS user is not told their device lacks a
+ * capability it actually has.
+ */
+export type EngineUnsupportedReason = 'no-wasm-simd' | 'ios-webkit';
+
 interface EngineAssetEntry {
   loaded: number;
   total: number;
@@ -47,6 +57,8 @@ export interface EngineAssetsSnapshot {
    * field simply stays `null` for those failures.
    */
   failureKind: MaiaFailureKind | null;
+  /** Which gate produced the current `'unsupported'` status, or `null` in every other status. */
+  unsupportedReason: EngineUnsupportedReason | null;
 }
 
 // ─── Named constants (CLAUDE.md no-magic-numbers) ──────────────────────────
@@ -127,6 +139,8 @@ let currentStatus: EngineAssetStatus = 'idle';
 let currentAssets: Partial<Record<EngineAssetId, EngineAssetEntry>> = {};
 /** Quick 260829-tku: the classified kind behind the current `'failed'` status. */
 let currentFailureKind: MaiaFailureKind | null = null;
+/** Hotfix 2026-09-06 (SEED-158): the gate behind the current `'unsupported'` status. */
+let currentUnsupportedReason: EngineUnsupportedReason | null = null;
 /**
  * Cached snapshot object — referentially stable between mutations so
  * `useSyncExternalStore` (in `useEngineAssets.ts`) does not loop forever.
@@ -136,6 +150,7 @@ let cachedSnapshot: EngineAssetsSnapshot = {
   status: currentStatus,
   assets: currentAssets,
   failureKind: currentFailureKind,
+  unsupportedReason: currentUnsupportedReason,
 };
 const listeners = new Set<() => void>();
 
@@ -162,7 +177,12 @@ function roundedAssetPercent(loaded: number, total: number): number {
  * true current bytes and `useSyncExternalStore`'s tearing guarantee holds.
  */
 function refreshSnapshot(): void {
-  cachedSnapshot = { status: currentStatus, assets: currentAssets, failureKind: currentFailureKind };
+  cachedSnapshot = {
+    status: currentStatus,
+    assets: currentAssets,
+    failureKind: currentFailureKind,
+    unsupportedReason: currentUnsupportedReason,
+  };
 }
 
 /** Notifies every subscriber. Only the caller decides whether this runs. */
@@ -313,9 +333,14 @@ export function markEngineAssetReady(id: EngineAssetId): void {
  * D-13: the device cannot run any engine asset at all (WASM-SIMD probe
  * failed). Plan 04 owns this state's UI; Task 1 calls it from the
  * `wasmSimd.ts` choke point in `maiaWorkerHost.ts`.
+ *
+ * Hotfix 2026-09-06 (SEED-158): also reached from the iOS/iPadOS gate at the
+ * same choke point, with `reason: 'ios-webkit'`, so the gate's copy can say
+ * what is actually going on instead of "your device lacks the technology".
  */
-export function markEngineAssetsUnsupported(): void {
+export function markEngineAssetsUnsupported(reason: EngineUnsupportedReason): void {
   currentStatus = 'unsupported';
+  currentUnsupportedReason = reason;
   commit();
 }
 
@@ -483,7 +508,13 @@ export function resetEngineAssetsForTests(): void {
   currentStatus = 'idle';
   currentAssets = {};
   currentFailureKind = null;
-  cachedSnapshot = { status: currentStatus, assets: currentAssets, failureKind: currentFailureKind };
+  currentUnsupportedReason = null;
+  cachedSnapshot = {
+    status: currentStatus,
+    assets: currentAssets,
+    failureKind: currentFailureKind,
+    unsupportedReason: currentUnsupportedReason,
+  };
   listeners.clear();
   lastNotifiedPercentById.clear();
 }
