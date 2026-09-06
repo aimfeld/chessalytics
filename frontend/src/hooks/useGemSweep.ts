@@ -278,6 +278,11 @@ export function useGemSweep({
     // path is the whole point (see D-05 dispatch-gate doc comment above),
     // never the other way around.
     priority: false,
+    // ladderOnly (quick 260906-gu2): the sweep reads perElo only, so it keeps
+    // the single full-ladder request — no exact-rung phase, no prefetch — and
+    // its cost and gem classification stay byte-identical to before the
+    // live chart's two-phase pipeline.
+    ladderOnly: true,
   });
 
   // ─── Dedicated Stockfish grading instance (expensive tier) ───────────────

@@ -46,6 +46,7 @@ import { useAnalysisBoardArrows } from '@/hooks/analysis/useAnalysisBoardArrows'
 import { useStockfishEngine } from '@/hooks/useStockfishEngine';
 import { useStockfishGradingEngine } from '@/hooks/useStockfishGradingEngine';
 import { useMaiaEngine } from '@/hooks/useMaiaEngine';
+import { nextLineFen } from '@/lib/nextLineFen';
 import {
   useMaiaEloDefault,
   deriveRawDefault,
@@ -734,10 +735,18 @@ export default function Analysis() {
   // `enabled` and otherwise passes the position unconditionally, so the run
   // suppression is the sole condition here. See the FAST-FORWARD SUPPRESSION
   // block at the `useStockfishEngine` call above for why the lever is `fen`.
+  // `prefetchFen` (quick 260906-gu2): the next ply on the current line gets
+  // its exact selected-ELO rung inferred right after the live position's (one
+  // ~200 ms wasm inference), so stepping forward lands on a cache hit for the
+  // eval bar and the FlawChess Engine's root policy instead of a fresh
+  // inference. Computed inline (a string, cheap O(mainline) lookup) — this
+  // component sits at its max-statements/complexity baseline. Needs no
+  // fast-forward gate of its own: the hook never prefetches while `fen` is null.
   const maia = useMaiaEngine({
     fen: fastForwardRunning ? null : position,
     enabled: maiaEnabled,
     selectedElo,
+    prefetchFen: nextLineFen(nodes, currentNodeId, mainLine),
   });
 
   // Phase 159 D-08 (Thread A): session-only policy-temperature state, plain

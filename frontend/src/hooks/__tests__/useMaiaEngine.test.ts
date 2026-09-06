@@ -8,7 +8,8 @@
  * 1. Idle (no lease) until enabled.
  * 2. Lease acquisition with source 'maia-worker' and the requested priority.
  * 3. isReady flips false->true once the lease's whenReady() resolves.
- * 4. Adaptive debounce: settled FEN fires analyze with the full MAIA_ELO_LADDER.
+ * 4. Adaptive debounce: settled FEN fires analyze with the exact selectedElo rung first
+ *    (quick 260906-gu2 two-phase ladder), then the remaining ladder rungs.
  * 5. Rapid successive FEN changes coalesce to one analyze for the final FEN.
  * 6. Stale-result discard: a result for a superseded FEN is ignored.
  * 7. Cache hit for a previously-seen FEN skips a second lease round-trip.
@@ -24,7 +25,7 @@ import { useMaiaEngine } from '../useMaiaEngine';
 import { MAIA_ELO_LADDER, POLICY_VOCAB_SIZE } from '../../lib/maiaEncoding';
 import { acquireMaiaWorker } from '../../lib/engine/maiaWorkerHost';
 import type { AcquireMaiaWorkerOptions, MaiaAnalyzeResult, MaiaWorkerLease } from '../../lib/engine/maiaWorkerHost';
-import { getCachedPolicy, clearMaiaPolicyCache } from '../../lib/engine/maiaPolicyCache';
+import { getCachedPolicy, getPendingPolicy, clearMaiaPolicyCache } from '../../lib/engine/maiaPolicyCache';
 
 vi.mock('../../lib/engine/maiaWorkerHost', () => ({
   acquireMaiaWorker: vi.fn(),
@@ -110,12 +111,12 @@ function analyzeMessages(lease: FakeLease): { fen: string; eloInputs: number[] }
 }
 
 /** Builds a synthetic host analyze() result for the given FEN (all-zero logits). */
-function buildResultMessage(fen: string): MaiaAnalyzeResult {
-  const rawPolicyByElo = MAIA_ELO_LADDER.map((elo) => ({
+function buildResultMessage(fen: string, elos: readonly number[] = MAIA_ELO_LADDER): MaiaAnalyzeResult {
+  const rawPolicyByElo = elos.map((elo) => ({
     elo,
     policy: new Float32Array(POLICY_VOCAB_SIZE),
   }));
-  const wdlByElo = MAIA_ELO_LADDER.map((elo) => ({ elo, wdl: Float32Array.from([0, 0, 0]) }));
+  const wdlByElo = elos.map((elo) => ({ elo, wdl: Float32Array.from([0, 0, 0]) }));
   return { fen, rawPolicyByElo, wdlByElo, backend: 'wasm' };
 }
 
@@ -168,18 +169,167 @@ describe('useMaiaEngine', () => {
     expect(result.current.isReady).toBe(true);
   });
 
-  it('settled FEN fires analyze with the full ELO ladder once ready', async () => {
+  it('settled FEN fires analyze with the exact selectedElo rung first (quick 260906-gu2), then the remaining ladder', async () => {
     vi.advanceTimersByTime(200); // Date.now() >> 0 so the first FEN is a "settled move".
-    renderHook(() => useMaiaEngine({ fen: TEST_FEN, enabled: true, selectedElo: 1500 }));
+    const { result } = renderHook(() => useMaiaEngine({ fen: TEST_FEN, enabled: true, selectedElo: 1550 }));
     await driveReady(currentLease);
     await act(async () => {
       await vi.advanceTimersByTimeAsync(200);
     });
 
-    const msgs = analyzeMessages(currentLease);
+    let msgs = analyzeMessages(currentLease);
     expect(msgs).toHaveLength(1);
     expect(msgs[0]?.fen).toBe(TEST_FEN);
-    expect(msgs[0]?.eloInputs).toEqual(MAIA_ELO_LADDER);
+    expect(msgs[0]?.eloInputs).toEqual([1550]);
+    // The exact rung is registered as pending so maiaQueue.policy() can await it.
+    expect(getPendingPolicy(TEST_FEN, 1550)).toBeInstanceOf(Promise);
+    expect(result.current.isAnalyzing).toBe(true);
+
+    // Phase 1 lands: wdl is available, the chart (perElo) is still empty.
+    await act(async () => {
+      currentLease.latestAnalyzeCall()?.resolve(buildResultMessage(TEST_FEN, [1550]));
+      await Promise.resolve();
+    });
+    expect(result.current.wdl).not.toBeNull();
+    expect(result.current.resultFen).toBe(TEST_FEN);
+    expect(result.current.perElo).toHaveLength(0);
+    expect(getPendingPolicy(TEST_FEN, 1550)).toBeUndefined();
+    expect(getCachedPolicy(TEST_FEN, 1550)).toBeDefined();
+
+    // Phase 3 (no prefetchFen given): every ladder rung, nothing already held.
+    msgs = analyzeMessages(currentLease);
+    expect(msgs).toHaveLength(2);
+    expect(msgs[1]?.fen).toBe(TEST_FEN);
+    expect(msgs[1]?.eloInputs).toEqual(MAIA_ELO_LADDER);
+    expect(result.current.isAnalyzing).toBe(true);
+
+    await resolveLatest(currentLease, TEST_FEN);
+    expect(result.current.perElo.length).toBe(MAIA_ELO_LADDER.length);
+    expect(result.current.isAnalyzing).toBe(false);
+    expect(analyzeMessages(currentLease)).toHaveLength(2);
+  });
+
+  it('a selectedElo that IS a ladder rung is excluded from the ladder request (already held)', async () => {
+    vi.advanceTimersByTime(200);
+    renderHook(() => useMaiaEngine({ fen: TEST_FEN, enabled: true, selectedElo: 1500 }));
+    await driveReady(currentLease);
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(200);
+    });
+    expect(analyzeMessages(currentLease)[0]?.eloInputs).toEqual([1500]);
+    await act(async () => {
+      currentLease.latestAnalyzeCall()?.resolve(buildResultMessage(TEST_FEN, [1500]));
+      await Promise.resolve();
+    });
+    const ladderMsg = analyzeMessages(currentLease)[1];
+    expect(ladderMsg?.eloInputs).toEqual(MAIA_ELO_LADDER.filter((elo) => elo !== 1500));
+  });
+
+  it('prefetchFen: the next ply\'s exact rung is inferred between phase 1 and the ladder, and stepping onto it is a cache hit', async () => {
+    vi.advanceTimersByTime(200);
+    const { rerender, result } = renderHook(
+      ({ fen, prefetchFen }: { fen: string; prefetchFen: string }) =>
+        useMaiaEngine({ fen, enabled: true, selectedElo: 1550, prefetchFen }),
+      { initialProps: { fen: TEST_FEN, prefetchFen: TEST_FEN_2 } },
+    );
+    await driveReady(currentLease);
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(200);
+    });
+    expect(analyzeMessages(currentLease)).toEqual([{ fen: TEST_FEN, eloInputs: [1550] }]);
+
+    await act(async () => {
+      currentLease.latestAnalyzeCall()?.resolve(buildResultMessage(TEST_FEN, [1550]));
+      await Promise.resolve();
+    });
+    // Prefetch is NOT a live request — isAnalyzing stays false while it runs.
+    expect(analyzeMessages(currentLease)[1]).toEqual({ fen: TEST_FEN_2, eloInputs: [1550] });
+    expect(result.current.isAnalyzing).toBe(false);
+    expect(getPendingPolicy(TEST_FEN_2, 1550)).toBeInstanceOf(Promise);
+
+    await act(async () => {
+      currentLease.latestAnalyzeCall()?.resolve(buildResultMessage(TEST_FEN_2, [1550]));
+      await Promise.resolve();
+    });
+    // The prefetch result is cached (policy cache too) but never painted for the live position.
+    expect(result.current.resultFen).toBe(TEST_FEN);
+    expect(getCachedPolicy(TEST_FEN_2, 1550)).toBeDefined();
+    // Then the live position's ladder.
+    expect(analyzeMessages(currentLease)[2]).toEqual({ fen: TEST_FEN, eloInputs: MAIA_ELO_LADDER });
+    expect(result.current.isAnalyzing).toBe(true);
+    await resolveLatest(currentLease, TEST_FEN);
+
+    // Step forward: wdl for TEST_FEN_2 is available on the very next commit, no exact-rung request.
+    rerender({ fen: TEST_FEN_2, prefetchFen: TEST_FEN });
+    expect(result.current.resultFen).toBe(TEST_FEN_2);
+    expect(result.current.wdl).not.toBeNull();
+    expect(result.current.perElo).toHaveLength(0);
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(200);
+    });
+    // TEST_FEN's ladder is complete, so no prefetch for it — straight to TEST_FEN_2's ladder.
+    const msgs = analyzeMessages(currentLease);
+    expect(msgs).toHaveLength(4);
+    expect(msgs[3]).toEqual({ fen: TEST_FEN_2, eloInputs: MAIA_ELO_LADDER });
+  });
+
+  it('ladderOnly: true requests the plain full ladder in one batch and never prefetches (gem sweep contract)', async () => {
+    vi.advanceTimersByTime(200);
+    const { result } = renderHook(() =>
+      useMaiaEngine({ fen: TEST_FEN, enabled: true, selectedElo: 1550, prefetchFen: TEST_FEN_2, ladderOnly: true }),
+    );
+    await driveReady(currentLease);
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(200);
+    });
+    expect(analyzeMessages(currentLease)).toEqual([{ fen: TEST_FEN, eloInputs: MAIA_ELO_LADDER }]);
+    await resolveLatest(currentLease, TEST_FEN);
+    expect(result.current.perElo.length).toBe(MAIA_ELO_LADDER.length);
+    expect(analyzeMessages(currentLease)).toHaveLength(1);
+  });
+
+  it('a FEN change while the exact rung is in flight re-plans for the new position instead of finishing the old ladder', async () => {
+    vi.advanceTimersByTime(200);
+    const { rerender } = renderHook(
+      ({ fen }: { fen: string }) => useMaiaEngine({ fen, enabled: true, selectedElo: 1550 }),
+      { initialProps: { fen: TEST_FEN } },
+    );
+    await driveReady(currentLease);
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(200);
+    });
+    expect(analyzeMessages(currentLease)).toEqual([{ fen: TEST_FEN, eloInputs: [1550] }]);
+
+    rerender({ fen: TEST_FEN_2 });
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(200);
+    });
+    expect(analyzeMessages(currentLease)).toHaveLength(1); // single in flight — nothing queued
+
+    await act(async () => {
+      currentLease.latestAnalyzeCall()?.resolve(buildResultMessage(TEST_FEN, [1550]));
+      await Promise.resolve();
+    });
+    const msgs = analyzeMessages(currentLease);
+    expect(msgs).toHaveLength(2);
+    expect(msgs[1]).toEqual({ fen: TEST_FEN_2, eloInputs: [1550] });
+  });
+
+  it('a rejected request fails its pending policy entries so an awaiting maiaQueue.policy() can fall back', async () => {
+    vi.advanceTimersByTime(200);
+    renderHook(() => useMaiaEngine({ fen: TEST_FEN, enabled: true, selectedElo: 1550 }));
+    await driveReady(currentLease);
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(200);
+    });
+    const waiter = getPendingPolicy(TEST_FEN, 1550);
+    expect(waiter).toBeInstanceOf(Promise);
+    await act(async () => {
+      currentLease.latestAnalyzeCall()?.reject(new Error('worker died'));
+      await Promise.resolve();
+    });
+    await expect(waiter).rejects.toThrow('worker died');
+    expect(getPendingPolicy(TEST_FEN, 1550)).toBeUndefined();
   });
 
   it('rapid successive FEN changes coalesce — only the final FEN is analyzed', async () => {
