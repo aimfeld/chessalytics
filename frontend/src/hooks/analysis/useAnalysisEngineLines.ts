@@ -423,7 +423,13 @@ export function useAnalysisEngineLines(
   // "not a gem/great" answer — the live classifyGem fallback below is never
   // consulted in that case.
   const qualityBySanWithGem = useMemo<Map<string, MoveQualityEval>>(() => {
-    if (reconciledBestSan === null) return qualityBySan;
+    // WAIT-FOR-COMPLETE (Phase 219-03, D-12, T-219-12): live gem/great
+    // classification must never act on a coarse (11-rung) ladder — with the
+    // old all-or-nothing contract `maia.perElo` was empty until complete, so
+    // the nearestByElo lookup below returned nothing and no gem was ever
+    // assigned from a partial ladder. Preserve that behavior explicitly now
+    // that `perElo` can be non-empty-but-partial.
+    if (reconciledBestSan === null || !maia.isLadderComplete) return qualityBySan;
 
     const onMainlineHere = currentNodeId === null || isOnMainLine(currentNodeId);
     const storedShortCircuit = resolveStoredTierShortCircuit(
@@ -480,6 +486,7 @@ export function useAnalysisEngineLines(
     qualityBySan,
     reconciledBestSan,
     maia.perElo,
+    maia.isLadderComplete,
     pinnedEloForMover,
     position,
     currentNodeId,

@@ -22,6 +22,7 @@ in `YYYY-MM-DD` (Europe/Zurich).
 
 - The Human Move Probability chart is roughly twice as fast on devices without WebGPU, because the browser inference runtime that computes it was returned to a faster earlier version. (Phase 219)
 - The Maia chart is faster on machines without a GPU because the analysis now uses several CPU cores. (Phase 219)
+- The Maia chart now appears almost immediately and sharpens as the remaining ratings finish, instead of staying blank until every rating has been computed. (Phase 219)
 - Practice-bot persona cards now carry a colored border and glow matching each bot's playing style, brightening on hover.
 - Openings, Endgames and Stats now default to rated games against human opponents on a fresh load, matching the population the percentile benchmarks compare against — the Opponent and Rated filters still switch it back to any opponent or any rated status. The Library keeps showing FlawChess practice-bot games and pasted PGNs regardless of those two filters.
 

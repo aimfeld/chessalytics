@@ -244,6 +244,59 @@ describe('MovesByRatingChart', () => {
     expect(el.textContent).toMatch(/Waiting/i);
   });
 
+  // ─── Progressive ladder paint (Phase 219-03, D-11/D-12): the chart is the
+  // PAINT-LIVE consumer group — it draws whatever rungs `perElo` holds, with
+  // no partial-specific branch, and must never be gated on isLadderComplete. ──
+
+  it('renders an 11-rung coarse-pass input identically to a full ladder (no placeholder, no partial-specific branch)', () => {
+    const coarseElos = [600, 800, 1000, 1200, 1400, 1600, 1800, 2000, 2200, 2400, 2600];
+    const coarsePerElo: MoveCurvePoint[] = coarseElos.map((elo) => ({
+      elo,
+      moveProbabilities: { e4: 0.4, 'O-O': 0.3 },
+    }));
+    const shownSans = ['e4', 'O-O'];
+    const qualityBySan = new Map<string, MoveQualityEval>([
+      ['e4', { quality: 'best', evalCp: 20, evalMate: null }],
+      ['O-O', { quality: 'good', evalCp: 15, evalMate: null }],
+    ]);
+    const { container } = render(
+      <MovesByRatingChart
+        perElo={coarsePerElo}
+        playedSan="e4"
+        bestSan="e4"
+        selectedElo={1500}
+        shownSans={shownSans}
+        engineTopLines={[]}
+        qualityBySan={qualityBySan}
+      />,
+    );
+    expect(screen.queryByTestId('moves-by-rating-chart-skeleton')).toBeNull();
+    const lines = container.querySelectorAll('.recharts-line-curve');
+    expect(lines.length).toBe(shownSans.length);
+  });
+
+  it('renders an 11-rung coarse-pass input whose probability maps are all empty (no-legal-moves shape) without throwing', () => {
+    const coarseElos = [600, 800, 1000, 1200, 1400, 1600, 1800, 2000, 2200, 2400, 2600];
+    const coarsePerElo: MoveCurvePoint[] = coarseElos.map((elo) => ({
+      elo,
+      moveProbabilities: {},
+    }));
+    expect(() =>
+      render(
+        <MovesByRatingChart
+          perElo={coarsePerElo}
+          playedSan={null}
+          bestSan={null}
+          selectedElo={1500}
+          shownSans={[]}
+          engineTopLines={[]}
+          qualityBySan={new Map()}
+        />,
+      ),
+    ).not.toThrow();
+    expect(screen.getByTestId('moves-by-rating-chart')).toBeTruthy();
+  });
+
   // ─── G-213-34 (supersedes D-12): the Maia chart skeleton reads no download state ──
 
   it('even while the Maia model asset is actively downloading, the perElo-empty skeleton renders no progress element and no percent text (inverted regression guard)', () => {

@@ -52,17 +52,28 @@ const gradingCalls: GradingCallOptions[] = [];
  *  per-position data, only per-SAN probabilities the test controls).
  *  `ready: false` simulates an inference still in flight — `resultFen` stays
  *  null even once `fen` is set, so a test can observe the fen the hook
- *  DISPATCHED before the mock lets the cascade resolve it and move on. */
+ *  DISPATCHED before the mock lets the cascade resolve it and move on.
+ *  `isLadderComplete` (Phase 219-03, D-12) defaults to mirroring `ready` —
+ *  most tests here don't care about the coarse/fill distinction, only about
+ *  "has the ladder this hook needs landed at all"; the dedicated invariant
+ *  test below overrides it independently of `ready` to prove the C1 guard is
+ *  load-bearing. */
 const maiaState: {
   perElo: { elo: number; moveProbabilities: Record<string, number> }[];
   ready: boolean;
-} = { perElo: [], ready: true };
+  isLadderComplete: boolean | null;
+} = { perElo: [], ready: true, isLadderComplete: null };
 
 vi.mock('@/hooks/useMaiaEngine', () => ({
   useMaiaEngine: (options: MaiaCallOptions) => {
     maiaCalls.push(options);
+    const resultFen = options.fen !== null && maiaState.perElo.length > 0 && maiaState.ready ? options.fen : null;
     return {
       perElo: maiaState.perElo,
+      // null (the default) means "mirror resultFen" — the ordinary complete-
+      // ladder case every pre-219-03 test exercises; a test may override with
+      // an explicit true/false to simulate a coarse-only (partial) result.
+      isLadderComplete: maiaState.isLadderComplete ?? resultFen !== null,
       expectedScoreAtSelectedElo: null,
       wdl: null,
       isReady: true,
@@ -71,7 +82,7 @@ vi.mock('@/hooks/useMaiaEngine', () => ({
       // WR-03 mock convention (mirrors Analysis.test.tsx): a completed result
       // is "for" whatever fen was requested, once the stub curve is non-empty
       // AND the test has flipped `ready` (simulating inference completion).
-      resultFen: options.fen !== null && maiaState.perElo.length > 0 && maiaState.ready ? options.fen : null,
+      resultFen,
     };
   },
 }));
@@ -144,6 +155,7 @@ describe('useGemSweep', () => {
     // for tests that don't care about a full C1-pass -> C2 round trip).
     maiaState.perElo = [{ elo: 1500, moveProbabilities: { e4: 0.9 } }];
     maiaState.ready = true;
+    maiaState.isLadderComplete = null;
     gradingState.gradeMap = new Map();
     gradingState.isGrading = false;
     gradingState.ready = true;
@@ -196,6 +208,24 @@ describe('useGemSweep', () => {
       expect(result.current.gemByPly.get(0)).toBeNull();
     });
 
+    expect(gradingCalls.every((c) => c.fen === null)).toBe(true);
+  });
+
+  it('LOAD-BEARING (T-219-12, Phase 219-03 D-12): an 11-rung coarse result whose FEN matches the sweep\'s parent FEN does NOT advance past the Maia stage', async () => {
+    const c0 = candidate(0);
+    // Would pass C1 (<= GEM_MAIA_MAX_PROB) and would reach grading if the
+    // guard were absent — resultFen already matches parentFen (ready: true),
+    // but isLadderComplete is explicitly false (a coarse-only result).
+    maiaState.perElo = [{ elo: 1500, moveProbabilities: { e4: 0.05 } }];
+    maiaState.ready = true;
+    maiaState.isLadderComplete = false;
+
+    renderHook((props: UseGemSweepOptions) => useGemSweep(props), {
+      initialProps: baseOptions({ candidates: [c0] }),
+    });
+
+    // Give the effect a real chance to fire (it would, without the guard).
+    await new Promise((resolve) => setTimeout(resolve, 50));
     expect(gradingCalls.every((c) => c.fen === null)).toBe(true);
   });
 

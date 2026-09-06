@@ -4,14 +4,14 @@ milestone: v2.16
 current_phase: 219
 current_phase_name: maia-chart-latency-ort-repin-cross-origin-isolation-progressive-ladder
 status: executing
-stopped_at: Completed 219-01-PLAN.md (onnxruntime-web 1.27.0 re-pin, benchmark gate, dev-only timing instrumentation), squash-merged to main at 52fb1ad87
-last_updated: "2026-09-06T12:37:33.709Z"
-state_head: 52fb1ad8728e426bc1c6f32d8e9a783a807e6121
+stopped_at: Completed 219-02-PLAN.md (squash-merged to main at cb3d7549a)
+last_updated: "2026-09-06T13:10:26.539Z"
+state_head: cb3d7549a294eceea4299f3f4d448ef54b7c18f9
 progress:
   total_phases: 1
   completed_phases: 0
   total_plans: 3
-  completed_plans: 1
+  completed_plans: 2
 milestone_name: Audit Hardening & Dependency Currency
 last_activity: 2026-09-06
 last_activity_desc: Completed quick task 260906-i5e — FlawChess Engine card header shows a running node count (main at 1b5060661, unreleased)
@@ -22,9 +22,9 @@ last_activity_desc: Completed quick task 260906-i5e — FlawChess Engine card he
 ## Current Position
 
 Phase: 219 (Maia Chart Latency — ORT 1.27 Re-pin, Cross-Origin Isolation & Progressive Ladder Paint)
-Plan: 2 of 3 in current phase
+Plan: 3 of 3 in current phase
 
-Status: executing
+Status: Ready to execute
 
 Open threads carried forward (not blockers):
 
@@ -704,6 +704,8 @@ v1.29 Live-Engine Analysis Page shipped 2026-06-29 — 5 phases (136–140), 14 
 - [Phase 218]: Checkpoint answered proceed: native onnxruntime 1.29.0 clean pass on both Python and Node, phase continues to 218-02/218-03
 - [Phase 219]: 219-01: Re-pinned onnxruntime-web 1.29.0 -> 1.27.0 (exact string), re-vendored all six runtime files byte-identical, bumped ENGINE_ASSET_CACHE_VERSION 3->4 in the same commit. — 1.29.0's wasm build measured 1.5-2.3x slower single-threaded with no thread-scaling gain on the reference box; 1.27.0 is the last version this codebase ran on before the regression.
 - [Phase 219]: 219-01: Added scripts/bench_maia_ort_wasm.mjs as a documented manual gate (not CI) and a renovate.json rule isolating onnxruntime-web into its own PR. — Timing on shared CI runners is noise (manual gate instead); the existing grouped minor/patch Renovate rule was the real risk of a silent future regression, not automerge (which this repo does not use).
+- [Phase 219]: D-05/D-06/D-07/D-08/D-09 implemented per 219-CONTEXT.md; COOP/COEP site-wide, Umami CORP + crossorigin attribute, inverted CI guard, fail-safe wasm thread count, retired rationale scrubbed
+- [Phase 219]: Executor had no claude-in-chrome tool — all six D-10 UAT legs and wave-2 D-15 numbers recorded pending in 219-UAT.md, not fabricated; orchestrator to complete via browser pass
 
 ### Pending Todos
 
@@ -862,9 +864,9 @@ Items acknowledged and deferred at **v1.29 milestone close on 2026-06-29** (user
 
 ## Session Continuity
 
-**Stopped at:** Completed 219-01-PLAN.md (onnxruntime-web 1.27.0 re-pin, benchmark gate, dev-only timing instrumentation), squash-merged to main at 52fb1ad87
+**Stopped at:** Completed 219-02-PLAN.md (squash-merged to main at cb3d7549a)
 
-**Last session:** 2026-09-06T12:37:33.644Z
+**Last session:** 2026-09-06T13:10:26.471Z
 
 **Resume file:** None
 
@@ -1030,6 +1032,7 @@ Items acknowledged and deferred at **v1.29 milestone close on 2026-06-29** (user
 | Phase 217 P02 | ~15min+checkpoint | 5 tasks | 17 files |
 | Phase 218 P01 | 8min | 3 tasks | 7 files |
 | Phase 219 P01 | 19min | 4 tasks | 14 files |
+| Phase 219 P02 | 15min | 4 tasks | 13 files |
 
 ## Performance Metrics
 

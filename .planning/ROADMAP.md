@@ -255,7 +255,7 @@ Plans:
 
 **Wave 2** *(blocked on Wave 1 completion)*
 
-- [ ] 219-02-PLAN.md — COOP/COEP site-wide (Caddy + Vite), CORP on the analytics host, inverted CI guard, fail-safe wasm thread count (MAIAPERF-03/04/05/07)
+- [x] 219-02-PLAN.md — COOP/COEP site-wide (Caddy + Vite), CORP on the analytics host, inverted CI guard, fail-safe wasm thread count (MAIAPERF-03/04/05/07)
 
 **Wave 3** *(blocked on Wave 2 completion)*
 

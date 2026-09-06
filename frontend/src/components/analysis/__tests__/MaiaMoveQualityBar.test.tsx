@@ -71,6 +71,7 @@ describe('MaiaMoveQualityBar', () => {
         shownSans={['Ra8', 'g4', 'Rb1', 'Ra5']}
         qualityBySan={QUALITY}
         mover="white"
+        isLadderComplete={true}
       />,
     );
     expect(screen.getByTestId('maia-move-quality-bar')).toBeTruthy();
@@ -89,9 +90,40 @@ describe('MaiaMoveQualityBar', () => {
         shownSans={[]}
         qualityBySan={new Map()}
         mover="white"
+        isLadderComplete={true}
       />,
     );
     expect(container.firstChild).toBeNull();
+  });
+
+  it('LOAD-BEARING (T-219-14, Phase 219-03 D-12): an 11-rung coarse result (isLadderComplete: false) never reaches the verdict/buckets — the frozen ref stays at its empty starting value', () => {
+    const { container, rerender } = render(
+      <MaiaMoveQualityBar
+        perElo={PER_ELO}
+        selectedElo={1500}
+        shownSans={['Ra8', 'g4', 'Rb1', 'Ra5']}
+        qualityBySan={QUALITY}
+        mover="white"
+        isLadderComplete={false}
+      />,
+    );
+    // Never acted on — the frozen ref is still [], so totalMass <= 0 and the
+    // component renders nothing, exactly like the perElo=[] case above.
+    expect(container.firstChild).toBeNull();
+
+    // The SAME perElo, now marked complete, is picked up on this render.
+    rerender(
+      <MaiaMoveQualityBar
+        perElo={PER_ELO}
+        selectedElo={1500}
+        shownSans={['Ra8', 'g4', 'Rb1', 'Ra5']}
+        qualityBySan={QUALITY}
+        mover="white"
+        isLadderComplete={true}
+      />,
+    );
+    expect(screen.getByTestId('maia-move-quality-bar')).toBeTruthy();
+    expect(screen.getByTestId('maia-position-verdict')).toBeTruthy();
   });
 
   it('reveals only the hovered segment\'s moves and lifts them for board arrows', () => {
@@ -103,6 +135,7 @@ describe('MaiaMoveQualityBar', () => {
         shownSans={['Ra8', 'g4', 'Rb1', 'Ra5']}
         qualityBySan={QUALITY}
         mover="white"
+        isLadderComplete={true}
         onHoverMovesChange={onHover}
       />,
     );
@@ -133,6 +166,7 @@ describe('MaiaMoveQualityBar', () => {
         shownSans={['Ra8', 'g4', 'Rb1', 'Ra5']}
         qualityBySan={new Map()}
         mover="white"
+        isLadderComplete={true}
       />,
     );
     expect(screen.getByTestId('maia-quality-hovered-list').textContent).toMatch(/Hover a segment/);
@@ -147,6 +181,7 @@ describe('MaiaMoveQualityBar', () => {
         shownSans={['g4', 'Rb1']}
         qualityBySan={grade({ g4: 'blunder', Rb1: 'blunder' })}
         mover="white"
+        isLadderComplete={true}
       />,
     );
     fireEvent.mouseEnter(screen.getByTestId('maia-quality-segment-blunder'));
@@ -163,6 +198,7 @@ describe('MaiaMoveQualityBar', () => {
         shownSans={['Ra8', 'g4', 'Rb1', 'Ra5']}
         qualityBySan={winningQuality()}
         mover="white"
+        isLadderComplete={true}
       />,
     );
     const you = screen.getByTestId('maia-position-verdict').textContent ?? '';
@@ -176,6 +212,7 @@ describe('MaiaMoveQualityBar', () => {
         shownSans={['Ra8', 'g4', 'Rb1', 'Ra5']}
         qualityBySan={winningQuality()}
         mover="white"
+        isLadderComplete={true}
         isOpponentToMove
       />,
     );
@@ -190,6 +227,7 @@ describe('MaiaMoveQualityBar', () => {
         shownSans={['Ra8', 'g4', 'Rb1', 'Ra5']}
         qualityBySan={QUALITY}
         mover="white"
+        isLadderComplete={true}
       />,
     );
     const move = screen.getByTestId('maia-prose-move-g4');
@@ -212,6 +250,7 @@ describe('MaiaMoveQualityBar', () => {
         shownSans={['Ra8', 'g4', 'Rb1', 'Ra5']}
         qualityBySan={QUALITY}
         mover="white"
+        isLadderComplete={true}
         onPlayMove={onPlayMove}
       />,
     );
@@ -233,6 +272,7 @@ describe('MaiaMoveQualityBar', () => {
         shownSans={['Ra8', 'g4', 'Rb1', 'Ra5']}
         qualityBySan={QUALITY}
         mover="white"
+        isLadderComplete={true}
         onPlayMove={onPlayMove}
       />,
     );
@@ -258,6 +298,7 @@ describe('MaiaMoveQualityBar — standing+difficulty prose rewrite (quick 260709
         shownSans={['Qxc1', 'Bad1']}
         qualityBySan={grades}
         mover="black"
+        isLadderComplete={true}
       />,
     );
     const sentence = screen.getByTestId('maia-position-verdict').textContent ?? '';
@@ -278,6 +319,7 @@ describe('MaiaMoveQualityBar — standing+difficulty prose rewrite (quick 260709
         shownSans={['Qxc1', 'Good1']}
         qualityBySan={grades}
         mover="white"
+        isLadderComplete={true}
       />,
     );
     const sentence = screen.getByTestId('maia-position-verdict').textContent ?? '';
@@ -298,6 +340,7 @@ describe('MaiaMoveQualityBar — standing+difficulty prose rewrite (quick 260709
         shownSans={['Qxc1', 'Good1']}
         qualityBySan={grades}
         mover="white"
+        isLadderComplete={true}
       />,
     );
     const sentence = screen.getByTestId('maia-position-verdict').textContent ?? '';
@@ -317,6 +360,7 @@ describe('MaiaMoveQualityBar — standing+difficulty prose rewrite (quick 260709
         shownSans={['Qxc1', 'Good1']}
         qualityBySan={grades}
         mover="white"
+        isLadderComplete={true}
       />,
     );
     const sentence = screen.getByTestId('maia-position-verdict').textContent ?? '';
@@ -332,6 +376,7 @@ describe('MaiaMoveQualityBar — standing+difficulty prose rewrite (quick 260709
         shownSans={['Ra8', 'g4', 'Rb1', 'Ra5']}
         qualityBySan={winningQuality()}
         mover="white"
+        isLadderComplete={true}
       />,
     );
     const sentence = screen.getByTestId('maia-position-verdict').textContent ?? '';
@@ -357,6 +402,7 @@ describe('MaiaMoveQualityBar — standing+difficulty prose rewrite (quick 260709
         shownSans={['Escape1', 'Bad1', 'Bad2', 'Bad3']}
         qualityBySan={grades}
         mover="white"
+        isLadderComplete={true}
       />,
     );
     const sentence = screen.getByTestId('maia-position-verdict').textContent ?? '';
@@ -373,6 +419,7 @@ describe('MaiaMoveQualityBar — standing+difficulty prose rewrite (quick 260709
         shownSans={['Ra8', 'g4', 'Rb1', 'Ra5']}
         qualityBySan={QUALITY}
         mover="white"
+        isLadderComplete={true}
       />,
     );
     const sentence = screen.getByTestId('maia-position-verdict').textContent ?? '';
@@ -394,6 +441,7 @@ describe('MaiaMoveQualityBar — standing+difficulty prose rewrite (quick 260709
         shownSans={['Good1']}
         qualityBySan={grades}
         mover="white"
+        isLadderComplete={true}
       />,
     );
     const sentence = screen.getByTestId('maia-position-verdict').textContent ?? '';
@@ -414,6 +462,7 @@ describe('MaiaMoveQualityBar — standing+difficulty prose rewrite (quick 260709
         shownSans={['Qxc1', 'Bad1']}
         qualityBySan={grades}
         mover="black"
+        isLadderComplete={true}
       />,
     );
     const sentence = screen.getByTestId('maia-position-verdict').textContent ?? '';
@@ -433,6 +482,7 @@ describe('MaiaMoveQualityBar — standing+difficulty prose rewrite (quick 260709
         shownSans={['Qxc1', 'Bad1']}
         qualityBySan={grades}
         mover="black"
+        isLadderComplete={true}
       />,
     );
     const label = screen.getByTestId('maia-prose-move-Qxc1').getAttribute('aria-label') ?? '';

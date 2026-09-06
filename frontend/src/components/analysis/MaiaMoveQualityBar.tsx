@@ -90,6 +90,14 @@ const MIN_INLINE_LABEL_PCT = 12;
 export interface MaiaMoveQualityBarProps {
   /** useMaiaEngine's perElo (same value the chart receives); [] renders nothing. */
   perElo: MoveCurvePoint[];
+  /**
+   * useMaiaEngine's isLadderComplete (Phase 219-03, D-12). This component is a
+   * WAIT-FOR-COMPLETE consumer: the position verdict and the quality buckets
+   * must never flip from a coarse (11-rung) reading to the full 21-rung one,
+   * so the value actually read is frozen in state that only advances when
+   * this flag is true — see `stablePerElo` below.
+   */
+  isLadderComplete: boolean;
   /** The ELO whose Maia probabilities weight the segments (EloSelector's value). */
   selectedElo: number;
   /** The shown candidate set (Analysis.tsx's selectCandidatesByMass output). */
@@ -419,6 +427,7 @@ function renderVerdictSentence(
 
 export function MaiaMoveQualityBar({
   perElo,
+  isLadderComplete,
   selectedElo,
   shownSans,
   qualityBySan,
@@ -434,9 +443,22 @@ export function MaiaMoveQualityBar({
   const [activeProseSan, setActiveProseSan] = useState<string | null>(null);
   const proseHoverTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
 
+  // T-219-14: freeze the ladder this component reads in STATE that only
+  // advances once the FULL ladder has landed — the verdict/buckets can never
+  // flip from a coarse (11-rung) reading to the fine (21-rung) one. `[]`
+  // (unset until the first complete ladder) preserves this component's
+  // existing "renders nothing on first load" behavior by construction — no
+  // separate empty-state branch is needed. Adjusted directly during render
+  // (React's documented "storing information from previous renders"
+  // pattern, https://react.dev/reference/react/useState#storing-information-from-previous-renders)
+  // rather than via a ref, which `react-hooks/refs` (eslint-plugin-react-hooks
+  // 7.1+) now flags as an error when read inside a `useMemo` factory.
+  const [stablePerElo, setStablePerElo] = useState<MoveCurvePoint[]>([]);
+  if (isLadderComplete && stablePerElo !== perElo) setStablePerElo(perElo);
+
   const buckets = useMemo(
-    () => bucketMovesByQuality(perElo, selectedElo, shownSans, qualityBySan),
-    [perElo, selectedElo, shownSans, qualityBySan],
+    () => bucketMovesByQuality(stablePerElo, selectedElo, shownSans, qualityBySan),
+    [stablePerElo, selectedElo, shownSans, qualityBySan],
   );
 
   const totalMass = useMemo(
@@ -445,8 +467,8 @@ export function MaiaMoveQualityBar({
   );
 
   const verdict = useMemo(
-    () => computePositionVerdict(perElo, selectedElo, shownSans, qualityBySan, mover),
-    [perElo, selectedElo, shownSans, qualityBySan, mover],
+    () => computePositionVerdict(stablePerElo, selectedElo, shownSans, qualityBySan, mover),
+    [stablePerElo, selectedElo, shownSans, qualityBySan, mover],
   );
 
   // Single source of truth for the board-arrow overlay: segment hover always

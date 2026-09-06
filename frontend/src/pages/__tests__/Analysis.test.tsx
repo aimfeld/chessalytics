@@ -158,9 +158,15 @@ vi.mock('@/hooks/useStockfishGradingEngine', () => ({
 const maiaState: {
   expectedScoreAtSelectedElo: number | null;
   perElo: { elo: number; moveProbabilities: Record<string, number> }[];
+  /** null (the default) mirrors `perElo.length > 0` — the ordinary complete-
+   *  ladder case almost every test in this file exercises. A test may
+   *  override with an explicit false to simulate a coarse-only (partial)
+   *  result (Phase 219-03, D-12's dedicated invariant test below). */
+  isLadderComplete: boolean | null;
 } = {
   expectedScoreAtSelectedElo: null,
   perElo: [],
+  isLadderComplete: null,
 };
 
 // Phase 172 (SEED-106 D-05): Analysis renders TWO useMaiaEngine instances per
@@ -182,6 +188,12 @@ vi.mock('@/hooks/useMaiaEngine', () => ({
     maiaCalls.push(options);
     return {
       perElo: maiaState.perElo,
+      // Phase 219-03, D-12: by mock convention, a non-empty `perElo` always
+      // represents a COMPLETE ladder (this suite has no coarse/partial
+      // fixtures — that split is covered by useMaiaEngine.test.ts /
+      // MaiaMoveQualityBar.test.tsx / useGemSweep.test.ts's own dedicated
+      // invariant tests), mirroring the existing `resultFen` convention below.
+      isLadderComplete: maiaState.isLadderComplete ?? maiaState.perElo.length > 0,
       expectedScoreAtSelectedElo: maiaState.expectedScoreAtSelectedElo,
       wdl: null,
       isReady: false,
@@ -381,6 +393,7 @@ afterEach(() => {
   engineState.currentFen = null;
   maiaState.expectedScoreAtSelectedElo = null;
   maiaState.perElo = [];
+  maiaState.isLadderComplete = null;
   flawChessState.rankedLines = [];
   flawChessState.isSearching = false;
   flawChessState.isReady = true;
@@ -1371,6 +1384,19 @@ describe('Gem moves (Phase 163, SEED-092)', () => {
 
     expect(boardGemMarkerPresent()).toBe(true);
     expect(moveListGemIconPresent()).toBe(true);
+  });
+
+  it('LOAD-BEARING (T-219-13, Phase 219-03 D-12): an 11-rung coarse curve at the PARENT position is never written into maiaCurveByFen, so the same move never classifies as a gem', () => {
+    seedGemGrading('Nf3', 'd4');
+    // Simulate the coarse-only shape: perElo is non-empty (would have passed
+    // the retired `perElo.length === 0` proxy) but isLadderComplete is false.
+    maiaState.isLadderComplete = false;
+
+    renderAnalysis();
+    playMove('g1', 'f3');
+
+    expect(boardGemMarkerPresent()).toBe(false);
+    expect(moveListGemIconPresent()).toBe(false);
   });
 
   it('move-list gem badge popover explains the rule and cites the ELO + Maia probability (follow-on)', async () => {
