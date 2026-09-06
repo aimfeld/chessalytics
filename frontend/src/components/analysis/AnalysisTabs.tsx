@@ -356,6 +356,9 @@ export type FlawChessCardProps = {
   flawChessLoading: boolean;
   reconciledRankedLines: RankedLine[];
   flawChessIsSearching: boolean;
+  /** Running MCTS expansion count for the current position (quick 260906-i5e);
+   *  0 until the first snapshot lands, resets on every FEN change. */
+  flawChessNodesEvaluated: number;
   position: string;
   currentPly: number;
   boardFlipped: boolean;
@@ -386,6 +389,7 @@ export function FlawChessCard({
   flawChessLoading,
   reconciledRankedLines,
   flawChessIsSearching,
+  flawChessNodesEvaluated,
   position,
   currentPly,
   boardFlipped,
@@ -413,9 +417,13 @@ export function FlawChessCard({
           ariaLabel="Toggle FlawChess Engine"
           icon={ChessKnight}
         >
-          {/* ELO in parens = the mover's rating (or the slider override), the
-              strength the engine is playing at (155 UAT). */}
-          FlawChess Engine ({selectedElo} ELO)
+          {/* ELO = the mover's rating (or the slider override), the strength the
+              engine is playing at (155 UAT). Nodes = the running MCTS expansion
+              count for this position (quick 260906-i5e), the FlawChess analogue of
+              the Stockfish card's "Depth N" — same `> 0` gate, so it stays hidden
+              until the first snapshot lands and disappears on every FEN change. */}
+          FlawChess, {selectedElo} ELO
+          {flawChessEnabled && flawChessNodesEvaluated > 0 ? `, ${flawChessNodesEvaluated} Nodes` : ''}
         </EngineToggleHeader>
         <FlawChessInfoTooltip />
       </CardHeader>

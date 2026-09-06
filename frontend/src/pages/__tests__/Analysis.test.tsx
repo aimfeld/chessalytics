@@ -211,6 +211,8 @@ const flawChessState: {
   }[];
   isSearching: boolean;
   isReady: boolean;
+  /** Quick 260906-i5e: the running expansion count the card header renders. */
+  nodesEvaluated: number;
   /** WR-01 (196-REVIEW.md): the FEN `rankedLines` currently belongs to.
    *  `null` (the default) mirrors whichever `fen` the mocked hook was called
    *  with — see `useStockfishEngine`'s identical mock override above for the
@@ -220,6 +222,7 @@ const flawChessState: {
   rankedLines: [],
   isSearching: false,
   isReady: true,
+  nodesEvaluated: 0,
   currentFen: null,
 };
 
@@ -237,7 +240,7 @@ vi.mock('@/hooks/useFlawChessEngine', () => ({
     flawChessCalls.push({ extraRootMoves: options.extraRootMoves });
     return {
       rankedLines: flawChessState.rankedLines,
-      nodesEvaluated: 0,
+      nodesEvaluated: flawChessState.nodesEvaluated,
       budgetExhausted: false,
       isSearching: flawChessState.isSearching,
       isReady: flawChessState.isReady,
@@ -381,6 +384,7 @@ afterEach(() => {
   flawChessState.rankedLines = [];
   flawChessState.isSearching = false;
   flawChessState.isReady = true;
+  flawChessState.nodesEvaluated = 0;
   flawChessState.currentFen = null;
   gradingState.gradeMap = new Map();
   gradingState.isGrading = false;
@@ -750,6 +754,33 @@ describe('Maia eval bar perspective (151.1 UAT regression)', () => {
     fireEvent.click(screen.getByTestId('btn-analysis-flawchess-toggle'));
 
     expect(maiaWhiteFillPercent()).toBeCloseTo(80, 1);
+  });
+});
+
+describe('FlawChess Engine card header node count (quick 260906-i5e)', () => {
+  it('reads "FlawChess, <elo> ELO, <n> Nodes" while the engine is on and nodes have landed', () => {
+    flawChessState.nodesEvaluated = 137;
+    renderAnalysis();
+
+    const header = screen.getByTestId('analysis-flawchess-info').textContent ?? '';
+    expect(header).toMatch(/FlawChess, \d+ ELO, 137 Nodes/);
+  });
+
+  it('omits the node suffix before the first snapshot lands (0 nodes), mirroring the Stockfish "Depth" gate', () => {
+    flawChessState.nodesEvaluated = 0;
+    renderAnalysis();
+
+    const header = screen.getByTestId('analysis-flawchess-info').textContent ?? '';
+    expect(header).toMatch(/FlawChess, \d+ ELO/);
+    expect(header).not.toContain('Nodes');
+  });
+
+  it('omits the node suffix when the engine is toggled off', () => {
+    flawChessState.nodesEvaluated = 137;
+    renderAnalysis();
+    fireEvent.click(screen.getByTestId('btn-analysis-flawchess-toggle'));
+
+    expect(screen.getByTestId('analysis-flawchess-info').textContent).not.toContain('Nodes');
   });
 });
 

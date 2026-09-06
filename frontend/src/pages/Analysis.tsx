@@ -2192,6 +2192,7 @@ export default function Analysis() {
     flawChessLoading,
     reconciledRankedLines,
     flawChessIsSearching: flawChessEngine.isSearching,
+    flawChessNodesEvaluated: flawChessEngine.nodesEvaluated,
     position,
     currentPly,
     boardFlipped,
