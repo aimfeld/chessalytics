@@ -526,6 +526,69 @@ describe('maiaWorkerHost', () => {
     expect(getEngineAssetsSnapshot().status).not.toBe('unsupported');
   });
 
+  // ─── Hotfix 2026-09-06 (SEED-158): iOS WebKit -> zero Workers, ever ──────
+
+  const IPHONE_UA =
+    'Mozilla/5.0 (iPhone; CPU iPhone OS 18_7 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/18.7 Mobile/15E148 Safari/604.1';
+  const IPAD_DESKTOP_MODE_UA =
+    'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/18.7 Safari/605.1.15';
+  const IPAD_TOUCH_POINTS = 5;
+
+  it('an iPhone never constructs a Worker, fetches no runtime, and the store reports unsupported with the ios-webkit reason', async () => {
+    vi.stubGlobal('navigator', { userAgent: IPHONE_UA, platform: 'iPhone', maxTouchPoints: IPAD_TOUCH_POINTS });
+    const info = vi.spyOn(console, 'info').mockImplementation(() => {});
+
+    const lease = acquireMaiaWorker({ source: 'maia-worker', priority: true });
+    const ready = lease.whenReady();
+
+    expect(createdWorkers).toHaveLength(0);
+    expect(vi.mocked(ensureOrtRuntime)).not.toHaveBeenCalled();
+    expect(vi.mocked(fetchWasmOnlyOrtRuntime)).not.toHaveBeenCalled();
+    expect(getEngineAssetsSnapshot().status).toBe('unsupported');
+    expect(getEngineAssetsSnapshot().unsupportedReason).toBe('ios-webkit');
+    // Rejected with the 'unsupported' marker so useFlawChessEngine/the gate
+    // do not re-report it — same contract as the SIMD case.
+    await expect(ready).rejects.toMatchObject({ kind: 'unsupported' });
+    // The fallback line for browser UAT (the seed's trigger condition).
+    expect(info).toHaveBeenCalledWith(expect.stringContaining('[maia-worker] iOS WebKit detected'));
+  });
+
+  it('an iPad in desktop-site mode (macOS UA + touch points) is gated the same way', () => {
+    vi.stubGlobal('navigator', {
+      userAgent: IPAD_DESKTOP_MODE_UA,
+      platform: 'MacIntel',
+      maxTouchPoints: IPAD_TOUCH_POINTS,
+    });
+    vi.spyOn(console, 'info').mockImplementation(() => {});
+
+    const lease = acquireMaiaWorker({ source: 'maia-worker', priority: true });
+    void lease.whenReady().catch(() => {});
+
+    expect(createdWorkers).toHaveLength(0);
+    expect(getEngineAssetsSnapshot().unsupportedReason).toBe('ios-webkit');
+  });
+
+  it('a real Mac (same UA, zero touch points) DOES construct a Worker — proves the iPad tell is the touch count', () => {
+    vi.stubGlobal('navigator', { userAgent: IPAD_DESKTOP_MODE_UA, platform: 'MacIntel', maxTouchPoints: 0 });
+
+    const lease = acquireMaiaWorker({ source: 'maia-worker', priority: true });
+    void lease.whenReady();
+
+    expect(createdWorkers).toHaveLength(1);
+    expect(getEngineAssetsSnapshot().status).not.toBe('unsupported');
+  });
+
+  it('the SIMD probe wins over the iOS gate when both apply (a no-SIMD iOS device reports no-wasm-simd)', () => {
+    vi.spyOn(WebAssembly, 'validate').mockReturnValue(false);
+    vi.stubGlobal('navigator', { userAgent: IPHONE_UA, platform: 'iPhone', maxTouchPoints: IPAD_TOUCH_POINTS });
+
+    const lease = acquireMaiaWorker({ source: 'maia-worker', priority: true });
+    void lease.whenReady().catch(() => {});
+
+    expect(createdWorkers).toHaveLength(0);
+    expect(getEngineAssetsSnapshot().unsupportedReason).toBe('no-wasm-simd');
+  });
+
   // ─── Phase 213-04 D-14/D-15: failure routing into engineAssetProgress ────
 
   it('a pre-ready error (second consecutive fetch failure) marks the store failed', () => {
