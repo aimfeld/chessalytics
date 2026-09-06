@@ -16,16 +16,19 @@
  * `JSC::Wasm::parseAndCompileOMG` on the same kind of workload). Not
  * controllable from the page.
  *
- * WebGPU on the same device is FINE (same day, same phone, iOS 26 Safari:
- * `navigator.gpu` in the worker, `shader-f16` present, the real
- * `maia-worker.js` reached `ready backend=webgpu numThreads=2` and survived
- * 30 consecutive 21-rung ladders at ~510 ms each). So iOS is a WebGPU-ONLY
- * platform for Maia: the host spawns normally when the adapter probe picks
- * `webgpu`, gates Maia off (`unsupported`, reason `'ios-webkit'`) when the
- * probe picks `wasm` (iOS < 26, or no adapter), and turns every
- * WebGPU-failure respawn into that same terminal instead of the fatal wasm
- * replacement. The 2026-09-06 hotfix's blanket "no Maia on iOS" gate is
- * superseded by this narrower rule.
+ * WebGPU on the same device runs the model fine in isolation (same phone,
+ * iOS 26 Safari, /maia-diag.html: `ready backend=webgpu`, 30 consecutive
+ * 21-rung ladders at ~510 ms each), and a WebGPU-only rule shipped on main
+ * for one day (78276d717 .. a4a1f4f6d). It was withdrawn on 2026-09-07: the
+ * REAL /analysis page still gets killed with Maia on WebGPU, one wasm
+ * thread, cross-origin isolated, every Stockfish worker stubbed out and the
+ * FlawChess Engine off, so Maia alone is enough to cross WebKit's per-page
+ * limit there. The last pre-Phase-219 release never ran Maia on this device
+ * either (graceful `oom` terminal), so nothing regressed: iOS has never
+ * carried Maia on /analysis. Hence the blanket gate: `maiaWorkerHost.ts`
+ * reports `unsupported` with reason `'ios-webkit'` for every iOS/iPadOS
+ * device before any probe or download. Narrow it only after a real
+ * /analysis session survives on the reference phone.
  *
  * Every browser on iOS/iPadOS is WebKit (Chrome, Firefox and Brave for iOS
  * wrap WKWebView), so "iOS" is the whole population; there is no

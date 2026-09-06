@@ -1,6 +1,6 @@
 ---
 id: SEED-158
-status: active — iOS /analysis STILL dies with the WebGPU-only gate + single-thread pin (see "Status 2026-09-06 night"); Linux leg resolved; Firefox/Windows Clip shader left as-is
+status: parked — blanket iOS gate restored on main 2026-09-07 (Maia alone kills /analysis on iOS, no earlier build ever ran it there); Linux leg resolved; Firefox/Windows Clip shader left as-is; iOS Maia is NEW work with two concrete suspects (see "Next steps 2026-09-07")
 planted: 2026-08-29
 updated: 2026-09-07 (on-device bisect: Maia ALONE kills /analysis on iOS; the pre-219 build never ran Maia on this phone either (graceful oom); prod with the blanket gate survives. See "Status 2026-09-07")
 planted_during: Sentry triage of the 2026-08-29 18:54 UTC iPad OOM cascade
@@ -10,7 +10,7 @@ re-scoped: 2026-09-06, after the FLAWCHESS-9V root cause was measured on the
   reporter's iPhone 14 Pro and fixed by quick task 260906-p54 (ORT wasm memory
   ceiling 4 GB -> 1 GB). The OOM question below is CLOSED; what remains is why
   WebGPU fails on WebGPU-capable devices and silently costs every user the fast path.
-trigger_when: BEFORE THE NEXT RELEASE (main currently enables Maia on iOS and /analysis dies there); or the console fallback line `[maia-worker] ... WebGPU ... respawn` shows
+trigger_when: when iOS Maia is picked up as scoped work (start at "Next steps 2026-09-07", each step is one dev switch + one phone run); or the console fallback line `[maia-worker] ... WebGPU ... respawn` shows
   up on a device that should run WebGPU (any Windows/macOS Chromium, iOS 26 Safari),
   or the next phase that touches maiaWorkerHost.ts / maia-worker.js backend selection,
   or when Maia chart latency on desktop is revisited (WebGPU is the only lever left
@@ -159,6 +159,34 @@ Tooling added for this (dev server only, `import.meta.env.DEV`): `frontend/src/l
 mirrored into a fixed corner badge (backend, numThreads, crossOriginIsolated). Serving an old commit to the
 phone: `git worktree add ../flawchess-bisect <sha>`, `npm ci`, `npx vite --host --port 5174`,
 `tailscale serve --bg http://127.0.0.1:5174` (restore with 5173), clear the site's data in Safari first.
+
+### Next steps 2026-09-07 (when iOS Maia is picked up again; each is one dev switch + one phone run)
+
+The blanket gate is back in `ensureSpawned()` (`spawn()` iOS branch, before any probe or download) and is
+what ships. The work below is NEW scope, not a fix: nothing on iOS ever ran Maia on /analysis. Rules that
+still hold: only REAL /analysis runs on the reference phone count (the diag page produced three false
+"safe" verdicts); every step reuses the `devEngineSwitches.ts` pattern (`?dev-<switch>=…` persisted in
+localStorage, dev-server only) and the corner badge; clear the site's data in Safari between builds.
+Bypass the gate for these runs with a dev switch (`?dev-ios-gate=off`), never by editing the gate.
+
+1. **Suspect A — main-thread byte copies.** `ensureOrtRuntime()` resolves the 25.7 MB asyncify binary on
+   the main thread (engine asset cache, Cache API write, `ArrayBuffer`, transfer) and the model bytes go
+   through the same layer; the diag page let the worker fetch via `wasmPaths` and survived. Switch:
+   `?dev-maia-runtime=worker` makes the host spawn with `buffer: null` (the existing degraded path: worker
+   resolves `wasmPaths` itself) and skips the model-through-cache path if there is one. If the page
+   survives, the fix is to keep every engine byte off the main thread on iOS (worker-side fetch, no Cache
+   API mirror), which is a small change.
+2. **Suspect B — the 219 ladder workload.** Coarse 11-rung pass + 21-rung fill + next-ply prefetch +
+   policy calls per step, vs. one 21-rung batch pre-219. Switch: `?dev-maia-ladder=single` disables the
+   coarse pass and the prefetch in `useMaiaEngine`. If the page survives, iOS gets the single-pass ladder
+   (a `isIosWebKit()` branch at the two call sites) and stays on WebGPU with one thread.
+3. **If both survive only together, or neither survives:** stop. Record the two cells here, keep the gate,
+   and treat iOS Maia as blocked on WebKit (ORT #26827 / #27584 are the upstream threads to watch). Do
+   not add more diag knobs; the next lever would be a smaller model export, which is a separate seed.
+4. **Whatever ships:** narrow the gate to the measured-safe shape only (e.g. WebGPU + single ladder), keep
+   both `respawnPinnedToWasm` iOS terminals (they are unreachable under the blanket gate but guard any
+   narrowing), and re-run the exact /analysis session on the phone AFTER the squash, from the deployed
+   preview, before the release PR.
 
 ## Status 2026-09-06 night: iOS /analysis is STILL killed. Release blocker.
 

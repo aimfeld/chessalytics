@@ -332,8 +332,7 @@ describe('EngineReadyGate', () => {
     expect(within(gate).queryAllByRole('button')).toHaveLength(0);
     expect(screen.getByTestId('engine-gate-unsupported-ios')).toBeTruthy();
     expect(screen.queryByTestId('engine-gate-unsupported')).toBeNull();
-    expect(gate.textContent).toContain("can't start on this iPhone or iPad");
-    expect(gate.textContent).toContain('iOS 26');
+    expect(gate.textContent).toContain('switched off on iPhone and iPad');
     // Must not claim the device lacks a capability it actually has.
     expect(gate.textContent).not.toContain("doesn't support the technology");
   });
