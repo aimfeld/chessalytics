@@ -183,7 +183,7 @@
 | 216. Audit Bugs and Quick Wins (SEED-161, v2.16) | 7/7 | Complete    | 2026-09-04 |
 | 217. Frontend Major Bumps — Vitest 5 / jsdom 30 + onnxruntime-web 1.29 (SEED-162, v2.16) | 2/2 | Complete    | 2026-09-05 |
 | 218. Backend onnxruntime Parity Spike → Python 3.14 Chain (SEED-162, v2.16) | 3/3 | Complete    | 2026-09-05 |
-| 219. Maia Chart Latency — ORT 1.27 Re-pin, Cross-Origin Isolation & Progressive Ladder Paint (standalone) | 1/3 | In Progress | — |
+| 219. Maia Chart Latency — ORT 1.27 Re-pin, Cross-Origin Isolation & Progressive Ladder Paint (standalone) | 3/3 | Complete    | 2026-09-06 |
 
 ## Active Phases
 
@@ -246,7 +246,7 @@ Requirement definitions (phase-local IDs; no open milestone REQUIREMENTS.md):
 **Out of scope**: multi-threaded Stockfish (seed), ladder redefinition, model quantization,
 WebGPU-path optimisation, IndexedDB model storage.
 
-**Plans:** 3 plans
+**Plans:** 3/3 plans complete
 
 Plans:
 **Wave 1**
@@ -259,7 +259,7 @@ Plans:
 
 **Wave 3** *(blocked on Wave 2 completion)*
 
-- [ ] 219-03-PLAN.md — coarse-then-fill ladder paint, explicit `isLadderComplete`, all eight perElo consumers classified (MAIAPERF-06/07)
+- [x] 219-03-PLAN.md — coarse-then-fill ladder paint, explicit `isLadderComplete`, all eight perElo consumers classified (MAIAPERF-06/07)
 
 **Cross-cutting constraints:**
 

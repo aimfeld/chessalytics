@@ -11,7 +11,13 @@
  *
  * Message protocol (structured objects, not UCI text — this is not Stockfish):
  *   in:  { type: 'init', backend: 'webgpu' | 'wasm', runtimeBuffer?: ArrayBuffer,
- *          assetCacheName?: string, assetVersionQuery?: string }
+ *          assetCacheName?: string, assetVersionQuery?: string, forceSingleThread?: boolean }
+ *                                              // WR-01 (Phase 219 review): `forceSingleThread`,
+ *                                              // when true, pins `ort.env.wasm.numThreads` to 1
+ *                                              // regardless of `chooseWasmThreadCount()` — sent
+ *                                              // by `maiaWorkerHost.ts` on the ONE retry it issues
+ *                                              // after a threaded wasm init timeout (see
+ *                                              // `MAIA_WASM_INIT_TIMEOUT_MS` below).
  *                                              // Phase 213-09 (G-213-35): `backend` is now
  *                                              // REQUIRED — the main thread (`maiaWorkerHost.ts`,
  *                                              // via `ortRuntimeSource.ts`'s WebGPU adapter
@@ -264,9 +270,28 @@ function versionedAssetUrl(path) {
 const MAIA_MAX_WASM_THREADS = 4;
 
 /**
+ * WR-01 (Phase 219 review): with `numThreads > 1`, `InferenceSession.create`
+ * spawns pthread workers from the threaded runtime `.mjs`. If that worker
+ * script's response ever lacks COEP (an HTTP-cached copy, a stripping proxy,
+ * or a browser extension — the DOCUMENT itself stays `crossOriginIsolated`,
+ * so `chooseWasmThreadCount()` cannot detect this), Emscripten waits for the
+ * thread pool forever: `ort.env.wasm.initTimeout` defaulted to `0` (no
+ * timeout), so `create()` never rejected, no `ready`/`error` message was ever
+ * posted, and the user saw a permanent loading state with no Retry (observed
+ * once in 219-UAT.md leg 5). Bounding init lets ORT reject with a
+ * classifiable timeout message instead, which `maiaWorkerHost.ts` treats as
+ * "blocked pthread worker, not a slow device" and retries ONCE pinned to a
+ * single thread (see `forceSingleThread` above).
+ */
+const MAIA_WASM_INIT_TIMEOUT_MS = 20_000;
+
+/**
  * Chooses the wasm thread count for BOTH session-init paths (the wasm-only
  * path in `initWasmOnlySession` and the WebGPU/asyncify path in
- * `initSession`). Returns 1 whenever `self.crossOriginIsolated` is falsy —
+ * `initSession`). `forceSingleThread` (WR-01, Phase 219 review) always wins,
+ * short-circuiting straight to 1 — the host's post-timeout retry sets this so
+ * the replacement worker cannot hit the exact same blocked-pthread hang
+ * again. Otherwise returns 1 whenever `self.crossOriginIsolated` is falsy —
  * the fail-safe for a document that lost the COOP/COEP headers (a proxy, an
  * extension, or a stale service-worker-cached shell from before this phase
  * shipped) so this worker never attempts `SharedArrayBuffer`-backed threading
@@ -274,7 +299,8 @@ const MAIA_MAX_WASM_THREADS = 4;
  * (ceiling), capped at `MAIA_MAX_WASM_THREADS`. `navigator` is read
  * defensively — absent both in a `node:vm` sandbox and on exotic browsers.
  */
-function chooseWasmThreadCount() {
+function chooseWasmThreadCount(forceSingleThread) {
+  if (forceSingleThread) return 1;
   if (!self.crossOriginIsolated) return 1;
   const cores = (self.navigator && self.navigator.hardwareConcurrency) || 1;
   return Math.min(MAIA_MAX_WASM_THREADS, Math.ceil(cores / 2));
@@ -443,9 +469,14 @@ async function fetchModelBuffer(onProgress, assetCacheName) {
  * without a second transferable in the init message (the exact shape that
  * produced `G-213-36`).
  */
-async function initWasmOnlySession(onProgress, runtimeBuffer, assetCacheName) {
+async function initWasmOnlySession(onProgress, runtimeBuffer, assetCacheName, forceSingleThread) {
   importScripts(versionedAssetUrl(WASM_ONLY_RUNTIME_PATH));
-  ort.env.wasm.numThreads = chooseWasmThreadCount(); // Phase 219 D-08: cross-origin isolation now ships site-wide; see chooseWasmThreadCount()'s doc comment
+  ort.env.wasm.numThreads = chooseWasmThreadCount(forceSingleThread); // Phase 219 D-08: cross-origin isolation now ships site-wide; see chooseWasmThreadCount()'s doc comment
+  // WR-01 (Phase 219 review): bounds threaded init so a blocked pthread
+  // worker (missing COEP on the threaded runtime's response) rejects with a
+  // classifiable timeout instead of hanging `create()` forever — see
+  // `MAIA_WASM_INIT_TIMEOUT_MS`'s doc comment.
+  ort.env.wasm.initTimeout = MAIA_WASM_INIT_TIMEOUT_MS;
   // Object form (quick 260905-rhc) — a bare string prefix cannot carry a
   // `?v=` query, since ORT concatenates a bare filename onto it.
   ort.env.wasm.wasmPaths = {
@@ -499,14 +530,17 @@ async function initWasmOnlySession(onProgress, runtimeBuffer, assetCacheName) {
  * stays on its single-thread build regardless: a multi-thread build is a
  * separate, deferred item, not blocked by isolation availability.
  */
-async function initSession(chosenBackend, onProgress, runtimeBuffer, assetCacheName) {
+async function initSession(chosenBackend, onProgress, runtimeBuffer, assetCacheName, forceSingleThread) {
   if (chosenBackend === 'wasm') {
-    await initWasmOnlySession(onProgress, runtimeBuffer, assetCacheName);
+    await initWasmOnlySession(onProgress, runtimeBuffer, assetCacheName, forceSingleThread);
     return { ok: true };
   }
 
   importScripts(versionedAssetUrl(WEBGPU_RUNTIME_PATH));
-  ort.env.wasm.numThreads = chooseWasmThreadCount();
+  ort.env.wasm.numThreads = chooseWasmThreadCount(forceSingleThread);
+  // WR-01 (Phase 219 review): see initWasmOnlySession's comment — the same
+  // blocked-pthread hang risk applies to this asyncify build's thread pool.
+  ort.env.wasm.initTimeout = MAIA_WASM_INIT_TIMEOUT_MS;
   // Object form (quick 260905-rhc) — see initWasmOnlySession's comment.
   ort.env.wasm.wasmPaths = {
     mjs: versionedAssetUrl(ORT_ASYNCIFY_MJS_PATH),
@@ -661,6 +695,7 @@ self.onmessage = async (e) => {
         onProgress,
         msg.runtimeBuffer || null,
         msg.assetCacheName || null,
+        !!msg.forceSingleThread, // WR-01 (Phase 219 review): host's post-timeout single-thread retry
       );
       const outcome = await initPromise;
       if (!outcome.ok) {

@@ -2,16 +2,15 @@
 gsd_state_version: 1.0
 milestone: v2.16
 current_phase: 219
-current_phase_name: maia-chart-latency-ort-repin-cross-origin-isolation-progressive-ladder
-status: executing
-stopped_at: Completed 219-02-PLAN.md (squash-merged to main at cb3d7549a)
-last_updated: "2026-09-06T13:10:26.539Z"
-state_head: cb3d7549a294eceea4299f3f4d448ef54b7c18f9
+status: completed
+stopped_at: Phase 219 complete — all phases complete
+last_updated: "2026-09-06T15:51:11.424Z"
+state_head: 4d9eceff7259c84a74372e2f7622a59fc4aa8b39
 progress:
   total_phases: 1
-  completed_phases: 0
+  completed_phases: 1
   total_plans: 3
-  completed_plans: 2
+  completed_plans: 3
 milestone_name: Audit Hardening & Dependency Currency
 last_activity: 2026-09-06
 last_activity_desc: Completed quick task 260906-i5e — FlawChess Engine card header shows a running node count (main at 1b5060661, unreleased)
@@ -21,10 +20,10 @@ last_activity_desc: Completed quick task 260906-i5e — FlawChess Engine card he
 
 ## Current Position
 
-Phase: 219 (Maia Chart Latency — ORT 1.27 Re-pin, Cross-Origin Isolation & Progressive Ladder Paint)
-Plan: 3 of 3 in current phase
+Phase: 219
+Plan: Not started
 
-Status: Ready to execute
+Status: All phases complete
 
 Open threads carried forward (not blockers):
 
@@ -35,9 +34,9 @@ Open threads carried forward (not blockers):
 
 ## Project Reference
 
-See: .planning/PROJECT.md (updated 2026-09-04 after Phase 216)
+See: .planning/PROJECT.md (updated 2026-09-06 after Phase 219)
 Core value: Position-precise WDL across openings + endgames + time pressure on top of users' actual chess.com / lichess games, with personalized LLM commentary and an auto-generated opening-strengths/weaknesses report.
-Current focus: **Phase 216 (Audit Bugs and Quick Wins, SEED-161) complete and deployed 2026-09-04** (PR #339, production 3c64c0371, UAT 4/4). No active phase. Next: pick the next milestone via `/gsd-new-milestone`, or measure the deferred SC-4 CI median after the next release.
+Current focus: **Phase 219 (Maia Chart Latency — ORT 1.27 re-pin, cross-origin isolation, progressive ladder paint) complete 2026-09-06**: verified 7/7, UAT 7/7 (leg 2 owner override), code review 1 critical / 3 warnings all fixed. All three D-15 targets met on the reference box (exact rung 81 ms, ladder 0.94 s, first paint 639 ms). Phase branch `gsd/phase-219-...` NOT yet squash-merged to `main`; Phases 217-219 unreleased. Next: pre-merge gate + squash-merge, then `/deploy`, then close milestone v2.16 via `/gsd-complete-milestone`.
 
 ### Superseded: focus after the v2.11 close
 
@@ -196,6 +195,12 @@ v1.29 Live-Engine Analysis Page shipped 2026-06-29 — 5 phases (136–140), 14 
 ### Decisions
 
 (Cleared at v1.31 close — full log in `.planning/PROJECT.md` Key Decisions + the milestone archives.)
+
+- [Phase 219-01]: onnxruntime-web re-pinned 1.29.0 -> 1.27.0 on measured evidence (headless bench: 1.29 ~2x slower single-thread wasm); Renovate pins the package with a bench-before-merge note so a future bump must re-measure.
+- [Phase 219-02]: COOP `same-origin` + COEP `require-corp` ship site-wide (Caddy + Vite dev/preview) with a CI header guard; the Maia worker picks `min(4, ceil(cores/2))` wasm threads only when `self.crossOriginIsolated`, else 1 (fail-safe for stale cached shells / stripping proxies). Every cross-origin subresource was audited (Umami `crossorigin`, Google Fonts CORP, Sentry, CF Insights).
+- [Phase 219-03]: coarse-then-fill ladder with an explicit `isLadderComplete` contract; consumers are classified PAINT-LIVE (chart, eval bar, FlawChess root policy) vs WAIT-FOR-COMPLETE (quality bar, verdict, gem sweep, `maiaCurveByFen` cache). Review CR-01: WAIT-FOR-COMPLETE must be a DERIVED empty-when-incomplete value, never a frozen `useState` (it leaked position A's ladder into position B's verdict).
+- [Phase 219 review WR-01]: `ort.env.wasm.initTimeout` = 20 s on both worker init paths; the host classifies ORT's timeout message and retries ONCE with `forceSingleThread` (a missing COEP on the threaded `.mjs` otherwise hangs `InferenceSession.create()` forever).
+- [Phase 219 UAT]: on Linux Chrome the WebGPU adapter exists only with `chrome://flags/#enable-vulkan`; ORT's WebGPU EP then rejects f16 on RADV ("Program Cast requires f16") and the host's wasm respawn fires as designed (~1.5 s cost per page load because `webgpuFailed` is page-session state — seed candidate).
 
 - [Phase 215]: SC-0/SC-1 RELAXED 2026-09-04 (commit 5687e41c7) for page-component bodies: cyclomatic 15 is a soft target for `Analysis()` (176 -> 132) and `OpeningsPage()` (64 -> 48) because both ESLint `complexity` and Sonar cognitive add +1 per flat `&&`/`?:` derivation and per JSX conditional; both keep reasoned-residual baseline entries in `frontend/eslint.config.js`. The gate for NEW code stays at 15. Do not plan a gap-closure for the residuals; the real seam is SEED-160 (analysis-session state store).
 - [Phase 215-02/03]: extracted seams in `workerPool.ts`/`useBotGame.ts` proven by two-way mutation tests against the existing oracles (109 + 167 tests); `runBotTurnRef` indirection and all `Sentry.captureException` sites preserved; module paths for `vi.mock` factories unchanged.
@@ -706,6 +711,8 @@ v1.29 Live-Engine Analysis Page shipped 2026-06-29 — 5 phases (136–140), 14 
 - [Phase 219]: 219-01: Added scripts/bench_maia_ort_wasm.mjs as a documented manual gate (not CI) and a renovate.json rule isolating onnxruntime-web into its own PR. — Timing on shared CI runners is noise (manual gate instead); the existing grouped minor/patch Renovate rule was the real risk of a silent future regression, not automerge (which this repo does not use).
 - [Phase 219]: D-05/D-06/D-07/D-08/D-09 implemented per 219-CONTEXT.md; COOP/COEP site-wide, Umami CORP + crossorigin attribute, inverted CI guard, fail-safe wasm thread count, retired rationale scrubbed
 - [Phase 219]: Executor had no claude-in-chrome tool — all six D-10 UAT legs and wave-2 D-15 numbers recorded pending in 219-UAT.md, not fabricated; orchestrator to complete via browser pass
+- [Phase 219]: D-11/D-12/D-13: useMaiaEngine's phase-3 ladder request splits into an 11-rung coarse pass and a 10-rung fill pass; perElo becomes ascending-and-possibly-partial with an explicit isLadderComplete flag as the sole completeness signal, replacing the retired perElo.length/resultFen-equality proxies. All eight perElo/maia. consumers classified paint-live vs wait-for-complete; the four wait-for-complete ones gated on isLadderComplete, each proven load-bearing via a revert-to-red mutation test.
+- [Phase 219]: Ref-to-state correction to RESEARCH.md's freeze-mechanism example: reading a ref inside a useMemo factory tripped eslint-plugin-react-hooks 7.1+'s react-hooks/refs rule (error level). MaiaMoveQualityBar's frozen-ladder value is now held in useState with a conditional setState-during-render, React's documented "adjust state during render" idiom, not a ref.
 
 ### Pending Todos
 
@@ -713,6 +720,8 @@ None active.
 
 ### Blockers/Concerns
 
+- ⚠️ [Phase 219] Deferred UAT halves: a SUCCESSFUL WebGPU inference run (needs a device where ORT's WebGPU EP works; RADV rejects f16) and Umami dashboard delivery under production CORP (post-deploy only). Recorded in `219-UAT.md` / `219-VERIFICATION.md` override note.
+- ⚠️ [Phase 219, seed candidate] Devices whose WebGPU adapter advertises `shader-f16` but whose ORT WebGPU EP fails pay ~1.5 s for the doomed WebGPU attempt on EVERY page load before the wasm respawn (`webgpuFailed` is not persisted). Also pre-existing, out of scope: React "<button> inside <button>" dev error in `VariationTree.tsx` mobile `HorizontalMoveList` (`variation-node-*` wraps `btn-delete-line-*`).
 - ⚠️ [Phase 215] `Analysis()` is still ~1,100 logic lines / cyclomatic 132 after nine extractions; more `useXyz` hooks would be metric-chasing. Real fix is a state store for the analysis session (SEED-160), only worth doing with a product trigger.
 - ⚠️ [Phase 215] `src/pages/__tests__/Train.guestGate.test.tsx`: 2 tests intermittently fail in the full vitest run (bare `waitFor` ceiling under load), pass in isolation, pre-existing on main. See `215-.../deferred-items.md`.
 
@@ -864,9 +873,9 @@ Items acknowledged and deferred at **v1.29 milestone close on 2026-06-29** (user
 
 ## Session Continuity
 
-**Stopped at:** Completed 219-02-PLAN.md (squash-merged to main at cb3d7549a)
+**Stopped at:** Phase 219 complete — all phases complete
 
-**Last session:** 2026-09-06T13:10:26.471Z
+**Last session:** 2026-09-06T14:08:31.261Z
 
 **Resume file:** None
 
@@ -1033,6 +1042,7 @@ Items acknowledged and deferred at **v1.29 milestone close on 2026-06-29** (user
 | Phase 218 P01 | 8min | 3 tasks | 7 files |
 | Phase 219 P01 | 19min | 4 tasks | 14 files |
 | Phase 219 P02 | 15min | 4 tasks | 13 files |
+| Phase 219 P03 | ~7min (git-visible commit span) | 4 tasks | 14 files |
 
 ## Performance Metrics
 

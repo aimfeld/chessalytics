@@ -45,6 +45,8 @@ interface CreateCall {
   wasmBinarySnapshot: unknown;
   executionProviders: string[];
   numThreadsAtCreate: number;
+  /** WR-01 (Phase 219 review): `ort.env.wasm.initTimeout` as of create() time. */
+  initTimeoutAtCreate: unknown;
 }
 
 interface SandboxHandle {
@@ -197,6 +199,7 @@ function setupSandbox(opts: SetupSandboxOptions = {}): SandboxHandle {
         wasmBinarySnapshot,
         executionProviders,
         numThreadsAtCreate: env.wasm.numThreads as number,
+        initTimeoutAtCreate: env.wasm.initTimeout,
       });
     });
   };
@@ -373,6 +376,45 @@ describe('maiaWorkerScript — chooseWasmThreadCount() (Phase 219, D-08)', () =>
     await sendInit(handle, { backend: 'wasm' });
 
     expect(handle.postMessages).toContainEqual({ type: 'ready', backend: 'wasm', numThreads: 4 });
+  });
+});
+
+describe('maiaWorkerScript — WR-01 (Phase 219 review): bounded threaded init + forceSingleThread', () => {
+  it('sets ort.env.wasm.initTimeout to a bounded value BEFORE InferenceSession.create(), wasm-only path', async () => {
+    const handle = setupSandbox({ crossOriginIsolated: true, hardwareConcurrency: 8 });
+    await sendInit(handle, { backend: 'wasm' });
+
+    expect(handle.createCalls[0]?.initTimeoutAtCreate).toBeGreaterThan(0);
+  });
+
+  it('sets ort.env.wasm.initTimeout to a bounded value BEFORE InferenceSession.create(), webgpu/asyncify path', async () => {
+    const handle = setupSandbox({ crossOriginIsolated: true, hardwareConcurrency: 8 });
+    await sendInit(handle, { backend: 'webgpu' });
+
+    expect(handle.createCalls[0]?.initTimeoutAtCreate).toBeGreaterThan(0);
+  });
+
+  it('forceSingleThread pins numThreads to 1 even when crossOriginIsolated + hardwareConcurrency would otherwise choose more, wasm-only path', async () => {
+    const handle = setupSandbox({ crossOriginIsolated: true, hardwareConcurrency: 8 });
+    await sendInit(handle, { backend: 'wasm', forceSingleThread: true });
+
+    expect(handle.createCalls[0]?.numThreadsAtCreate).toBe(1);
+    expect(handle.postMessages).toContainEqual({ type: 'ready', backend: 'wasm', numThreads: 1 });
+  });
+
+  it('forceSingleThread pins numThreads to 1 on the webgpu/asyncify path too', async () => {
+    const handle = setupSandbox({ crossOriginIsolated: true, hardwareConcurrency: 8 });
+    await sendInit(handle, { backend: 'webgpu', forceSingleThread: true });
+
+    expect(handle.createCalls[0]?.numThreadsAtCreate).toBe(1);
+    expect(handle.postMessages).toContainEqual({ type: 'ready', backend: 'webgpu', numThreads: 1 });
+  });
+
+  it('an absent forceSingleThread leaves chooseWasmThreadCount()\'s normal formula in effect (no regression)', async () => {
+    const handle = setupSandbox({ crossOriginIsolated: true, hardwareConcurrency: 8 });
+    await sendInit(handle, { backend: 'wasm' });
+
+    expect(handle.createCalls[0]?.numThreadsAtCreate).toBe(4);
   });
 });
 

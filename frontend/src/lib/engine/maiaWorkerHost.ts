@@ -71,6 +71,18 @@ import { ENGINE_ASSET_CACHE_NAME, ENGINE_ASSET_VERSION_QUERY, versionedEngineAss
  */
 export const ENGINE_PATH = versionedEngineAssetUrl('/maia/maia-worker.js');
 
+/**
+ * WR-01 (Phase 219 review): matches onnxruntime-web's own rejection message
+ * ("WebAssembly backend initializing failed due to timeout.") once
+ * `ort.env.wasm.initTimeout` (maia-worker.js's `MAIA_WASM_INIT_TIMEOUT_MS`)
+ * bounds a blocked-pthread-worker hang instead of letting `create()` hang
+ * forever. Distinguishes this ONE recoverable pre-ready failure mode from
+ * every other pre-ready init error (OOM, a genuine model-load failure, an
+ * unrelated ONNX error) — those still fail the worker outright via
+ * `failAllLeasesAndDropWorker`.
+ */
+const THREADED_INIT_TIMEOUT_PATTERN = /initializ(?:ing|ation).*timeout/i;
+
 // ─── Types ──────────────────────────────────────────────────────────────────
 
 export interface MaiaAnalyzeResult {
@@ -165,6 +177,10 @@ interface InitMessage {
   runtimeBuffer?: ArrayBuffer;
   assetCacheName?: string;
   assetVersionQuery?: string;
+  /** WR-01 (Phase 219 review): pins the worker's `ort.env.wasm.numThreads` to
+   *  1 — sent on the ONE retry `handleMessage` issues after a threaded wasm
+   *  init timeout (`THREADED_INIT_TIMEOUT_PATTERN`), never on a normal spawn. */
+  forceSingleThread?: boolean;
 }
 
 /** One `analyze()` call awaiting dispatch or resolution. */
@@ -197,6 +213,16 @@ let backend: 'webgpu' | 'wasm' | null = null;
 let lastReportedNumThreads: number | null = null;
 /** Source of whichever lease most recently triggered a spawn — used to tag Sentry captures that fire before any request is in flight (pre-ready init failures). */
 let spawnSource: MaiaErrorSource | null = null;
+/**
+ * WR-01 (Phase 219 review): true when the CURRENT worker's init message was
+ * sent with `forceSingleThread: true` — set in `constructWorker` (the single
+ * funnel every spawn goes through) and read by `handleMessage`'s pre-ready
+ * `error` branch to decide whether a threaded-init-timeout is still eligible
+ * for the one-time single-thread retry, or whether this replacement ALSO
+ * timed out (already single-threaded, so retrying again could never help —
+ * treat it as a genuine failure instead of looping forever).
+ */
+let currentInitForceSingleThread = false;
 
 let nextLeaseId = 1;
 const leases = new Map<number, LeaseRecord>();
@@ -328,7 +354,7 @@ function ensureSpawned(source: MaiaErrorSource): void {
  * adapter left to probe and no reason to reuse `ensureOrtRuntime()`'s
  * (differently-backended) memoised promise.
  */
-function spawn(source: MaiaErrorSource, mode: 'auto' | 'wasm'): void {
+function spawn(source: MaiaErrorSource, mode: 'auto' | 'wasm', forceSingleThread = false): void {
   spawnSource = source;
   spawnInFlight = true;
   const myGeneration = spawnGeneration;
@@ -359,7 +385,7 @@ function spawn(source: MaiaErrorSource, mode: 'auto' | 'wasm'): void {
       // `myGeneration !== spawnGeneration` guard for `terminate()`.
       if (myGeneration !== spawnGeneration) return;
       spawnInFlight = false;
-      constructWorker(source, 'wasm', runtimeBuffer);
+      constructWorker(source, 'wasm', runtimeBuffer, forceSingleThread);
     });
     return;
   }
@@ -367,7 +393,7 @@ function spawn(source: MaiaErrorSource, mode: 'auto' | 'wasm'): void {
   ensureOrtRuntime().then(({ backend: chosenBackend, buffer: runtimeBuffer }) => {
     if (myGeneration !== spawnGeneration) return;
     spawnInFlight = false;
-    constructWorker(source, chosenBackend, runtimeBuffer);
+    constructWorker(source, chosenBackend, runtimeBuffer, forceSingleThread);
   });
 }
 
@@ -397,6 +423,7 @@ function constructWorker(
   source: MaiaErrorSource,
   chosenBackend: OrtBackend,
   runtimeBuffer: ArrayBuffer | null,
+  forceSingleThread = false,
 ): void {
   let w: Worker;
   try {
@@ -414,6 +441,19 @@ function constructWorker(
   worker = w;
   isReady = false;
   backend = null;
+  // WR-03 fix (Phase 219 review): this was never reset on respawn, so a
+  // pre-ready init failure in a REPLACEMENT worker (e.g. after a
+  // webgpu-unavailable respawn) attached the DEAD worker's numThreads to the
+  // Sentry `engine_device` context, contradicting the documented contract
+  // above ("null before the first ready") — constructWorker is the single
+  // funnel every spawn (auto AND wasm-pinned respawn) goes through, so
+  // resetting here covers every respawn path.
+  lastReportedNumThreads = null;
+  // WR-01 (Phase 219 review): tracked per-worker so a THIS worker's own
+  // pre-ready timeout can tell "first timeout, eligible for the single-
+  // thread retry" apart from "already single-threaded, retrying again is
+  // pointless" — see `currentInitForceSingleThread`'s own comment.
+  currentInitForceSingleThread = forceSingleThread;
 
   w.onmessage = (e: MessageEvent<WorkerMessage>) => handleMessage(e.data);
 
@@ -437,6 +477,7 @@ function constructWorker(
     backend: chosenBackend,
     assetCacheName: ENGINE_ASSET_CACHE_NAME,
     assetVersionQuery: ENGINE_ASSET_VERSION_QUERY,
+    forceSingleThread,
   };
   const transfer: Transferable[] = [];
   if (runtimeBuffer) {
@@ -459,6 +500,13 @@ function constructWorker(
  */
 function respawnPinnedToWasm(rawMessage: string, breadcrumbMessage: string): void {
   const source = spawnSource ?? 'maia-worker';
+  // Announce the fallback in the console. maia-worker.js's header has always
+  // promised "the fallback itself is announced with a single console.info
+  // line", but until Phase 219 UAT only a Sentry breadcrumb was recorded — a
+  // browser UAT on a device whose WebGPU EP fails (Linux/RADV: "Program Cast
+  // requires f16 but the device does not support it") saw the worker land on
+  // wasm with no console trace of WHY. Same shape as the `ready` line below.
+  console.info(`[maia-worker] ${breadcrumbMessage} — ${rawMessage}`);
   // G-213-8: WebGPU has now failed for this page session — never re-probe it.
   webgpuFailed = true;
   if (worker) {
@@ -505,6 +553,42 @@ function respawnPinnedToWasm(rawMessage: string, breadcrumbMessage: string): voi
     data: { rawMessage },
   });
   spawn(source, 'wasm');
+}
+
+/**
+ * WR-01 (Phase 219 review): named seam (mirrors `respawnPinnedToWasm` above)
+ * that keeps `handleMessage` under the enforced complexity-15 limit.
+ * Detaches the dying worker, resets module state, and spawns a REPLACEMENT
+ * with `forceSingleThread: true` — reusing whichever mode `ensureSpawned`
+ * would have chosen (still 'auto' unless WebGPU has separately failed), so
+ * the SAME backend is retried and only `numThreads` changes. `queue` is left
+ * untouched: this only ever fires pre-ready (nothing has been serviced yet),
+ * so the replacement drains it on its own `ready` — same contract as
+ * `respawnPinnedToWasm`. A breadcrumb (not a full Sentry capture) mirrors
+ * that function's own webgpu-unavailable reporting shape: this path is
+ * non-terminal, so a full capture only happens if the single-thread retry
+ * ALSO fails (`handleMessage`'s terminal `captureMaiaWorkerError` call).
+ */
+function respawnPinnedToSingleThread(source: MaiaErrorSource, rawMessage: string): void {
+  // Console trace for the same reason as respawnPinnedToWasm: a silent
+  // respawn is indistinguishable from a slow first init during browser UAT.
+  console.info(`[maia-worker] threaded wasm init timed out — respawning pinned to single-thread — ${rawMessage}`);
+  Sentry.addBreadcrumb({
+    category: 'maia',
+    level: 'warning',
+    message: 'Maia worker: threaded wasm init timed out — respawning pinned to single-thread',
+    data: { rawMessage, numThreads: lastReportedNumThreads },
+  });
+  if (worker) {
+    worker.onmessage = null;
+    worker.onerror = null;
+    worker.terminate();
+  }
+  worker = null;
+  isReady = false;
+  backend = null;
+  lastReportedNumThreads = null;
+  spawn(source, webgpuFailed ? 'wasm' : 'auto', true);
 }
 
 function handleMessage(msg: WorkerMessage): void {
@@ -575,17 +659,41 @@ function handleMessage(msg: WorkerMessage): void {
     return;
   }
 
-  // msg.type === 'error'. Routed through captureMaiaWorkerError (Task 1) for
-  // bounded classification + stable Sentry grouping. `inFlight`'s own source
-  // is used when available (a post-ready error always has one dispatched);
-  // otherwise this is a pre-ready init failure and the spawning lease's
-  // source is the best available tag.
+  // msg.type === 'error' — the only remaining variant. Extracted into its
+  // own function (rather than inlined here) to keep `handleMessage` under
+  // the enforced complexity-15 limit — this branch alone (timeout-retry +
+  // classification + three settlement shapes) was pushing it well past that.
+  handleErrorMessage(msg.message);
+}
+
+/**
+ * Handles `{ type: 'error' }`. Routed through `captureMaiaWorkerError` (Task
+ * 1) for bounded classification + stable Sentry grouping. `inFlight`'s own
+ * source is used when available (a post-ready error always has one
+ * dispatched); otherwise this is a pre-ready init failure and the spawning
+ * lease's source is the best available tag.
+ */
+function handleErrorMessage(rawMessage: string): void {
   const errSource = inFlight?.source ?? spawnSource ?? 'maia-worker';
+
+  // WR-01 (Phase 219 review): a threaded-init timeout is pre-ready by
+  // construction (it fires from inside `InferenceSession.create()`, before
+  // `ready` can ever post) and recoverable — retry ONCE pinned to a single
+  // thread rather than failing every lease outright over what is really a
+  // blocked pthread worker (missing COEP on the threaded runtime's response),
+  // not a genuinely broken device. `currentInitForceSingleThread` guards
+  // against retrying a worker that was ALREADY single-threaded — that
+  // failure is real, not a blocked-pthread artifact, so this can never loop.
+  if (!isReady && !currentInitForceSingleThread && THREADED_INIT_TIMEOUT_PATTERN.test(rawMessage)) {
+    respawnPinnedToSingleThread(spawnSource ?? errSource, rawMessage);
+    return;
+  }
+
   // Dedupe (FLAWCHESS-9V/A3/A5): the returned MaiaWorkerError is what every
   // downstream waiter is rejected with, so `useFlawChessEngine` and
   // `EngineReadyGate` can tell this already-reported failure apart from one
   // nobody has captured yet.
-  const reported = captureMaiaWorkerError(msg.message, {
+  const reported = captureMaiaWorkerError(rawMessage, {
     source: errSource,
     backend,
     // Phase 219 (D-08): the thread count in effect when this failure fired —
@@ -619,7 +727,7 @@ function handleMessage(msg: WorkerMessage): void {
     // No ready worker exists at this moment — dispatchNext() runs once the
     // wasm-pinned replacement reports `ready` (same contract as the
     // pre-ready webgpu-unavailable path above).
-    respawnPinnedToWasm(msg.message, 'Maia worker WebGPU session died mid-inference — respawning worker pinned to wasm');
+    respawnPinnedToWasm(rawMessage, 'Maia worker WebGPU session died mid-inference — respawning worker pinned to wasm');
     return;
   }
 
@@ -803,4 +911,8 @@ export function resetMaiaWorkerHostForTests(): void {
   // that leaves a spawn mid-fetch would leak state into the next case.
   spawnInFlight = false;
   spawnGeneration = 0;
+  // WR-01 (Phase 219 review): a test that drives a threaded-init-timeout
+  // retry in one case must not leak the pin into the next.
+  currentInitForceSingleThread = false;
+  lastReportedNumThreads = null;
 }

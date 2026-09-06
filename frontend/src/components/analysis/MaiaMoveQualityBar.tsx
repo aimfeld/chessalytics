@@ -87,6 +87,14 @@ const BUCKET_META: Record<
 // text never overflows a sliver; the value is still reachable via the hover list.
 const MIN_INLINE_LABEL_PCT = 12;
 
+// CR-01 fix (Phase 219 review): module-scope stable reference so `stablePerElo`
+// below is referentially stable across renders (keeps useMemo deps from
+// churning) when the ladder is incomplete. A `useState`-backed freeze here
+// previously kept rendering position A's ladder against position B's
+// candidates after navigating to an uncached position, because nothing ever
+// reset the state when `isLadderComplete` flipped back to false.
+const EMPTY_LADDER: MoveCurvePoint[] = [];
+
 export interface MaiaMoveQualityBarProps {
   /** useMaiaEngine's perElo (same value the chart receives); [] renders nothing. */
   perElo: MoveCurvePoint[];
@@ -94,8 +102,8 @@ export interface MaiaMoveQualityBarProps {
    * useMaiaEngine's isLadderComplete (Phase 219-03, D-12). This component is a
    * WAIT-FOR-COMPLETE consumer: the position verdict and the quality buckets
    * must never flip from a coarse (11-rung) reading to the full 21-rung one,
-   * so the value actually read is frozen in state that only advances when
-   * this flag is true — see `stablePerElo` below.
+   * so `perElo` is only read (via `stablePerElo`) while this flag is true —
+   * see `stablePerElo` below.
    */
   isLadderComplete: boolean;
   /** The ELO whose Maia probabilities weight the segments (EloSelector's value). */
@@ -443,18 +451,20 @@ export function MaiaMoveQualityBar({
   const [activeProseSan, setActiveProseSan] = useState<string | null>(null);
   const proseHoverTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
 
-  // T-219-14: freeze the ladder this component reads in STATE that only
-  // advances once the FULL ladder has landed — the verdict/buckets can never
-  // flip from a coarse (11-rung) reading to the fine (21-rung) one. `[]`
-  // (unset until the first complete ladder) preserves this component's
-  // existing "renders nothing on first load" behavior by construction — no
-  // separate empty-state branch is needed. Adjusted directly during render
-  // (React's documented "storing information from previous renders"
-  // pattern, https://react.dev/reference/react/useState#storing-information-from-previous-renders)
-  // rather than via a ref, which `react-hooks/refs` (eslint-plugin-react-hooks
-  // 7.1+) now flags as an error when read inside a `useMemo` factory.
-  const [stablePerElo, setStablePerElo] = useState<MoveCurvePoint[]>([]);
-  if (isLadderComplete && stablePerElo !== perElo) setStablePerElo(perElo);
+  // T-219-14 / CR-01 (Phase 219 review): a partial (coarse) ladder is read as
+  // "no ladder", so the verdict/buckets can never show a coarse reading —
+  // and, critically, a navigation that resets `isLadderComplete` to false
+  // drops the previous position's ladder immediately instead of continuing
+  // to render it. This used to be a `useState` that only advanced when
+  // `isLadderComplete` was true and was NEVER reset when it went back to
+  // false, so after navigating to an uncached position the bar kept
+  // rendering the previous position's probabilities against the new
+  // position's candidates (any SAN present in both positions got the stale
+  // mass) until the new fill pass landed. A derived value with a stable
+  // empty reference (`EMPTY_LADDER`, module scope, so `useMemo` deps below
+  // don't churn every render) fixes this by construction: it can never lag
+  // behind `isLadderComplete`.
+  const stablePerElo = isLadderComplete ? perElo : EMPTY_LADDER;
 
   const buckets = useMemo(
     () => bucketMovesByQuality(stablePerElo, selectedElo, shownSans, qualityBySan),
