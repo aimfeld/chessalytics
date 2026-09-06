@@ -2,7 +2,7 @@
 id: SEED-158
 status: active — iOS /analysis STILL dies with the WebGPU-only gate + single-thread pin (see "Status 2026-09-06 night"); Linux leg resolved; Firefox/Windows Clip shader left as-is
 planted: 2026-08-29
-updated: 2026-09-06 (night: /analysis on the iPhone still killed after both iOS changes; RELEASE BLOCKER, see the status section)
+updated: 2026-09-07 (on-device bisect: Maia ALONE kills /analysis on iOS; the pre-219 build never ran Maia on this phone either (graceful oom); prod with the blanket gate survives. See "Status 2026-09-07")
 planted_during: Sentry triage of the 2026-08-29 18:54 UTC iPad OOM cascade
   (FLAWCHESS-9V regression + new FLAWCHESS-A2/A3), same session as quick task
   260829-tku (oom terminal variant in EngineReadyGate)
@@ -129,6 +129,36 @@ first step of the plan above.
 Prior art from the ORT tracker: microsoft/onnxruntime#22776 ("Support iOS devices") and
 #22086 (wasm load failures on iOS 17) are open with no maintainer guidance; WebGPU on iOS was
 not an option there either at the time.
+
+## Status 2026-09-07: three measurements that reframe the seed
+
+All on the reference iPhone 14 Pro (iOS 26.6.1, Safari), each on a REAL build, none on the diag page.
+
+| Build | Stockfish | Maia | Result |
+|---|---|---|---|
+| `origin/production` (#349: blanket iOS gate) | on | gated off | **survives** |
+| `main` @ da9c9c53a, `?dev-stockfish=off` (inert Stockfish workers, no wasm fetch, no Blob) | **off** | WebGPU, badge confirms `threads=1 coi=true` | **KILLED** within seconds of stepping |
+| `a7a4f6d74` (#346, last pre-219 release: ORT 1.29, no isolation, single ladder, 4 GB reservation) | on (3 workers) | tried | graceful `oom` terminal ("your device ran out of memory"), page survives |
+
+Consequences:
+
+- **Maia on /analysis has never run on this phone at any recent commit.** The pre-219 build lands in `oom`
+  because the WebGPU worker's 4 GB reservation is the 4th large wasm memory next to 3 Stockfish workers
+  (pool 2 + live eval 1), so the "it worked before Phase 219" premise is falsified for this device class.
+  Phase 219 did not regress iOS; the 1 GB cap turned a graceful `oom` into a page kill by letting Maia start.
+- **The kill needs only Maia.** FlawChess Engine off: dies. Stockfish off entirely (dev switch): dies. So the
+  remaining suspects are what the REAL page adds to the Maia path that the diag page does not: the main-thread
+  runtime/model byte copies handed to the worker (`ensureOrtRuntime()` + engine asset cache) and the 219 ladder
+  workload (11-rung coarse pass + 21-rung fill + next-ply prefetch + policy calls). The diag page's
+  "Maia alone survives 150 mixed shapes" is NOT evidence about the app.
+- **Release path is clear:** restore the blanket iOS gate in `ensureSpawned()` (prod behaviour, measured
+  surviving) and ship; iOS Maia via WebGPU is NEW work with two concrete suspects, not a regression fix.
+
+Tooling added for this (dev server only, `import.meta.env.DEV`): `frontend/src/lib/engine/devEngineSwitches.ts`
+— `/analysis?dev-stockfish=off|on` persists an inert-Stockfish switch, and the Maia `ready` message is
+mirrored into a fixed corner badge (backend, numThreads, crossOriginIsolated). Serving an old commit to the
+phone: `git worktree add ../flawchess-bisect <sha>`, `npm ci`, `npx vite --host --port 5174`,
+`tailscale serve --bg http://127.0.0.1:5174` (restore with 5173), clear the site's data in Safari first.
 
 ## Status 2026-09-06 night: iOS /analysis is STILL killed. Release blocker.
 
