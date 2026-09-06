@@ -16,6 +16,7 @@
 
 import { useRef, useState, useCallback, useEffect } from 'react';
 import * as Sentry from '@sentry/react';
+import { isReportedMaiaWorkerError } from '@/lib/maiaWorkerErrors';
 import { mctsSearch } from '@/lib/engine/mctsSearch';
 import { createWorkerPool, computePoolSize, type WorkerPool } from '@/lib/engine/workerPool';
 import { createMaiaQueue, type MaiaQueue } from '@/lib/engine/maiaQueue';
@@ -218,7 +219,12 @@ export function useFlawChessEngine({
       if (maia.status === 'rejected') failures.push({ name: 'maia', reason: maia.reason });
       if (stockfish.status === 'rejected')
         failures.push({ name: 'stockfish', reason: stockfish.reason });
-      const first = failures[0];
+      // Dedupe (FLAWCHESS-A3): a Maia rejection carrying a `MaiaWorkerError`
+      // was already captured by the worker host (with the raw text, backend
+      // and device context) — re-reporting it here made one OOM cold start
+      // show up as three Sentry issues. Only a failure nobody has reported
+      // yet earns a capture from this site.
+      const first = failures.find((f) => !isReportedMaiaWorkerError(f.reason));
       if (first) {
         // Fixed, variable-free message string (Sentry grouping rule); which
         // provider died and why goes in `cause` + `extra`, not the message —

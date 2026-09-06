@@ -345,7 +345,7 @@ describe('EngineReadyGate', () => {
   describe.each([['bots'], ['analysis']] as const)(
     'the out-of-memory terminal state (surface=%s)',
     (surface) => {
-      it('renders the oom testid and free-memory copy, not the generic failed testid, with a working Retry and a single tagged Sentry capture', () => {
+      it('renders the oom testid and free-memory copy, not the generic failed testid, with a working Retry and NO Sentry capture of its own', () => {
         markEngineAssetFailed('maia-model', 'oom');
         const onRetry = vi.fn();
         render(<EngineReadyGate surface={surface} onStart={vi.fn()} onRetry={onRetry} />);
@@ -364,18 +364,20 @@ describe('EngineReadyGate', () => {
         expect(onRetry).toHaveBeenCalledTimes(1);
         expect(screen.queryByTestId('engine-gate-oom')).toBeNull();
 
-        expect(Sentry.captureException).toHaveBeenCalledTimes(1);
-        expect(Sentry.captureException).toHaveBeenCalledWith(
-          expect.objectContaining({
-            message: 'Engine cold start: device ran out of memory starting the engine',
-          }),
-          expect.objectContaining({
-            tags: expect.objectContaining({ source: 'engine-ready-gate', engine_failure: 'oom' }),
-          }),
-        );
+        // Dedupe (FLAWCHESS-A5): a classified kind means the worker host
+        // already captured this failure — the gate must not report it again.
+        expect(Sentry.captureException).not.toHaveBeenCalled();
       });
     },
   );
+
+  it('does not capture a classified non-oom Maia failure either (already reported by the worker host)', () => {
+    markEngineAssetFailed('maia-model', 'load');
+    render(<EngineReadyGate surface="bots" onStart={vi.fn()} onRetry={vi.fn()} />);
+
+    expect(screen.getByTestId('engine-gate-failed')).toBeTruthy();
+    expect(Sentry.captureException).not.toHaveBeenCalled();
+  });
 
   // ─── Quick 260829-tku Task 2: the new branch must not swallow the generic path ──
 

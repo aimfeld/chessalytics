@@ -42,7 +42,12 @@
  */
 
 import * as Sentry from '@sentry/react';
-import { captureMaiaWorkerError, classifyMaiaWorkerError, type MaiaErrorSource } from '@/lib/maiaWorkerErrors';
+import {
+  captureMaiaWorkerError,
+  classifyMaiaWorkerError,
+  MaiaWorkerError,
+  type MaiaErrorSource,
+} from '@/lib/maiaWorkerErrors';
 import { supportsWasmSimd } from './wasmSimd';
 import {
   getEngineAssetsSnapshot,
@@ -395,7 +400,7 @@ function constructWorker(
     Sentry.captureException(err instanceof Error ? err : new Error(String(err)), {
       tags: { source, backend: 'unknown', maia_failure: 'load' },
     });
-    failAllLeasesAndDropWorker(err instanceof Error ? err : new Error(String(err)));
+    failAllLeasesAndDropWorker(new MaiaWorkerError(String(err), 'load'));
     return;
   }
 
@@ -414,7 +419,7 @@ function constructWorker(
     Sentry.captureException(new Error('Maia worker: worker load failure'), {
       tags: { source: spawnSource ?? source, backend: backend ?? 'unknown', maia_failure: 'load' },
     });
-    failAllLeasesAndDropWorker(new Error('Maia worker: worker load failure'));
+    failAllLeasesAndDropWorker(new MaiaWorkerError('Maia worker: worker load failure', 'load'));
   };
 
   // Phase 213-12 (D-20, G-213-37): sent on EVERY spawn — this single
@@ -563,12 +568,16 @@ function handleMessage(msg: WorkerMessage): void {
   // otherwise this is a pre-ready init failure and the spawning lease's
   // source is the best available tag.
   const errSource = inFlight?.source ?? spawnSource ?? 'maia-worker';
-  captureMaiaWorkerError(msg.message, { source: errSource, backend });
+  // Dedupe (FLAWCHESS-9V/A3/A5): the returned MaiaWorkerError is what every
+  // downstream waiter is rejected with, so `useFlawChessEngine` and
+  // `EngineReadyGate` can tell this already-reported failure apart from one
+  // nobody has captured yet.
+  const reported = captureMaiaWorkerError(msg.message, { source: errSource, backend });
 
   if (!isReady) {
     // Pre-ready init failure (e.g. onnx session/model-load): nothing will
     // ever service this worker — settle everything as worker death.
-    failAllLeasesAndDropWorker(new Error(msg.message));
+    failAllLeasesAndDropWorker(reported);
     return;
   }
 
@@ -587,7 +596,7 @@ function handleMessage(msg: WorkerMessage): void {
   if (backend === 'webgpu') {
     const req = inFlight;
     inFlight = null;
-    if (req) req.reject(new Error(msg.message));
+    if (req) req.reject(reported);
     // No ready worker exists at this moment — dispatchNext() runs once the
     // wasm-pinned replacement reports `ready` (same contract as the
     // pre-ready webgpu-unavailable path above).
@@ -600,7 +609,7 @@ function handleMessage(msg: WorkerMessage): void {
   // per-consumer behavior).
   const req = inFlight;
   inFlight = null;
-  if (req) req.reject(new Error(msg.message));
+  if (req) req.reject(reported);
   dispatchNext();
 }
 
@@ -614,6 +623,11 @@ function handleMessage(msg: WorkerMessage): void {
  * script-load-failure path — both are the same "nothing will ever service
  * this queue" situation (maiaQueue's pre-existing self-heal contract,
  * preserved here at the host level).
+ */
+/**
+ * `err` is a `MaiaWorkerError` on every path that already captured to Sentry
+ * (so downstream waiters can skip re-reporting); the WASM-SIMD `unsupported`
+ * path passes a plain `Error` because the gate owns that capture.
  */
 function failAllLeasesAndDropWorker(err: Error): void {
   const stranded = queue.splice(0, queue.length);
@@ -638,7 +652,10 @@ function failAllLeasesAndDropWorker(err: Error): void {
     // prod string, FLAWCHESS-92: onnxruntime "Out of memory" while creating
     // the inference session) reached the user as generic download-failure
     // copy instead of being told to free device memory.
-    markEngineAssetFailed('maia-model', classifyMaiaWorkerError(err.message));
+    markEngineAssetFailed(
+      'maia-model',
+      err instanceof MaiaWorkerError ? err.kind : classifyMaiaWorkerError(err.message),
+    );
   }
 
   if (worker) {

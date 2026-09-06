@@ -22,6 +22,7 @@ import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { renderHook, act } from '@testing-library/react';
 import * as Sentry from '@sentry/react';
 import type { EngineSnapshot } from '@/lib/engine/types';
+import { MaiaWorkerError } from '@/lib/maiaWorkerErrors';
 
 vi.mock('@sentry/react', () => ({ captureException: vi.fn() }));
 
@@ -488,6 +489,41 @@ describe('useFlawChessEngine', () => {
 
       expect(Sentry.captureException).not.toHaveBeenCalled();
       expect(result.current.isReady).toBe(false);
+    });
+
+    it('a whenReady() rejected with an already-reported MaiaWorkerError does NOT capture again (FLAWCHESS-A3 dedupe) and still sets isReady true', async () => {
+      const { result } = renderHook(() =>
+        useFlawChessEngine({ fen: TEST_FEN, enabled: true, elo: 1500 }),
+      );
+
+      await act(async () => {
+        queueWhenReadyDeferred.reject(
+          new MaiaWorkerError('no available backend found. ERR: [wasm] RangeError: Out of memory', 'oom'),
+        );
+        poolWhenReadyDeferred.resolve();
+        await Promise.resolve();
+        await Promise.resolve();
+        await Promise.resolve();
+      });
+
+      expect(result.current.isReady).toBe(true);
+      expect(Sentry.captureException).not.toHaveBeenCalled();
+    });
+
+    it('a reported Maia failure alongside an unreported Stockfish failure captures once, with the Stockfish reason as cause', async () => {
+      renderHook(() => useFlawChessEngine({ fen: TEST_FEN, enabled: true, elo: 1500 }));
+
+      await act(async () => {
+        queueWhenReadyDeferred.reject(new MaiaWorkerError('Out of memory', 'oom'));
+        poolWhenReadyDeferred.reject(new Error('pool dead'));
+        await Promise.resolve();
+        await Promise.resolve();
+        await Promise.resolve();
+      });
+
+      expect(Sentry.captureException).toHaveBeenCalledTimes(1);
+      const capturedError = vi.mocked(Sentry.captureException).mock.calls[0]?.[0] as Error;
+      expect((capturedError.cause as Error | undefined)?.message).toBe('pool dead');
     });
 
     it('BOTH providers rejecting captures once, naming both in extra', async () => {

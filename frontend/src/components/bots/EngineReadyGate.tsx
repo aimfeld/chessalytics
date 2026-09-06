@@ -13,6 +13,7 @@ import {
 } from '@/components/ui/dialog';
 import { BOT_ACTION_BUTTON_CLASS } from '@/components/bots/chipStyles';
 import { markEngineAssetsRetrying, requiredEngineAssets } from '@/lib/engine/engineAssetProgress';
+import { readDeviceContext } from '@/lib/maiaWorkerErrors';
 import { useEngineAssets } from '@/hooks/useEngineAssets';
 import { trackEvent } from '@/lib/analytics';
 import type { MaiaFailureKind } from '@/lib/maiaWorkerErrors';
@@ -112,14 +113,10 @@ function waitBucket(elapsedMs: number): WaitBucketLabel {
 
 const SENTRY_MESSAGE_UNSUPPORTED = 'Engine cold start: device cannot run the Maia model';
 const SENTRY_MESSAGE_FAILED = 'Engine cold start: engine failed to start';
-/** Quick 260829-tku: distinct fixed literal for the memory-exhaustion case —
- * never interpolates the raw worker string (CLAUDE.md grouping rule). */
-const SENTRY_MESSAGE_OOM = 'Engine cold start: device ran out of memory starting the engine';
 
-/** Quick 260829-tku: named constants for the Sentry `engine_failure` tag
- * values, so the two strings are not bare literals at the capture call site. */
+/** Named constant for the Sentry `engine_failure` tag value, so the string
+ * is not a bare literal at the capture call site. */
 const ENGINE_FAILURE_TAG_DOWNLOAD = 'download';
-const ENGINE_FAILURE_TAG_OOM = 'oom';
 
 /**
  * D-14: genuinely different terminal states, never the canonical data-load
@@ -196,30 +193,6 @@ function pickTerminalVariant(status: 'unsupported' | 'failed', failureKind: Maia
   return failureKind === 'oom' ? 'oom' : 'failed';
 }
 
-/** D-17 device context for the terminal-failure Sentry captures. Read
- * defensively — `navigator.deviceMemory` is missing in Firefox/Safari and
- * this must never throw regardless of which fields a given browser omits. */
-function readDeviceContext(): Record<string, string | number> {
-  const context: Record<string, string | number> = {};
-  try {
-    context.userAgent = navigator.userAgent;
-  } catch {
-    // best-effort only
-  }
-  try {
-    context.hardwareConcurrency = navigator.hardwareConcurrency;
-  } catch {
-    // best-effort only
-  }
-  try {
-    const deviceMemory = (navigator as Navigator & { deviceMemory?: number }).deviceMemory;
-    if (deviceMemory !== undefined) context.deviceMemory = deviceMemory;
-  } catch {
-    // best-effort only
-  }
-  return context;
-}
-
 /**
  * The D-09 non-dismissible readiness gate: mirrors `ResumeGate.tsx`'s
  * structure (non-dismissible `Dialog`, `showCloseButton={false}`) and mounts
@@ -288,16 +261,16 @@ export function EngineReadyGate({ surface, onStart, onRetry }: EngineReadyGatePr
     }
     if (assets.status === 'failed' && !failedCapturedRef.current) {
       failedCapturedRef.current = true;
-      // Quick 260829-tku: select message + tag from the SAME variant decision
-      // as the render below — memory exhaustion reports its own message and
-      // tag, every other failure keeps today's message and 'download' tag
-      // verbatim so existing Sentry dashboard filters keep matching.
-      const isOom = pickTerminalVariant('failed', assets.failureKind) === 'oom';
-      Sentry.captureException(new Error(isOom ? SENTRY_MESSAGE_OOM : SENTRY_MESSAGE_FAILED), {
-        tags: {
-          source: 'engine-ready-gate',
-          engine_failure: isOom ? ENGINE_FAILURE_TAG_OOM : ENGINE_FAILURE_TAG_DOWNLOAD,
-        },
+      // Dedupe (FLAWCHESS-A5): a non-null `failureKind` means the Maia worker
+      // host already captured this failure (`Maia worker inference error
+      // (<kind>)`, with the raw text, backend and device context) — the
+      // gate re-reporting it turned one OOM cold start into three Sentry
+      // issues. Only an unclassified failure (Stockfish pool, or anything
+      // else that never passed through `captureMaiaWorkerError`) is
+      // captured here; the on-screen OOM variant is unaffected.
+      if (assets.failureKind !== null) return;
+      Sentry.captureException(new Error(SENTRY_MESSAGE_FAILED), {
+        tags: { source: 'engine-ready-gate', engine_failure: ENGINE_FAILURE_TAG_DOWNLOAD },
         contexts: { engine_device: readDeviceContext() },
       });
     }

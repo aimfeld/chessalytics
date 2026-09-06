@@ -12,6 +12,7 @@ in `YYYY-MM-DD` (Europe/Zurich).
 
 - Openings statistics and the bookmarked "Score over Time" chart no longer count FlawChess practice-bot games or pasted PGNs, which were already excluded from every other analytics surface.
 - Fixed the chess engine failing to start for everyone after an update, because a caching layer kept serving old engine files instead of the new ones. Every engine file request now carries a version marker so an update can never be served stale files again.
+- Low-memory Android devices that cannot allocate the Maia model now see the "your device ran out of memory" message instead of a misleading download-failure message.
 - Generate Insights on the Endgames tab works again. The rated-games default introduced with the new analytics population was rejected by the insights endpoint itself, so the button was enabled but every click failed with "Couldn't generate insights." Reports now cover your rated games against human opponents, matching the numbers on the rest of the tab, and cached reports written under the old population are regenerated once.
 - The "Try again" button on a failed insights report is now disabled while a filter blocks generation, like the Generate Insights button already was.
 
