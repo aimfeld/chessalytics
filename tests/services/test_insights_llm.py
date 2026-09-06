@@ -221,7 +221,7 @@ class TestPromptVersionAndBody:
 
     def test_prompt_version_is_v33(self) -> None:
         # Phase 87.6 Plan 03 bumped v33 → v34 (PR-direct rebuild + non_endgame_elo).
-        assert insights_llm._PROMPT_VERSION == "endgame_v46"
+        assert insights_llm._PROMPT_VERSION == "endgame_v47"
 
     def test_prompt_file_glossary_has_entry_expected_score(self) -> None:
         """Phase 83 D-17: glossary entry must be present with required framing."""
@@ -425,7 +425,7 @@ class TestPromptVersionAndBody:
 
     def test_prompt_version_bumped(self) -> None:
         """Phase 102 UAT: _PROMPT_VERSION is endgame_v40; prior v35 stays in changelog."""
-        assert insights_llm._PROMPT_VERSION == "endgame_v46"
+        assert insights_llm._PROMPT_VERSION == "endgame_v47"
 
 
 class TestEndgameTypeAchievableScoreGapPayload:
@@ -2692,7 +2692,7 @@ class TestMetadataOverride:
         assert response.status == "fresh"
         assert response.report.model_used == insights_llm.settings.PYDANTIC_AI_MODEL_INSIGHTS
         # Phase 102 UAT: bumped from endgame_v35 to endgame_v40.
-        assert response.report.prompt_version == "endgame_v46"
+        assert response.report.prompt_version == "endgame_v47"
 
         # Log row's response_json also carries the overridden values (the override
         # happens BEFORE create_llm_log per A3). Query by findings_hash (unique
@@ -2716,7 +2716,7 @@ class TestMetadataOverride:
         assert log is not None, f"no log row for findings_hash={findings_hash}"
         assert log.response_json is not None
         assert log.response_json["model_used"] == insights_llm.settings.PYDANTIC_AI_MODEL_INSIGHTS
-        assert log.response_json["prompt_version"] == "endgame_v46"
+        assert log.response_json["prompt_version"] == "endgame_v47"
 
 
 class TestCacheBehavior:
@@ -3704,7 +3704,7 @@ class TestPhase874PromptVersion:
 
     def test_prompt_version_is_v33(self) -> None:
         """SC#7: bumped to endgame_v40 by Phase 102 UAT (was endgame_v35 after Phase 87.6)."""
-        assert insights_llm._PROMPT_VERSION == "endgame_v46"
+        assert insights_llm._PROMPT_VERSION == "endgame_v47"
 
     def test_non_fractional_metrics_renamed(self) -> None:
         """Phase 87.5 (D-06): _NON_FRACTIONAL_METRICS swaps conversion_elo_gap → endgame_elo_gap."""
@@ -3752,7 +3752,7 @@ class TestPhase876LLMPayloadExtension:
 
     def test_prompt_version_is_endgame_v39(self) -> None:
         """Phase 102 UAT: _PROMPT_VERSION bumped from endgame_v35 to endgame_v40."""
-        assert insights_llm._PROMPT_VERSION == "endgame_v46"
+        assert insights_llm._PROMPT_VERSION == "endgame_v47"
 
     def test_prompt_prose_includes_non_endgame_elo_sentence_pattern(self) -> None:
         """Phase 87.6: the canonical 'Your Endgame ELO sits at X, vs Y' sentence skeleton
@@ -4579,4 +4579,4 @@ class TestRatingBasisBlock:
         """Phase 102 Plan 05/UAT: _PROMPT_VERSION bumped to endgame_v40."""
         from app.services import insights_llm
 
-        assert insights_llm._PROMPT_VERSION == "endgame_v46"
+        assert insights_llm._PROMPT_VERSION == "endgame_v47"
