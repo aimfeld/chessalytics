@@ -1,8 +1,8 @@
 // @vitest-environment jsdom
 import { describe, it, expect, vi, afterEach } from 'vitest';
-import { render, screen, cleanup } from '@testing-library/react';
+import { render, screen, cleanup, fireEvent } from '@testing-library/react';
 import type { UseMutationResult } from '@tanstack/react-query';
-import type { FilterState } from '@/components/filters/FilterPanel';
+import { DEFAULT_FILTERS, type FilterState } from '@/components/filters/FilterPanel';
 import type {
   EndgameInsightsResponse,
   InsightsAxiosError,
@@ -37,17 +37,15 @@ vi.mock('@/components/ui/tooltip', () => ({
 }));
 import type { ReactNode } from 'react';
 
-const BASE_FILTERS: FilterState = {
-  matchSide: 'both',
-  timeControls: null,
-  platforms: null,
-  rated: null,
-  opponentType: 'human',
-  opponentStrength: { min: null, max: null },
-  recency: null,
-  customRange: null,
-  color: 'white',
-};
+// FLAWCHESS-AG: the unblocked baseline IS DEFAULT_FILTERS — getBlockedReason
+// compares against it field by field, so a hand-written literal silently
+// drifts into "blocked" the moment a default changes (SEED-163 2a flipped
+// `rated` null -> true) and every gating assertion below stops testing the
+// state real users are actually in.
+const BASE_FILTERS: FilterState = DEFAULT_FILTERS;
+
+/** DEFAULT_FILTERS with one field pushed off its default → button blocked. */
+const RATED_FILTERED: FilterState = { ...DEFAULT_FILTERS, rated: false };
 
 function makeMutation(
   overrides: Partial<{
@@ -218,5 +216,41 @@ describe('EndgameInsightsBlock', () => {
     expect(errorBlock.textContent).toContain('Please try again in a moment.');
     expect(screen.getByTestId('btn-insights-retry').textContent).toContain('Try again');
     expect(errorBlock.textContent).not.toMatch(/Try again in ~/);
+    expect(screen.getByTestId<HTMLButtonElement>('btn-insights-retry').disabled).toBe(false);
+  });
+
+  it('FLAWCHESS-AG: Try again is disabled while a filter blocks generation', () => {
+    // The error state was the one path around getBlockedReason: once any
+    // failure rendered it, Try again stayed enabled and kept POSTing requests
+    // the router rejects with 400 filters_not_supported.
+    const axiosError = {
+      isAxiosError: true,
+      response: { data: { error: 'provider_error' } },
+    } as InsightsAxiosError;
+    const onGenerate = vi.fn();
+    render(
+      <EndgameInsightsBlock
+        appliedFilters={RATED_FILTERED}
+        rendered={null}
+        mutation={makeMutation({ isError: true, error: axiosError })}
+        onGenerate={onGenerate}
+      />,
+    );
+    const retry = screen.getByTestId<HTMLButtonElement>('btn-insights-retry');
+    expect(retry.disabled).toBe(true);
+    fireEvent.click(retry);
+    expect(onGenerate).not.toHaveBeenCalled();
+  });
+
+  it('enables Generate Insights on the default filter state (FLAWCHESS-AG)', () => {
+    render(
+      <EndgameInsightsBlock
+        appliedFilters={DEFAULT_FILTERS}
+        rendered={null}
+        mutation={makeMutation()}
+        onGenerate={vi.fn()}
+      />,
+    );
+    expect(screen.getByTestId<HTMLButtonElement>('btn-generate-insights').disabled).toBe(false);
   });
 });

@@ -115,6 +115,7 @@ export function EndgameInsightsBlock({
         <AccordionContent className="p-4">
           {isError ? (
             <ErrorState
+              blockedReason={blockedReason}
               onRetry={handleGenerateClick}
             />
           ) : isPending && !hasRendered ? (
@@ -369,9 +370,19 @@ function InsightsSection({
   );
 }
 
+/**
+ * Retry is gated on `blockedReason` exactly like the Generate buttons.
+ *
+ * WHY (FLAWCHESS-AG): this button used to be unconditionally enabled, so once
+ * any failure put the block into the error state the user could apply a
+ * blocking filter and keep firing requests the router rejects with 400
+ * filters_not_supported — the one path around getBlockedReason.
+ */
 function ErrorState({
+  blockedReason,
   onRetry,
 }: {
+  blockedReason: string | null;
   onRetry: () => void;
 }) {
   return (
@@ -382,14 +393,17 @@ function ErrorState({
       <p className="text-sm text-muted-foreground">
         Please try again in a moment.
       </p>
-      <Button
-        variant="brand-outline"
-        onClick={onRetry}
-        data-testid="btn-insights-retry"
-        className="mt-3"
-      >
-        Try again
-      </Button>
+      <MaybeBlockedTooltip reason={blockedReason}>
+        <Button
+          variant="brand-outline"
+          onClick={onRetry}
+          disabled={blockedReason !== null}
+          data-testid="btn-insights-retry"
+          className="mt-3"
+        >
+          Try again
+        </Button>
+      </MaybeBlockedTooltip>
     </div>
   );
 }

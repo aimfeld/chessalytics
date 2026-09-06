@@ -424,23 +424,80 @@ class TestFilterPassing:
     ) -> None:
         """v8: router returns 400 when any filter other than opponent_strength
         is non-default. Frontend already gates the button; the server check is
-        the defensive safety net."""
+        the defensive safety net.
+
+        Each case asserts its own `blocking` reason, not just the error code:
+        FLAWCHESS-AG was a wrong *default* (rated), so a test that only checked
+        for `filters_not_supported` would have stayed green while every request
+        was rejected for the wrong reason.
+        """
         headers, _user = authed_user_with_session
 
         async with httpx.AsyncClient(
             transport=httpx.ASGITransport(app=app), base_url="http://test"
         ) as client:
             cases = [
-                ({"time_control": "blitz"}, "Time control"),
-                ({"platform": "chess.com"}, "Platform"),
-                ({"from_date": "2026-01-01"}, "Custom date range"),
-                ({"rated": "true"}, "Rated"),
+                ({"time_control": "blitz"}, "Remove Time control filter"),
+                ({"platform": "chess.com"}, "Remove Platform filter"),
+                ({"from_date": "2026-01-01"}, "Clear Custom date range filter"),
+                # rated-only is the DEFAULT population (SEED-163 2a), so it is
+                # the casual/all selection that truncates the dataset.
+                ({"rated": "false"}, "Set the Rated filter to Rated"),
             ]
-            for params, _label in cases:
+            for params, blocking in cases:
                 response = await client.post(INSIGHTS_ENDPOINT, params=params, headers=headers)
                 assert response.status_code == 400, f"expected 400 for params={params}"
                 body = response.json()
                 assert body["detail"]["error"] == "filters_not_supported"
+                assert blocking in body["detail"]["blocking"], (
+                    f"expected {blocking!r} in blocking for params={params}"
+                )
+
+    @pytest.mark.parametrize("params", [{"rated": "true"}, {}], ids=["explicit", "omitted"])
+    @pytest.mark.asyncio
+    async def test_default_filters_are_accepted(
+        self,
+        params: dict[str, str],
+        authed_user_with_session: tuple[dict[str, str], User],
+        fake_insights_agent: Any,
+        monkeypatch: pytest.MonkeyPatch,
+        test_engine: AsyncEngine,
+    ) -> None:
+        """FLAWCHESS-AG regression: the frontend's DEFAULT_FILTERS must pass.
+
+        `DEFAULT_FILTERS.rated` flipped null -> true (SEED-163 2a) while the
+        router still rejected `rated=true`, so the Generate Insights button —
+        gated on those same defaults, and therefore left enabled — 400'd for
+        every user on a filter they had never touched. Both the explicit
+        `rated=true` the frontend sends and an omitted `rated` must be accepted
+        AND must reach compute_findings as rated-only, since the LLM cache key
+        carries no filter and so cannot distinguish two populations.
+        """
+        headers, _user = authed_user_with_session
+        fake_insights_agent(_sample_report())
+
+        captured_filter: dict[str, Any] = {}
+
+        async def _capture_compute_findings(
+            fc: FilterContext, session: AsyncSession, uid: int
+        ) -> EndgameTabFindings:
+            captured_filter.update(fc.model_dump())
+            return EndgameTabFindings(
+                as_of=datetime.datetime.now(datetime.UTC),
+                filters=fc,
+                findings=[],
+                findings_hash="z" * 64,
+            )
+
+        monkeypatch.setattr("app.services.insights_llm.compute_findings", _capture_compute_findings)
+
+        async with httpx.AsyncClient(
+            transport=httpx.ASGITransport(app=app), base_url="http://test"
+        ) as client:
+            response = await client.post(INSIGHTS_ENDPOINT, params=params, headers=headers)
+
+        assert response.status_code == 200, f"expected 200 for params={params}: {response.text}"
+        assert captured_filter["rated_only"] is True
 
 
 # ---------------------------------------------------------------------------

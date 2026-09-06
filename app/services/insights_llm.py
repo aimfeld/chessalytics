@@ -85,7 +85,7 @@ _TC_BAND_METRICS: frozenset[str] = frozenset(
     }
 )
 
-_PROMPT_VERSION = "endgame_v46"  # v46 (20260604 jargon de-priming, prose-only): added Audience ban (percentile/quintile/p-value/etc.), replaced incidental "percentile"→"peer-rank" / "quintile"→"clock bucket" in meta-instructions to stop priming the banned words into output; no contract or payload change
+_PROMPT_VERSION = "endgame_v47"  # v47 (FLAWCHESS-AG, cache-flush only — prompt text unchanged): the router now pins the findings population to rated-only (SEED-163 2a default) instead of all games. The cache key is (user_id, prompt_version, model, opponent_strength) and carries no filter, so rows cached under the old all-games population would have kept being served for up to INSIGHTS_CACHE_MAX_AGE_DAYS. Bumping the version is the only lever that invalidates them.
 _OUTPUT_RETRIES = 2  # CONTEXT.md D-24, RESEARCH.md §2
 _ENDPOINT: LlmLogEndpoint = "insights.endgame"
 

@@ -56,9 +56,25 @@ def _validate_full_history_filters(filters: FilterContext) -> None:
 
     v8 allows only opponent_strength to vary — it genuinely changes which
     games feed the findings, so it's a legitimate cross-section. All other
-    filters (date range, time controls, platforms, rated) truncate the dataset
-    and would produce a partial report that doesn't match the system
-    prompt's "your full history" framing.
+    filters (date range, time controls, platforms, rated) move the dataset
+    away from the default population and would produce a report that doesn't
+    match the system prompt's "your full history" framing.
+
+    "Default" for `rated` means rated-only, NOT unfiltered. SEED-163 (2a)
+    flipped the frontend's `DEFAULT_FILTERS.rated` from `null` (all) to `true`
+    so the analytics population matches the percentile benchmark cohort
+    (`g.rated AND NOT g.is_computer_game`); `opponent_type` is already pinned
+    to "human" inside compute_findings. The gate exists to hold the findings
+    population at ONE value — the LLM cache key is
+    (user_id, prompt_version, model, opponent_strength) and does not carry any
+    filter — so it has to track whatever that default is.
+
+    BUG (FLAWCHESS-AG): this check used to be `if filters.rated_only`, which
+    after the SEED-163 flip rejected exactly the state the default filters
+    produce. The frontend gate (EndgameInsightsBlock.getBlockedReason) compares
+    against DEFAULT_FILTERS and so left the button enabled, and every Generate
+    Insights click 400'd with "Remove Rated filter" on a filter the user had
+    never touched and could not clear.
 
     `color` is intentionally NOT gated here — it's ignored by the findings
     pipeline (compute_findings doesn't forward it), so the frontend's
@@ -71,17 +87,16 @@ def _validate_full_history_filters(filters: FilterContext) -> None:
         blocking.append("Remove Time control filter")
     if filters.platforms:
         blocking.append("Remove Platform filter")
-    if filters.rated_only:
-        blocking.append("Remove Rated filter")
+    if not filters.rated_only:
+        blocking.append("Set the Rated filter to Rated")
     if blocking:
         raise HTTPException(
             status_code=400,
             detail={
                 "error": "filters_not_supported",
                 "message": (
-                    "Insights can only be generated for your full game history. "
-                    + blocking[0]
-                    + "."
+                    "Insights can only be generated for your full rated game "
+                    "history. " + blocking[0] + "."
                 ),
                 "blocking": blocking,
             },
@@ -96,7 +111,7 @@ async def get_endgame_insights(
     platform: list[str] | None = Query(default=None),
     from_date: datetime.date | None = Query(default=None),
     to_date: datetime.date | None = Query(default=None),
-    rated: bool | None = Query(default=None),
+    rated: bool = Query(default=True),
     opponent_gap_min: int | None = Query(default=None),
     opponent_gap_max: int | None = Query(default=None),
     color: Literal["all", "white", "black"] = Query(default="all"),
@@ -109,6 +124,13 @@ async def get_endgame_insights(
     other than opponent_strength must be at defaults — see
     `_validate_full_history_filters`.
 
+    `rated` defaults to True, matching the frontend's `DEFAULT_FILTERS.rated`
+    (SEED-163 2a): an omitted param means the default rated-only population,
+    not "all games". A client that means "all" therefore gets the rated-only
+    report rather than a 400 — the UI can't produce that request (its button
+    is gated on the same default), and pinning beats silently widening the
+    population behind an unchanged cache key.
+
     Opponent strength is accepted as a (gap_min, gap_max) pair to mirror the
     range slider. Only the four preset ranges (any/stronger/similar/weaker) are
     permitted here so the LLM cache key (keyed on preset name) stays stable —
@@ -116,7 +138,8 @@ async def get_endgame_insights(
 
     Returns:
         200: EndgameInsightsResponse with status in {fresh, cache_hit}.
-        400: filters_not_supported (any non-default filter other than opponent_strength,
+        400: filters_not_supported (any non-default filter other than opponent_strength
+             — including `rated=false`, since the default population is rated-only —
              or custom (non-preset) opponent gap range).
         502: InsightsErrorResponse(error='provider_error' | 'validation_failure').
     """
@@ -141,7 +164,7 @@ async def get_endgame_insights(
         color=color,
         time_controls=time_control or [],
         platforms=platform or [],
-        rated_only=bool(rated) if rated is not None else False,
+        rated_only=rated,
     )
     _validate_full_history_filters(filter_context)
     try:
@@ -170,7 +193,7 @@ async def get_cached_endgame_insights(
     platform: list[str] | None = Query(default=None),
     from_date: datetime.date | None = Query(default=None),
     to_date: datetime.date | None = Query(default=None),
-    rated: bool | None = Query(default=None),
+    rated: bool = Query(default=True),
     opponent_gap_min: int | None = Query(default=None),
     opponent_gap_max: int | None = Query(default=None),
     color: Literal["all", "white", "black"] = Query(default="all"),
@@ -208,7 +231,7 @@ async def get_cached_endgame_insights(
         color=color,
         time_controls=time_control or [],
         platforms=platform or [],
-        rated_only=bool(rated) if rated is not None else False,
+        rated_only=rated,
     )
 
     model = settings.PYDANTIC_AI_MODEL_INSIGHTS
