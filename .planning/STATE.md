@@ -11,10 +11,10 @@ progress:
   total_plans: 12
   completed_plans: 12
 milestone_name: Audit Hardening & Dependency Currency
-last_activity: 2026-09-05
+last_activity: 2026-09-06
 current_phase: 218
 current_phase_name: backend-onnxruntime-parity-spike-python-3-14-chain
-last_activity_desc: Completed quick task 260905-p0t — SEED-163 group 2 analytics defaults Human+Rated + Library native-game bypass (main at 599cedfd7, unreleased)
+last_activity_desc: Completed quick task 260906-i5e — FlawChess Engine card header shows a running node count (main at 1b5060661, unreleased)
 ---
 
 # Project State: FlawChess
@@ -808,6 +808,7 @@ None active.
 | 260905-rhc | Version every vendored engine runtime URL (/maia/*, /engine/*, Maia model) with a ?v= query derived from ENGINE_ASSET_CACHE_VERSION so a stale Cloudflare edge entry can never be served after an onnxruntime-web/Stockfish bump; wasmPaths object form, Stockfish degraded path, Workbox precache, source-gate test, changelog | 2026-09-05 | ad9a8f33 | [260905-rhc-version-the-vendored-engine-runtime-urls](./quick/260905-rhc-version-the-vendored-engine-runtime-urls/) |
 | 260905-p0t | SEED-163 group 2: analytics defaults flip to Human + Rated (matches benchmark cohort); `apply_game_filters` gains a Library-only `native_games_bypass_opponent_and_rated` flag so flawchess/pgn games stay browsable in Library Games/Flaws; Library disclosure hint; named "no rated games against humans" empty state on Openings/Endgames/Stats; changelog | 2026-09-05 | 599cedfd7 | [260905-p0t-seed-163-group-2-analytics-default-human](./quick/260905-p0t-seed-163-group-2-analytics-default-human/) |
 | 260906-gu2 | Two-phase Maia ladder (exact selectedElo rung first, then the remaining ladder) + single-rung next-ply prefetch on the analysis board; pending-policy registry so the FlawChess Engine's root policy() awaits the chart's in-flight inference instead of duplicating it; useGemSweep ladderOnly; changelog | 2026-09-06 | b6d4cc48a | [260906-gu2-two-phase-maia-ladder-single-rung-next-p](./quick/260906-gu2-two-phase-maia-ladder-single-rung-next-p/) |
+| 260906-i5e | FlawChess Engine card header shows a running node count: "FlawChess, x ELO, n Nodes" (analogue of the Stockfish card's Depth) | 2026-09-06 | 1b5060661 | [260906-i5e-in-the-flawchess-engine-card-of-the-anal](./quick/260906-i5e-in-the-flawchess-engine-card-of-the-anal/) |
 | 85 | bot cards: per-style border + glow, brighter on hover | 2026-09-05 | c6e957ff1 | — |
 
 ## Deferred Items
