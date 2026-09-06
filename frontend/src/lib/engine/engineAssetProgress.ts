@@ -282,7 +282,14 @@ export function reportEngineAssetProgress(id: EngineAssetId, loaded: number, tot
     [id]: { loaded: monotonicLoaded, total: safeTotal, done: existing?.done ?? false },
   };
   const previousStatus = currentStatus;
-  if (currentStatus !== 'ready') {
+  // Hotfix 2026-09-06 (SEED-158 follow-up): `'unsupported'` is terminal and
+  // must survive another asset's traffic. On an iOS device the Maia gate
+  // fires first and never registers `maia-model`/`ort-runtime`; Stockfish
+  // (unaffected, `workerPool.ts`) then reports progress here, which used to
+  // flip the status to `'downloading'` — un-suppressing the analysis-page
+  // gate, which then sat at 11% (the Stockfish share) forever because Maia's
+  // assets can never complete. Real prod repro: Chrome on iPhone, /analysis.
+  if (currentStatus !== 'ready' && currentStatus !== 'unsupported') {
     currentStatus = 'downloading';
   }
   // Snapshot refresh is ALWAYS unconditional — see refreshSnapshot()'s doc
@@ -323,7 +330,11 @@ export function markEngineAssetReady(id: EngineAssetId): void {
   // `done: false` entry here, rather than being silently absent from
   // `Object.values(currentAssets)` and treated as done by omission.
   const allDone = Object.values(currentAssets).every((entry) => entry?.done);
-  if (allDone) {
+  // Hotfix 2026-09-06 (SEED-158 follow-up): same terminal guard as
+  // `reportEngineAssetProgress` — on a gated device only Stockfish is ever
+  // registered, so `allDone` is trivially true the moment it finishes, and
+  // `'ready'` would claim an engine set that can never be ready.
+  if (allDone && currentStatus !== 'unsupported') {
     currentStatus = 'ready';
   }
   commit();
@@ -370,7 +381,14 @@ export function markEngineAssetFailed(id: EngineAssetId, failureKind?: MaiaFailu
       done: false,
     },
   };
-  currentStatus = 'failed';
+  // Hotfix 2026-09-06 (SEED-158 follow-up): the same guard
+  // `maiaWorkerHost.ts`'s `failAllLeasesAndDropWorker` applies at its call
+  // site, now enforced centrally so a Stockfish-side failure on a gated device
+  // can never downgrade the more specific `'unsupported'` to `'failed'` (which
+  // would offer a Retry that cannot help).
+  if (currentStatus !== 'unsupported') {
+    currentStatus = 'failed';
+  }
   currentFailureKind = failureKind ?? currentFailureKind;
   commit();
 }
