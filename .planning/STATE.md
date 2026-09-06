@@ -31,6 +31,7 @@ Open threads carried forward (not blockers):
 - Phase 217 device legs (iOS <16.4 no-SIMD, low-memory OOM, WebGPU adapter) deferred for lack of hardware (`v2.16-phases/217-.../217-UAT.md`).
 - Phase 215's `Train.guestGate.test.tsx` full-run flake still deferred (`v2.15-phases/215-.../deferred-items.md`).
 - SEED-163 (analytics population excludes bot games) captured 2026-09-04, unscheduled.
+- SEED-158 re-scoped 2026-09-06: the iOS OOM half is closed (quick task 260906-p54); what remains is WebGPU failing on capable devices (iPhone 14 Pro iOS 26, Linux Brave/Chrome, a Windows 11 notebook), everyone silently on the wasm fallback. Collect the `[maia-worker]` console fallback lines first.
 
 ## Project Reference
 
@@ -820,6 +821,7 @@ None active.
 | 260905-p0t | SEED-163 group 2: analytics defaults flip to Human + Rated (matches benchmark cohort); `apply_game_filters` gains a Library-only `native_games_bypass_opponent_and_rated` flag so flawchess/pgn games stay browsable in Library Games/Flaws; Library disclosure hint; named "no rated games against humans" empty state on Openings/Endgames/Stats; changelog | 2026-09-05 | 599cedfd7 | [260905-p0t-seed-163-group-2-analytics-default-human](./quick/260905-p0t-seed-163-group-2-analytics-default-human/) |
 | 260906-gu2 | Two-phase Maia ladder (exact selectedElo rung first, then the remaining ladder) + single-rung next-ply prefetch on the analysis board; pending-policy registry so the FlawChess Engine's root policy() awaits the chart's in-flight inference instead of duplicating it; useGemSweep ladderOnly; changelog | 2026-09-06 | b6d4cc48a | [260906-gu2-two-phase-maia-ladder-single-rung-next-p](./quick/260906-gu2-two-phase-maia-ladder-single-rung-next-p/) |
 | 260906-i5e | FlawChess Engine card header shows a running node count: "FlawChess, x ELO, n Nodes" (analogue of the Stockfish card's Depth) | 2026-09-06 | 1b5060661 | [260906-i5e-in-the-flawchess-engine-card-of-the-anal](./quick/260906-i5e-in-the-flawchess-engine-card-of-the-anal/) |
+| 260906-p54 | Maia iOS OOM (FLAWCHESS-9V): cap ORT wasm memory reservation at 1 GB in both vendored glue files (WebKit allows ~3 large wasm reservations per page; Stockfish x2 + WebGPU worker + wasm respawn = 4), vitest gate, cache version 4→5; Vite dev/preview now send COOP/COEP on 304s (WebKit 245346 killed the second same-URL Stockfish worker) | 2026-09-06 | d7c3fa436 | [260906-p54-cap-maia-ort-wasm-memory-at-1-gb-ios-oom](./quick/260906-p54-cap-maia-ort-wasm-memory-at-1-gb-ios-oom/) |
 | 85 | bot cards: per-style border + glow, brighter on hover | 2026-09-05 | c6e957ff1 | — |
 
 ## Deferred Items
