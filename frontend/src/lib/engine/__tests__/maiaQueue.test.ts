@@ -24,7 +24,14 @@ import { acquireMaiaWorker, ENGINE_PATH } from '../maiaWorkerHost';
 import type { AcquireMaiaWorkerOptions, MaiaAnalyzeResult, MaiaWorkerLease } from '../maiaWorkerHost';
 import type { EngineProviders } from '../types';
 import { maskAndSoftmax, POLICY_VOCAB_SIZE } from '@/lib/maiaEncoding';
-import { MAIA_POLICY_CACHE_MAX, clearMaiaPolicyCache, getCachedPolicy, setCachedPolicy } from '../maiaPolicyCache';
+import {
+  MAIA_POLICY_CACHE_MAX,
+  clearMaiaPolicyCache,
+  getCachedPolicy,
+  setCachedPolicy,
+  markPolicyPending,
+  failPolicyPending,
+} from '../maiaPolicyCache';
 
 vi.mock('../maiaWorkerHost', async (importOriginal) => {
   const actual = await importOriginal<typeof import('../maiaWorkerHost')>();
@@ -294,6 +301,38 @@ describe('createMaiaQueue', () => {
   );
 
   // ─── CACHE-05: shared cache short-circuit ──────────────────────────────
+
+  // ─── Pending-policy coordination (quick 260906-gu2) ─────────────────────
+
+  it('policy() awaits a (fen, elo) another producer marked pending — zero analyze() calls of its own, resolves with the produced policy', async () => {
+    markPolicyPending(TEST_FEN, 1500);
+    const q = createMaiaQueue();
+    const p = q.policy(TEST_FEN, 1500, 'w');
+    expect(createdLeases.every((l) => l.analyzeCalls.length === 0)).toBe(true);
+
+    setCachedPolicy(TEST_FEN, 1500, { e2e4: 0.6, d2d4: 0.4 });
+    await expect(p).resolves.toEqual({ e2e4: 0.6, d2d4: 0.4 });
+    expect(createdLeases.every((l) => l.analyzeCalls.length === 0)).toBe(true);
+    q.terminate();
+  });
+
+  it("policy() falls back to its own analyze() when the pending producer's request fails", async () => {
+    markPolicyPending(TEST_FEN, 1500);
+    const q = createMaiaQueue();
+    const p = q.policy(TEST_FEN, 1500, 'w');
+
+    failPolicyPending(TEST_FEN, 1500, new Error('worker died'));
+    await Promise.resolve();
+    await Promise.resolve();
+    const lease = createdLeases[0];
+    expect(lease).toBeDefined();
+    await driveReady(lease!);
+    expect(analyzeMessages(lease!)).toEqual([{ fen: TEST_FEN, eloInputs: [1500] }]);
+    await resolveLatest(lease!, TEST_FEN, [1500]);
+    const policy = await p;
+    expect(Object.keys(policy).length).toBeGreaterThan(0);
+    q.terminate();
+  });
 
   it("policy() resolves a pre-seeded shared-cache entry (e.g. from useMaiaEngine's write-through) without ever calling lease.analyze()", async () => {
     const queue = createMaiaQueue();

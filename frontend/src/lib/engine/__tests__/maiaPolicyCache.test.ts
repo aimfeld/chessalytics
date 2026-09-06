@@ -8,6 +8,9 @@ import {
   getCachedPolicy,
   setCachedPolicy,
   clearMaiaPolicyCache,
+  markPolicyPending,
+  getPendingPolicy,
+  failPolicyPending,
   MAIA_POLICY_CACHE_MAX,
 } from '../maiaPolicyCache';
 
@@ -54,6 +57,58 @@ describe('maiaPolicyCache', () => {
     setCachedPolicy(FEN, 1500, { e2e4: 1 });
     clearMaiaPolicyCache();
     expect(getCachedPolicy(FEN, 1500)).toBeUndefined();
+  });
+
+  // ─── Pending registry (quick 260906-gu2) ────────────────────────────────
+
+  it('getPendingPolicy is undefined until a producer marks the key pending', () => {
+    expect(getPendingPolicy(FEN, 1500)).toBeUndefined();
+    markPolicyPending(FEN, 1500);
+    expect(getPendingPolicy(FEN, 1500)).toBeInstanceOf(Promise);
+    expect(getPendingPolicy(FEN, 1600)).toBeUndefined();
+    expect(getPendingPolicy(FEN_2, 1500)).toBeUndefined();
+  });
+
+  it('setCachedPolicy resolves the pending promise with the stored policy and clears the pending entry', async () => {
+    markPolicyPending(FEN, 1500);
+    const waiter = getPendingPolicy(FEN, 1500);
+    setCachedPolicy(FEN, 1500, { e2e4: 0.7, d2d4: 0.3 });
+    await expect(waiter).resolves.toEqual({ e2e4: 0.7, d2d4: 0.3 });
+    expect(getPendingPolicy(FEN, 1500)).toBeUndefined();
+    expect(getCachedPolicy(FEN, 1500)).toEqual({ e2e4: 0.7, d2d4: 0.3 });
+  });
+
+  it('failPolicyPending rejects the pending promise and clears the entry; a later mark starts fresh', async () => {
+    markPolicyPending(FEN, 1500);
+    const waiter = getPendingPolicy(FEN, 1500);
+    failPolicyPending(FEN, 1500, new Error('worker died'));
+    await expect(waiter).rejects.toThrow('worker died');
+    expect(getPendingPolicy(FEN, 1500)).toBeUndefined();
+    markPolicyPending(FEN, 1500);
+    expect(getPendingPolicy(FEN, 1500)).toBeInstanceOf(Promise);
+  });
+
+  it('markPolicyPending is a no-op for an already-cached or already-pending key', () => {
+    setCachedPolicy(FEN, 1500, { e2e4: 1 });
+    markPolicyPending(FEN, 1500);
+    expect(getPendingPolicy(FEN, 1500)).toBeUndefined();
+
+    markPolicyPending(FEN_2, 1500);
+    const first = getPendingPolicy(FEN_2, 1500);
+    markPolicyPending(FEN_2, 1500);
+    expect(getPendingPolicy(FEN_2, 1500)).toBe(first);
+  });
+
+  it('failPolicyPending on a key that is not pending is a no-op', () => {
+    expect(() => failPolicyPending(FEN, 1500, new Error('x'))).not.toThrow();
+  });
+
+  it('clearMaiaPolicyCache() rejects and drops pending entries too', async () => {
+    markPolicyPending(FEN, 1500);
+    const waiter = getPendingPolicy(FEN, 1500);
+    clearMaiaPolicyCache();
+    await expect(waiter).rejects.toThrow();
+    expect(getPendingPolicy(FEN, 1500)).toBeUndefined();
   });
 
   it(
