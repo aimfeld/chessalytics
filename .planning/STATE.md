@@ -1,19 +1,19 @@
 ---
 gsd_state_version: 1.0
 milestone: v2.16
+current_phase: 219
+current_phase_name: maia-chart-latency-ort-repin-cross-origin-isolation-progressive-ladder
 status: milestone_complete
 stopped_at: v2.16 closed — phases 216–218 archived, tagged, released, deployed (releases
-last_updated: "2026-09-05T21:23:59.570Z"
-state_head: c6e957ff1e80a6149d39c53b42d32bc1e6d59ef1
+last_updated: "2026-09-06T12:01:11.383Z"
+state_head: d72760c38eeae4bacfbc9d37a451c032cfd3ba76
 progress:
-  total_phases: 3
+  total_phases: 1
   completed_phases: 3
-  total_plans: 12
+  total_plans: 3
   completed_plans: 12
 milestone_name: Audit Hardening & Dependency Currency
 last_activity: 2026-09-06
-current_phase: 218
-current_phase_name: backend-onnxruntime-parity-spike-python-3-14-chain
 last_activity_desc: Completed quick task 260906-i5e — FlawChess Engine card header shows a running node count (main at 1b5060661, unreleased)
 ---
 
@@ -21,7 +21,7 @@ last_activity_desc: Completed quick task 260906-i5e — FlawChess Engine card he
 
 ## Current Position
 
-Phase: none active. **v2.16 Audit Hardening & Dependency Currency closed 2026-09-05** (Phases 216–218,
+Phase: 219 (maia-chart-latency-ort-repin-cross-origin-isolation-progressive-ladder) — READY TO EXECUTE
 12/12 plans). Production is at release #341 (`463b93de7`) and `main` is byte-identical to
 `origin/production` outside `.planning/`. `.planning/phases/` is empty; the next phase or
 `/gsd-new-milestone` starts from a clean trunk.

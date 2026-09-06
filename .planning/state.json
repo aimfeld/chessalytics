@@ -632,6 +632,11 @@
       "number": "218",
       "name": "Backend onnxruntime Parity Spike → Python 3.14 Chain (SEED-162, v2.16)",
       "status": "complete"
+    },
+    {
+      "number": "219",
+      "name": "Maia Chart Latency — ORT 1.27 Re-pin, Cross-Origin Isolation & Progressive Ladder Paint (standalone)",
+      "status": "pending"
     }
   ],
   "next": {
@@ -639,5 +644,5 @@
     "label": "Show progress",
     "reason": "Unsure of state — showing progress"
   },
-  "updated_at": "2026-09-05T09:00:35.850Z"
+  "updated_at": "2026-09-06T12:01:11.423Z"
 }

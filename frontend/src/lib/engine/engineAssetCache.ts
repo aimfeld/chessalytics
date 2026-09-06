@@ -53,8 +53,15 @@ import type { EngineAssetId } from './engineAssetProgress';
  * entry keys on a URL nothing will ever request again. Bumping makes the
  * next open/sweep delete those orphans rather than retain ~67 MB
  * unreachable forever.
+ *
+ * Bumped 3 -> 4 (Phase 219-01, 2026-09-06): the six vendored onnxruntime-web
+ * runtime files under `public/maia/` were re-vendored back to 1.27.0
+ * (different bytes, same filenames — 1.29.0's wasm build measured 1.5-2.3x
+ * slower single-threaded, see `219-MEASUREMENTS.md`), so every returning
+ * browser must discard its cached 1.29.0-era bytes rather than keep serving
+ * the slower runtime indefinitely.
  */
-const ENGINE_ASSET_CACHE_VERSION = 3;
+const ENGINE_ASSET_CACHE_VERSION = 4;
 
 /**
  * The shared `?v=<n>` query suffix, derived from `ENGINE_ASSET_CACHE_VERSION`

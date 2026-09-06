@@ -657,4 +657,119 @@ describe('useMaiaEngine', () => {
     expect(result.current.hasFailed).toBe(true);
     expect(result.current.isReady).toBe(false);
   });
+
+  // ─── Dev-only pipeline timing (D-15 measurement harness, Phase 219-01) ─────
+
+  describe('dev-only pipeline timing', () => {
+    const TIMING_PREFIX = '[maia-timing]';
+
+    afterEach(() => {
+      vi.unstubAllEnvs();
+    });
+
+    it('emits no [maia-timing] line for any phase when import.meta.env.DEV is false', async () => {
+      vi.stubEnv('DEV', false);
+      const consoleInfo = vi.spyOn(console, 'info').mockImplementation(() => {});
+      vi.advanceTimersByTime(200);
+      renderHook(() => useMaiaEngine({ fen: TEST_FEN, enabled: true, selectedElo: 1550 }));
+      await driveReady(currentLease);
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(200);
+      });
+      await act(async () => {
+        currentLease.latestAnalyzeCall()?.resolve(buildResultMessage(TEST_FEN, [1550]));
+        await Promise.resolve();
+      });
+      await resolveLatest(currentLease, TEST_FEN);
+
+      const timingCalls = consoleInfo.mock.calls.filter((c) => String(c[0]).includes(TIMING_PREFIX));
+      expect(timingCalls).toHaveLength(0);
+    });
+
+    it('emits exactly one timing line per completed live phase, each with an integer millisecond count', async () => {
+      vi.stubEnv('DEV', true);
+      const consoleInfo = vi.spyOn(console, 'info').mockImplementation(() => {});
+      vi.advanceTimersByTime(200);
+      renderHook(() => useMaiaEngine({ fen: TEST_FEN, enabled: true, selectedElo: 1550 }));
+      await driveReady(currentLease);
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(200);
+      });
+
+      // Phase 1: exact selected-ELO rung on the live position.
+      await act(async () => {
+        currentLease.latestAnalyzeCall()?.resolve(buildResultMessage(TEST_FEN, [1550]));
+        await Promise.resolve();
+      });
+      // Phase 3 (no prefetchFen given): remaining ladder rungs.
+      await resolveLatest(currentLease, TEST_FEN);
+
+      const timingCalls = consoleInfo.mock.calls.filter((c) => String(c[0]).includes(TIMING_PREFIX));
+      expect(timingCalls).toHaveLength(2);
+      for (const call of timingCalls) {
+        expect(String(call[0])).toMatch(/\d+ms/);
+        const match = /(\d+)ms/.exec(String(call[0]));
+        expect(match).not.toBeNull();
+        expect(Number.isInteger(Number(match?.[1]))).toBe(true);
+      }
+    });
+
+    it('a prefetch completion emits its own line labelled distinctly from the live-position phases', async () => {
+      vi.stubEnv('DEV', true);
+      const consoleInfo = vi.spyOn(console, 'info').mockImplementation(() => {});
+      vi.advanceTimersByTime(200);
+      renderHook(() =>
+        useMaiaEngine({ fen: TEST_FEN, enabled: true, selectedElo: 1550, prefetchFen: TEST_FEN_2 }),
+      );
+      await driveReady(currentLease);
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(200);
+      });
+      // Phase 1: exact rung on the live position.
+      await act(async () => {
+        currentLease.latestAnalyzeCall()?.resolve(buildResultMessage(TEST_FEN, [1550]));
+        await Promise.resolve();
+      });
+      // Phase 2: exact rung on the prefetch position.
+      await act(async () => {
+        currentLease.latestAnalyzeCall()?.resolve(buildResultMessage(TEST_FEN_2, [1550]));
+        await Promise.resolve();
+      });
+
+      const timingCalls = consoleInfo.mock.calls
+        .filter((c) => String(c[0]).includes(TIMING_PREFIX))
+        .map((c) => String(c[0]));
+      expect(timingCalls).toHaveLength(2);
+      const labels = new Set(timingCalls.map((line) => line.replace(/\d+ms$/, '').trim()));
+      expect(labels.size).toBe(2); // exact-rung and prefetch use distinct labels
+    });
+
+    it('emits no timing line for a live result discarded as stale (fen no longer matches the current position)', async () => {
+      vi.stubEnv('DEV', true);
+      const consoleInfo = vi.spyOn(console, 'info').mockImplementation(() => {});
+      const { rerender, result } = renderHook(
+        ({ fen }: { fen: string }) => useMaiaEngine({ fen, enabled: true, selectedElo: 1500 }),
+        { initialProps: { fen: TEST_FEN } },
+      );
+      await driveReady(currentLease);
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(200);
+      });
+      expect(result.current.isAnalyzing).toBe(true);
+      const staleCall = currentLease.latestAnalyzeCall();
+
+      rerender({ fen: TEST_FEN_2 });
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(200);
+      });
+
+      await act(async () => {
+        staleCall?.resolve(buildResultMessage(TEST_FEN));
+        await Promise.resolve();
+      });
+
+      const timingCalls = consoleInfo.mock.calls.filter((c) => String(c[0]).includes(TIMING_PREFIX));
+      expect(timingCalls).toHaveLength(0);
+    });
+  });
 });

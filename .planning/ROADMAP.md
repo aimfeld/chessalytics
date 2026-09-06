@@ -183,10 +183,89 @@
 | 216. Audit Bugs and Quick Wins (SEED-161, v2.16) | 7/7 | Complete    | 2026-09-04 |
 | 217. Frontend Major Bumps — Vitest 5 / jsdom 30 + onnxruntime-web 1.29 (SEED-162, v2.16) | 2/2 | Complete    | 2026-09-05 |
 | 218. Backend onnxruntime Parity Spike → Python 3.14 Chain (SEED-162, v2.16) | 3/3 | Complete    | 2026-09-05 |
+| 219. Maia Chart Latency — ORT 1.27 Re-pin, Cross-Origin Isolation & Progressive Ladder Paint (standalone) | 0/3 | Not started | — |
 
 ## Active Phases
 
-None. v2.16 closed 2026-09-05; the next phase or `/gsd-new-milestone` starts here.
+Standalone phase (no open milestone). Continues absolute numbering from v2.16's Phase 218.
+
+### Phase 219: Maia Chart Latency — ORT 1.27 Re-pin, Cross-Origin Isolation & Progressive Ladder Paint
+
+**Goal**: Make the analysis board's Human Move Probability chart appear about as fast as
+maiachess.com's on devices without WebGPU. Three measured causes (`219-MEASUREMENTS.md`,
+2026-09-06, reference box: 16 threads, no WebGPU adapter): the 2026-09-05 bump to
+`onnxruntime-web` 1.29.0 made the 21-rung ladder ~2x slower than 1.27.0 and its wasm build
+does not scale with threads; FlawChess ships no COOP/COEP headers so the Maia worker is
+pinned to one wasm thread while maiachess.com runs four; and the chart stays blank until all
+21 rungs land where maiachess paints 9. Fix all three as three bisectable, sequential
+squash-merges: re-pin + re-vendor 1.27.0 with a headless benchmark gate for future bumps;
+ship `Cross-Origin-Opener-Policy: same-origin` + `Cross-Origin-Embedder-Policy: require-corp`
+site-wide (Caddy, Vite dev/preview, inverted CI guard, CORP on the Umami host) and let the
+worker pick `min(4, ceil(cores/2))` threads when `crossOriginIsolated`; paint the chart from
+an 11-rung coarse pass and refine to the full ladder.
+
+**Requirements:** MAIAPERF-01, MAIAPERF-02, MAIAPERF-03, MAIAPERF-04, MAIAPERF-05, MAIAPERF-06, MAIAPERF-07
+
+Requirement definitions (phase-local IDs; no open milestone REQUIREMENTS.md):
+
+- MAIAPERF-01 — `onnxruntime-web` resolves 1.27.0; the six vendored runtime files, README
+  SHA table and pairing match; `ENGINE_ASSET_CACHE_VERSION` bumped in the same commit.
+- MAIAPERF-02 — A headless Node benchmark script times the 21-rung and 1-rung wasm inference
+  at 1 and 4 threads; documented as the manual gate for every future `onnxruntime-web` bump.
+- MAIAPERF-03 — Every document response from prod (Caddy), dev and preview (Vite) carries
+  COOP `same-origin` + COEP `require-corp`; `self.crossOriginIsolated === true` on fresh AND
+  service-worker-served navigations; the CI guard asserts presence instead of absence.
+- MAIAPERF-04 — Google login, Umami tracking, Google Fonts and Cloudflare Insights keep working
+  under COEP; `analytics.flawchess.com` sends `Cross-Origin-Resource-Policy: cross-origin`.
+- MAIAPERF-05 — `maia-worker.js` uses `min(4, ceil(hardwareConcurrency/2))` wasm threads when
+  isolated and 1 otherwise, on both the wasm-only and WebGPU paths; the WebGPU → wasm respawn
+  path still works.
+- MAIAPERF-06 — The chart paints from a coarse 11-rung pass (every second rung, always
+  including the selected rung) and refines in place when the remaining 10 land; verdict, gem
+  classification and the gem sweep keep waiting for the complete ladder (`isLadderComplete`).
+- MAIAPERF-07 — Measured on the reference box (wasm path): full ladder ≤ 1.5 s (today ≈ 4 s),
+  first chart paint ≤ 0.8 s after the position settles (today ≈ 4.5 s), exact-rung call
+  ≤ 100 ms (today ≈ 250 ms); numbers recorded per plan summary.
+
+**Success criteria**:
+
+1. MAIAPERF-01/02 land as one squash-merge with the full pre-merge gate plus `npm run build`
+   green; the benchmark script's output for 1.27.0 is pasted in the summary and is within
+   noise of the `219-MEASUREMENTS.md` 1.27 rows.
+2. MAIAPERF-03/04/05 land as one squash-merge; browser UAT (automated via claude-in-chrome
+   where possible) records `crossOriginIsolated`, the thread count the worker chose, a Google
+   login round-trip, an Umami event, and fonts rendering; hardware-only legs are listed as
+   HUMAN-UAT, not skipped silently.
+3. MAIAPERF-06 lands as one squash-merge; a test proves the coarse pass renders before the
+   fill pass and that the verdict does not change between them.
+4. MAIAPERF-07's three numbers are met and recorded; if any target is missed, the summary says
+   by how much and why rather than moving the target.
+5. `CHANGELOG.md` `[Unreleased]` carries a user-facing entry; the post-deploy Cloudflare purge
+   of `/maia/*` is listed as a release step.
+
+**Out of scope**: multi-threaded Stockfish (seed), ladder redefinition, model quantization,
+WebGPU-path optimisation, IndexedDB model storage.
+
+**Plans:** 3 plans
+
+Plans:
+**Wave 1**
+
+- [ ] 219-01-PLAN.md — onnxruntime-web 1.27.0 re-pin, six-file re-vendor, cache-version bump, headless benchmark gate (MAIAPERF-01/02/07)
+
+**Wave 2** *(blocked on Wave 1 completion)*
+
+- [ ] 219-02-PLAN.md — COOP/COEP site-wide (Caddy + Vite), CORP on the analytics host, inverted CI guard, fail-safe wasm thread count (MAIAPERF-03/04/05/07)
+
+**Wave 3** *(blocked on Wave 2 completion)*
+
+- [ ] 219-03-PLAN.md — coarse-then-fill ladder paint, explicit `isLadderComplete`, all eight perElo consumers classified (MAIAPERF-06/07)
+
+**Cross-cutting constraints:**
+
+- No backend, migration or dev-database work is performed by this plan (D-16); `bin/reset_db.sh` is never run.
+
+**Context:** `.planning/phases/219-maia-chart-latency-ort-repin-cross-origin-isolation-progressive-ladder/219-CONTEXT.md`
 
 ## Backlog
 

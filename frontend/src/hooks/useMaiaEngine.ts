@@ -76,6 +76,37 @@ const MAIA_CACHE_MAX = 256;
  */
 const WDL_RUNG_TOLERANCE_ELO = 50;
 
+/**
+ * Dev-only pipeline phase timing (D-15 measurement harness, Phase 219-01).
+ * `useMaiaEngine.ts` module header describes the three-phase pipeline this
+ * instruments: the exact selected-ELO rung on the live position, the same
+ * exact rung on the prefetch position, and the remaining-ladder request.
+ * These numbers feed the reference-box readings recorded per plan against
+ * `219-MEASUREMENTS.md`'s targets — build once here, reuse in 219-02/219-03.
+ */
+const MAIA_TIMING_LOG_PREFIX = '[maia-timing]';
+
+/** Phase labels for `logMaiaPhaseTiming` — one per pipeline stage (D-15). */
+const MAIA_TIMING_PHASE_EXACT_RUNG = 'exact rung';
+const MAIA_TIMING_PHASE_PREFETCH = 'prefetch';
+const MAIA_TIMING_PHASE_LADDER = 'ladder';
+
+type MaiaTimingPhase =
+  | typeof MAIA_TIMING_PHASE_EXACT_RUNG
+  | typeof MAIA_TIMING_PHASE_PREFETCH
+  | typeof MAIA_TIMING_PHASE_LADDER;
+
+/**
+ * Logs one completed pipeline phase's elapsed time. No-op unless
+ * `import.meta.env.DEV` — production bundles carry no `[maia-timing]` output
+ * (Vite/esbuild dead-code-eliminate the call at build time; verified by
+ * grepping `dist/assets/*.js` for the prefix string).
+ */
+function logMaiaPhaseTiming(phase: MaiaTimingPhase, elapsedMs: number): void {
+  if (!import.meta.env.DEV) return;
+  console.info(`${MAIA_TIMING_LOG_PREFIX} ${phase} ${Math.round(elapsedMs)}ms`);
+}
+
 // ─── Types ───────────────────────────────────────────────────────────────────
 
 export interface UseMaiaEngineOptions {
@@ -170,6 +201,8 @@ interface PlannedRequest {
   elos: number[];
   /** True when `fen` is the live position (drives `isAnalyzing`); false for a prefetch. */
   live: boolean;
+  /** Pipeline phase label for dev-only timing (D-15 measurement harness). */
+  phase: MaiaTimingPhase;
 }
 
 // ─── Helpers ─────────────────────────────────────────────────────────────────
@@ -197,17 +230,19 @@ function planNextRequest(
   const current = cache.get(fen);
   const ladderDone = isLadderComplete(current);
   if (!ladderOnly) {
-    if (!ladderDone && !hasRung(current, selectedElo)) return { fen, elos: [selectedElo], live: true };
+    if (!ladderDone && !hasRung(current, selectedElo)) {
+      return { fen, elos: [selectedElo], live: true, phase: MAIA_TIMING_PHASE_EXACT_RUNG };
+    }
     if (prefetchFen !== null && prefetchFen !== fen) {
       const next = cache.get(prefetchFen);
       if (!isLadderComplete(next) && !hasRung(next, selectedElo)) {
-        return { fen: prefetchFen, elos: [selectedElo], live: false };
+        return { fen: prefetchFen, elos: [selectedElo], live: false, phase: MAIA_TIMING_PHASE_PREFETCH };
       }
     }
   }
   if (ladderDone) return null;
   const missing = MAIA_ELO_LADDER.filter((elo) => !hasRung(current, elo));
-  return { fen, elos: missing, live: true };
+  return { fen, elos: missing, live: true, phase: MAIA_TIMING_PHASE_LADDER };
 }
 
 /**
@@ -339,6 +374,7 @@ export function useMaiaEngine({
       inFlightRef.current = req;
       if (req.live) setIsAnalyzing(true);
       for (const elo of req.elos) markPolicyPending(req.fen, elo);
+      const issuedAt = performance.now();
       lease.analyze(req.fen, req.elos).then(
         (msg) => {
           // Cache every completed inference, even one whose position was already
@@ -348,6 +384,12 @@ export function useMaiaEngine({
           const merged = mergeMaiaResult(cacheRef.current.get(msg.fen), msg);
           cacheResult(msg.fen, merged);
           if (leaseRef.current !== lease) return; // this lease has since been released/replaced
+          // A live request whose on-screen position moved on before it landed is
+          // stale — its elapsed time no longer describes anything visible. A
+          // prefetch has no such notion (it never targets the on-screen position
+          // at issue time, by design), so it always reports.
+          const isStaleLiveResult = req.live && msg.fen !== currentFenRef.current;
+          if (!isStaleLiveResult) logMaiaPhaseTiming(req.phase, performance.now() - issuedAt);
           // Only paint it if it still matches the on-screen position (stale guard).
           if (msg.fen === currentFenRef.current) setLatestResult(merged);
           if (inFlightRef.current === req) {

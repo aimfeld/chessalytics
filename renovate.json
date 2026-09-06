@@ -22,6 +22,10 @@
     {
       "matchManagers": ["dockerfile"],
       "groupName": "docker base images"
+    },
+    {
+      "matchPackageNames": ["onnxruntime-web"],
+      "groupName": "onnxruntime-web (run scripts/bench_maia_ort_wasm.mjs before merging — Phase 219)"
     }
   ],
   "vulnerabilityAlerts": {

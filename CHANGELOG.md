@@ -20,6 +20,7 @@ in `YYYY-MM-DD` (Europe/Zurich).
 
 - The analysis board's eval bar and the FlawChess Engine card now appear about 200 ms after navigating to a new position instead of waiting for the full Maia rating ladder (about 2–4 s on devices without WebGPU). Maia infers your selected rating first, then quietly pre-computes the next move on the line, so stepping forward through a game is instant; the Human Move Probability chart still fills in over the next few seconds.
 
+- The Human Move Probability chart is roughly twice as fast on devices without WebGPU, because the browser inference runtime that computes it was returned to a faster earlier version. (Phase 219)
 - Practice-bot persona cards now carry a colored border and glow matching each bot's playing style, brightening on hover.
 - Openings, Endgames and Stats now default to rated games against human opponents on a fresh load, matching the population the percentile benchmarks compare against — the Opponent and Rated filters still switch it back to any opponent or any rated status. The Library keeps showing FlawChess practice-bot games and pasted PGNs regardless of those two filters.
 
