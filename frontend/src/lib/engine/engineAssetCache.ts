@@ -60,8 +60,17 @@ import type { EngineAssetId } from './engineAssetProgress';
  * slower single-threaded, see `219-MEASUREMENTS.md`), so every returning
  * browser must discard its cached 1.29.0-era bytes rather than keep serving
  * the slower runtime indefinitely.
+ *
+ * Bumped 4 -> 5 (quick 260906-p54, 2026-09-06): both vendored ORT glue
+ * loaders (`ort-wasm-simd-threaded.mjs`, `ort-wasm-simd-threaded.asyncify.mjs`)
+ * now carry a 1 GB wasm memory reservation cap (different bytes, same
+ * filenames) fixing FLAWCHESS-9V, an iOS Safari out-of-memory crash caused by
+ * WebKit's three-large-reservation-per-page budget. Every returning browser
+ * must discard the cached 4 GB-reserving loaders. The `?v=<n>` query this
+ * constant feeds also invalidates the Cloudflare edge, so no manual CF purge
+ * is needed.
  */
-const ENGINE_ASSET_CACHE_VERSION = 4;
+const ENGINE_ASSET_CACHE_VERSION = 5;
 
 /**
  * The shared `?v=<n>` query suffix, derived from `ENGINE_ASSET_CACHE_VERSION`

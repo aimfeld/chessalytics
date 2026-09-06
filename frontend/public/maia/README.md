@@ -83,6 +83,61 @@ requires the **Asyncify** build (`ort-wasm-simd-threaded.asyncify.{mjs,wasm}`) i
 pair is used by other bundles (`ort.min.js`, `ort.all.min.js`), not this one. The asyncify pair is
 vendored here; the JSEP pair was never added (unused by this worker's chosen bundle).
 
+## Local patch: 1 GB wasm memory cap (quick 260906-p54)
+
+**What:** in both `.mjs` loaders (`ort-wasm-simd-threaded.mjs`,
+`ort-wasm-simd-threaded.asyncify.mjs`) the single imported-shared-memory
+literal's `maximum` went from 65536 pages (4 GiB) to 16384 pages (1 GiB). The
+`.wasm` binaries and every other byte are untouched.
+
+**Why:** WebKit lets one page hold only three large wasm memory reservations
+before `new WebAssembly.Memory(...)` throws `RangeError: Out of memory`. The
+Stockfish pool (2 workers on mobile) takes two of the three slots; on iOS 26
+the Maia host tries a WebGPU worker first (reservation 3), then on
+`webgpu-unavailable` respawns a wasm-pinned worker (reservation 4) while the
+first is still dying. That 4th reservation is FLAWCHESS-9V. Device RAM is
+irrelevant here — six 1 GiB shared memories fit at once on a 6 GB phone; the
+binding constraint is address space, not RAM.
+
+**Legality:** a lower `maximum` on an imported memory is legal as long as it
+stays `<=` the module's declared max. `shared:false` is NOT legal (import
+type mismatch), so the shared flag stays `!0`.
+
+**Re-apply after EVERY re-vendor:** the documented `cp` command below
+overwrites both loaders with stock 65536-page bytes. Re-apply with:
+
+```bash
+cd frontend
+sed -i 's/maximum:65536/maximum:16384/' \
+  public/maia/ort-wasm-simd-threaded.mjs \
+  public/maia/ort-wasm-simd-threaded.asyncify.mjs
+```
+
+**How to verify:** per file, occurrence counts of `maximum:16384` == 1 and
+`maximum:65536` == 0:
+
+```bash
+grep -o 'maximum:16384' <file> | wc -l   # 1
+grep -o 'maximum:65536' <file> | wc -l   # 0
+```
+
+(Plain `grep -c` counts matching LINES, which happens to equal the occurrence
+count only because these files are minified onto one line.) Plus the vitest
+gate `frontend/src/lib/engine/__tests__/ortRuntimeMemoryCap.test.ts`, which
+fails CI if the patch is lost on a future re-vendor.
+
+**Hash note:** the SHA-256 table above records the UPSTREAM v1.27.0 bytes,
+which the two `.mjs` files below no longer match by design (post-patch):
+
+| File | SHA-256 (post-patch) |
+|------|---------|
+| `ort-wasm-simd-threaded.mjs` | `ef292a5650859ae45c19c4b579acecda5217bb5fa20bda57fed28ad7d6fc87bf` |
+| `ort-wasm-simd-threaded.asyncify.mjs` | `8443997b013f348bffc37ffa0d09b75a4cdc4f23df732314cd8bc79e36799acf` |
+
+**Residual risk:** the whole ORT heap (model weights plus activations) must
+now fit in 1 GiB. Today's 45 MB Maia-3 at up to 4 threads is far inside it; a
+materially larger model would need the cap raised (and this section updated).
+
 ## Runtime binary ownership (Phase 213-09, G-213-35 second half)
 
 As of Phase 213-09 the two `ort-wasm-simd-threaded*.wasm` binaries above are no
