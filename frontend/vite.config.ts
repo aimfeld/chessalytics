@@ -2,7 +2,7 @@
 import { createHash } from 'crypto'
 import fs from 'fs'
 import path from 'path'
-import { defineConfig, type Plugin } from 'vite'
+import { defineConfig, type Plugin, type ViteDevServer, type PreviewServer } from 'vite'
 import react from '@vitejs/plugin-react'
 import tailwindcss from '@tailwindcss/vite'
 import { VitePWA } from 'vite-plugin-pwa'
@@ -36,6 +36,43 @@ function forceExitAfterBuild(): Plugin {
   }
 }
 
+// Single source of truth for both server.headers/preview.headers (the 200-path
+// second line of defense, quick 260906-p54) and crossOriginIsolationPlugin
+// below (the 304-path fix, since server.headers is a 200-only mechanism).
+const CROSS_ORIGIN_ISOLATION_HEADERS: Record<string, string> = {
+  'Cross-Origin-Opener-Policy': 'same-origin',
+  'Cross-Origin-Embedder-Policy': 'require-corp',
+}
+
+// server.headers/preview.headers only apply on the 200 path. Dev sends
+// Cache-Control: no-cache, so every second load of a given URL revalidates
+// (304 Not Modified), and WebKit refuses to run a worker script whose 304
+// response lacks COEP (WebKit bug 245346) — this killed the SECOND Stockfish
+// pool worker (same glue URL as the first) within ~10 ms with a bare `error`
+// Event, while workers loaded from distinct URLs started fine. Prod is
+// unaffected: Caddy's `header` directive does emit on 304s too. This plugin
+// sets both headers on every response, 200 or 304, closing that gap for dev
+// and `vite preview`.
+function crossOriginIsolationPlugin(): Plugin {
+  const attachHeaders = (server: ViteDevServer | PreviewServer): void => {
+    server.middlewares.use((_req, res, next) => {
+      for (const [name, value] of Object.entries(CROSS_ORIGIN_ISOLATION_HEADERS)) {
+        res.setHeader(name, value)
+      }
+      next()
+    })
+  }
+  return {
+    name: 'cross-origin-isolation',
+    configureServer(server) {
+      attachHeaders(server)
+    },
+    configurePreviewServer(server) {
+      attachHeaders(server)
+    },
+  }
+}
+
 // Vitest ceilings. These are NOT budgets: a passing test never waits for them,
 // only a hung or failing one does, so raising them costs nothing on the happy
 // path. Vitest's 5s default sits within one CPU-contention spike of the
@@ -63,6 +100,7 @@ export default defineConfig({
     exclude: ['stockfish', 'onnxruntime-web'],
   },
   plugins: [
+    crossOriginIsolationPlugin(),
     ogImageHashPlugin(),
     react(),
     tailwindcss(),
@@ -177,15 +215,12 @@ export default defineConfig({
     // (Caddy) and `vite preview` (below), so `self.crossOriginIsolated` is
     // `true` in every environment and the Maia worker's thread-count formula
     // (maia-worker.js's chooseWasmThreadCount()) behaves the same everywhere.
-    headers: {
-      'Cross-Origin-Opener-Policy': 'same-origin',
-      'Cross-Origin-Embedder-Policy': 'require-corp',
-    },
+    // Applied only on the 200 path (a Vite/connect limitation); a second line
+    // of defense alongside crossOriginIsolationPlugin() above, which also
+    // covers the 304 path (quick 260906-p54).
+    headers: CROSS_ORIGIN_ISOLATION_HEADERS,
   },
   preview: {
-    headers: {
-      'Cross-Origin-Opener-Policy': 'same-origin',
-      'Cross-Origin-Embedder-Policy': 'require-corp',
-    },
+    headers: CROSS_ORIGIN_ISOLATION_HEADERS,
   },
 })
