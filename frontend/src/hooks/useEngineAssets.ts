@@ -23,6 +23,7 @@ import {
   subscribeEngineAssets,
   type EngineAssetId,
   type EngineAssetStatus,
+  type EngineUnsupportedReason,
 } from '@/lib/engine/engineAssetProgress';
 import type { MaiaFailureKind } from '@/lib/maiaWorkerErrors';
 
@@ -47,6 +48,8 @@ export interface EngineAssetsState {
    * one). Read straight off the snapshot — it needs no per-`required` derivation.
    */
   failureKind: MaiaFailureKind | null;
+  /** Hotfix 2026-09-06 (SEED-158): which gate produced an `'unsupported'` status — drives the gate's copy. */
+  unsupportedReason: EngineUnsupportedReason | null;
 }
 
 /**
@@ -87,6 +90,7 @@ export function useEngineAssets(required: readonly EngineAssetId[]): EngineAsset
       totalBytes: totalSum,
       ready,
       failureKind: snapshot.failureKind,
+      unsupportedReason: snapshot.unsupportedReason,
     };
   }, [snapshot, required]);
 }

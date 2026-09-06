@@ -312,7 +312,7 @@ describe('EngineReadyGate', () => {
 
   it('the unsupported terminal state renders no button of any kind, and never the LoadError trailer copy', () => {
     act(() => {
-      markEngineAssetsUnsupported();
+      markEngineAssetsUnsupported('no-wasm-simd');
     });
     render(<EngineReadyGate surface="bots" onStart={vi.fn()} onRetry={vi.fn()} />);
 
@@ -320,6 +320,21 @@ describe('EngineReadyGate', () => {
     expect(within(gate).queryAllByRole('button')).toHaveLength(0);
     expect(screen.getByTestId('engine-gate-unsupported')).toBeTruthy();
     expect(gate.textContent).not.toContain('Please try again in a moment');
+  });
+
+  it('the iOS-gated terminal state (hotfix 2026-09-06, SEED-158) renders its own copy and, like unsupported, no button of any kind', () => {
+    act(() => {
+      markEngineAssetsUnsupported('ios-webkit');
+    });
+    render(<EngineReadyGate surface="bots" onStart={vi.fn()} onRetry={vi.fn()} />);
+
+    const gate = screen.getByTestId('engine-ready-gate');
+    expect(within(gate).queryAllByRole('button')).toHaveLength(0);
+    expect(screen.getByTestId('engine-gate-unsupported-ios')).toBeTruthy();
+    expect(screen.queryByTestId('engine-gate-unsupported')).toBeNull();
+    expect(gate.textContent).toContain('switched off on iPhone and iPad');
+    // Must not claim the device lacks a capability it actually has.
+    expect(gate.textContent).not.toContain("doesn't support the technology");
   });
 
   it('the failed terminal state renders a Retry button that clears the failed status and calls onRetry exactly once', () => {
@@ -505,7 +520,7 @@ describe('EngineReadyGate', () => {
 
     it('captures exactly one Sentry exception for the unsupported terminal state, with device context and no interpolated message', () => {
       act(() => {
-        markEngineAssetsUnsupported();
+        markEngineAssetsUnsupported('no-wasm-simd');
       });
       render(<EngineReadyGate surface="bots" onStart={vi.fn()} onRetry={vi.fn()} />);
 
@@ -515,6 +530,21 @@ describe('EngineReadyGate', () => {
         expect.objectContaining({
           tags: expect.objectContaining({ source: 'engine-ready-gate', engine_failure: 'unsupported' }),
           contexts: expect.objectContaining({ engine_device: expect.any(Object) }),
+        }),
+      );
+    });
+
+    it('tags the unsupported capture with the gate reason so the iOS population is separable from no-SIMD (same grouping message)', () => {
+      act(() => {
+        markEngineAssetsUnsupported('ios-webkit');
+      });
+      render(<EngineReadyGate surface="bots" onStart={vi.fn()} onRetry={vi.fn()} />);
+
+      expect(Sentry.captureException).toHaveBeenCalledTimes(1);
+      expect(Sentry.captureException).toHaveBeenCalledWith(
+        expect.objectContaining({ message: 'Engine cold start: device cannot run the Maia model' }),
+        expect.objectContaining({
+          tags: expect.objectContaining({ engine_failure: 'unsupported', unsupported_reason: 'ios-webkit' }),
         }),
       );
     });
@@ -678,7 +708,7 @@ describe('EngineReadyGate', () => {
 
     it('analysis: the unsupported terminal state does NOT auto-close — onStart is never called (defensive; Analysis.tsx additionally suppresses mounting the gate at all in this state)', () => {
       act(() => {
-        markEngineAssetsUnsupported();
+        markEngineAssetsUnsupported('no-wasm-simd');
       });
       const onStart = vi.fn();
       render(<EngineReadyGate surface="analysis" onStart={onStart} onRetry={vi.fn()} />);
@@ -696,7 +726,7 @@ describe('EngineReadyGate', () => {
 
       resetEngineAssetsForTests();
       act(() => {
-        markEngineAssetsUnsupported();
+        markEngineAssetsUnsupported('no-wasm-simd');
       });
       const onStartUnsupported = vi.fn();
       render(<EngineReadyGate surface="bots" onStart={onStartUnsupported} onRetry={vi.fn()} />);

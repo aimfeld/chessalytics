@@ -493,7 +493,7 @@ describe('reportEngineAssetProgress — coalesced notifications (G-213-35)', () 
 
     listener = vi.fn();
     unsubscribe = subscribeEngineAssets(listener);
-    markEngineAssetsUnsupported();
+    markEngineAssetsUnsupported('no-wasm-simd');
     expect(listener).toHaveBeenCalledTimes(1);
     unsubscribe();
 
@@ -544,5 +544,32 @@ describe('reportEngineAssetProgress — coalesced notifications (G-213-35)', () 
     const MAX_NOTIFICATIONS = 101; // 0..100 inclusive
     expect(listener.mock.calls.length).toBeLessThanOrEqual(MAX_NOTIFICATIONS);
     unsubscribe();
+  });
+});
+
+// ─── Hotfix 2026-09-06 (SEED-158): unsupportedReason ─────────────────────────
+
+describe('unsupportedReason', () => {
+  beforeEach(() => {
+    resetEngineAssetsForTests();
+  });
+
+  it('is null until a gate fires, records the reason with the unsupported status, and resets to null', () => {
+    expect(getEngineAssetsSnapshot().unsupportedReason).toBeNull();
+
+    markEngineAssetsUnsupported('ios-webkit');
+    expect(getEngineAssetsSnapshot().status).toBe('unsupported');
+    expect(getEngineAssetsSnapshot().unsupportedReason).toBe('ios-webkit');
+
+    resetEngineAssetsForTests();
+    expect(getEngineAssetsSnapshot().unsupportedReason).toBeNull();
+  });
+
+  it('is exposed on the useEngineAssets snapshot shape (referential stability preserved between reads)', () => {
+    markEngineAssetsUnsupported('no-wasm-simd');
+    const first = getEngineAssetsSnapshot();
+    const second = getEngineAssetsSnapshot();
+    expect(first).toBe(second);
+    expect(first.unsupportedReason).toBe('no-wasm-simd');
   });
 });
