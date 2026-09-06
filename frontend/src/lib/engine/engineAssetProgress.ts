@@ -29,7 +29,7 @@ export type EngineAssetId = 'maia-model' | 'stockfish-wasm' | 'ort-runtime';
 export type EngineAssetStatus = 'idle' | 'unsupported' | 'downloading' | 'ready' | 'failed';
 
 /**
- * Why the store reports `'unsupported'` (hotfix 2026-09-06, SEED-158):
+ * Why the store reports `'unsupported'` (SEED-158, 2026-09-06):
  * `'no-wasm-simd'` is the D-13 probe (the device can never run the model);
  * `'ios-webkit'` is the iOS/iPadOS gate (the device COULD run it, but Safari
  * kills the page when it does — see `iosWebKit.ts`). `EngineReadyGate` shows
@@ -345,9 +345,10 @@ export function markEngineAssetReady(id: EngineAssetId): void {
  * failed). Plan 04 owns this state's UI; Task 1 calls it from the
  * `wasmSimd.ts` choke point in `maiaWorkerHost.ts`.
  *
- * Hotfix 2026-09-06 (SEED-158): also reached from the iOS/iPadOS gate at the
- * same choke point, with `reason: 'ios-webkit'`, so the gate's copy can say
- * what is actually going on instead of "your device lacks the technology".
+ * SEED-158: also reached from the iOS/iPadOS gate at the same choke point in
+ * `maiaWorkerHost.ts` (every iOS device, before any probe or download) with
+ * `reason: 'ios-webkit'`, so the gate's copy can say what is actually going
+ * on instead of "your device lacks the technology".
  */
 export function markEngineAssetsUnsupported(reason: EngineUnsupportedReason): void {
   currentStatus = 'unsupported';

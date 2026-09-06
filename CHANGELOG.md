@@ -18,6 +18,8 @@ in `YYYY-MM-DD` (Europe/Zurich).
 - Maia analysis no longer fails with an out-of-memory error on iPhones. The browser inference runtime was reserving four times more memory address space than iOS Safari allows a page to hold alongside the Stockfish engine workers.
 - Hotfix follow-up: on iPhone and iPad the analysis board no longer hangs in the "Getting the engine ready" dialog at 11%. The Stockfish download was overwriting the "engine switched off on iOS" state, so the dialog waited for a Maia download that was never going to start.
 - Hotfix: the analysis board no longer crashes the whole tab on iPhone and iPad. The previous fix let the Maia engine start on iOS for the first time, and Safari then killed the page within seconds of stepping through moves. Maia (the Human Move Probability chart, FlawChess Engine and the practice bots) is now switched off on iOS with a clear message on the bots page; the analysis board, Stockfish evaluation and game imports keep working there.
+- Maia stays switched off on iPhone and iPad for now. A WebGPU-only attempt at bringing it back was measured on an iPhone 14 Pro and still crashed the analysis page, even with the Stockfish workers disabled, so the iOS gate from the hotfix remains in place; the analysis board, Stockfish evaluation and game imports keep working there.
+- The WebGPU check before the Maia download now inspects the same graphics adapter the inference runtime will use. On machines with two GPUs the check could pass on one adapter while the runtime picked the other and failed, downloading the 25 MB WebGPU build for nothing before falling back to the CPU build.
 
 ### Changed
 

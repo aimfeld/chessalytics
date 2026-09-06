@@ -147,14 +147,15 @@ const TERMINAL_COPY: Record<TerminalVariant, { title: string; body: string; test
       'and import your games from chess.com or lichess.',
     testId: 'engine-gate-unsupported',
   },
-  // Hotfix 2026-09-06 (SEED-158): iOS/iPadOS WebKit CAN run the model but
-  // Safari kills the page while it does (see `iosWebKit.ts`), so the generic
-  // `unsupported` copy above ("doesn't support the technology") would be
-  // untrue here. Same dead-end shape (no button): a retry or reload runs
-  // straight into the same kill. Only the bots surface ever shows this
-  // (Analysis.tsx suppresses every `unsupported` mount, see the note above).
+  // SEED-158: iOS/iPadOS WebKit CAN run the model but Safari kills the page
+  // while it does (see `iosWebKit.ts`; re-measured 2026-09-07 on WebGPU with
+  // Stockfish off, still killed), so the generic "your device doesn't support
+  // the technology" copy would be untrue here. Same dead-end shape (no
+  // button): a retry or reload runs straight into the same kill. Only the
+  // bots surface ever shows this (Analysis.tsx suppresses every `unsupported`
+  // mount, see the note above).
   'unsupported-ios': {
-    title: "The bot engine is switched off on iPhone and iPad",
+    title: 'The bot engine is switched off on iPhone and iPad',
     body:
       'Safari on iOS shuts the page down while the bot engine is thinking, so FlawChess ' +
       "doesn't start it there for now. You can still use the analysis board and import " +

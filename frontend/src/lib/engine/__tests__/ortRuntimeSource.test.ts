@@ -15,6 +15,7 @@ import * as Sentry from '@sentry/react';
 import {
   ensureOrtRuntime,
   fetchWasmOnlyOrtRuntime,
+  probeOrtBackendOnce,
   resetOrtRuntimeSourceForTests,
   ORT_RUNTIME_WASM_ONLY_PATH,
   ORT_RUNTIME_ASYNCIFY_PATH,
@@ -219,6 +220,21 @@ describe('ensureOrtRuntime — backend selection falls safe to wasm', () => {
 
     expect(result.backend).toBe('webgpu');
     expect(fetchMock).toHaveBeenCalledWith(ORT_RUNTIME_ASYNCIFY_PATH);
+  });
+
+  it('probes the adapter ORT itself will use — requestAdapter({ powerPreference: "high-performance" }) (SEED-158)', async () => {
+    // Bug fix: an option-less requestAdapter() can return a DIFFERENT adapter
+    // than onnxruntime-web's native WebGPU EP (which always asks for
+    // high-performance) — on a multi-GPU box the probe then said "webgpu" for
+    // an adapter ORT never used, and the 25.7 MB asyncify build was fetched
+    // only to fail on the fp16 Cast node inside the worker.
+    stubGpuWithFeature(true);
+    vi.stubGlobal('fetch', vi.fn().mockImplementation(async () => makeImmediateResponse(new Uint8Array([1, 2, 3]))));
+
+    await ensureOrtRuntime();
+
+    const gpu = (navigator as Navigator & { gpu: { requestAdapter: ReturnType<typeof vi.fn> } }).gpu;
+    expect(gpu.requestAdapter).toHaveBeenCalledWith({ powerPreference: 'high-performance' });
   });
 
   it('an adapter NOT reporting shader-f16 selects wasm and requests the wasm-only URL', async () => {
@@ -643,5 +659,34 @@ describe('ensureOrtRuntime — f16 predicate is load-bearing (see mutation proof
     await ensureOrtRuntime();
 
     expect(fetchMock).not.toHaveBeenCalledWith(ORT_RUNTIME_ASYNCIFY_PATH);
+  });
+});
+
+// ─── probeOrtBackendOnce — the fetch-free iOS entry point (SEED-158) ───────
+
+describe('probeOrtBackendOnce — decides without fetching and shares the memoised decision', () => {
+  it('answers the backend, registers ort-runtime as pending synchronously, and issues NO fetch', async () => {
+    stubGpuWithFeature(false);
+    const fetchMock = vi.fn();
+    vi.stubGlobal('fetch', fetchMock);
+
+    const pending = probeOrtBackendOnce();
+    // CR-02: registered in the same synchronous call, before the adapter probe resolves.
+    expect(getEngineAssetsSnapshot().assets['ort-runtime']).toMatchObject({ loaded: 0, done: false });
+
+    await expect(pending).resolves.toBe('wasm');
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
+  it('a later ensureOrtRuntime() joins the same decision instead of re-probing', async () => {
+    stubGpuWithFeature(true);
+    vi.stubGlobal('fetch', vi.fn().mockImplementation(async () => makeImmediateResponse(new Uint8Array([1, 2, 3]))));
+
+    await expect(probeOrtBackendOnce()).resolves.toBe('webgpu');
+    const result = await ensureOrtRuntime();
+
+    expect(result.backend).toBe('webgpu');
+    const gpu = (navigator as Navigator & { gpu: { requestAdapter: ReturnType<typeof vi.fn> } }).gpu;
+    expect(gpu.requestAdapter).toHaveBeenCalledTimes(1);
   });
 });

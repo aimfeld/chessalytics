@@ -1,22 +1,34 @@
 /**
- * iosWebKit — a synchronous "is this iOS/iPadOS WebKit?" probe, run at the
- * same D-13 choke point as `wasmSimd.ts` (`maiaWorkerHost.ts`'s
- * `ensureSpawned()`), before any Worker is constructed or any byte fetched.
+ * iosWebKit — a synchronous "is this iOS/iPadOS WebKit?" probe, consulted by
+ * `maiaWorkerHost.ts` at the D-13 choke point (`ensureSpawned()`/`spawn()`)
+ * and at both wasm-respawn sites (`respawnPinnedToWasm()`).
  *
- * Hotfix 2026-09-06 (SEED-158, iOS section): with the 1 GB wasm memory cap
- * from quick task 260906-p54 in place, Maia STARTS on an iPhone 14 Pro
- * (iOS 26.6.1) and Safari then kills the WebContent process within 10-20 s
- * of stepping through moves on /analysis ("A problem repeatedly occurred").
- * Measured on the device: the wasm heap stays flat at ~110 MB, one thread
- * and one Stockfish worker make no difference, and bypassing `session.run`
- * survives indefinitely, so executing ORT's wasm kernels is what WebKit's
- * silent per-page memory-limit termination reacts to (prime suspect: the
- * optimizing wasm tier compiling ORT's very large SIMD functions). That is
- * not controllable from the page, and WebGPU also fails on the same device
- * (adapter present, session/warmup fails, falls back to the fatal wasm
- * path), so the only lever that keeps /analysis usable on iOS is to not
- * start Maia there at all. Narrow this gate to "wasm only" once SEED-158
- * makes WebGPU work on iOS.
+ * SEED-158 (2026-09-06): on iOS the Maia wasm path is FATAL. With the 1 GB
+ * wasm memory cap from quick task 260906-p54 in place, Maia STARTS on an
+ * iPhone 14 Pro (iOS 26.6.1) and Safari then kills the WebContent process
+ * within 10-20 s of stepping through moves on /analysis ("A problem
+ * repeatedly occurred"). Measured on the device: the wasm heap stays flat at
+ * ~110 MB, one thread and one Stockfish worker make no difference, and
+ * bypassing `session.run` survives indefinitely, so executing ORT's wasm
+ * kernels is what WebKit's silent per-page memory-limit termination reacts to
+ * (prime suspect: the optimizing wasm tier compiling ORT's very large SIMD
+ * functions; microsoft/onnxruntime#26827 samples WebKit 26 pinned in
+ * `JSC::Wasm::parseAndCompileOMG` on the same kind of workload). Not
+ * controllable from the page.
+ *
+ * WebGPU on the same device runs the model fine in isolation (same phone,
+ * iOS 26 Safari, /maia-diag.html: `ready backend=webgpu`, 30 consecutive
+ * 21-rung ladders at ~510 ms each), and a WebGPU-only rule shipped on main
+ * for one day (78276d717 .. a4a1f4f6d). It was withdrawn on 2026-09-07: the
+ * REAL /analysis page still gets killed with Maia on WebGPU, one wasm
+ * thread, cross-origin isolated, every Stockfish worker stubbed out and the
+ * FlawChess Engine off, so Maia alone is enough to cross WebKit's per-page
+ * limit there. The last pre-Phase-219 release never ran Maia on this device
+ * either (graceful `oom` terminal), so nothing regressed: iOS has never
+ * carried Maia on /analysis. Hence the blanket gate: `maiaWorkerHost.ts`
+ * reports `unsupported` with reason `'ios-webkit'` for every iOS/iPadOS
+ * device before any probe or download. Narrow it only after a real
+ * /analysis session survives on the reference phone.
  *
  * Every browser on iOS/iPadOS is WebKit (Chrome, Firefox and Brave for iOS
  * wrap WKWebView), so "iOS" is the whole population; there is no
