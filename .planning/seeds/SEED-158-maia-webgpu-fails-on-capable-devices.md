@@ -2,7 +2,7 @@
 id: SEED-158
 status: active
 planted: 2026-08-29
-updated: 2026-09-06
+updated: 2026-09-06 (evening: wasm path kills the iOS page, see the iOS section)
 planted_during: Sentry triage of the 2026-08-29 18:54 UTC iPad OOM cascade
   (FLAWCHESS-9V regression + new FLAWCHESS-A2/A3), same session as quick task
   260829-tku (oom terminal variant in EngineReadyGate)
@@ -88,6 +88,39 @@ fallback itself is not captured as an event, only as a breadcrumb plus (since d2
    error text.
 4. **Measure the win.** With WebGPU working, re-run the Phase 219 latency measurement
    (219-MEASUREMENTS.md) on the desktop box; the wasm 4-thread ceiling is the current floor.
+
+## iOS is worse than "no WebGPU": the wasm path kills the page (measured 2026-09-06)
+
+With the 1 GB ceiling in place Maia *starts* on the iPhone 14 Pro (iOS 26.6.1) and then Safari
+kills the WebContent process within 10 to 20 s of stepping through moves on `/analysis`
+("A problem repeatedly occurred" after the automatic reload dies too). Bisect on the device,
+each step served live from the dev server:
+
+- 1 wasm thread instead of 2: still dies.
+- Stockfish pool 1 instead of 2: still dies.
+- Wasm heap logged after every inference: flat at 110 MB across both page lifetimes, so it is
+  not heap growth and not the SEED-113 tensor leak (disposal is in place).
+- `session.run` bypassed (model loaded, neutral fake outputs returned): survives indefinitely.
+- No `com.apple.WebKit.WebContent-*.ips` and no `JetsamEvent-*` in Settings > Analytics Data
+  for the kills, which matches WebKit's own silent per-page memory-limit termination, not a
+  kernel jetsam and not a JIT crash.
+
+So executing ORT's wasm kernels is fatal on iOS Safari while the wasm heap stays small. Prime
+suspect: JavaScriptCore's optimizing wasm tier (OMG/B3) compiling ORT's very large SIMD
+functions in the background with a footprint far above the heap; the ~10 s delay after
+`ready` fits tier-up timing. Not proven (no Mac for Web Inspector's memory timeline), and not
+controllable from the page.
+
+Consequence for the release carrying quick task 260906-p54: before the cap, iOS users got a
+graceful `oom` terminal state; after it they get a dead analysis tab. Until either WebGPU
+works on iOS 26 or the wasm kill is understood, the wasm Maia path should be gated off on iOS
+Safari (a `unsupported`-style terminal state with honest copy), which is the only lever that
+keeps `/analysis` usable there. Collecting the WebGPU failure reason on the phone is the first
+step of the plan above and would remove the need for the gate.
+
+Prior art from the ORT tracker: microsoft/onnxruntime#22776 ("Support iOS devices") and
+#22086 (wasm load failures on iOS 17) are open with no maintainer guidance; WebGPU on iOS was
+not an option there either at the time.
 
 ## Constraints / prior art
 
