@@ -38,6 +38,12 @@
   <button id="btnOrtWasm" class="danger">ORT wasm via worker (kills iOS page)</button>
 </div>
 <div>
+  <button id="btnMaiaVaried" disabled>5a. Maia varied shapes x60 (needs 2)</button>
+  <button id="btnSf">5b. Stockfish x3 loop (60 s)</button>
+  <button id="btnMix" disabled>5c. Analysis mix: 5a + 5b together (needs 2)</button>
+  <button id="btnSfStop">stop Stockfish</button>
+</div>
+<div>
   <button id="btnCopy">Copy log</button>
   <button id="btnClear">Clear log + stored state</button>
 </div>
@@ -214,7 +220,7 @@ async function runProbe() {
 // ─── 2. ORT via the real maia-worker.js ─────────────────────────────────────
 let maiaWorker = null;
 let pendingResult = null;
-function killMaia() { if (maiaWorker) { maiaWorker.onmessage = null; maiaWorker.onerror = null; maiaWorker.terminate(); maiaWorker = null; } document.getElementById('btnStress').disabled = true; }
+function killMaia() { if (maiaWorker) { maiaWorker.onmessage = null; maiaWorker.onerror = null; maiaWorker.terminate(); maiaWorker = null; } for (const id of ['btnStress', 'btnMaiaVaried', 'btnMix']) document.getElementById(id).disabled = true; }
 
 function runOrt(backend) {
   killMaia();
@@ -237,6 +243,8 @@ function runOrt(backend) {
       summary('ort', `ORT ${backend}: READY (backend=${m.backend}, ${m.numThreads} threads)`, 'ok');
       setState({ phase: 'idle' });
       document.getElementById('btnStress').disabled = false;
+      document.getElementById('btnMaiaVaried').disabled = false;
+      document.getElementById('btnMix').disabled = false;
       return;
     }
     if (m.type === 'webgpu-unavailable') {
@@ -356,6 +364,88 @@ async function runMainOrt() {
   }
   setState({ phase: 'idle' });
 }
+
+
+// ─── 5. /analysis-like mix: varied Maia shapes + Stockfish workers ──────────
+const GAME_FENS = [
+  STARTPOS,
+  'rnbqkbnr/pppppppp/8/8/4P3/8/PPPP1PPP/RNBQKBNR b KQkq e3 0 1',
+  'rnbqkbnr/pppp1ppp/8/4p3/4P3/8/PPPP1PPP/RNBQKBNR w KQkq e6 0 2',
+  'rnbqkbnr/pppp1ppp/8/4p3/4P3/5N2/PPPP1PPP/RNBQKB1R b KQkq - 1 2',
+  'r1bqkbnr/pppp1ppp/2n5/4p3/4P3/5N2/PPPP1PPP/RNBQKB1R w KQkq - 2 3',
+  'r1bqkbnr/pppp1ppp/2n5/4p3/2B1P3/5N2/PPPP1PPP/RNBQK2R b KQkq - 3 3',
+  'r1bqk1nr/pppp1ppp/2n5/2b1p3/2B1P3/5N2/PPPP1PPP/RNBQK2R w KQkq - 4 4',
+  'r1bqk1nr/pppp1ppp/2n5/2b1p3/2B1P3/2P2N2/PP1P1PPP/RNBQK2R b KQkq - 0 4',
+  'r1bqk2r/pppp1ppp/2n2n2/2b1p3/2B1P3/2P2N2/PP1P1PPP/RNBQK2R w KQkq - 1 5',
+  'r1bqk2r/pppp1ppp/2n2n2/2b1p3/2B1P3/2PP1N2/PP3PPP/RNBQK2R b KQkq - 0 5',
+  'r1bqk2r/ppp2ppp/2np1n2/2b1p3/2B1P3/2PP1N2/PP3PPP/RNBQK2R w KQkq - 0 6',
+  'r1bqk2r/ppp2ppp/2np1n2/2b1p3/2B1P3/2PP1N2/PP3PPP/RNBQ1RK1 b kq - 1 6',
+  '8/8/4k3/8/8/4K3/4P3/8 w - - 0 1',
+  '8/5k2/8/8/8/8/R4PK1/5r2 w - - 0 1',
+];
+// Mirrors what /analysis sends: exact rung (1), prefetch (1), coarse pass (11), fill (10), full (21), engine policy calls (1-3).
+const BATCH_PLAN = [1, 1, 11, 10, 21, 1, 2, 3, 21, 1];
+const ELO_COARSE = ELO_LADDER.filter((_, i) => i % 2 === 0);
+const ELO_FILL = ELO_LADDER.filter((_, i) => i % 2 === 1);
+function elosFor(n) { if (n === 11) return ELO_COARSE; if (n === 10) return ELO_FILL; if (n === 21) return ELO_LADDER; return ELO_LADDER.slice(5, 5 + n); }
+
+async function runMaiaVaried(tag = 'maia-varied') {
+  if (!maiaWorker) return;
+  const N = 60;
+  log(`--- 5a. ${tag}: ${N} x analyze over ${GAME_FENS.length} positions, batch plan ${BATCH_PLAN.join('/')} ---`);
+  const lat = [];
+  for (let i = 1; i <= N; i++) {
+    const fen = GAME_FENS[i % GAME_FENS.length]; const n = BATCH_PLAN[i % BATCH_PLAN.length];
+    setState({ phase: tag, detail: `run ${i}/${N} batch=${n} sf=${sfBestmoves} fen=${fen.slice(0, 30)}` });
+    const t = performance.now();
+    await analyzeOnce(fen, elosFor(n));
+    lat.push(performance.now() - t);
+    if (i % 10 === 0) log(`${tag} run ${i}: ${lat[lat.length - 1].toFixed(0)} ms batch=${n} sf bestmoves=${sfBestmoves} (still alive)`);
+  }
+  lat.sort((a, b) => a - b);
+  log(`${tag} done: median ${lat[Math.floor(N / 2)].toFixed(0)} ms, max ${lat[N - 1].toFixed(0)} ms`);
+  summary(tag, `${tag}: ${N} runs survived (median ${lat[Math.floor(N / 2)].toFixed(0)} ms)`, 'ok');
+  setState({ phase: 'idle' });
+}
+
+// Stockfish: same glue + hash-URL contract as stockfishWorkerSource.ts, 3 workers = live eval + MOBILE_POOL_SIZE 2.
+const SF_GLUE = `/engine/stockfish-18-lite-single.js${ASSET_VERSION_QUERY}`;
+const SF_WASM = `/engine/stockfish-18-lite-single.wasm${ASSET_VERSION_QUERY}`;
+const SF_COUNT = 3, SF_HASH_MB = 8, SF_RUN_MS = 60000;
+let sfWorkers = [], sfBestmoves = 0, sfStopAt = 0;
+function sfStop() { sfStopAt = 0; for (const w of sfWorkers) { w.postMessage('stop'); w.terminate(); } if (sfWorkers.length) log(`stockfish: ${sfWorkers.length} workers terminated after ${sfBestmoves} bestmoves`); sfWorkers = []; }
+function sfSpawnOne(idx) {
+  const w = new Worker(`${SF_GLUE}#${encodeURIComponent(SF_WASM)}`);
+  let pos = idx;
+  const go = () => { pos = (pos + 1) % GAME_FENS.length; w.postMessage(`position fen ${GAME_FENS[pos]}`); w.postMessage('go movetime 1500 nodes 2000000'); };
+  w.onerror = (e) => log(`[sf${idx}] onerror ${e.message}`);
+  w.onmessage = (e) => {
+    const line = String(e.data);
+    if (line === 'uciok') { w.postMessage(`setoption name Hash value ${SF_HASH_MB}`); if (idx === 0) w.postMessage('setoption name MultiPV value 2'); w.postMessage('isready'); }
+    else if (line === 'readyok') { log(`[sf${idx}] ready`); go(); }
+    else if (line.startsWith('bestmove')) { sfBestmoves++; if (sfBestmoves % 10 === 0) log(`stockfish bestmoves=${sfBestmoves}`); if (performance.now() < sfStopAt) go(); else { w.terminate(); } }
+  };
+  w.postMessage('uci');
+  sfWorkers.push(w);
+}
+function runStockfish() {
+  sfStop(); sfBestmoves = 0; sfStopAt = performance.now() + SF_RUN_MS;
+  log(`--- 5b. stockfish x${SF_COUNT} (Hash ${SF_HASH_MB} MB, movetime 1500) for ${SF_RUN_MS / 1000} s ---`);
+  setState({ phase: 'stockfish', detail: `x${SF_COUNT}` });
+  for (let i = 0; i < SF_COUNT; i++) sfSpawnOne(i);
+  setTimeout(() => { if (sfWorkers.length) { log(`stockfish loop finished: ${sfBestmoves} bestmoves, alive`); summary('sf', `stockfish x${SF_COUNT} 60 s survived (${sfBestmoves} bestmoves)`, 'ok'); } sfStop(); if (!maiaBusy) setState({ phase: 'idle' }); }, SF_RUN_MS + 2500);
+}
+let maiaBusy = false;
+async function runMix() {
+  log('--- 5c. analysis mix: stockfish x3 + maia varied shapes, concurrently ---');
+  runStockfish();
+  maiaBusy = true;
+  try { await runMaiaVaried('mix-maia'); } finally { maiaBusy = false; }
+}
+document.getElementById('btnMaiaVaried').onclick = () => runMaiaVaried().catch((e) => { log(`5a crashed: ${errText(e)}`); setState({ phase: 'idle' }); });
+document.getElementById('btnSf').onclick = () => runStockfish();
+document.getElementById('btnSfStop').onclick = () => sfStop();
+document.getElementById('btnMix').onclick = () => runMix().catch((e) => { log(`5c crashed: ${errText(e)}`); setState({ phase: 'idle' }); });
 
 // ─── wiring ─────────────────────────────────────────────────────────────────
 document.getElementById('btnProbe').onclick = () => runProbe().catch((e) => log(`probe crashed: ${errText(e)}`));
