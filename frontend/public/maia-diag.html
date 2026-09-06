@@ -1,0 +1,373 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Maia WebGPU diag (SEED-158)</title>
+<style>
+  body { font: 14px/1.4 -apple-system, system-ui, sans-serif; margin: 12px; background: #111; color: #eee; }
+  h1 { font-size: 18px; margin: 0 0 8px; }
+  h2 { font-size: 15px; margin: 18px 0 6px; color: #9cf; }
+  button { font-size: 14px; padding: 8px 12px; margin: 4px 4px 4px 0; border-radius: 6px; border: 1px solid #555; background: #222; color: #eee; }
+  button.danger { border-color: #a33; color: #f88; }
+  label { display: inline-block; margin: 4px 10px 4px 0; }
+  pre { white-space: pre-wrap; word-break: break-word; background: #000; padding: 8px; border-radius: 6px; font-size: 12px; }
+  textarea { width: 100%; height: 260px; background: #000; color: #ddd; font: 11px/1.3 ui-monospace, monospace; border: 1px solid #444; }
+  .ok { color: #8f8; } .bad { color: #f88; } .warn { color: #fc8; }
+  #summary div { padding: 2px 0; }
+</style>
+</head>
+<body>
+<h1>Maia WebGPU diag (SEED-158)</h1>
+<p>Everything below is also written to <b>localStorage</b> on every line, so if Safari kills this page, reload it and the previous run's log is shown.</p>
+
+<h2>Summary</h2>
+<div id="summary"></div>
+
+<h2>Actions</h2>
+<div>
+  <button id="btnProbe">1. Probe WebGPU (main + worker)</button>
+  <button id="btnOrtWebgpu">2. ORT WebGPU via maia-worker.js</button>
+  <label><input type="checkbox" id="chkSingle"> force 1 wasm thread</label>
+  <label><input type="checkbox" id="chkOwnDevice"> pass own GPUDevice (f16) to ORT</label>
+  <label>ORT powerPreference: <select id="selPower"><option value="">(ORT default: high-performance)</option><option value="low-power">low-power</option><option value="high-performance">high-performance</option></select></label>
+</div>
+<div>
+  <button id="btnStress" disabled>3. Stress: 30 x 21-rung ladder</button>
+  <button id="btnMainOrt">4. ORT WebGPU on MAIN thread</button>
+  <button id="btnOrtWasm" class="danger">ORT wasm via worker (kills iOS page)</button>
+</div>
+<div>
+  <button id="btnCopy">Copy log</button>
+  <button id="btnClear">Clear log + stored state</button>
+</div>
+
+<h2>Log</h2>
+<textarea id="log" readonly></textarea>
+
+<h2>Previous session (from localStorage)</h2>
+<pre id="prev">(none)</pre>
+
+<script>
+'use strict';
+const ASSET_VERSION_QUERY = '?v=5';
+const ASSET_CACHE_NAME = 'flawchess-engine-assets-v5';
+const LS_LOG = 'maia-diag-log';
+const LS_STATE = 'maia-diag-state';
+const ELO_LADDER = Array.from({ length: 21 }, (_, i) => 600 + i * 100);
+const STARTPOS = 'rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1';
+const NUM_SQUARES = 64, PLANES_PER_SQUARE = 12;
+const LIMIT_KEYS = ['maxBufferSize', 'maxStorageBufferBindingSize', 'maxUniformBufferBindingSize', 'maxComputeWorkgroupStorageSize',
+  'maxComputeInvocationsPerWorkgroup', 'maxComputeWorkgroupSizeX', 'maxComputeWorkgroupsPerDimension', 'maxStorageBuffersPerShaderStage', 'maxBindGroups'];
+
+const logEl = document.getElementById('log');
+const sumEl = document.getElementById('summary');
+let lines = [];
+function ts() { return new Date().toISOString().slice(11, 23); }
+function log(msg) {
+  const line = `${ts()} ${msg}`;
+  lines.push(line);
+  logEl.value = lines.join('\n');
+  logEl.scrollTop = logEl.scrollHeight;
+  try { localStorage.setItem(LS_LOG, logEl.value); } catch {}
+}
+function setState(patch) {
+  try {
+    const cur = JSON.parse(localStorage.getItem(LS_STATE) || '{}');
+    localStorage.setItem(LS_STATE, JSON.stringify({ ...cur, ...patch, at: new Date().toISOString() }));
+  } catch {}
+}
+function summary(key, text, cls) {
+  let el = document.getElementById('sum-' + key);
+  if (!el) { el = document.createElement('div'); el.id = 'sum-' + key; sumEl.appendChild(el); }
+  el.textContent = text; el.className = cls || '';
+}
+function errText(e) { return e && e.stack ? `${e.name}: ${e.message}\n${e.stack}` : String(e && e.message || e); }
+
+// ─── Previous session ───────────────────────────────────────────────────────
+(function showPrev() {
+  try {
+    const st = localStorage.getItem(LS_STATE);
+    const lg = localStorage.getItem(LS_LOG);
+    if (st || lg) document.getElementById('prev').textContent = `state: ${st || '(none)'}\n\n${lg || ''}`;
+    const s = st ? JSON.parse(st) : null;
+    if (s && s.phase && s.phase !== 'idle') summary('prev', `PREVIOUS PAGE DIED during: ${s.phase} (${s.detail || ''}) at ${s.at}`, 'bad');
+  } catch {}
+  setState({ phase: 'idle', detail: '' });
+})();
+
+// ─── Environment ────────────────────────────────────────────────────────────
+log(`UA: ${navigator.userAgent}`);
+log(`platform=${navigator.platform} maxTouchPoints=${navigator.maxTouchPoints} cores=${navigator.hardwareConcurrency} deviceMemory=${navigator.deviceMemory}`);
+log(`isSecureContext=${isSecureContext} crossOriginIsolated=${crossOriginIsolated} SharedArrayBuffer=${typeof SharedArrayBuffer}`);
+summary('env', `secure=${isSecureContext} isolated=${crossOriginIsolated} navigator.gpu(main)=${!!navigator.gpu}`, isSecureContext ? 'ok' : 'bad');
+window.addEventListener('error', (e) => log(`WINDOW ERROR: ${e.message} @${e.filename}:${e.lineno}`));
+window.addEventListener('unhandledrejection', (e) => log(`UNHANDLED REJECTION: ${errText(e.reason)}`));
+
+// ─── 1. Probe ───────────────────────────────────────────────────────────────
+async function probeGpu(gpu, tag) {
+  if (!gpu) { log(`[${tag}] navigator.gpu is ${typeof gpu}`); return { ok: false, reason: 'no navigator.gpu' }; }
+  let adapter;
+  try { adapter = await gpu.requestAdapter(); } catch (e) { log(`[${tag}] requestAdapter threw: ${errText(e)}`); return { ok: false, reason: 'requestAdapter threw' }; }
+  if (!adapter) { log(`[${tag}] requestAdapter -> null`); return { ok: false, reason: 'adapter null' }; }
+  const feats = [...adapter.features].sort();
+  const info = adapter.info ? { vendor: adapter.info.vendor, architecture: adapter.info.architecture, device: adapter.info.device, description: adapter.info.description } : null;
+  const limits = {};
+  for (const k of LIMIT_KEYS) limits[k] = adapter.limits[k];
+  log(`[${tag}] adapter info=${JSON.stringify(info)} isFallback=${adapter.isFallbackAdapter}`);
+  log(`[${tag}] features=${feats.join(',')}`);
+  log(`[${tag}] limits=${JSON.stringify(limits)}`);
+  log(`[${tag}] wgslLanguageFeatures=${gpu.wgslLanguageFeatures ? [...gpu.wgslLanguageFeatures].join(',') : 'n/a'} preferredCanvasFormat=${gpu.getPreferredCanvasFormat ? gpu.getPreferredCanvasFormat() : 'n/a'}`);
+  // Mirror what ORT's native WebGPU EP asks for: every feature it knows about that the adapter has, plus adapter limits as required limits.
+  const wanted = ['shader-f16', 'subgroups', 'timestamp-query', 'chromium-experimental-timestamp-query-inside-passes', 'chromium-experimental-subgroup-matrix'].filter((f) => adapter.features.has(f));
+  const requiredLimits = {};
+  for (const k of ['maxBufferSize', 'maxStorageBufferBindingSize', 'maxComputeWorkgroupStorageSize', 'maxComputeInvocationsPerWorkgroup', 'maxComputeWorkgroupsPerDimension']) requiredLimits[k] = adapter.limits[k];
+  try {
+    const dev = await adapter.requestDevice({ requiredFeatures: wanted, requiredLimits });
+    dev.lost.then((l) => log(`[${tag}] DEVICE LOST: reason=${l.reason} msg=${l.message}`));
+    log(`[${tag}] requestDevice OK with features=[${wanted.join(',')}] + adapter limits`);
+    dev.destroy();
+    return { ok: true, feats, info };
+  } catch (e) {
+    log(`[${tag}] requestDevice(features+limits) threw: ${errText(e)}`);
+    try { const d2 = await adapter.requestDevice({ requiredFeatures: wanted }); d2.destroy(); log(`[${tag}] requestDevice(features only) OK -> a LIMIT is the problem`); }
+    catch (e2) { log(`[${tag}] requestDevice(features only) threw too: ${errText(e2)}`); }
+    return { ok: false, reason: 'requestDevice threw' };
+  }
+}
+
+const workerProbeSrc = `
+  const LIMIT_KEYS = ${JSON.stringify(LIMIT_KEYS)};
+  self.onmessage = async () => {
+    const out = { gpuType: typeof navigator.gpu, isolated: self.crossOriginIsolated, sab: typeof SharedArrayBuffer, cores: navigator.hardwareConcurrency };
+    try {
+      if (!navigator.gpu) throw new Error('no navigator.gpu in worker');
+      const adapter = await navigator.gpu.requestAdapter();
+      if (!adapter) throw new Error('requestAdapter -> null in worker');
+      out.features = [...adapter.features].sort();
+      out.info = adapter.info ? { vendor: adapter.info.vendor, architecture: adapter.info.architecture, device: adapter.info.device, description: adapter.info.description } : null;
+      out.limits = {}; for (const k of LIMIT_KEYS) out.limits[k] = adapter.limits[k];
+      const wanted = ['shader-f16','subgroups','timestamp-query'].filter((f) => adapter.features.has(f));
+      const dev = await adapter.requestDevice({ requiredFeatures: wanted });
+      out.device = 'OK features=' + wanted.join(',');
+      // Tiny compute smoke test: does a trivial f16-using shader compile + run in the worker?
+      const mod = dev.createShaderModule({ code: 'enable f16; @group(0) @binding(0) var<storage, read_write> b: array<f32>; @compute @workgroup_size(1) fn main(@builtin(global_invocation_id) id: vec3<u32>) { let h: f16 = f16(b[id.x]) * 2.0h; b[id.x] = f32(h); }' });
+      const ci = await mod.getCompilationInfo();
+      out.shaderMessages = ci.messages.map((m) => m.type + ': ' + m.message);
+      dev.pushErrorScope('validation'); dev.pushErrorScope('internal');
+      let pipe;
+      try { pipe = await dev.createComputePipelineAsync({ layout: 'auto', compute: { module: mod, entryPoint: 'main' } }); }
+      catch (pe) { out.pipelineError = pe.constructor.name + ': ' + pe.message + ' reason=' + pe.reason; throw pe; }
+      const buf = dev.createBuffer({ size: 16, usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_SRC | GPUBufferUsage.COPY_DST });
+      const rb = dev.createBuffer({ size: 16, usage: GPUBufferUsage.MAP_READ | GPUBufferUsage.COPY_DST });
+      dev.queue.writeBuffer(buf, 0, new Float32Array([1, 2, 3, 4]));
+      const bg = dev.createBindGroup({ layout: pipe.getBindGroupLayout(0), entries: [{ binding: 0, resource: { buffer: buf } }] });
+      const enc = dev.createCommandEncoder(); const pass = enc.beginComputePass(); pass.setPipeline(pipe); pass.setBindGroup(0, bg); pass.dispatchWorkgroups(4); pass.end();
+      enc.copyBufferToBuffer(buf, 0, rb, 0, 16); dev.queue.submit([enc.finish()]);
+      const internalErr = await dev.popErrorScope(); const validationErr = await dev.popErrorScope();
+      out.scopeErrors = [internalErr && internalErr.message, validationErr && validationErr.message].filter(Boolean);
+      await rb.mapAsync(GPUMapMode.READ); out.compute = Array.from(new Float32Array(rb.getMappedRange())).join(',');
+      dev.destroy();
+    } catch (e) { out.error = (e && e.stack) ? e.name + ': ' + e.message + '\\n' + e.stack : String(e); }
+    self.postMessage(out);
+  };`;
+
+async function runProbe() {
+  setState({ phase: 'probe' });
+  log('--- 1. WebGPU probe (main thread) ---');
+  const main = await probeGpu(navigator.gpu, 'main');
+  if (navigator.gpu) {
+    for (const pp of ['high-performance', 'low-power']) {
+      try {
+        const a = await navigator.gpu.requestAdapter({ powerPreference: pp });
+        log(`[main] requestAdapter({powerPreference:'${pp}'}) -> ${a ? 'info=' + JSON.stringify(a.info ? { vendor: a.info.vendor, architecture: a.info.architecture, device: a.info.device, description: a.info.description } : null) + ' f16=' + a.features.has('shader-f16') + ' nfeat=' + a.features.size : 'null'}`);
+      } catch (e) { log(`[main] requestAdapter(${pp}) threw ${e.message}`); }
+    }
+  }
+  summary('main', `main-thread WebGPU: ${main.ok ? 'OK' : 'FAIL (' + main.reason + ')'} f16=${main.feats ? main.feats.includes('shader-f16') : '?'}`, main.ok ? 'ok' : 'bad');
+  log('--- 1b. WebGPU probe (dedicated worker) ---');
+  await new Promise((resolve) => {
+    const w = new Worker(URL.createObjectURL(new Blob([workerProbeSrc], { type: 'text/javascript' })));
+    const to = setTimeout(() => { log('[worker] probe TIMEOUT after 15 s'); summary('worker', 'worker WebGPU: TIMEOUT', 'bad'); w.terminate(); resolve(); }, 15000);
+    w.onerror = (e) => { clearTimeout(to); log(`[worker] onerror: ${e.message}`); summary('worker', 'worker WebGPU: worker error', 'bad'); resolve(); };
+    w.onmessage = (e) => {
+      clearTimeout(to);
+      const o = e.data;
+      log(`[worker] navigator.gpu=${o.gpuType} crossOriginIsolated=${o.isolated} SAB=${o.sab} cores=${o.cores}`);
+      if (o.info) log(`[worker] adapter info=${JSON.stringify(o.info)}`);
+      if (o.features) log(`[worker] features=${o.features.join(',')}`);
+      if (o.limits) log(`[worker] limits=${JSON.stringify(o.limits)}`);
+      if (o.device) log(`[worker] requestDevice ${o.device}`);
+      if (o.shaderMessages) log(`[worker] f16 shader compile messages: ${JSON.stringify(o.shaderMessages)}`);
+      if (o.pipelineError) log(`[worker] f16 PIPELINE ERROR: ${o.pipelineError}`);
+      if (o.scopeErrors && o.scopeErrors.length) log(`[worker] f16 GPU errors: ${JSON.stringify(o.scopeErrors)}`);
+      if (o.compute) log(`[worker] f16 compute result (expect 2,4,6,8): ${o.compute}`);
+      if (o.error) log(`[worker] ERROR: ${o.error}`);
+      summary('worker', `worker WebGPU: ${o.error ? 'FAIL: ' + o.error.split('\n')[0] : 'OK (f16 compute ' + o.compute + ')'}`, o.error ? 'bad' : 'ok');
+      w.terminate(); resolve();
+    };
+    w.postMessage('go');
+  });
+  setState({ phase: 'idle' });
+}
+
+// ─── 2. ORT via the real maia-worker.js ─────────────────────────────────────
+let maiaWorker = null;
+let pendingResult = null;
+function killMaia() { if (maiaWorker) { maiaWorker.onmessage = null; maiaWorker.onerror = null; maiaWorker.terminate(); maiaWorker = null; } document.getElementById('btnStress').disabled = true; }
+
+function runOrt(backend) {
+  killMaia();
+  const single = document.getElementById('chkSingle').checked;
+  setState({ phase: `ort-init-${backend}`, detail: single ? '1 thread' : 'auto threads' });
+  log(`--- 2. ORT ${backend} via /maia/maia-worker.js${ASSET_VERSION_QUERY} (forceSingleThread=${single}) ---`);
+  const t0 = performance.now();
+  maiaWorker = new Worker(`/maia/maia-worker.js${ASSET_VERSION_QUERY}`);
+  maiaWorker.onerror = (e) => { log(`[maia-worker] onerror: ${e.message} @${e.filename}:${e.lineno}`); summary('ort', `ORT ${backend}: worker load error`, 'bad'); setState({ phase: 'idle' }); };
+  let lastPct = -1;
+  maiaWorker.onmessage = (e) => {
+    const m = e.data;
+    if (m.type === 'progress') {
+      const pct = Math.floor((m.loaded / m.total) * 10) * 10;
+      if (pct !== lastPct) { lastPct = pct; log(`[maia-worker] model ${pct}% (${m.loaded}/${m.total})`); }
+      return;
+    }
+    if (m.type === 'ready') {
+      log(`[maia-worker] READY backend=${m.backend} numThreads=${m.numThreads} after ${(performance.now() - t0).toFixed(0)} ms`);
+      summary('ort', `ORT ${backend}: READY (backend=${m.backend}, ${m.numThreads} threads)`, 'ok');
+      setState({ phase: 'idle' });
+      document.getElementById('btnStress').disabled = false;
+      return;
+    }
+    if (m.type === 'webgpu-unavailable') {
+      log(`[maia-worker] WEBGPU-UNAVAILABLE after ${(performance.now() - t0).toFixed(0)} ms:\n${m.message}`);
+      summary('ort', `ORT webgpu: FAILED -> ${m.message.split('\n')[0].slice(0, 200)}`, 'bad');
+      setState({ phase: 'idle' }); killMaia();
+      return;
+    }
+    if (m.type === 'error') { log(`[maia-worker] ERROR: ${m.message}`); summary('ort', `ORT ${backend}: error ${m.message.slice(0, 120)}`, 'bad'); setState({ phase: 'idle' }); killMaia(); return; }
+    if (m.type === 'result') {
+      if (pendingResult) { const r = pendingResult; pendingResult = null; r.resolve(m); }
+      return;
+    }
+    log(`[maia-worker] other message: ${JSON.stringify(m).slice(0, 200)}`);
+  };
+  maiaWorker.postMessage({ type: 'init', backend, assetCacheName: ASSET_CACHE_NAME, assetVersionQuery: ASSET_VERSION_QUERY, forceSingleThread: single });
+}
+
+function analyzeOnce(fen, elos) {
+  return new Promise((resolve, reject) => {
+    pendingResult = { resolve, reject };
+    maiaWorker.postMessage({ type: 'analyze', fen, eloInputs: elos });
+  });
+}
+
+async function runStress() {
+  if (!maiaWorker) return;
+  const N = 30;
+  log(`--- 3. stress: ${N} x analyze(startpos, 21 rungs) ---`);
+  const lat = [];
+  for (let i = 1; i <= N; i++) {
+    setState({ phase: 'stress', detail: `run ${i}/${N}` });
+    const t = performance.now();
+    const r = await analyzeOnce(STARTPOS, ELO_LADDER);
+    const ms = performance.now() - t; lat.push(ms);
+    if (i === 1) log(`run 1: ${ms.toFixed(0)} ms backend=${r.backend} rungs=${r.rawPolicyByElo.length} policy[0..2]=${Array.from(r.rawPolicyByElo[0].policy.slice(0, 3)).map((x) => x.toFixed(3)).join(',')} wdl=${Array.from(r.wdlByElo[10].wdl).map((x) => x.toFixed(3)).join(',')}`);
+    else if (i % 5 === 0) log(`run ${i}: ${ms.toFixed(0)} ms (still alive)`);
+  }
+  lat.sort((a, b) => a - b);
+  log(`stress done: median ${lat[Math.floor(N / 2)].toFixed(0)} ms, min ${lat[0].toFixed(0)}, max ${lat[N - 1].toFixed(0)}`);
+  summary('stress', `stress ${N} runs survived, median ${lat[Math.floor(N / 2)].toFixed(0)} ms / 21-rung ladder`, 'ok');
+  setState({ phase: 'idle' });
+}
+
+// ─── 4. ORT WebGPU on the MAIN thread (zero-token smoke test, shape-valid) ──
+function patchWebGpuForLogging() {
+  if (window.__gpuPatched || !navigator.gpu) return;
+  window.__gpuPatched = true;
+  const ra = GPU.prototype.requestAdapter;
+  GPU.prototype.requestAdapter = async function (opts) {
+    const a = await ra.call(this, opts);
+    log(`[hook] requestAdapter(${JSON.stringify(opts)}) -> ${a ? 'info=' + JSON.stringify(a.info ? { vendor: a.info.vendor, architecture: a.info.architecture, device: a.info.device, description: a.info.description } : null) + ' isFallback=' + a.isFallbackAdapter + ' f16=' + a.features.has('shader-f16') + ' nfeat=' + a.features.size : 'null'}`);
+    return a;
+  };
+  const rd = GPUAdapter.prototype.requestDevice;
+  GPUAdapter.prototype.requestDevice = async function (desc) {
+    const safe = desc ? { requiredFeatures: desc.requiredFeatures, requiredLimits: desc.requiredLimits, label: desc.label } : desc;
+    try {
+      const d = await rd.call(this, desc);
+      log(`[hook] requestDevice(${JSON.stringify(safe)}) -> device features=${[...d.features].sort().join(',')}`);
+      d.addEventListener('uncapturederror', (e) => log(`[hook] UNCAPTURED GPU ERROR: ${e.error.constructor.name}: ${e.error.message}`));
+      return d;
+    } catch (e) {
+      log(`[hook] requestDevice(${JSON.stringify(safe)}) THREW: ${errText(e)}`);
+      throw e;
+    }
+  };
+}
+
+async function runMainOrt() {
+  setState({ phase: 'main-ort' });
+  log('--- 4. ORT WebGPU on main thread ---');
+  patchWebGpuForLogging();
+  try {
+    if (!window.ort) {
+      await new Promise((res, rej) => { const s = document.createElement('script'); s.src = `/maia/ort.webgpu.min.js${ASSET_VERSION_QUERY}`; s.onload = res; s.onerror = () => rej(new Error('script load failed')); document.head.appendChild(s); });
+    }
+    ort.env.wasm.numThreads = document.getElementById('chkSingle').checked ? 1 : Math.min(4, Math.ceil((navigator.hardwareConcurrency || 1) / 2));
+    ort.env.wasm.initTimeout = 20000;
+    ort.env.wasm.wasmPaths = { mjs: `/maia/ort-wasm-simd-threaded.asyncify.mjs${ASSET_VERSION_QUERY}`, wasm: `/maia/ort-wasm-simd-threaded.asyncify.wasm${ASSET_VERSION_QUERY}` };
+    ort.env.logLevel = 'verbose';
+    const t0 = performance.now();
+    const resp = await fetch(`/maia/maia3_simplified.onnx${ASSET_VERSION_QUERY}`);
+    const model = new Uint8Array(await resp.arrayBuffer());
+    log(`model fetched ${model.byteLength} bytes in ${(performance.now() - t0).toFixed(0)} ms; creating webgpu session (numThreads=${ort.env.wasm.numThreads})`);
+    let ep = 'webgpu';
+    if (document.getElementById('chkOwnDevice').checked) {
+      const adapter = await navigator.gpu.requestAdapter();
+      const wanted = ['shader-f16', 'subgroups', 'timestamp-query'].filter((f) => adapter.features.has(f));
+      const device = await adapter.requestDevice({ requiredFeatures: wanted });
+      device.lost.then((l) => log(`own device LOST: ${l.reason} ${l.message}`));
+      log(`own GPUDevice created with features=[${[...device.features].join(',')}]`);
+      ep = { name: 'webgpu', device };
+    }
+    const power = document.getElementById('selPower').value;
+    const sessionOptions = { executionProviders: [ep], logSeverityLevel: 0 };
+    if (power) { sessionOptions.extra = { ep: { webgpuexecutionprovider: { powerPreference: power } } }; log(`session config ep.webgpuexecutionprovider.powerPreference=${power}`); }
+    const session = await ort.InferenceSession.create(model, sessionOptions);
+    const dev = ort.env.webgpu && ort.env.webgpu.device;
+    log(`session created in ${(performance.now() - t0).toFixed(0)} ms; inputs=${session.inputNames} outputs=${session.outputNames}`);
+    log(`ort.env.webgpu.device features=[${dev ? [...dev.features].sort().join(',') : 'n/a'}] limits.maxBufferSize=${dev ? dev.limits.maxBufferSize : '?'}`);
+    const B = 1;
+    const feeds = {
+      tokens: new ort.Tensor('float32', new Float32Array(B * NUM_SQUARES * PLANES_PER_SQUARE), [B, NUM_SQUARES, PLANES_PER_SQUARE]),
+      elo_self: new ort.Tensor('float32', Float32Array.from([1500]), [B]),
+      elo_oppo: new ort.Tensor('float32', Float32Array.from([1500]), [B]),
+    };
+    const t1 = performance.now();
+    const out = await session.run(feeds);
+    log(`main-thread webgpu run OK in ${(performance.now() - t1).toFixed(0)} ms; logits_value=${Array.from(out.logits_value.data).map((x) => x.toFixed(3)).join(',')}`);
+    for (let i = 0; i < 5; i++) { const t = performance.now(); const o = await session.run(feeds); for (const v of Object.values(o)) v.dispose?.(); log(`main-thread run ${i + 2}: ${(performance.now() - t).toFixed(0)} ms`); }
+    summary('mainort', 'ORT WebGPU on MAIN thread: OK', 'ok');
+    await session.release();
+  } catch (e) {
+    log(`main-thread ORT webgpu FAILED: ${errText(e)}`);
+    summary('mainort', `ORT WebGPU on MAIN thread: FAIL -> ${String(e && e.message || e).slice(0, 200)}`, 'bad');
+  }
+  setState({ phase: 'idle' });
+}
+
+// ─── wiring ─────────────────────────────────────────────────────────────────
+document.getElementById('btnProbe').onclick = () => runProbe().catch((e) => log(`probe crashed: ${errText(e)}`));
+document.getElementById('btnOrtWebgpu').onclick = () => runOrt('webgpu');
+document.getElementById('btnOrtWasm').onclick = () => runOrt('wasm');
+document.getElementById('btnStress').onclick = () => runStress().catch((e) => { log(`stress crashed: ${errText(e)}`); setState({ phase: 'idle' }); });
+document.getElementById('btnMainOrt').onclick = () => runMainOrt();
+document.getElementById('btnCopy').onclick = async () => {
+  try { await navigator.clipboard.writeText(logEl.value); log('(log copied to clipboard)'); }
+  catch (e) { logEl.select(); log(`clipboard failed (${e.message}); text selected — copy manually`); }
+};
+document.getElementById('btnClear').onclick = () => { try { localStorage.removeItem(LS_LOG); localStorage.removeItem(LS_STATE); } catch {} lines = []; logEl.value = ''; document.getElementById('prev').textContent = '(cleared)'; sumEl.innerHTML = ''; };
+</script>
+</body>
+</html>

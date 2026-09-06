@@ -88,6 +88,22 @@ export const ORT_RUNTIME_ASYNCIFY_BYTES_FALLBACK = 25_749_873;
  */
 const REQUIRED_WEBGPU_FEATURE = 'shader-f16';
 
+/**
+ * The adapter power preference onnxruntime-web's native WebGPU EP uses when
+ * it creates ITS adapter inside `InferenceSession.create()` (the
+ * `WebGpuContextConfig` default in `webgpu_context.h`, unreachable from the
+ * JS EP options in 1.27). Bug fix (SEED-158, 2026-09-06): the probe used to
+ * call `requestAdapter()` with NO options, which on a multi-GPU machine can
+ * return a DIFFERENT adapter than ORT ends up with — measured on the Linux
+ * dev box, where the default adapter (AMD iGPU) has `shader-f16` but the
+ * high-performance one (NVIDIA, Chrome/Linux Vulkan) does not: the probe
+ * said "webgpu", the 25.7 MB asyncify build downloaded, and the fp16 `Cast`
+ * node then failed inside the worker ("Program Cast requires f16 but the
+ * device does not support it"), costing the wasm respawn the seed describes.
+ * Probing the adapter ORT will actually use keeps the two decisions aligned.
+ */
+const ORT_ADAPTER_POWER_PREFERENCE = 'high-performance';
+
 /** The single engine-asset id this whole module reports under — `engineAssetCache.ts`'s single-flight and CacheStorage entries are keyed by this id, matching `engineAssetProgress.ts`'s own `EngineAssetId` union member. */
 const ORT_RUNTIME_ASSET_ID = 'ort-runtime';
 
@@ -106,8 +122,12 @@ interface MinimalGpuAdapter {
   features?: { has?: (feature: string) => boolean } | null;
 }
 
+interface MinimalGpuRequestAdapterOptions {
+  powerPreference?: 'low-power' | 'high-performance';
+}
+
 interface MinimalGpu {
-  requestAdapter: () => Promise<MinimalGpuAdapter | null>;
+  requestAdapter: (options?: MinimalGpuRequestAdapterOptions) => Promise<MinimalGpuAdapter | null>;
 }
 
 // ─── Module-level singleton state ──────────────────────────────────────────
@@ -159,7 +179,7 @@ async function probeOrtBackend(): Promise<OrtBackend> {
   try {
     const gpu = (navigator as Navigator & { gpu?: MinimalGpu }).gpu;
     if (!gpu) return 'wasm';
-    const adapter = await gpu.requestAdapter();
+    const adapter = await gpu.requestAdapter({ powerPreference: ORT_ADAPTER_POWER_PREFERENCE });
     if (!adapter) return 'wasm';
     const features = adapter.features;
     if (!features || typeof features.has !== 'function') return 'wasm';
@@ -195,15 +215,7 @@ function runtimeAssetFor(backend: OrtBackend): { url: string; fallbackBytes: num
  * onnxruntime-web's own `wasmPaths` resolution rather than breaking spawn.
  */
 export function ensureOrtRuntime(): Promise<OrtRuntimeResult> {
-  if (!backendPromise) {
-    // CR-02: registered synchronously, before the adapter probe (itself
-    // async) even begins — this happens in the exact same tick as the first
-    // caller's request.
-    markEngineAssetPending(ORT_RUNTIME_ASSET_ID);
-    backendPromise = probeOrtBackend();
-  }
-
-  return backendPromise.then(async (backend): Promise<OrtRuntimeResult> => {
+  return probeOrtBackendOnce().then(async (backend): Promise<OrtRuntimeResult> => {
     const { url, fallbackBytes } = runtimeAssetFor(backend);
     try {
       const buffer = await getEngineAsset(
@@ -220,6 +232,28 @@ export function ensureOrtRuntime(): Promise<OrtRuntimeResult> {
       return { backend, buffer: null };
     }
   });
+}
+
+/**
+ * The memoised backend decision on its own, WITHOUT the runtime fetch
+ * (SEED-158, 2026-09-06). `maiaWorkerHost.ts` consults this on iOS/iPadOS
+ * WebKit before spawning anything: there the wasm path is fatal (Safari
+ * kills the page mid-inference, see `iosWebKit.ts`), so a `'wasm'` answer
+ * means "gate Maia off" and must not cost the 14.0 MB wasm-only runtime
+ * download that `ensureOrtRuntime()` would issue on the way to that answer.
+ * Shares `ensureOrtRuntime()`'s single memoised promise, so a later
+ * `ensureOrtRuntime()` call joins the same decision instead of re-probing.
+ *
+ * CR-02: `'ort-runtime'` is registered as pending synchronously here, before
+ * the (async) adapter probe begins, in the exact same tick as the first
+ * caller's request — regardless of which of the two entry points runs first.
+ */
+export function probeOrtBackendOnce(): Promise<OrtBackend> {
+  if (!backendPromise) {
+    markEngineAssetPending(ORT_RUNTIME_ASSET_ID);
+    backendPromise = probeOrtBackend();
+  }
+  return backendPromise;
 }
 
 /**

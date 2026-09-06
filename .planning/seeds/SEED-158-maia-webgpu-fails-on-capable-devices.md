@@ -1,8 +1,8 @@
 ---
 id: SEED-158
-status: active
+status: resolved (iOS + Linux legs), Firefox/Windows Clip shader left as-is
 planted: 2026-08-29
-updated: 2026-09-06 (night: iOS gate hotfixed, see the iOS section)
+updated: 2026-09-06 (late: iOS WebGPU WORKS on the reference iPhone; gate narrowed to WebGPU-only; Linux leg root-caused)
 planted_during: Sentry triage of the 2026-08-29 18:54 UTC iPad OOM cascade
   (FLAWCHESS-9V regression + new FLAWCHESS-A2/A3), same session as quick task
   260829-tku (oom terminal variant in EngineReadyGate)
@@ -129,6 +129,66 @@ first step of the plan above.
 Prior art from the ORT tracker: microsoft/onnxruntime#22776 ("Support iOS devices") and
 #22086 (wasm load failures on iOS 17) are open with no maintainer guidance; WebGPU on iOS was
 not an option there either at the time.
+
+## Findings 2026-09-06 (Linux leg root-caused; diag page for the phone)
+
+Tooling: `frontend/public/maia-diag.html` (committed dev tool, served at `/maia-diag.html` in dev AND
+prod — excluded from the SW precache like every `.html`). It drives the REAL `/maia/maia-worker.js` with `{type:'init', backend:'webgpu'}`
+and renders the raw `webgpu-unavailable` text on screen (plus a main/worker WebGPU probe with an f16
+compute smoke test, a main-thread ORT run with `requestAdapter`/`requestDevice` hooks, a 30-run
+ladder stress test, and a localStorage journal so a page kill is visible after reload). Built
+because iOS Safari has no reachable console without a Mac.
+
+**Linux dev box (bucket b, ours):** the box has TWO adapters. `requestAdapter()` and `low-power`
+return the AMD RDNA3 iGPU WITH `shader-f16` (a real f16 compute shader returns correct results);
+`high-performance` returns the NVIDIA Lovelace dGPU WITHOUT `shader-f16` (Chrome/Linux Vulkan).
+ORT 1.27's native WebGPU EP creates its adapter in C++ (`webgpu_context.cc` Initialize) with
+`powerPreference = HighPerformance` (the `WebGpuContextConfig` default), so it lands on the NVIDIA
+adapter, requests only `[timestamp-query, subgroups]`, and the fp16 `Cast` node then fails with
+`Program Cast requires f16 but the device does not support it`. Our main-thread probe in
+`ortRuntimeSource.ts` calls `requestAdapter()` with NO options and so inspects the OTHER adapter,
+says "webgpu", and the 25.7 MB asyncify build is downloaded for nothing before the wasm respawn.
+
+Levers checked and rejected in ORT 1.27's web bundle:
+- `ep.webgpuexecutionprovider.powerPreference` via `sessionOptions.extra`: parsed by the C++
+  factory, but the JS appends the EP (and the factory reads config) BEFORE `extra` entries are added,
+  so it never arrives. The JS whitelist of EP options (`device`, `preferredLayout`,
+  `forceCpuNodeNames`, `validationMode`, `enableGraphCapture`) has no `powerPreference`.
+- Passing our own `GPUDevice` via `executionProviders: [{ name: 'webgpu', device }]`: accepted, the
+  f16 check passes, but every program then fails with `Failed to wait for the operation:3`
+  (`WebGpuContext::Wait` -> `instance_.WaitAny` error; the JS-side `webgpuRegisterDevice` creates the
+  WGPUInstance without ORT's `TimedWaitAny` requirement). Not usable without patching ORT.
+- Same conclusion holds for 1.29's `session-options.ts` (no `powerPreference` EP option either).
+
+Cheap fix that IS ours: make the probe request the adapter the way ORT will
+(`requestAdapter({ powerPreference: 'high-performance' })`) so the decision matches and multi-GPU
+boxes fall to wasm WITHOUT the wasted asyncify download. It does not make WebGPU work on such boxes.
+
+**Windows 11 Edge (per Adrian, console pasted 2026-09-06):** WebGPU WORKS —
+`[maia-worker] ready — backend=webgpu numThreads=4`. Firefox/Windows still fails (the known `Clip`
+shader compile failure noted in `maia-worker.js`). So the "mainstream platform is broken" worry from
+the original seed is withdrawn; the desktop failures are per-GPU/per-browser, not systemic.
+
+**iOS (measured on the iPhone 14 Pro, iOS 26.6.1, through the tunnel-served diag page):** WebGPU
+WORKS. `navigator.gpu` exists in the dedicated worker, the adapter has `shader-f16`, a real f16
+compute shader returns correct values, and the REAL `maia-worker.js` reached
+`ready backend=webgpu numThreads=2` in 5.8 s, then survived 30 consecutive 21-rung ladders at a flat
+505-554 ms (median 509 ms) with no page kill. The "WebGPU also fails on the reference device" line in
+the hotfix section was the pre-cap 4 GB reservation failure, not a WebGPU fault. Fix shipped the same
+evening (uncommitted at the time of writing, see `git log` for the commit): the D-13 gate in
+`maiaWorkerHost.ts` now spawns on iOS whenever the probe (`probeOrtBackendOnce()`, fetch-free) picks
+`webgpu`, gates off with `unsupported`/`'ios-webkit'` when it picks `wasm` (no runtime download on the
+way), and both `respawnPinnedToWasm` call sites become that same terminal on iOS (plus one Sentry
+capture tagged `maia_failure:webgpu-ios-terminal` with the raw ORT text in context). Gate copy now
+says "needs WebGPU, iOS 26+". The wasm path on iOS is NOT worth further work: the kill is inside
+WebKit's wasm engine (flat 110 MB heap, 1 thread makes no difference, skipping `session.run` survives;
+ORT #26827 samples WebKit 26 stuck in `JSC::Wasm::parseAndCompileOMG` on the same kind of workload),
+which the page cannot influence, and WebGPU now covers every iOS version that has it (26+).
+Previously: still no raw message. Next step is to open `/maia-diag.html` through the tunnel on the
+iPhone, tap 1 (probe) then 2 (ORT WebGPU via the real worker), and read the Summary / Copy log.
+ORT tracker context: microsoft/onnxruntime#26827 (WebKit 26 + JSEP: CPU pinned in
+`JSC::Wasm::parseAndCompileOMG` and 1 GB+ growth, i.e. the same optimizing-tier suspect as our wasm
+kill) and #27584 (yolo26n WebGPU on iOS 26.3 Safari works, then crashes after ~500 inferences).
 
 ## Constraints / prior art
 

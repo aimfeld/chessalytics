@@ -29,12 +29,13 @@ export type EngineAssetId = 'maia-model' | 'stockfish-wasm' | 'ort-runtime';
 export type EngineAssetStatus = 'idle' | 'unsupported' | 'downloading' | 'ready' | 'failed';
 
 /**
- * Why the store reports `'unsupported'` (hotfix 2026-09-06, SEED-158):
+ * Why the store reports `'unsupported'` (SEED-158, 2026-09-06):
  * `'no-wasm-simd'` is the D-13 probe (the device can never run the model);
- * `'ios-webkit'` is the iOS/iPadOS gate (the device COULD run it, but Safari
- * kills the page when it does — see `iosWebKit.ts`). `EngineReadyGate` shows
- * different copy for each, so the iOS user is not told their device lacks a
- * capability it actually has.
+ * `'ios-webkit'` is the iOS/iPadOS gate — Maia runs there ONLY on WebGPU,
+ * because the wasm path kills the page (see `iosWebKit.ts`), so this reason
+ * means "iOS without a usable WebGPU adapter, or WebGPU failed at start".
+ * `EngineReadyGate` shows different copy for each, so the iOS user is told
+ * what would actually help (iOS 26+) instead of "your device lacks it".
  */
 export type EngineUnsupportedReason = 'no-wasm-simd' | 'ios-webkit';
 
@@ -345,9 +346,10 @@ export function markEngineAssetReady(id: EngineAssetId): void {
  * failed). Plan 04 owns this state's UI; Task 1 calls it from the
  * `wasmSimd.ts` choke point in `maiaWorkerHost.ts`.
  *
- * Hotfix 2026-09-06 (SEED-158): also reached from the iOS/iPadOS gate at the
- * same choke point, with `reason: 'ios-webkit'`, so the gate's copy can say
- * what is actually going on instead of "your device lacks the technology".
+ * SEED-158 (2026-09-06): also reached from the iOS/iPadOS gate in
+ * `maiaWorkerHost.ts` (probe answered 'wasm', or WebGPU failed there) with
+ * `reason: 'ios-webkit'`, so the gate's copy can say what is actually going
+ * on instead of "your device lacks the technology".
  */
 export function markEngineAssetsUnsupported(reason: EngineUnsupportedReason): void {
   currentStatus = 'unsupported';
