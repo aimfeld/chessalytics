@@ -51,6 +51,7 @@ import {
   STOCKFISH_WASM_BYTES_FALLBACK,
 } from './engineAssetProgress';
 import { getEngineAsset, versionedEngineAssetUrl } from './engineAssetCache';
+import { createInertWorker, isDevStockfishDisabled } from './devEngineSwitches';
 
 // ─── Named constants (CLAUDE.md no-magic-numbers) ──────────────────────────
 
@@ -118,6 +119,8 @@ async function fetchAndPublishSharedWasm(): Promise<string> {
  */
 export function ensureStockfishWorkerUrl(): Promise<string | null> {
   if (sharedUrlPromise) return sharedUrlPromise;
+  // SEED-158 dev bisect switch: no fetch, no pending asset, no Blob on the main thread.
+  if (isDevStockfishDisabled()) return Promise.resolve(null);
 
   // CR-02: registered synchronously, before `fetchAndPublishSharedWasm()` is
   // even invoked — the async function's first `await` has not run yet, so
@@ -152,6 +155,9 @@ export function ensureStockfishWorkerUrl(): Promise<string | null> {
  * same way.
  */
 export function createStockfishWorker(sharedUrl: string | null): Worker {
+  // SEED-158 dev bisect switch (`?dev-stockfish=off`): hand every consumer a
+  // worker that never speaks UCI, so the page runs Maia with zero Stockfish.
+  if (isDevStockfishDisabled()) return createInertWorker();
   const wasmHashUrl = sharedUrl ?? STOCKFISH_ENGINE_WASM_PATH;
   return new Worker(`${STOCKFISH_ENGINE_GLUE_PATH}#${encodeURIComponent(wasmHashUrl)}`);
 }

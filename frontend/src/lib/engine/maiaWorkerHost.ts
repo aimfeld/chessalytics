@@ -50,6 +50,7 @@ import {
 } from '@/lib/maiaWorkerErrors';
 import { supportsWasmSimd } from './wasmSimd';
 import { isIosWebKit } from './iosWebKit';
+import { showDevEngineBadge } from './devEngineSwitches';
 import {
   getEngineAssetsSnapshot,
   markEngineAssetFailed,
@@ -700,6 +701,8 @@ function handleMessage(msg: WorkerMessage): void {
     // whenReady()'s Promise<'webgpu' | 'wasm'> signature is deliberately not
     // widened to carry it (would ripple through every caller for no gain).
     console.info(`[maia-worker] ready — backend=${msg.backend} numThreads=${msg.numThreads}`);
+    // SEED-158: the same line on screen, for devices without a console (dev only).
+    showDevEngineBadge(`maia ${msg.backend} threads=${msg.numThreads} coi=${String(globalThis.crossOriginIsolated)}`);
     markEngineAssetReady('maia-model');
     // Phase 213-09 (G-213-35): 'ready' fires only after the worker's
     // `InferenceSession.create()` has already succeeded — on EVERY path,
