@@ -513,7 +513,10 @@ export function MoveListHeaderContent({ onOpenPasteModal }: MoveListHeaderConten
 
 export type HumanTabProps = {
   selectedElo: number;
+  /** PAINT-LIVE (Phase 219-03, D-12, consumer group 4) — a pure pass-through to MaiaHumanPanel. */
   maiaPerElo: UseMaiaEngineState['perElo'];
+  /** useMaiaEngine's isLadderComplete (Phase 219-03, D-12) — passed through to MaiaHumanPanel. */
+  maiaIsLadderComplete: UseMaiaEngineState['isLadderComplete'];
   playedSan: string | null;
   reconciledBestSan: string | null;
   bestSan: string | null;
@@ -536,6 +539,7 @@ export type HumanTabProps = {
 export function HumanTab({
   selectedElo,
   maiaPerElo,
+  maiaIsLadderComplete,
   playedSan,
   reconciledBestSan,
   bestSan,
@@ -556,6 +560,7 @@ export function HumanTab({
         <MaiaHumanPanel
           selectedElo={selectedElo}
           perElo={maiaPerElo}
+          isLadderComplete={maiaIsLadderComplete}
           playedSan={playedSan}
           // 162-REVIEW WR-02: the chart's emphasized stroke follows the SAME
           // reconciled Best the quality color/label/verdict designate, not the

@@ -35,8 +35,11 @@ const requireFromFrontend = createRequire(path.join(FRONTEND_DIR, 'package.json'
 const ort = (await import(pathToFileURL(requireFromFrontend.resolve('onnxruntime-web')).href))
   .default
 
-// Match the browser worker's threading posture: single-thread WASM, no SharedArrayBuffer
-// (FlawChess ships no COOP/COEP headers — Phase 136 D-3).
+// Single-thread WASM: this is a simple headless inspection script, not a
+// timing benchmark (see scripts/bench_maia_ort_wasm.mjs for that), and Node
+// has no `crossOriginIsolated` concept for chooseWasmThreadCount() (Phase
+// 219 D-08, maia-worker.js) to read — the browser worker's actual thread
+// count depends on that formula, not on this script's fixed value.
 ort.env.wasm.numThreads = 1
 
 // Confirmed 12-plane order: white P,N,B,R,Q,K (0-5), black p,n,b,r,q,k (6-11).

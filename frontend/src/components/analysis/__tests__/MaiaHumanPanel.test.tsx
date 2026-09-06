@@ -54,6 +54,7 @@ describe('MaiaHumanPanel', () => {
         qualityBySan={new Map()}
         mover="white"
         engineTopLines={[]}
+        isLadderComplete={false}
       />,
     );
     expect(screen.getByTestId('moves-by-rating-chart')).toBeTruthy();
@@ -72,6 +73,7 @@ describe('MaiaHumanPanel', () => {
         qualityBySan={new Map()}
         mover="white"
         engineTopLines={[]}
+        isLadderComplete={false}
       />,
     );
     expect(screen.getByTestId('maia-human-header').textContent).toMatch(/Human Move Probability/);
@@ -89,6 +91,7 @@ describe('MaiaHumanPanel', () => {
         qualityBySan={new Map()}
         mover="white"
         engineTopLines={[]}
+        isLadderComplete={false}
       />,
     );
     expect(screen.queryByTestId('maia-attribution')).toBeNull();
@@ -105,6 +108,7 @@ describe('MaiaHumanPanel', () => {
         qualityBySan={new Map()}
         mover="white"
         engineTopLines={[]}
+        isLadderComplete={false}
         compact
       />,
     );

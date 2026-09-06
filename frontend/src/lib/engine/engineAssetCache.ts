@@ -53,8 +53,24 @@ import type { EngineAssetId } from './engineAssetProgress';
  * entry keys on a URL nothing will ever request again. Bumping makes the
  * next open/sweep delete those orphans rather than retain ~67 MB
  * unreachable forever.
+ *
+ * Bumped 3 -> 4 (Phase 219-01, 2026-09-06): the six vendored onnxruntime-web
+ * runtime files under `public/maia/` were re-vendored back to 1.27.0
+ * (different bytes, same filenames — 1.29.0's wasm build measured 1.5-2.3x
+ * slower single-threaded, see `219-MEASUREMENTS.md`), so every returning
+ * browser must discard its cached 1.29.0-era bytes rather than keep serving
+ * the slower runtime indefinitely.
+ *
+ * Bumped 4 -> 5 (quick 260906-p54, 2026-09-06): both vendored ORT glue
+ * loaders (`ort-wasm-simd-threaded.mjs`, `ort-wasm-simd-threaded.asyncify.mjs`)
+ * now carry a 1 GB wasm memory reservation cap (different bytes, same
+ * filenames) fixing FLAWCHESS-9V, an iOS Safari out-of-memory crash caused by
+ * WebKit's three-large-reservation-per-page budget. Every returning browser
+ * must discard the cached 4 GB-reserving loaders. The `?v=<n>` query this
+ * constant feeds also invalidates the Cloudflare edge, so no manual CF purge
+ * is needed.
  */
-const ENGINE_ASSET_CACHE_VERSION = 3;
+const ENGINE_ASSET_CACHE_VERSION = 5;
 
 /**
  * The shared `?v=<n>` query suffix, derived from `ENGINE_ASSET_CACHE_VERSION`

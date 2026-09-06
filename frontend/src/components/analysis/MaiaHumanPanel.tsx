@@ -36,6 +36,13 @@ export interface MaiaHumanPanelProps {
   selectedElo: number;
   /** useMaiaEngine's perElo verbatim — [] renders the chart's own waiting placeholder. */
   perElo: MoveCurvePoint[];
+  /**
+   * useMaiaEngine's isLadderComplete (Phase 219-03, D-12). Passed to
+   * `MaiaMoveQualityBar` ONLY — that component freezes its verdict/buckets on
+   * this flag; `MovesByRatingChart` stays ungated and paints from whatever
+   * `perElo` holds.
+   */
+  isLadderComplete: boolean;
   playedSan: string | null;
   bestSan: string | null;
   /** Analysis.tsx's selectCandidatesByMass output — the exact candidate set to render (Phase 151.1). */
@@ -126,6 +133,7 @@ function MaiaInfoTooltip(): React.ReactElement {
 export function MaiaHumanPanel({
   selectedElo,
   perElo,
+  isLadderComplete,
   playedSan,
   bestSan,
   shownSans,
@@ -187,6 +195,7 @@ export function MaiaHumanPanel({
             candidates' Maia mass split by Stockfish-graded severity. */}
         <MaiaMoveQualityBar
           perElo={perElo}
+          isLadderComplete={isLadderComplete}
           selectedElo={selectedElo}
           shownSans={shownSans}
           qualityBySan={qualityBySan}

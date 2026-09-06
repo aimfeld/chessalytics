@@ -278,10 +278,12 @@ export function useGemSweep({
     // path is the whole point (see D-05 dispatch-gate doc comment above),
     // never the other way around.
     priority: false,
-    // ladderOnly (quick 260906-gu2): the sweep reads perElo only, so it keeps
-    // the single full-ladder request — no exact-rung phase, no prefetch — and
-    // its cost and gem classification stay byte-identical to before the
-    // live chart's two-phase pipeline.
+    // ladderOnly (quick 260906-gu2): the sweep skips the exact-rung phase and
+    // the prefetch — no phase 1/2 round trip. It still goes through the D-11
+    // coarse/fill split for phase 3 (Phase 219-03), but the C1 effect below
+    // gates on `maia.isLadderComplete`, so gem classification only ever acts
+    // once the full 21-rung ladder has landed — byte-identical to before this
+    // phase's coarse-paint split.
     ladderOnly: true,
   });
 
@@ -299,7 +301,12 @@ export function useGemSweep({
   // ─── C1: Maia completion -> pass to grade stage, or resolve a miss ───────
 
   useEffect(() => {
-    if (inFlight === null || stage !== 'maia') return;
+    // WAIT-FOR-COMPLETE (Phase 219-03, D-12, T-219-12): gem classification
+    // must never act on a coarse (11-rung) ladder. This restores the intent
+    // the `ladderOnly` comment above already documents; the guard used to
+    // rely on `resultFen` matching alone, which was safe only while
+    // non-empty implied complete under the old all-or-nothing contract.
+    if (inFlight === null || stage !== 'maia' || !maia.isLadderComplete) return;
     // WR-03 guard: only act once the displayed curve actually belongs to the
     // in-flight candidate's parent FEN — never key on this hook's own
     // "current" value.
@@ -325,7 +332,7 @@ export function useGemSweep({
       pinnedElo,
     });
     setStage('grade');
-  }, [inFlight, stage, maia.resultFen, maia.perElo, pinnedEloForPly, resolveCandidate]);
+  }, [inFlight, stage, maia.resultFen, maia.perElo, maia.isLadderComplete, pinnedEloForPly, resolveCandidate]);
 
   // ─── C2: grade completion -> classifyGem, resolve gem or miss ────────────
 

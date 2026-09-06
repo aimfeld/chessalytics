@@ -900,6 +900,9 @@ export default function Analysis() {
   // consumed as one contributor to the grading union below (unionSans), plus
   // passed to the chart (as shownSans), replacing MovesByRatingChart's own
   // top-6-by-peak cap.
+  // PAINT-LIVE (Phase 219-03, D-12, consumer group 2): must follow whichever
+  // rungs the chart is currently drawing, or the selected series and the
+  // drawn rungs disagree — never gate this on maia.isLadderComplete.
   const shownSans = useMemo(
     () => selectCandidatesByMass(maia.perElo, selectedElo, playedSan, bestSan),
     [maia.perElo, selectedElo, playedSan, bestSan],
@@ -909,6 +912,11 @@ export default function Analysis() {
   // map at the selected ELO, computed ONCE here (the SAME rung the chart displays via
   // nearestByElo) and passed down to FlawChessAgreementVerdict as `rawProbBySan` — the verdict
   // gate must never call nearestByElo independently, so the prose can never contradict the chart.
+  // PAINT-LIVE (Phase 219-03, D-12, consumer group 3): keeping this live is what
+  // preserves the "SAME rung the chart displays" invariant above. For a
+  // selectedElo roughly midway between two coarse rungs, the nearest rung
+  // nearestByElo picks can shift once when the fill pass lands — that is the
+  // invariant working as designed, not drift.
   const rawProbBySan = useMemo(
     () => nearestByElo(maia.perElo, selectedElo)?.moveProbabilities ?? {},
     [maia.perElo, selectedElo],
@@ -1279,7 +1287,12 @@ export default function Analysis() {
     () => new Map(),
   );
   useEffect(() => {
-    if (!maiaEnabled || maia.perElo.length === 0) return;
+    // T-219-13 (Phase 219-03, D-12): this cache feeds gem detection, a
+    // WAIT-FOR-COMPLETE consumer — writing an 11-rung coarse curve here would
+    // poison a later classification. `perElo.length === 0` used to be the
+    // completeness proxy (non-empty implied complete under the old
+    // all-or-nothing contract); it is no longer — gate on the explicit flag.
+    if (!maiaEnabled || !maia.isLadderComplete) return;
     // Bug fix (163-REVIEW WR-03): useMaiaEngine clears its result one commit
     // AFTER `position` changes, so on the navigation commit `maia.perElo`
     // still holds the PARENT's curve — writing it under the child's FEN would
@@ -1298,7 +1311,7 @@ export default function Analysis() {
       }
       return next;
     });
-  }, [position, maia.perElo, maia.resultFen, maiaEnabled]);
+  }, [position, maia.perElo, maia.resultFen, maia.isLadderComplete, maiaEnabled]);
 
   // FEN of the position BEFORE the current move — the live classifier's "best before".
   const parentFen = useMemo<string | null>(() => {
@@ -2315,6 +2328,7 @@ export default function Analysis() {
         <HumanTab
           selectedElo={selectedElo}
           maiaPerElo={maia.perElo}
+          maiaIsLadderComplete={maia.isLadderComplete}
           playedSan={playedSan}
           // 162-REVIEW WR-02: the chart's emphasized stroke follows the SAME
           // reconciled Best the quality color/label/verdict designate, not the
@@ -2404,6 +2418,7 @@ export default function Analysis() {
   const desktopMaiaPanelProps = {
     selectedElo,
     perElo: maia.perElo,
+    isLadderComplete: maia.isLadderComplete,
     playedSan,
     // 162-REVIEW WR-02: same reconciled-emphasis threading as the mobile Maia tab.
     bestSan: reconciledBestSan ?? bestSan,

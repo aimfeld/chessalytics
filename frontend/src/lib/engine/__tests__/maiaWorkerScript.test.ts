@@ -45,6 +45,8 @@ interface CreateCall {
   wasmBinarySnapshot: unknown;
   executionProviders: string[];
   numThreadsAtCreate: number;
+  /** WR-01 (Phase 219 review): `ort.env.wasm.initTimeout` as of create() time. */
+  initTimeoutAtCreate: unknown;
 }
 
 interface SandboxHandle {
@@ -154,6 +156,10 @@ interface SetupSandboxOptions {
   modelFetchBytes?: Uint8Array;
   /** Overrides the content-length the model fetch declares (CR-01: a value larger than modelFetchBytes.length simulates clean-EOF truncation). */
   modelFetchDeclaredLength?: number;
+  /** Phase 219 (D-08): installs `self.crossOriginIsolated` — absent/false exercises `chooseWasmThreadCount()`'s fail-safe (returns 1 regardless of core count). */
+  crossOriginIsolated?: boolean;
+  /** Phase 219 (D-08): installs `self.navigator = { hardwareConcurrency }` — omitted entirely (no `navigator` at all) exercises the defensive `self.navigator && ...` read, the same as a `node:vm` sandbox with no navigator global. */
+  hardwareConcurrency?: number;
 }
 
 /** Creates a fresh `node:vm` sandbox, runs the real vendored worker script inside it, and returns instrumentation handles. */
@@ -173,6 +179,16 @@ function setupSandbox(opts: SetupSandboxOptions = {}): SandboxHandle {
   const sandbox: SandboxHandle['sandbox'] = { self: {} };
   sandbox.self = sandbox as unknown as Record<string, unknown>; // `self` in a Worker IS the global scope
   (sandbox as unknown as Record<string, unknown>).console = console;
+  // Phase 219 (D-08): `self.crossOriginIsolated` defaults to `undefined`
+  // (falsy) — the same "no headers" starting point as every pre-existing
+  // test in this file, all of which expect numThreadsAtCreate === 1.
+  (sandbox as unknown as Record<string, unknown>).crossOriginIsolated = opts.crossOriginIsolated ?? false;
+  // Absent entirely (not merely `undefined`-valued) when the option is not
+  // provided, so the no-navigator defensive path in chooseWasmThreadCount()
+  // keeps being exercised exactly as before this change.
+  if (opts.hardwareConcurrency !== undefined) {
+    (sandbox as unknown as Record<string, unknown>).navigator = { hardwareConcurrency: opts.hardwareConcurrency };
+  }
   (sandbox as unknown as Record<string, unknown>).postMessage = (msg: Record<string, unknown>): void => {
     postMessages.push(msg);
   };
@@ -183,6 +199,7 @@ function setupSandbox(opts: SetupSandboxOptions = {}): SandboxHandle {
         wasmBinarySnapshot,
         executionProviders,
         numThreadsAtCreate: env.wasm.numThreads as number,
+        initTimeoutAtCreate: env.wasm.initTimeout,
       });
     });
   };
@@ -261,7 +278,7 @@ describe('maiaWorkerScript — backend: wasm', () => {
     // must be cleared — retaining the duplicate buffer past this point is
     // pure waste on the worker's heap (T-213-09-06).
     expect(handle.sandbox.ort?.env.wasm.wasmBinary).toBeUndefined();
-    expect(handle.postMessages).toContainEqual({ type: 'ready', backend: 'wasm' });
+    expect(handle.postMessages).toContainEqual({ type: 'ready', backend: 'wasm', numThreads: 1 });
   });
 
   it('an absent runtimeBuffer leaves wasmBinary unset throughout', async () => {
@@ -308,7 +325,7 @@ describe('maiaWorkerScript — backend: webgpu', () => {
     expect((snapshot as Uint8Array).length).toBe(3);
 
     expect(handle.sandbox.ort?.env.wasm.wasmBinary).toBeUndefined();
-    expect(handle.postMessages).toContainEqual({ type: 'ready', backend: 'webgpu' });
+    expect(handle.postMessages).toContainEqual({ type: 'ready', backend: 'webgpu', numThreads: 1 });
   });
 
   it('an absent runtimeBuffer leaves wasmBinary unset throughout the webgpu path too', async () => {
@@ -319,13 +336,95 @@ describe('maiaWorkerScript — backend: webgpu', () => {
   });
 });
 
+describe('maiaWorkerScript — chooseWasmThreadCount() (Phase 219, D-08)', () => {
+  it('not cross-origin isolated: 1 thread regardless of core count', async () => {
+    const handle = setupSandbox({ crossOriginIsolated: false, hardwareConcurrency: 16 });
+    await sendInit(handle, { backend: 'wasm' });
+
+    expect(handle.createCalls[0]?.numThreadsAtCreate).toBe(1);
+  });
+
+  it.each([
+    [1, 1],
+    [2, 1],
+    [7, 4], // ceiling on the halved core count first (4), then the MAIA_MAX_WASM_THREADS cap
+    [8, 4],
+    [9, 4], // the cap binds — half of 9 ceils to 5, capped to 4
+  ])('isolated, hardwareConcurrency %i -> %i thread(s), wasm-only path', async (hardwareConcurrency, expected) => {
+    const handle = setupSandbox({ crossOriginIsolated: true, hardwareConcurrency });
+    await sendInit(handle, { backend: 'wasm' });
+
+    expect(handle.createCalls[0]?.numThreadsAtCreate).toBe(expected);
+  });
+
+  it('isolated, hardwareConcurrency undefined (no navigator at all): 1 thread — the defensive fallback', async () => {
+    const handle = setupSandbox({ crossOriginIsolated: true });
+    await sendInit(handle, { backend: 'wasm' });
+
+    expect(handle.createCalls[0]?.numThreadsAtCreate).toBe(1);
+  });
+
+  it('isolated, hardwareConcurrency 8: the WebGPU/asyncify path uses the SAME formula as the wasm-only path', async () => {
+    const handle = setupSandbox({ crossOriginIsolated: true, hardwareConcurrency: 8 });
+    await sendInit(handle, { backend: 'webgpu' });
+
+    expect(handle.createCalls[0]?.numThreadsAtCreate).toBe(4);
+  });
+
+  it('the ready message carries the same numThreads that was assigned before create()', async () => {
+    const handle = setupSandbox({ crossOriginIsolated: true, hardwareConcurrency: 8 });
+    await sendInit(handle, { backend: 'wasm' });
+
+    expect(handle.postMessages).toContainEqual({ type: 'ready', backend: 'wasm', numThreads: 4 });
+  });
+});
+
+describe('maiaWorkerScript — WR-01 (Phase 219 review): bounded threaded init + forceSingleThread', () => {
+  it('sets ort.env.wasm.initTimeout to a bounded value BEFORE InferenceSession.create(), wasm-only path', async () => {
+    const handle = setupSandbox({ crossOriginIsolated: true, hardwareConcurrency: 8 });
+    await sendInit(handle, { backend: 'wasm' });
+
+    expect(handle.createCalls[0]?.initTimeoutAtCreate).toBeGreaterThan(0);
+  });
+
+  it('sets ort.env.wasm.initTimeout to a bounded value BEFORE InferenceSession.create(), webgpu/asyncify path', async () => {
+    const handle = setupSandbox({ crossOriginIsolated: true, hardwareConcurrency: 8 });
+    await sendInit(handle, { backend: 'webgpu' });
+
+    expect(handle.createCalls[0]?.initTimeoutAtCreate).toBeGreaterThan(0);
+  });
+
+  it('forceSingleThread pins numThreads to 1 even when crossOriginIsolated + hardwareConcurrency would otherwise choose more, wasm-only path', async () => {
+    const handle = setupSandbox({ crossOriginIsolated: true, hardwareConcurrency: 8 });
+    await sendInit(handle, { backend: 'wasm', forceSingleThread: true });
+
+    expect(handle.createCalls[0]?.numThreadsAtCreate).toBe(1);
+    expect(handle.postMessages).toContainEqual({ type: 'ready', backend: 'wasm', numThreads: 1 });
+  });
+
+  it('forceSingleThread pins numThreads to 1 on the webgpu/asyncify path too', async () => {
+    const handle = setupSandbox({ crossOriginIsolated: true, hardwareConcurrency: 8 });
+    await sendInit(handle, { backend: 'webgpu', forceSingleThread: true });
+
+    expect(handle.createCalls[0]?.numThreadsAtCreate).toBe(1);
+    expect(handle.postMessages).toContainEqual({ type: 'ready', backend: 'webgpu', numThreads: 1 });
+  });
+
+  it('an absent forceSingleThread leaves chooseWasmThreadCount()\'s normal formula in effect (no regression)', async () => {
+    const handle = setupSandbox({ crossOriginIsolated: true, hardwareConcurrency: 8 });
+    await sendInit(handle, { backend: 'wasm' });
+
+    expect(handle.createCalls[0]?.numThreadsAtCreate).toBe(4);
+  });
+});
+
 describe('maiaWorkerScript — backend defaulting', () => {
   it('an unrecognised backend value falls safe to wasm (D-13 fail-safe-toward-wasm philosophy)', async () => {
     const handle = setupSandbox();
     await sendInit(handle, { backend: 'not-a-real-backend' });
 
     expect(handle.importScriptsCalls).toEqual([WASM_ONLY_GLUE_PATH]);
-    expect(handle.postMessages).toContainEqual({ type: 'ready', backend: 'wasm' });
+    expect(handle.postMessages).toContainEqual({ type: 'ready', backend: 'wasm', numThreads: 1 });
   });
 
   it('an absent backend field falls safe to wasm', async () => {
@@ -347,7 +446,7 @@ describe('maiaWorkerScript — asset cache (Phase 213-12, D-20, closing G-213-37
     expect(handle.cacheOpenCalls).toEqual([TEST_ASSET_CACHE_NAME]);
     const progressEvents = handle.postMessages.filter((m) => m.type === 'progress');
     expect(progressEvents).toEqual([{ type: 'progress', loaded: bytes.length, total: bytes.length }]);
-    expect(handle.postMessages).toContainEqual({ type: 'ready', backend: 'wasm' });
+    expect(handle.postMessages).toContainEqual({ type: 'ready', backend: 'wasm', numThreads: 1 });
   });
 
   it('an EMPTY cache: exactly one model fetch, and the complete body is written to the cache under MODEL_PATH', async () => {
@@ -361,7 +460,7 @@ describe('maiaWorkerScript — asset cache (Phase 213-12, D-20, closing G-213-37
     const stored = handle.cacheStore.get(MODEL_PATH);
     expect(stored).toBeDefined();
     expect(Array.from(stored!)).toEqual(Array.from(bytes));
-    expect(handle.postMessages).toContainEqual({ type: 'ready', backend: 'wasm' });
+    expect(handle.postMessages).toContainEqual({ type: 'ready', backend: 'wasm', numThreads: 1 });
   });
 
   it('NO assetCacheName: byte-for-byte todays behavior — one fetch, no cache access at all, even when caches IS available', async () => {
@@ -370,7 +469,7 @@ describe('maiaWorkerScript — asset cache (Phase 213-12, D-20, closing G-213-37
 
     expect(handle.fetchCalls).toEqual([MODEL_PATH]);
     expect(handle.cacheOpenCalls).toEqual([]); // never opened — no assetCacheName means no cache access
-    expect(handle.postMessages).toContainEqual({ type: 'ready', backend: 'wasm' });
+    expect(handle.postMessages).toContainEqual({ type: 'ready', backend: 'wasm', numThreads: 1 });
   });
 
   it('a model stream ending short of its declared content-length is retried and NEVER written to the cache (CR-01)', async () => {
@@ -399,7 +498,7 @@ describe('maiaWorkerScript — asset cache (Phase 213-12, D-20, closing G-213-37
 
     expect(handle.fetchCalls).toEqual([MODEL_PATH]);
     expect(handle.cacheStore.has(MODEL_PATH)).toBe(false);
-    expect(handle.postMessages).toContainEqual({ type: 'ready', backend: 'wasm' });
+    expect(handle.postMessages).toContainEqual({ type: 'ready', backend: 'wasm', numThreads: 1 });
   });
 
   it('assetCacheName present but caches undefined (Safari private mode / insecure context): degrades to a plain fetch, never throws', async () => {
@@ -407,7 +506,7 @@ describe('maiaWorkerScript — asset cache (Phase 213-12, D-20, closing G-213-37
     await sendInit(handle, { backend: 'wasm', assetCacheName: TEST_ASSET_CACHE_NAME });
 
     expect(handle.fetchCalls).toEqual([MODEL_PATH]);
-    expect(handle.postMessages).toContainEqual({ type: 'ready', backend: 'wasm' });
+    expect(handle.postMessages).toContainEqual({ type: 'ready', backend: 'wasm', numThreads: 1 });
     expect(handle.postMessages.some((m) => m.type === 'error')).toBe(false);
   });
 });
@@ -470,6 +569,6 @@ describe('maiaWorkerScript — asset versioning (quick 260905-rhc)', () => {
     const wasmPaths = handle.sandbox.ort?.env.wasm.wasmPaths as { mjs: string; wasm: string };
     expect(wasmPaths.mjs).toBe('/maia/ort-wasm-simd-threaded.mjs');
     expect(wasmPaths.wasm).toBe('/maia/ort-wasm-simd-threaded.wasm');
-    expect(handle.postMessages).toContainEqual({ type: 'ready', backend: 'wasm' });
+    expect(handle.postMessages).toContainEqual({ type: 'ready', backend: 'wasm', numThreads: 1 });
   });
 });

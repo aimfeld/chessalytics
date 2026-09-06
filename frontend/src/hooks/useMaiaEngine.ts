@@ -12,25 +12,40 @@
  * MAIA-05: ephemeral, board-session-scoped FIFO cache (no persistence).
  * SURF-05: live recompute on every FEN change, no server round-trip.
  *
- * Two-phase ladder + next-ply prefetch (quick 260906-gu2). On the wasm
- * backend one Maia forward pass costs ~200 ms PER RUNG (batching amortizes
- * nothing on a single thread), so the 21-rung ladder took ~4 s during which
- * the eval bar stayed blank and the FlawChess Engine's root `policy()` call
- * (same shared worker, lower priority) waited behind it. The hook now runs a
- * small pipeline per position, one request in flight at a time, re-planned
- * on every completion / input change (`planNextRequest`):
+ * Two-phase ladder + next-ply prefetch (quick 260906-gu2), now split into a
+ * coarse pass and a fill pass (Phase 219-03, D-11). On the wasm backend one
+ * Maia forward pass costs ~200 ms PER RUNG (batching amortizes nothing on a
+ * single thread), so the 21-rung ladder took ~4 s during which the chart
+ * stayed blank and the FlawChess Engine's root `policy()` call (same shared
+ * worker, lower priority) waited behind it. The hook now runs a small
+ * pipeline per position, one request in flight at a time, re-planned on
+ * every completion / input change (`planNextRequest`):
  *
  *   1. the EXACT `selectedElo` rung for the live position (~200 ms) — enough
  *      for `wdl`/`expectedScoreAtSelectedElo`, and written through to
  *      `maiaPolicyCache` under the exact ELO the engine's root call reads;
  *   2. the same single rung for `prefetchFen` (the next ply on the current
  *      line), so a forward step lands on a cache hit even before the chart;
- *   3. the remaining ladder rungs for the live position (the chart).
+ *   3a. a COARSE pass — every second ladder rung (`coarseLadderElos`), union
+ *       the exact `selectedElo` rung whenever it is itself a ladder value —
+ *       so the chart paints from 11 rungs roughly half the ladder's wall time
+ *       into the position, instead of waiting for all 21;
+ *   3b. a FILL pass — the remaining ladder rungs, landing the last few
+ *       minutes/refinements the coarse pass didn't cover.
  *
- * `perElo` keeps its contract — ladder rungs only, complete or `[]` — so
- * every chart/quality-bar/verdict/gem consumer sees byte-identical data; only
- * `wdl` (and the policy cache) arrive ~20× earlier. `ladderOnly: true` opts a
- * consumer (the gem sweep) out of phases 1-2 entirely.
+ * `perElo` is now ASCENDING-AND-POSSIBLY-PARTIAL: every present rung is real,
+ * but the array may hold 11 rungs (coarse-only) or 21 (complete). The single
+ * source of truth for "all 21 have landed" is the new `isLadderComplete`
+ * flag — NEVER `perElo.length` and NEVER `resultFen` equality, both of which
+ * were only ever accidentally equivalent to completeness under the old
+ * all-or-nothing contract. Every consumer that needs a stable, complete
+ * ladder (the position verdict, gem/great classification, the gem sweep, the
+ * `maiaCurveByFen` retention cache) reads `isLadderComplete` and waits for it;
+ * the chart and its candidate-selection paint from whatever is present.
+ * `ladderOnly: true` opts a consumer (the gem sweep) out of phases 1-2
+ * entirely but still goes through the coarse/fill split for phase 3 — a
+ * second round trip is negligible against inference time, and it keeps the
+ * planner to one branch instead of a `ladderOnly`-conditioned one.
  *
  * maskAndSoftmax/expectedScore/softmaxWdl are single-sourced from maiaEncoding.ts
  * (the worker returns RAW policy/WDL logits only — see maia-worker.js header).
@@ -76,6 +91,44 @@ const MAIA_CACHE_MAX = 256;
  */
 const WDL_RUNG_TOLERANCE_ELO = 50;
 
+/**
+ * Dev-only pipeline phase timing (D-15 measurement harness, Phase 219-01).
+ * `useMaiaEngine.ts` module header describes the three-phase pipeline this
+ * instruments: the exact selected-ELO rung on the live position, the same
+ * exact rung on the prefetch position, and the remaining-ladder request.
+ * These numbers feed the reference-box readings recorded per plan against
+ * `219-MEASUREMENTS.md`'s targets — build once here, reuse in 219-02/219-03.
+ */
+const MAIA_TIMING_LOG_PREFIX = '[maia-timing]';
+
+/**
+ * Phase labels for `logMaiaPhaseTiming` — one per pipeline stage (D-15).
+ * `coarse`/`fill` (Phase 219-03) replace the old single `ladder` label so the
+ * first-paint number (coarse) can be measured separately from the
+ * full-ladder number (fill lands last).
+ */
+const MAIA_TIMING_PHASE_EXACT_RUNG = 'exact rung';
+const MAIA_TIMING_PHASE_PREFETCH = 'prefetch';
+const MAIA_TIMING_PHASE_COARSE = 'coarse';
+const MAIA_TIMING_PHASE_FILL = 'fill';
+
+type MaiaTimingPhase =
+  | typeof MAIA_TIMING_PHASE_EXACT_RUNG
+  | typeof MAIA_TIMING_PHASE_PREFETCH
+  | typeof MAIA_TIMING_PHASE_COARSE
+  | typeof MAIA_TIMING_PHASE_FILL;
+
+/**
+ * Logs one completed pipeline phase's elapsed time. No-op unless
+ * `import.meta.env.DEV` — production bundles carry no `[maia-timing]` output
+ * (Vite/esbuild dead-code-eliminate the call at build time; verified by
+ * grepping `dist/assets/*.js` for the prefix string).
+ */
+function logMaiaPhaseTiming(phase: MaiaTimingPhase, elapsedMs: number): void {
+  if (!import.meta.env.DEV) return;
+  console.info(`${MAIA_TIMING_LOG_PREFIX} ${phase} ${Math.round(elapsedMs)}ms`);
+}
+
 // ─── Types ───────────────────────────────────────────────────────────────────
 
 export interface UseMaiaEngineOptions {
@@ -116,8 +169,23 @@ export interface MoveCurvePoint {
 }
 
 export interface UseMaiaEngineState {
-  /** Full per-ELO curve (every MAIA_ELO_LADDER rung) — chart input (SURF-01). `[]` until the whole ladder has landed. */
+  /**
+   * Per-ELO curve — chart input (SURF-01). Ascending by `elo`, no duplicate
+   * rungs, but may be PARTIAL (Phase 219-03, D-12): `[]` until the coarse
+   * pass lands, 11 rungs after coarse, 21 once `isLadderComplete` is true.
+   * The chart and shown-candidate selection paint from whatever is present;
+   * any consumer that needs the full ladder must read `isLadderComplete`
+   * instead of this array's length.
+   */
   perElo: MoveCurvePoint[];
+  /**
+   * True once every `MAIA_ELO_LADDER` rung has landed for the CURRENT result
+   * (Phase 219-03, D-12) — the single source of truth for ladder
+   * completeness. Never derive this from `perElo.length` or from `resultFen`
+   * equality; both are now legitimately non-empty/matching while the ladder
+   * is still partial.
+   */
+  isLadderComplete: boolean;
   /** expectedScore(wdl) at the inferred rung nearest `selectedElo`; null until one is within tolerance. */
   expectedScoreAtSelectedElo: number | null;
   /** Full WDL vector at the inferred rung nearest `selectedElo`; null until one is within tolerance. */
@@ -141,8 +209,9 @@ export interface UseMaiaEngineState {
    * keyed on `fen`, i.e. one commit AFTER the caller's `fen` prop changes — so
    * on the navigation commit `perElo` still holds the PREVIOUS position's
    * curve. Callers writing per-FEN caches must key/guard on `resultFen`, never
-   * on their own current position. May be non-null while `perElo` is still
-   * `[]` (only the exact rung has landed) — guard on `perElo.length` too.
+   * on their own current position. `resultFen` matching is NOT proof the
+   * ladder is complete (Phase 219-03, D-12 retired that proxy) — a consumer
+   * needing the full ladder must read `isLadderComplete` as well.
    */
   resultFen: string | null;
 }
@@ -160,8 +229,10 @@ interface MaiaResult {
   fen: string;
   /** Every rung inferred so far, keyed by ELO — ladder rungs plus any exact selected-ELO rung. */
   rungs: Map<number, MaiaRung>;
-  /** Ladder rungs ascending — non-empty iff every `MAIA_ELO_LADDER` rung is present. */
+  /** Ladder rungs ascending — may be PARTIAL (Phase 219-03, D-12); see `isLadderComplete`. */
   ladder: MoveCurvePoint[];
+  /** True iff every `MAIA_ELO_LADDER` rung is present in `rungs` — computed once per merge. */
+  isLadderComplete: boolean;
 }
 
 /** One worker request the pipeline decided to issue next. */
@@ -170,12 +241,47 @@ interface PlannedRequest {
   elos: number[];
   /** True when `fen` is the live position (drives `isAnalyzing`); false for a prefetch. */
   live: boolean;
+  /** Pipeline phase label for dev-only timing (D-15 measurement harness). */
+  phase: MaiaTimingPhase;
 }
 
 // ─── Helpers ─────────────────────────────────────────────────────────────────
 
+/**
+ * Coarse-pass rung stride (D-11): every 2nd ladder rung — named per CLAUDE.md
+ * no-magic-numbers.
+ */
+const COARSE_PASS_STRIDE = 2;
+
+/**
+ * The coarse target set for phase 3a (D-11): every rung at an even ladder
+ * index, UNION the exact `selectedElo` rung whenever it is itself a ladder
+ * value. Filtering `MAIA_ELO_LADDER` itself (rather than concatenating and
+ * sorting) gives ascending order and duplicate-freedom by construction — a
+ * `selectedElo` that is not a ladder value contributes nothing, correctly,
+ * because such a value can never be a member of `perElo`.
+ */
+function coarseLadderElos(selectedElo: number): number[] {
+  return MAIA_ELO_LADDER.filter((elo, i) => i % COARSE_PASS_STRIDE === 0 || elo === selectedElo);
+}
+
+/**
+ * True only when every `MAIA_ELO_LADDER` rung is present in the accumulator
+ * map (Phase 219-03, D-12) — the sole completeness derivation. Replaces the
+ * retired `result.ladder.length > 0` proxy, which broke the moment the
+ * ladder could be non-empty-but-partial.
+ */
+function computeIsLadderComplete(rungs: Map<number, MaiaRung>): boolean {
+  return MAIA_ELO_LADDER.every((elo) => rungs.has(elo));
+}
+
+/**
+ * Reads the flag `mergeMaiaResult` already computed via `computeIsLadderComplete`
+ * — never recomputes it, per the "computed once per merge" contract on
+ * `MaiaResult.isLadderComplete`.
+ */
 function isLadderComplete(result: MaiaResult | undefined): boolean {
-  return result !== undefined && result.ladder.length > 0;
+  return result?.isLadderComplete ?? false;
 }
 
 function hasRung(result: MaiaResult | undefined, elo: number): boolean {
@@ -184,8 +290,11 @@ function hasRung(result: MaiaResult | undefined, elo: number): boolean {
 
 /**
  * The pipeline planner (module header): exact live rung → exact prefetch rung
- * → remaining ladder rungs. Pure so the ordering is unit-testable; returns
- * null once nothing is left to do for the live position.
+ * → coarse ladder pass → fill ladder pass (D-11). Pure so the ordering is
+ * unit-testable; returns null once nothing is left to do for the live
+ * position. Applied uniformly on the `ladderOnly` path too (RESEARCH Open
+ * Question 1) — a second round trip is negligible against inference time,
+ * and a `ladderOnly`-conditioned branch here is not worth its cost.
  */
 function planNextRequest(
   fen: string,
@@ -197,17 +306,23 @@ function planNextRequest(
   const current = cache.get(fen);
   const ladderDone = isLadderComplete(current);
   if (!ladderOnly) {
-    if (!ladderDone && !hasRung(current, selectedElo)) return { fen, elos: [selectedElo], live: true };
+    if (!ladderDone && !hasRung(current, selectedElo)) {
+      return { fen, elos: [selectedElo], live: true, phase: MAIA_TIMING_PHASE_EXACT_RUNG };
+    }
     if (prefetchFen !== null && prefetchFen !== fen) {
       const next = cache.get(prefetchFen);
       if (!isLadderComplete(next) && !hasRung(next, selectedElo)) {
-        return { fen: prefetchFen, elos: [selectedElo], live: false };
+        return { fen: prefetchFen, elos: [selectedElo], live: false, phase: MAIA_TIMING_PHASE_PREFETCH };
       }
     }
   }
   if (ladderDone) return null;
+  const missingCoarse = coarseLadderElos(selectedElo).filter((elo) => !hasRung(current, elo));
+  if (missingCoarse.length > 0) {
+    return { fen, elos: missingCoarse, live: true, phase: MAIA_TIMING_PHASE_COARSE };
+  }
   const missing = MAIA_ELO_LADDER.filter((elo) => !hasRung(current, elo));
-  return { fen, elos: missing, live: true };
+  return { fen, elos: missing, live: true, phase: MAIA_TIMING_PHASE_FILL };
 }
 
 /**
@@ -242,17 +357,29 @@ function mergeMaiaResult(existing: MaiaResult | undefined, msg: MaiaAnalyzeResul
     if (!wdlLogits) continue; // malformed payload rung — never surface a policy without its WDL
     rungs.set(elo, { elo, moveProbabilities: san, wdl: softmaxWdl(wdlLogits) });
   }
-  return { fen: msg.fen, rungs, ladder: buildLadder(existing, rungs) };
+  return {
+    fen: msg.fen,
+    rungs,
+    ladder: buildLadder(existing, rungs),
+    isLadderComplete: computeIsLadderComplete(rungs),
+  };
 }
 
-/** The ladder view over `rungs`; reuses the previous array (stable ref for consumers) once complete. */
+/**
+ * The ladder view over `rungs` — ascending, PARTIAL until every rung is
+ * present (Phase 219-03, D-12; never bails out early to `[]`). Re-keyed on
+ * completeness rather than non-emptiness for the stable-reference
+ * optimisation: when the PREVIOUS result was already complete, this merge is
+ * a redundant continuation (e.g. a cache re-hit), so returning its array
+ * keeps a cached complete FEN's identity stable for consumers that
+ * reference-check it (`maiaCurveByFen`).
+ */
 function buildLadder(existing: MaiaResult | undefined, rungs: Map<number, MaiaRung>): MoveCurvePoint[] {
-  if (existing && existing.ladder.length > 0) return existing.ladder;
+  if (existing && computeIsLadderComplete(existing.rungs)) return existing.ladder;
   const ladder: MoveCurvePoint[] = [];
   for (const elo of MAIA_ELO_LADDER) {
     const rung = rungs.get(elo);
-    if (!rung) return [];
-    ladder.push({ elo, moveProbabilities: rung.moveProbabilities });
+    if (rung) ladder.push({ elo, moveProbabilities: rung.moveProbabilities });
   }
   return ladder;
 }
@@ -339,6 +466,7 @@ export function useMaiaEngine({
       inFlightRef.current = req;
       if (req.live) setIsAnalyzing(true);
       for (const elo of req.elos) markPolicyPending(req.fen, elo);
+      const issuedAt = performance.now();
       lease.analyze(req.fen, req.elos).then(
         (msg) => {
           // Cache every completed inference, even one whose position was already
@@ -348,6 +476,12 @@ export function useMaiaEngine({
           const merged = mergeMaiaResult(cacheRef.current.get(msg.fen), msg);
           cacheResult(msg.fen, merged);
           if (leaseRef.current !== lease) return; // this lease has since been released/replaced
+          // A live request whose on-screen position moved on before it landed is
+          // stale — its elapsed time no longer describes anything visible. A
+          // prefetch has no such notion (it never targets the on-screen position
+          // at issue time, by design), so it always reports.
+          const isStaleLiveResult = req.live && msg.fen !== currentFenRef.current;
+          if (!isStaleLiveResult) logMaiaPhaseTiming(req.phase, performance.now() - issuedAt);
           // Only paint it if it still matches the on-screen position (stale guard).
           if (msg.fen === currentFenRef.current) setLatestResult(merged);
           if (inFlightRef.current === req) {
@@ -535,6 +669,7 @@ export function useMaiaEngine({
 
   return {
     perElo: latestResult?.ladder ?? [],
+    isLadderComplete: latestResult?.isLadderComplete ?? false,
     expectedScoreAtSelectedElo,
     wdl,
     isReady,

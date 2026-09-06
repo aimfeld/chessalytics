@@ -423,6 +423,13 @@ export function useAnalysisEngineLines(
   // "not a gem/great" answer — the live classifyGem fallback below is never
   // consulted in that case.
   const qualityBySanWithGem = useMemo<Map<string, MoveQualityEval>>(() => {
+    // WR-02 fix (Phase 219 review): `resolveStoredTierShortCircuit` (Phase 175)
+    // is Maia-independent — it recolors from `storedTierByPly`, a DB-authoritative
+    // fact that needs no ladder at all. The `isLadderComplete` gate used to sit
+    // ABOVE this check, so on analyzed games the stored gem/great tier waited
+    // for the full ladder and painted plain `best` during the coarse pass, then
+    // flipped to violet when the fill pass landed — the exact coarse-to-fine
+    // flip D-12 exists to prevent. Only bail early on a missing reconciled best.
     if (reconciledBestSan === null) return qualityBySan;
 
     const onMainlineHere = currentNodeId === null || isOnMainLine(currentNodeId);
@@ -437,6 +444,16 @@ export function useAnalysisEngineLines(
       qualityBySan,
     );
     if (storedShortCircuit !== null) return storedShortCircuit;
+
+    // WAIT-FOR-COMPLETE (Phase 219-03, D-12, T-219-12): live gem/great
+    // classification must never act on a coarse (11-rung) ladder — with the
+    // old all-or-nothing contract `maia.perElo` was empty until complete, so
+    // the nearestByElo lookup below returned nothing and no gem was ever
+    // assigned from a partial ladder. Preserve that behavior explicitly now
+    // that `perElo` can be non-empty-but-partial. Gated HERE (not above) so it
+    // only blocks the live classification path, not the stored-tier short
+    // circuit checked above.
+    if (!maia.isLadderComplete) return qualityBySan;
 
     // Quick 260719-m5g: pin the gem's Maia rung to the MOVER's rating-at-game-time
     // (Phase 172 / SEED-106 D-01 — the gem rung is a property of the GAME, never the
@@ -480,6 +497,7 @@ export function useAnalysisEngineLines(
     qualityBySan,
     reconciledBestSan,
     maia.perElo,
+    maia.isLadderComplete,
     pinnedEloForMover,
     position,
     currentNodeId,

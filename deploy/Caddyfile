@@ -47,6 +47,15 @@ flawchess.org, www.flawchess.org {
 }
 
 analytics.flawchess.com {
+    # Phase 219 (D-06): the Umami script is loaded cross-origin from the
+    # isolated flawchess.com document (COEP require-corp, below) — COEP
+    # requires the loaded subresource to opt in via CORP (or pass CORS; the
+    # index.html script tag also carries crossorigin="anonymous" as the
+    # sanctioned belt-and-suspenders source-side fix, D-06).
+    header {
+        Cross-Origin-Resource-Policy "cross-origin"
+    }
+
     reverse_proxy umami:3000
 }
 
@@ -66,6 +75,18 @@ flawchess.com {
         X-Content-Type-Options nosniff
         Referrer-Policy strict-origin-when-cross-origin
         Permissions-Policy "camera=(), microphone=(), geolocation=()"
+
+        # Cross-origin isolation (Phase 219 D-05): unlocks SharedArrayBuffer
+        # for the Maia worker's multi-threaded wasm inference
+        # (maia-worker.js's chooseWasmThreadCount()). Both headers on a JSON
+        # API response are inert, so this unconditioned block covering
+        # /api/* alongside static assets and the SPA fallback is harmless.
+        # The earlier rationale for withholding these ("severs the Google
+        # OAuth popup", Phase 136) is obsolete: Google OAuth is a full-page
+        # redirect (LoginForm.tsx/RegisterForm.tsx), which COOP same-origin
+        # cannot affect — only popup/opener relationships are governed by it.
+        Cross-Origin-Opener-Policy "same-origin"
+        Cross-Origin-Embedder-Policy "require-corp"
 
         # Report-only CSP (D-07): reports violations to Sentry via both the
         # legacy report-uri directive and the newer report-to/

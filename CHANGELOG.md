@@ -15,11 +15,18 @@ in `YYYY-MM-DD` (Europe/Zurich).
 - Low-memory Android devices that cannot allocate the Maia model now see the "your device ran out of memory" message instead of a misleading download-failure message.
 - Generate Insights on the Endgames tab works again. The rated-games default introduced with the new analytics population was rejected by the insights endpoint itself, so the button was enabled but every click failed with "Couldn't generate insights." Reports now cover your rated games against human opponents, matching the numbers on the rest of the tab, and cached reports written under the old population are regenerated once.
 - The "Try again" button on a failed insights report is now disabled while a filter blocks generation, like the Generate Insights button already was.
+- Maia analysis no longer fails with an out-of-memory error on iPhones. The browser inference runtime was reserving four times more memory address space than iOS Safari allows a page to hold alongside the Stockfish engine workers.
 
 ### Changed
 
+- The Maia "Human Move Probability" chart on the analysis board now appears roughly 7x faster on devices without WebGPU: the chart paints a coarse curve about 0.6 s after you land on a position and refines in place, instead of waiting 4-5 s for the full rating ladder. Behind it, the Maia engine runs on up to four threads (the site now ships cross-origin isolation headers), and its runtime was pinned back to a faster onnxruntime-web release.
+- The move-quality bar and the one-line position verdict wait for the complete rating ladder before showing, so they never flip from a rough reading to a final one, and navigating to a new position clears them immediately instead of briefly showing the previous position's numbers.
+- If the Maia engine's multi-threaded start ever stalls (for example behind a proxy that strips the isolation headers), it now retries single-threaded after 20 s instead of spinning forever.
 - The analysis board's eval bar and the FlawChess Engine card now appear about 200 ms after navigating to a new position instead of waiting for the full Maia rating ladder (about 2–4 s on devices without WebGPU). Maia infers your selected rating first, then quietly pre-computes the next move on the line, so stepping forward through a game is instant; the Human Move Probability chart still fills in over the next few seconds.
 
+- The Human Move Probability chart is roughly twice as fast on devices without WebGPU, because the browser inference runtime that computes it was returned to a faster earlier version. (Phase 219)
+- The Maia chart is faster on machines without a GPU because the analysis now uses several CPU cores. (Phase 219)
+- The Maia chart now appears almost immediately and sharpens as the remaining ratings finish, instead of staying blank until every rating has been computed. (Phase 219)
 - Practice-bot persona cards now carry a colored border and glow matching each bot's playing style, brightening on hover.
 - Openings, Endgames and Stats now default to rated games against human opponents on a fresh load, matching the population the percentile benchmarks compare against — the Opponent and Rated filters still switch it back to any opponent or any rated status. The Library keeps showing FlawChess practice-bot games and pasted PGNs regardless of those two filters.
 

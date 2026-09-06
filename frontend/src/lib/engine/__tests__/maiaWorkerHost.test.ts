@@ -103,7 +103,11 @@ function stubWorkerCtor(): void {
 }
 
 function driveReady(worker: MockWorker, backend: 'webgpu' | 'wasm' = 'wasm'): void {
-  worker.simulateMessage({ type: 'ready', backend });
+  // Phase 219 (D-08): `numThreads` is now a required field on the `ready`
+  // message; this file's job is dispatch/queue/respawn logic, not the
+  // thread-count formula itself (covered by maiaWorkerScript.test.ts), so a
+  // fixed value is sufficient here.
+  worker.simulateMessage({ type: 'ready', backend, numThreads: 1 });
 }
 
 function analyzeMessages(worker: MockWorker): WorkerMessageLike[] {
@@ -294,6 +298,76 @@ describe('maiaWorkerHost', () => {
     await expect(p1).resolves.toBeDefined();
   });
 
+  it('WR-01 (Phase 219 review): a threaded-init timeout retries ONCE pinned to single-thread, preserving the queue', async () => {
+    const lease = acquireMaiaWorker({ source: 'maia-worker', priority: true });
+    const p1 = lease.analyze(TEST_FEN, [1500]);
+    const worker1 = createdWorkers[0]!;
+
+    // Never driveReady() — this is a pre-ready init failure, the exact
+    // rejection message onnxruntime-web throws once `initTimeout` elapses on
+    // a blocked pthread worker.
+    worker1.simulateMessage({
+      type: 'error',
+      message: 'WebAssembly backend initializing failed due to timeout.',
+    });
+
+    // Non-terminal: a breadcrumb only, no full Sentry capture — mirrors the
+    // webgpu-unavailable respawn's own reporting shape.
+    expect(Sentry.captureException).not.toHaveBeenCalled();
+    expect(Sentry.addBreadcrumb).toHaveBeenCalledWith(
+      expect.objectContaining({
+        category: 'maia',
+        message: expect.stringContaining('single-thread'),
+      }),
+    );
+    expect(worker1.terminated).toBe(true);
+    expect(createdWorkers).toHaveLength(2);
+    const replacement = createdWorkers[1]!;
+    expect(replacement.messages).toContainEqual(
+      expect.objectContaining({ type: 'init', forceSingleThread: true }),
+    );
+
+    // The queued request survives the respawn, exactly like the
+    // webgpu-unavailable respawn above.
+    driveReady(replacement);
+    expect(analyzeMessages(replacement)).toHaveLength(1);
+    replacement.simulateMessage(buildResultMessage(TEST_FEN, [1500]));
+    await expect(p1).resolves.toBeDefined();
+  });
+
+  it('WR-01 (Phase 219 review): a SECOND threaded-init timeout (already single-threaded) is terminal — no infinite retry loop', async () => {
+    const onFatal = vi.fn();
+    const lease = acquireMaiaWorker({ source: 'maia-worker', priority: true, onFatal });
+    const p1 = lease.analyze(TEST_FEN, [1500]);
+    const worker1 = createdWorkers[0]!;
+
+    worker1.simulateMessage({
+      type: 'error',
+      message: 'WebAssembly backend initializing failed due to timeout.',
+    });
+    expect(createdWorkers).toHaveLength(2);
+    const replacement = createdWorkers[1]!;
+    expect(replacement.messages).toContainEqual(
+      expect.objectContaining({ type: 'init', forceSingleThread: true }),
+    );
+
+    // The single-threaded replacement ALSO times out — retrying again could
+    // never help (it is already at the minimum thread count), so this must
+    // be treated as a genuine terminal failure, not looped forever.
+    replacement.simulateMessage({
+      type: 'error',
+      message: 'WebAssembly backend initializing failed due to timeout.',
+    });
+
+    await expect(p1).rejects.toThrow();
+    expect(onFatal).toHaveBeenCalledTimes(1);
+    expect(createdWorkers).toHaveLength(2); // no third worker — the retry budget is exactly one
+    expect(Sentry.captureException).toHaveBeenCalledWith(
+      expect.any(Error),
+      expect.objectContaining({ tags: expect.objectContaining({ maia_failure: 'inference' }) }),
+    );
+  });
+
   it('a mid-inference webgpu error rejects in-flight, respawns pinned to wasm, and services the queue (FLAWCHESS-9D)', async () => {
     const lease = acquireMaiaWorker({ source: 'maia-worker', priority: true });
     const p1 = lease.analyze(TEST_FEN, [1500]);
@@ -325,6 +399,40 @@ describe('maiaWorkerHost', () => {
     expect(analyzeMessages(replacement)[0]?.fen).toBe(TEST_FEN_2);
     replacement.simulateMessage(buildResultMessage(TEST_FEN_2, [1200]));
     await expect(p2).resolves.toBeDefined();
+  });
+
+  it('WR-03 (Phase 219 review): lastReportedNumThreads resets on respawn — a pre-ready failure of the REPLACEMENT worker never reports the dead worker\'s thread count', async () => {
+    const lease = acquireMaiaWorker({ source: 'maia-worker', priority: true });
+    const p1 = lease.analyze(TEST_FEN, [1500]);
+    const worker1 = createdWorkers[0]!;
+    worker1.simulateMessage({ type: 'ready', backend: 'webgpu', numThreads: 4 });
+    const p2 = lease.analyze(TEST_FEN_2, [1200]);
+
+    // Mid-inference webgpu failure on worker #1 (numThreads: 4) respawns pinned to wasm.
+    worker1.simulateMessage({ type: 'error', message: 'WebGPU buffer already released' });
+    await expect(p1).rejects.toThrow();
+    const replacement = createdWorkers[1]!;
+
+    // The replacement fails BEFORE its own `ready` message — before the WR-03
+    // fix, `lastReportedNumThreads` still held worker #1's `4` here (never
+    // reset on respawn), so this capture would wrongly attach `numThreads: 4`
+    // to a worker that never got that far.
+    replacement.simulateMessage({ type: 'error', message: 'onnx init failure' });
+    await expect(p2).rejects.toThrow();
+
+    const initFailureCall = vi.mocked(Sentry.captureException).mock.calls.find(
+      ([, ctx]) =>
+        (ctx as { contexts?: { maia?: { rawMessage?: string } } })?.contexts?.maia?.rawMessage ===
+        'onnx init failure',
+    );
+    expect(initFailureCall).toBeDefined();
+    const engineDeviceContext = (
+      initFailureCall![1] as { contexts: { engine_device: Record<string, unknown> } }
+    ).contexts.engine_device;
+    // readDeviceContext omits the key entirely (rather than setting it to
+    // `null`) when `numThreads` is `null` — so "resets to null" is observed
+    // here as "the key is absent", not present-and-4.
+    expect(engineDeviceContext.numThreads).toBeUndefined();
   });
 
   it('WR-02: a mid-inference webgpu respawn resets maia-model to not-done in the store, even though it was already marked ready', async () => {
