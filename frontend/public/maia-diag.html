@@ -97,7 +97,13 @@ function errText(e) { return e && e.stack ? `${e.name}: ${e.message}\n${e.stack}
     const lg = localStorage.getItem(LS_LOG);
     if (st || lg) document.getElementById('prev').textContent = `state: ${st || '(none)'}\n\n${lg || ''}`;
     const s = st ? JSON.parse(st) : null;
-    if (s && s.phase && s.phase !== 'idle') summary('prev', `PREVIOUS PAGE DIED during: ${s.phase} (${s.detail || ''}) at ${s.at}`, 'bad');
+    if (s && s.phase && s.phase !== 'idle') {
+      summary('prev', `PREVIOUS PAGE DIED during: ${s.phase} (${s.detail || ''}) at ${s.at}`, 'bad');
+      // Surface the tail of the dead session's log right here, so it is not
+      // missed below the fold after Safari's automatic reload.
+      const tail = (lg || '').split('\n').slice(-8).join('\n');
+      const pre = document.createElement('pre'); pre.textContent = `last lines before the kill:\n${tail}`; sumEl.appendChild(pre);
+    }
   } catch {}
   setState({ phase: 'idle', detail: '' });
 })();
