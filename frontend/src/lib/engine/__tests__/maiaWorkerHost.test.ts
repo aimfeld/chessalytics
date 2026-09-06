@@ -574,7 +574,7 @@ describe('maiaWorkerHost', () => {
     expect(info).toHaveBeenCalledWith(expect.stringContaining('iOS WebKit without a usable WebGPU adapter'));
   });
 
-  it('an iPhone whose probe picks webgpu spawns a normal webgpu Worker (iOS 26 Safari)', () => {
+  it('an iPhone whose probe picks webgpu spawns a webgpu Worker pinned to ONE wasm thread (iOS 26 Safari)', () => {
     stubIphone();
     probeAnswers('webgpu');
 
@@ -582,8 +582,23 @@ describe('maiaWorkerHost', () => {
     void lease.whenReady();
 
     expect(createdWorkers).toHaveLength(1);
-    expect(createdWorkers[0]!.messages).toContainEqual(expect.objectContaining({ type: 'init', backend: 'webgpu' }));
+    // Measured on the device: two wasm threads next to the page's three
+    // Stockfish workers gets the page killed ~10 s in; one thread survives.
+    expect(createdWorkers[0]!.messages).toContainEqual(
+      expect.objectContaining({ type: 'init', backend: 'webgpu', forceSingleThread: true }),
+    );
     expect(getEngineAssetsSnapshot().status).not.toBe('unsupported');
+  });
+
+  it('a non-iOS device is NOT pinned to one thread by the iOS rule (the flag stays false on the normal spawn)', () => {
+    probeAnswers('webgpu');
+
+    const lease = acquireMaiaWorker({ source: 'maia-worker', priority: true });
+    void lease.whenReady();
+
+    expect(createdWorkers[0]!.messages).toContainEqual(
+      expect.objectContaining({ type: 'init', backend: 'webgpu', forceSingleThread: false }),
+    );
   });
 
   it('on an iPhone, webgpu-unavailable is TERMINAL: no wasm replacement, unsupported/ios-webkit, one Sentry capture', async () => {

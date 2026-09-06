@@ -84,6 +84,14 @@ export const ENGINE_PATH = versionedEngineAssetUrl('/maia/maia-worker.js');
  */
 const THREADED_INIT_TIMEOUT_PATTERN = /initializ(?:ing|ation).*timeout/i;
 
+/**
+ * SEED-158: every iOS/iPadOS Maia worker is spawned with
+ * `forceSingleThread: true` (see the iOS branch of `spawn()` for the
+ * measurement). Named so the intent reads at the call site rather than as a
+ * bare `true` (CLAUDE.md no-magic-values).
+ */
+const IOS_FORCE_SINGLE_THREAD = true;
+
 // ─── Types ──────────────────────────────────────────────────────────────────
 
 export interface MaiaAnalyzeResult {
@@ -433,7 +441,20 @@ function spawn(source: MaiaErrorSource, mode: 'auto' | 'wasm', forceSingleThread
         gateOffIosWebKit('iOS WebKit without a usable WebGPU adapter — Maia gated off (wasm inference kills the page, SEED-158)');
         return;
       }
-      spawnFromRuntime(source, myGeneration, forceSingleThread);
+      // Bug fix (SEED-158, measured 2026-09-06 on the iPhone 14 Pro, iOS
+      // 26.6.1 via /maia-diag.html): the WebGPU worker with ORT's default
+      // TWO wasm threads (`chooseWasmThreadCount()`: 4 cores -> 2) plus the
+      // three Stockfish workers /analysis runs on a phone gets the page
+      // killed by WebKit ~10 s in, exactly like the pure-wasm kill, while
+      // either half alone survives. Pinning this worker to ONE wasm thread
+      // with the same three Stockfish workers survives 150 mixed-shape
+      // inferences (~30 s) with no kill. The pin is free on this path: the
+      // WebGPU EP runs the model on the GPU, so the wasm thread pool only
+      // serves the graph plumbing. Before Phase 219 turned threading on,
+      // iOS ran Maia single-threaded without shared memory; this restores
+      // that footprint on the one platform that cannot afford the second
+      // thread. Same field the WR-01 init-timeout retry uses.
+      spawnFromRuntime(source, myGeneration, IOS_FORCE_SINGLE_THREAD);
     });
     return;
   }

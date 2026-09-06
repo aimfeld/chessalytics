@@ -184,6 +184,15 @@ says "needs WebGPU, iOS 26+". The wasm path on iOS is NOT worth further work: th
 WebKit's wasm engine (flat 110 MB heap, 1 thread makes no difference, skipping `session.run` survives;
 ORT #26827 samples WebKit 26 stuck in `JSC::Wasm::parseAndCompileOMG` on the same kind of workload),
 which the page cannot influence, and WebGPU now covers every iOS version that has it (26+).
+**Second kill, root-caused the same evening (/analysis still died with the WebGPU-only gate):** the diag
+page's mix stress (varied Maia batch shapes + 3 Stockfish workers, i.e. what /analysis runs on a phone)
+reproduced the kill at run 57/60, ~10 s after the Stockfish workers came up; Maia alone (150 mixed
+shapes) and Stockfish x3 alone both survive. Bisect on the phone: Maia pinned to ONE wasm thread + 3
+Stockfish survives; 2 threads + 3 Stockfish dies. So the WebGPU worker's default second wasm thread
+(`chooseWasmThreadCount()`: 4 cores -> 2) is what tips WebKit's per-page limit next to Stockfish.
+Shipped: every iOS Maia spawn sends `forceSingleThread: true` (`IOS_FORCE_SINGLE_THREAD` in
+`maiaWorkerHost.ts`); Stockfish pool unchanged. Adrian's recollection that Maia ran on iPhones before
+Phase 219 (single thread, no shared memory) matches.
 Previously: still no raw message. Next step is to open `/maia-diag.html` through the tunnel on the
 iPhone, tap 1 (probe) then 2 (ORT WebGPU via the real worker), and read the Summary / Copy log.
 ORT tracker context: microsoft/onnxruntime#26827 (WebKit 26 + JSEP: CPU pinned in
