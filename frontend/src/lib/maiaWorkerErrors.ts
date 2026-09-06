@@ -86,9 +86,15 @@ export function classifyMaiaWorkerError(rawMessage: string): MaiaFailureKind {
  * stay silent for a failure that is already on the dashboard.
  */
 export class MaiaWorkerError extends Error {
-  readonly kind: MaiaFailureKind;
+  /**
+   * The classified bucket, or `'unsupported'` for the WASM-SIMD probe
+   * failure — that one is reported by `EngineReadyGate`'s `unsupported`
+   * capture (which carries the device context) rather than by the host, but
+   * it is reported, so downstream waiters must stay silent for it too.
+   */
+  readonly kind: MaiaFailureKind | 'unsupported';
 
-  constructor(rawMessage: string, kind: MaiaFailureKind) {
+  constructor(rawMessage: string, kind: MaiaFailureKind | 'unsupported') {
     super(rawMessage);
     this.name = 'MaiaWorkerError';
     this.kind = kind;

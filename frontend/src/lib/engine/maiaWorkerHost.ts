@@ -298,7 +298,10 @@ function ensureSpawned(source: MaiaErrorSource): void {
   }
   if (!simdSupported) {
     markEngineAssetsUnsupported();
-    failAllLeasesAndDropWorker(new Error('Maia worker: device lacks WASM SIMD'));
+    // Reported by EngineReadyGate's `unsupported` capture (D-17), not here —
+    // the MaiaWorkerError marker keeps useFlawChessEngine from reporting the
+    // same rejection a second time as "a provider failed to become ready".
+    failAllLeasesAndDropWorker(new MaiaWorkerError('Maia worker: device lacks WASM SIMD', 'unsupported'));
     return;
   }
   spawn(source, webgpuFailed ? 'wasm' : 'auto');
@@ -625,11 +628,11 @@ function handleMessage(msg: WorkerMessage): void {
  * preserved here at the host level).
  */
 /**
- * `err` is a `MaiaWorkerError` on every path that already captured to Sentry
- * (so downstream waiters can skip re-reporting); the WASM-SIMD `unsupported`
- * path passes a plain `Error` because the gate owns that capture.
+ * Every caller passes a `MaiaWorkerError` — the failure is already on its way
+ * to Sentry (captured here, or by the gate for `'unsupported'`), so downstream
+ * waiters rejected with it can skip re-reporting.
  */
-function failAllLeasesAndDropWorker(err: Error): void {
+function failAllLeasesAndDropWorker(err: MaiaWorkerError): void {
   const stranded = queue.splice(0, queue.length);
   for (const req of stranded) req.reject(err);
   if (inFlight) {
@@ -652,9 +655,11 @@ function failAllLeasesAndDropWorker(err: Error): void {
     // prod string, FLAWCHESS-92: onnxruntime "Out of memory" while creating
     // the inference session) reached the user as generic download-failure
     // copy instead of being told to free device memory.
+    // `'unsupported'` cannot reach here (guarded above); the fallback only
+    // keeps the type honest.
     markEngineAssetFailed(
       'maia-model',
-      err instanceof MaiaWorkerError ? err.kind : classifyMaiaWorkerError(err.message),
+      err.kind === 'unsupported' ? classifyMaiaWorkerError(err.message) : err.kind,
     );
   }
 

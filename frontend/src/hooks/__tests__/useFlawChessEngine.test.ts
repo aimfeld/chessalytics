@@ -510,6 +510,23 @@ describe('useFlawChessEngine', () => {
       expect(Sentry.captureException).not.toHaveBeenCalled();
     });
 
+    it('the WASM-SIMD unsupported rejection (reported by the gate) does NOT capture again either', async () => {
+      const { result } = renderHook(() =>
+        useFlawChessEngine({ fen: TEST_FEN, enabled: true, elo: 1500 }),
+      );
+
+      await act(async () => {
+        queueWhenReadyDeferred.reject(new MaiaWorkerError('Maia worker: device lacks WASM SIMD', 'unsupported'));
+        poolWhenReadyDeferred.resolve();
+        await Promise.resolve();
+        await Promise.resolve();
+        await Promise.resolve();
+      });
+
+      expect(result.current.isReady).toBe(true);
+      expect(Sentry.captureException).not.toHaveBeenCalled();
+    });
+
     it('a reported Maia failure alongside an unreported Stockfish failure captures once, with the Stockfish reason as cause', async () => {
       renderHook(() => useFlawChessEngine({ fen: TEST_FEN, enabled: true, elo: 1500 }));
 
