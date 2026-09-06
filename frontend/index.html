@@ -25,12 +25,18 @@
     <meta name="twitter:description" content="Find and fix your chess flaws. Free analysis of every chess.com and lichess game: tactics, openings, endgames, and spaced-repetition training on your own blunders." />
     <meta name="twitter:image" content="https://flawchess.com/og-image.jpg" />
 
-    <!-- Umami analytics (privacy-friendly, no cookies) -->
+    <!-- Umami analytics (privacy-friendly, no cookies). crossorigin="anonymous"
+         (Phase 219 D-06): the response already sends
+         access-control-allow-origin: * and COEP accepts a successful CORS
+         check as an alternative to CORP, so this makes dev/preview/pre-deploy
+         production work before the Caddy CORP header (the durable fix) has
+         shipped there. Ships both mechanisms; see deploy/Caddyfile. -->
     <script
       defer
       src="https://analytics.flawchess.com/script.js"
       data-website-id="0ca19960-2398-4caf-b321-8039708fa7ef"
       data-domains="flawchess.com"
+      crossorigin="anonymous"
     ></script>
   </head>
   <body>

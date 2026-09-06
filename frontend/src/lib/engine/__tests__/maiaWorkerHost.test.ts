@@ -103,7 +103,11 @@ function stubWorkerCtor(): void {
 }
 
 function driveReady(worker: MockWorker, backend: 'webgpu' | 'wasm' = 'wasm'): void {
-  worker.simulateMessage({ type: 'ready', backend });
+  // Phase 219 (D-08): `numThreads` is now a required field on the `ready`
+  // message; this file's job is dispatch/queue/respawn logic, not the
+  // thread-count formula itself (covered by maiaWorkerScript.test.ts), so a
+  // fixed value is sufficient here.
+  worker.simulateMessage({ type: 'ready', backend, numThreads: 1 });
 }
 
 function analyzeMessages(worker: MockWorker): WorkerMessageLike[] {

@@ -115,7 +115,7 @@ export function isReportedMaiaWorkerError(reason: unknown): reason is MaiaWorker
  * `EngineReadyGate` until the gate stopped re-reporting worker failures; it
  * now rides on the canonical worker capture so no triage data is lost.
  */
-export function readDeviceContext(): Record<string, string | number> {
+export function readDeviceContext(numThreads?: number | null): Record<string, string | number> {
   const context: Record<string, string | number> = {};
   try {
     context.userAgent = navigator.userAgent;
@@ -133,6 +133,11 @@ export function readDeviceContext(): Record<string, string | number> {
   } catch {
     // best-effort only
   }
+  // Phase 219 (D-08/D-10): the wasm thread count in effect when a failure
+  // fired, alongside hardwareConcurrency above — omitted (not `null`) when
+  // the caller has no value, so existing callers (EngineReadyGate.tsx) that
+  // never pass this argument keep an unchanged context shape.
+  if (numThreads !== undefined && numThreads !== null) context.numThreads = numThreads;
   return context;
 }
 
@@ -143,6 +148,8 @@ export interface CaptureMaiaWorkerErrorOptions {
   source: MaiaErrorSource;
   /** Active execution provider when known, `null` if the failure fired pre-`ready`. */
   backend: 'webgpu' | 'wasm' | null;
+  /** Phase 219 (D-08/D-10): the wasm thread count in effect when the failure fired, `null`/absent if the failure fired pre-`ready` (never called for `maia-queue-worker`, which does not report this). */
+  numThreads?: number | null;
 }
 
 /**
@@ -160,7 +167,7 @@ export function captureMaiaWorkerError(
   const kind = classifyMaiaWorkerError(rawMessage);
   Sentry.captureException(new Error(`Maia worker inference error (${kind})`), {
     tags: { source: opts.source, backend: opts.backend ?? 'unknown', maia_failure: kind },
-    contexts: { maia: { rawMessage }, engine_device: readDeviceContext() },
+    contexts: { maia: { rawMessage }, engine_device: readDeviceContext(opts.numThreads) },
   });
   return new MaiaWorkerError(rawMessage, kind);
 }

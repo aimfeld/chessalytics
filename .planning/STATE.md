@@ -3,15 +3,15 @@ gsd_state_version: 1.0
 milestone: v2.16
 current_phase: 219
 current_phase_name: maia-chart-latency-ort-repin-cross-origin-isolation-progressive-ladder
-status: milestone_complete
-stopped_at: v2.16 closed — phases 216–218 archived, tagged, released, deployed (releases
-last_updated: "2026-09-06T12:01:11.383Z"
-state_head: d72760c38eeae4bacfbc9d37a451c032cfd3ba76
+status: executing
+stopped_at: Completed 219-01-PLAN.md (onnxruntime-web 1.27.0 re-pin, benchmark gate, dev-only timing instrumentation), squash-merged to main at 52fb1ad87
+last_updated: "2026-09-06T12:37:33.709Z"
+state_head: 52fb1ad8728e426bc1c6f32d8e9a783a807e6121
 progress:
   total_phases: 1
-  completed_phases: 3
+  completed_phases: 0
   total_plans: 3
-  completed_plans: 12
+  completed_plans: 1
 milestone_name: Audit Hardening & Dependency Currency
 last_activity: 2026-09-06
 last_activity_desc: Completed quick task 260906-i5e — FlawChess Engine card header shows a running node count (main at 1b5060661, unreleased)
@@ -21,12 +21,10 @@ last_activity_desc: Completed quick task 260906-i5e — FlawChess Engine card he
 
 ## Current Position
 
-Phase: 219 (maia-chart-latency-ort-repin-cross-origin-isolation-progressive-ladder) — READY TO EXECUTE
-12/12 plans). Production is at release #341 (`463b93de7`) and `main` is byte-identical to
-`origin/production` outside `.planning/`. `.planning/phases/` is empty; the next phase or
-`/gsd-new-milestone` starts from a clean trunk.
+Phase: 219 (Maia Chart Latency — ORT 1.27 Re-pin, Cross-Origin Isolation & Progressive Ladder Paint)
+Plan: 2 of 3 in current phase
 
-Status: Milestone complete, deployed, nothing pending.
+Status: executing
 
 Open threads carried forward (not blockers):
 
@@ -704,6 +702,8 @@ v1.29 Live-Engine Analysis Page shipped 2026-06-29 — 5 phases (136–140), 14 
 - [Phase 217]: 217-01: deleted overrides.undici rather than raising it, since jsdom 30 resolves undici@8.10.2 natively with no live advisory
 - [Phase 217]: onnxruntime-web 1.27.0 -> 1.29.0: six vendored Maia runtime files re-vendored and SHA-256-verified; ENGINE_ASSET_CACHE_VERSION bumped 1->2; device UAT recorded with WASM-only-path leg passed, iOS<16.4/low-memory/WebGPU-adapter legs deferred for lack of hardware
 - [Phase 218]: Checkpoint answered proceed: native onnxruntime 1.29.0 clean pass on both Python and Node, phase continues to 218-02/218-03
+- [Phase 219]: 219-01: Re-pinned onnxruntime-web 1.29.0 -> 1.27.0 (exact string), re-vendored all six runtime files byte-identical, bumped ENGINE_ASSET_CACHE_VERSION 3->4 in the same commit. — 1.29.0's wasm build measured 1.5-2.3x slower single-threaded with no thread-scaling gain on the reference box; 1.27.0 is the last version this codebase ran on before the regression.
+- [Phase 219]: 219-01: Added scripts/bench_maia_ort_wasm.mjs as a documented manual gate (not CI) and a renovate.json rule isolating onnxruntime-web into its own PR. — Timing on shared CI runners is noise (manual gate instead); the existing grouped minor/patch Renovate rule was the real risk of a silent future regression, not automerge (which this repo does not use).
 
 ### Pending Todos
 
@@ -862,9 +862,9 @@ Items acknowledged and deferred at **v1.29 milestone close on 2026-06-29** (user
 
 ## Session Continuity
 
-**Stopped at:** Phase 218 complete — all phases complete
+**Stopped at:** Completed 219-01-PLAN.md (onnxruntime-web 1.27.0 re-pin, benchmark gate, dev-only timing instrumentation), squash-merged to main at 52fb1ad87
 
-**Last session:** 2026-09-05T07:58:41.000Z
+**Last session:** 2026-09-06T12:37:33.644Z
 
 **Resume file:** None
 
@@ -1029,6 +1029,7 @@ Items acknowledged and deferred at **v1.29 milestone close on 2026-06-29** (user
 | Phase 217 P01 | 20min | 3 tasks | 2 files |
 | Phase 217 P02 | ~15min+checkpoint | 5 tasks | 17 files |
 | Phase 218 P01 | 8min | 3 tasks | 7 files |
+| Phase 219 P01 | 19min | 4 tasks | 14 files |
 
 ## Performance Metrics
 

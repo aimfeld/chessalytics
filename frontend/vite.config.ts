@@ -173,5 +173,19 @@ export default defineConfig({
     proxy: {
       '/api': 'http://localhost:8000',
     },
+    // Phase 219 (D-05): dev must be cross-origin isolated identically to prod
+    // (Caddy) and `vite preview` (below), so `self.crossOriginIsolated` is
+    // `true` in every environment and the Maia worker's thread-count formula
+    // (maia-worker.js's chooseWasmThreadCount()) behaves the same everywhere.
+    headers: {
+      'Cross-Origin-Opener-Policy': 'same-origin',
+      'Cross-Origin-Embedder-Policy': 'require-corp',
+    },
+  },
+  preview: {
+    headers: {
+      'Cross-Origin-Opener-Policy': 'same-origin',
+      'Cross-Origin-Embedder-Policy': 'require-corp',
+    },
   },
 })

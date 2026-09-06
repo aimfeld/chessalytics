@@ -53,9 +53,11 @@ npm package so the Worker can load it from a fixed path without bundler processi
 `ort.wasm.min.js` is the WASM-only minified API bundle (`ort.InferenceSession`/`ort.Tensor`/
 `ort.env`), loaded via `importScripts()` in the classic Maia Worker. It requests the base
 SIMD+threaded WASM build (`ort-wasm-simd-threaded.{mjs,wasm}`, ~13.5 MB) at session-create time.
-FlawChess runs it with `ort.env.wasm.numThreads = 1` forced (no cross-origin-isolation headers
-site-wide — Phase 136 D-3, CI-guarded), so no `SharedArrayBuffer` is required. This is the
-fallback path for browsers without WebGPU (D-09).
+FlawChess ships cross-origin isolation site-wide as of Phase 219 (D-05), so
+`ort.env.wasm.numThreads` is chosen by `chooseWasmThreadCount()`
+(`maia-worker.js`) — up to `MAIA_MAX_WASM_THREADS` (4) threads when
+`self.crossOriginIsolated` is true, falling back to 1 thread otherwise. This
+is the fallback path for browsers without WebGPU (D-09).
 
 ## Runtime — WebGPU-preferred path: `ort.webgpu.min.js` + `ort-wasm-simd-threaded.asyncify.{mjs,wasm}`
 
@@ -69,8 +71,9 @@ fallback path for browsers without WebGPU (D-09).
 `navigator.gpu?.requestAdapter()` in `maia-worker.js`; when available, the Worker creates the
 session with `executionProviders: ['webgpu']`, wrapped in a try/catch that falls back to the
 WASM-only path above on ANY failure (no adapter, session-create failure, or an unsupported op —
-RESEARCH.md Pitfall 4). `ort.env.wasm.numThreads` is forced to `1` on this path too, before any
-session is created.
+RESEARCH.md Pitfall 4). `ort.env.wasm.numThreads` uses the SAME `chooseWasmThreadCount()` formula
+on this path too, assigned before any session is created — WebGPU's own behavior (execution
+provider, warmup, respawn) is unaffected by Phase 219 (D-08).
 
 **Filename correction vs. earlier research:** 151-MAIA-CONTRACT.md's "Runtime facts" section
 (written before this worker was implemented) expected a **JSEP** build

@@ -165,7 +165,7 @@ jobs:
         run: npm test
         working-directory: frontend
 
-      - name: No COOP/COEP header guard + WASM MIME check
+      - name: COOP/COEP header guard + WASM MIME check
         run: |
           npm run preview -- --port 4173 &
           PREVIEW_PID=$!
@@ -173,14 +173,26 @@ jobs:
 
           FAIL=0
 
-          PAGE_HEADERS=$(curl -sf -I http://localhost:4173/ 2>&1)
+          # Phase 219 (D-05/D-07): inverted from the former "No COOP/COEP"
+          # guard — the site now ships cross-origin isolation site-wide, so
+          # this step asserts PRESENCE and fails when EITHER header is
+          # missing. Checked independently (not as one combined grep) so a
+          # response carrying only one of the two still fails; \r stripped
+          # so header-order/line-ending differences never affect the match.
+          PAGE_HEADERS=$(curl -sf -I http://localhost:4173/ 2>&1 | tr -d '\r')
           echo "Page headers:"
           echo "$PAGE_HEADERS"
-          if echo "$PAGE_HEADERS" | grep -qi 'cross-origin-opener-policy\|cross-origin-embedder-policy'; then
-            echo "FAIL: COOP/COEP header found on page — breaks Google OAuth and iOS Safari"
-            FAIL=1
+          if echo "$PAGE_HEADERS" | grep -qi '^cross-origin-opener-policy: *same-origin$'; then
+            echo "PASS: Cross-Origin-Opener-Policy: same-origin present"
           else
-            echo "PASS: No COOP/COEP headers on page"
+            echo "FAIL: Cross-Origin-Opener-Policy: same-origin missing — Phase 219 D-05/D-07 requires cross-origin isolation site-wide"
+            FAIL=1
+          fi
+          if echo "$PAGE_HEADERS" | grep -qi '^cross-origin-embedder-policy: *require-corp$'; then
+            echo "PASS: Cross-Origin-Embedder-Policy: require-corp present"
+          else
+            echo "FAIL: Cross-Origin-Embedder-Policy: require-corp missing — Phase 219 D-05/D-07 requires cross-origin isolation site-wide"
+            FAIL=1
           fi
 
           WASM_HEADERS=$(curl -sf -I http://localhost:4173/engine/stockfish-18-lite-single.wasm 2>&1)

@@ -52,7 +52,14 @@
  *                                              // degrade, never a crash.
  *        { type: 'analyze', fen: string, eloInputs: number[] }
  *        { type: 'terminate' }
- *   out: { type: 'ready', backend: 'webgpu' | 'wasm' }
+ *   out: { type: 'ready', backend: 'webgpu' | 'wasm', numThreads: number }
+ *                                                            // Phase 219 (D-08/D-10, Pitfall 9):
+ *                                                            // `numThreads` is the value
+ *                                                            // `chooseWasmThreadCount()` assigned
+ *                                                            // to `ort.env.wasm.numThreads` before
+ *                                                            // this session was created — the only
+ *                                                            // surface that reports the chosen
+ *                                                            // thread count on the happy path.
  *        { type: 'progress', loaded: number, total: number }   // Phase 213: byte
  *                                                            progress on the owned
  *                                                            ONNX model fetch
@@ -246,6 +253,33 @@ function versionedAssetUrl(path) {
   return `${path}${assetVersionQuery}`;
 }
 
+// ─── WASM thread count (D-08) ───────────────────────────────────────────────
+
+/**
+ * Ceiling on `ort.env.wasm.numThreads` when this document is cross-origin
+ * isolated. Measured, not guessed: 8 threads ran SLOWER than 4 on the
+ * reference box (219-MEASUREMENTS.md), so 4 stays the cap even on
+ * high-core-count devices.
+ */
+const MAIA_MAX_WASM_THREADS = 4;
+
+/**
+ * Chooses the wasm thread count for BOTH session-init paths (the wasm-only
+ * path in `initWasmOnlySession` and the WebGPU/asyncify path in
+ * `initSession`). Returns 1 whenever `self.crossOriginIsolated` is falsy —
+ * the fail-safe for a document that lost the COOP/COEP headers (a proxy, an
+ * extension, or a stale service-worker-cached shell from before this phase
+ * shipped) so this worker never attempts `SharedArrayBuffer`-backed threading
+ * without isolation, regardless of core count. Isolated: half the core count
+ * (ceiling), capped at `MAIA_MAX_WASM_THREADS`. `navigator` is read
+ * defensively — absent both in a `node:vm` sandbox and on exotic browsers.
+ */
+function chooseWasmThreadCount() {
+  if (!self.crossOriginIsolated) return 1;
+  const cores = (self.navigator && self.navigator.hardwareConcurrency) || 1;
+  return Math.min(MAIA_MAX_WASM_THREADS, Math.ceil(cores / 2));
+}
+
 /**
  * Streams the ONNX model bytes and counts them as they arrive (Phase 213
  * D-01/D-07) — this worker OWNS the fetch rather than letting session
@@ -411,7 +445,7 @@ async function fetchModelBuffer(onProgress, assetCacheName) {
  */
 async function initWasmOnlySession(onProgress, runtimeBuffer, assetCacheName) {
   importScripts(versionedAssetUrl(WASM_ONLY_RUNTIME_PATH));
-  ort.env.wasm.numThreads = 1; // NEVER > 1 — no cross-origin isolation (Phase 136 D-3)
+  ort.env.wasm.numThreads = chooseWasmThreadCount(); // Phase 219 D-08: cross-origin isolation now ships site-wide; see chooseWasmThreadCount()'s doc comment
   // Object form (quick 260905-rhc) — a bare string prefix cannot carry a
   // `?v=` query, since ORT concatenates a bare filename onto it.
   ort.env.wasm.wasmPaths = {
@@ -455,11 +489,15 @@ async function initWasmOnlySession(onProgress, runtimeBuffer, assetCacheName) {
  * caller (self.onmessage) is responsible for turning that into a terminal
  * `webgpu-unavailable` message instead of a second `importScripts`.
  *
- * `ort.env.wasm.numThreads` is forced to 1 on EVERY path before any session
- * is created: this site ships no cross-origin-isolation headers (locked
- * Phase 136 D-3, CI-guarded), so multi-thread WASM (which needs
- * SharedArrayBuffer) must never be attempted, regardless of which execution
- * provider ends up active.
+ * `ort.env.wasm.numThreads` is set on EVERY path before any session is
+ * created, via `chooseWasmThreadCount()` (Phase 219 D-08): cross-origin
+ * isolation now ships site-wide (Caddy + Vite dev/preview), so
+ * `SharedArrayBuffer`-backed multi-threading is available whenever
+ * `self.crossOriginIsolated` is true — `chooseWasmThreadCount()` itself is
+ * the fail-safe, falling back to 1 thread if a document ever loses the
+ * isolation headers (a proxy, an extension, a stale cached shell). Stockfish
+ * stays on its single-thread build regardless: a multi-thread build is a
+ * separate, deferred item, not blocked by isolation availability.
  */
 async function initSession(chosenBackend, onProgress, runtimeBuffer, assetCacheName) {
   if (chosenBackend === 'wasm') {
@@ -468,7 +506,7 @@ async function initSession(chosenBackend, onProgress, runtimeBuffer, assetCacheN
   }
 
   importScripts(versionedAssetUrl(WEBGPU_RUNTIME_PATH));
-  ort.env.wasm.numThreads = 1;
+  ort.env.wasm.numThreads = chooseWasmThreadCount();
   // Object form (quick 260905-rhc) — see initWasmOnlySession's comment.
   ort.env.wasm.wasmPaths = {
     mjs: versionedAssetUrl(ORT_ASYNCIFY_MJS_PATH),
@@ -636,7 +674,10 @@ self.onmessage = async (e) => {
         self.postMessage({ type: 'webgpu-unavailable', message: outcome.message });
         return;
       }
-      self.postMessage({ type: 'ready', backend });
+      // Phase 219 (D-10, Pitfall 9): numThreads is `ort.env.wasm.numThreads`,
+      // already assigned by chooseWasmThreadCount() inside initSession() —
+      // the only surface reporting the chosen thread count on the happy path.
+      self.postMessage({ type: 'ready', backend, numThreads: ort.env.wasm.numThreads });
       return;
     }
 

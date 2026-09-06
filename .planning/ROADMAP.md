@@ -183,7 +183,7 @@
 | 216. Audit Bugs and Quick Wins (SEED-161, v2.16) | 7/7 | Complete    | 2026-09-04 |
 | 217. Frontend Major Bumps — Vitest 5 / jsdom 30 + onnxruntime-web 1.29 (SEED-162, v2.16) | 2/2 | Complete    | 2026-09-05 |
 | 218. Backend onnxruntime Parity Spike → Python 3.14 Chain (SEED-162, v2.16) | 3/3 | Complete    | 2026-09-05 |
-| 219. Maia Chart Latency — ORT 1.27 Re-pin, Cross-Origin Isolation & Progressive Ladder Paint (standalone) | 0/3 | Not started | — |
+| 219. Maia Chart Latency — ORT 1.27 Re-pin, Cross-Origin Isolation & Progressive Ladder Paint (standalone) | 1/3 | In Progress | — |
 
 ## Active Phases
 
@@ -251,7 +251,7 @@ WebGPU-path optimisation, IndexedDB model storage.
 Plans:
 **Wave 1**
 
-- [ ] 219-01-PLAN.md — onnxruntime-web 1.27.0 re-pin, six-file re-vendor, cache-version bump, headless benchmark gate (MAIAPERF-01/02/07)
+- [x] 219-01-PLAN.md — onnxruntime-web 1.27.0 re-pin, six-file re-vendor, cache-version bump, headless benchmark gate (MAIAPERF-01/02/07)
 
 **Wave 2** *(blocked on Wave 1 completion)*
 

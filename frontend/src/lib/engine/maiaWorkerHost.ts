@@ -110,7 +110,9 @@ interface WorkerResultMessage {
 }
 
 type WorkerMessage =
-  | { type: 'ready'; backend: 'webgpu' | 'wasm' }
+  // Phase 219 (D-08/D-10): `numThreads` is the wasm thread count
+  // `chooseWasmThreadCount()` chose on the worker side — see maia-worker.js.
+  | { type: 'ready'; backend: 'webgpu' | 'wasm'; numThreads: number }
   | { type: 'progress'; loaded: number; total: number }
   | WorkerResultMessage
   | { type: 'error'; message: string }
@@ -191,6 +193,8 @@ interface LeaseRecord {
 let worker: Worker | null = null;
 let isReady = false;
 let backend: 'webgpu' | 'wasm' | null = null;
+/** Phase 219 (D-10, Pitfall 9): the wasm thread count the worker reported on its last `ready` message — attached to failure-path Sentry context in `maiaWorkerErrors.ts` alongside `hardwareConcurrency`, `null` before the first `ready`. */
+let lastReportedNumThreads: number | null = null;
 /** Source of whichever lease most recently triggered a spawn — used to tag Sentry captures that fire before any request is in flight (pre-ready init failures). */
 let spawnSource: MaiaErrorSource | null = null;
 
@@ -516,6 +520,12 @@ function handleMessage(msg: WorkerMessage): void {
   if (msg.type === 'ready') {
     isReady = true;
     backend = msg.backend;
+    lastReportedNumThreads = msg.numThreads;
+    // Phase 219 (D-10, Pitfall 9): the only observable surface for the chosen
+    // wasm thread count — read during browser UAT via the console, since
+    // whenReady()'s Promise<'webgpu' | 'wasm'> signature is deliberately not
+    // widened to carry it (would ripple through every caller for no gain).
+    console.info(`[maia-worker] ready — backend=${msg.backend} numThreads=${msg.numThreads}`);
     markEngineAssetReady('maia-model');
     // Phase 213-09 (G-213-35): 'ready' fires only after the worker's
     // `InferenceSession.create()` has already succeeded — on EVERY path,
@@ -575,7 +585,13 @@ function handleMessage(msg: WorkerMessage): void {
   // downstream waiter is rejected with, so `useFlawChessEngine` and
   // `EngineReadyGate` can tell this already-reported failure apart from one
   // nobody has captured yet.
-  const reported = captureMaiaWorkerError(msg.message, { source: errSource, backend });
+  const reported = captureMaiaWorkerError(msg.message, {
+    source: errSource,
+    backend,
+    // Phase 219 (D-08): the thread count in effect when this failure fired —
+    // null before the first `ready` (pre-ready init failures never had one).
+    numThreads: lastReportedNumThreads,
+  });
 
   if (!isReady) {
     // Pre-ready init failure (e.g. onnx session/model-load): nothing will
